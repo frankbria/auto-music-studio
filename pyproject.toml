@@ -25,7 +25,8 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+# E7xx/E9xx: logical errors; F: pyflakes; I: isort. Exclude E1-E5 (whitespace/formatting) — black owns those.
+select = ["E7", "E9", "F", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["acemusic"]
