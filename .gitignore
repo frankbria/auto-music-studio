@@ -50,3 +50,6 @@ htmlcov/
 
 # ruff
 .ruff_cache/
+
+# Beads local issue tracking (local-only, not shared)
+.beads/
