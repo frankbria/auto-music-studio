@@ -21,12 +21,20 @@ dev = [
 packages = ["src/acemusic"]
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 target-version = "py311"
 
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["acemusic"]
+
 [tool.black]
-line-length = 88
+line-length = 120
 target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=src/acemusic --cov-report=term-missing"
+bdd_features_base_dir = "tests/features"
