@@ -1,6 +1,7 @@
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -22,3 +23,30 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# JUCE build artifacts
+Builds/
+*.jucer
+JuceLibraryCode/
+*.xcodeproj/
+*.sln
+*.vcxproj*
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.ogg
+*.m4a
+
+# uv
+__pypackages__/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ruff
+.ruff_cache/
