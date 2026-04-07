@@ -2,6 +2,7 @@
 
 from typer.testing import CliRunner
 
+from acemusic import __version__
 from acemusic.cli import app
 
 runner = CliRunner()
@@ -17,8 +18,8 @@ def test_help_shows_subcommands():
     """--help output must list available subcommands."""
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    # At least one stub subcommand should appear
-    assert "generate" in result.output or "status" in result.output
+    assert "generate" in result.output, "Expected 'generate' subcommand in help output"
+    assert "status" in result.output, "Expected 'status' subcommand in help output"
 
 
 def test_version_exits_zero():
@@ -30,7 +31,7 @@ def test_version_exits_zero():
 def test_version_prints_version_string():
     """--version must print a non-empty version string."""
     result = runner.invoke(app, ["--version"])
-    assert "0.1.0" in result.output
+    assert __version__ in result.output
 
 
 def test_missing_api_url_produces_friendly_error(monkeypatch):

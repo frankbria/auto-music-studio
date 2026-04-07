@@ -28,10 +28,13 @@ def main(
     ),
 ) -> None:
     """acemusic — AI music generation CLI."""
-    if ctx.invoked_subcommand is not None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
+    else:
         config = load_config()
         if not config.api_url:
-            typer.echo("ACE-Step server URL not configured. " "Set ACEMUSIC_BASE_URL in .env or config.yaml")
+            typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
             raise typer.Exit(1)
 
 

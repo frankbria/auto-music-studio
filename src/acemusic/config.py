@@ -3,11 +3,14 @@
 Priority: env vars > .env file > ~/.acemusic/config.yaml
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,7 +39,7 @@ def load_config() -> AceConfig:
                     api_url = data.get("api_url") or data.get("ACEMUSIC_BASE_URL") or None
                 if not api_key:
                     api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to read config file %s: %s", yaml_path, exc)
 
     return AceConfig(api_url=api_url, api_key=api_key)
