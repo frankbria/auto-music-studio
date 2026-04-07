@@ -8,6 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.9.0",
+    "httpx>=0.27",
     "python-dotenv>=0.13.0",
     "PyYAML>=5.4",
 ]
@@ -46,3 +47,6 @@ target-version = ["py311"]
 testpaths = ["tests"]
 addopts = "--cov=src/acemusic --cov-report=term-missing"
 bdd_features_base_dir = "tests/features"
+markers = [
+    "integration: requires a live external service (deselect with -m 'not integration')",
+]
