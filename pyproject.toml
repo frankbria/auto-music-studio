@@ -45,7 +45,7 @@ target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=src/acemusic --cov-report=term-missing"
+addopts = "--cov=src/acemusic --cov-report=term-missing -m 'not integration'"
 bdd_features_base_dir = "tests/features"
 markers = [
     "integration: requires a live external service (deselect with -m 'not integration')",
