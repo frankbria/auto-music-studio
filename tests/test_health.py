@@ -101,9 +101,8 @@ class TestHealthCommand:
         assert result.exit_code != 0
 
     @pytest.mark.integration
-    def test_health_live_server(self, integration_url, monkeypatch):
+    def test_health_live_server(self, integration_url):
         """Integration: health command against a real ACE-Step server (prefers ACESTEP_LOCAL_URL)."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
-        result = runner.invoke(app, ["health"])
+        result = runner.invoke(app, ["health"], env={"ACEMUSIC_BASE_URL": integration_url})
         assert result.exit_code == 0, result.output
         assert "healthy" in result.output.lower()

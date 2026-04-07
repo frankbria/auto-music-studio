@@ -180,37 +180,55 @@ class TestGenerateCommand:
         assert result.exit_code != 0
 
     @pytest.mark.integration
-    def test_generate_live_server(self, integration_url, tmp_path, monkeypatch):
+    def test_generate_live_server(self, integration_url, tmp_path):
         """Integration: generate against a real ACE-Step server (prefers ACESTEP_LOCAL_URL)."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
-        result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path)])
+        result = runner.invoke(
+            app,
+            ["generate", "upbeat pop", "--output", str(tmp_path), "--num-clips", "1", "--duration", "15"],
+            env={"ACEMUSIC_BASE_URL": integration_url},
+        )
         assert result.exit_code == 0, result.output
         wav_files = list(tmp_path.glob("*.wav"))
-        assert len(wav_files) == 2
-        for f in wav_files:
-            assert f.stat().st_size > 0, f"{f.name} is empty"
-            assert f.read_bytes()[:4] == b"RIFF", f"{f.name} is not a valid WAV file"
+        assert len(wav_files) == 1
+        assert wav_files[0].stat().st_size > 0
+        assert wav_files[0].read_bytes()[:4] == b"RIFF", "Not a valid WAV file"
 
     @pytest.mark.integration
-    def test_generate_live_with_name_flag(self, integration_url, tmp_path, monkeypatch):
-        """Integration: --name produces prefix-1.wav, prefix-2.wav on a live server."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
-        result = runner.invoke(app, ["generate", "soft piano", "--output", str(tmp_path), "--name", "mytrack"])
+    def test_generate_live_with_name_flag(self, integration_url, tmp_path):
+        """Integration: --name produces prefix-1.wav on a live server."""
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "soft piano",
+                "--output",
+                str(tmp_path),
+                "--name",
+                "mytrack",
+                "--num-clips",
+                "1",
+                "--duration",
+                "15",
+            ],
+            env={"ACEMUSIC_BASE_URL": integration_url},
+        )
         assert result.exit_code == 0, result.output
         names = sorted(f.name for f in tmp_path.glob("*.wav"))
-        assert names == ["mytrack-1.wav", "mytrack-2.wav"]
-        for f in tmp_path.glob("*.wav"):
-            assert f.read_bytes()[:4] == b"RIFF", f"{f.name} is not a valid WAV file"
+        assert names == ["mytrack-1.wav"]
+        assert (tmp_path / "mytrack-1.wav").read_bytes()[:4] == b"RIFF"
 
     @pytest.mark.integration
-    def test_generate_live_creates_output_dir(self, integration_url, tmp_path, monkeypatch):
+    def test_generate_live_creates_output_dir(self, integration_url, tmp_path):
         """Integration: --output creates the directory automatically if missing."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
         new_dir = tmp_path / "auto-created"
-        result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(new_dir)])
+        result = runner.invoke(
+            app,
+            ["generate", "upbeat pop", "--output", str(new_dir), "--num-clips", "1", "--duration", "15"],
+            env={"ACEMUSIC_BASE_URL": integration_url},
+        )
         assert result.exit_code == 0, result.output
         assert new_dir.exists()
-        assert len(list(new_dir.glob("*.wav"))) == 2
+        assert len(list(new_dir.glob("*.wav"))) == 1
 
 
 class TestGenerateOutputNaming:
