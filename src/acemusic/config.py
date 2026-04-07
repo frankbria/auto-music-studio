@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AceConfig:
+    """Application configuration holding the ACE-Step server URL and optional API key."""
+
     api_url: str | None
     api_key: str | None
 
