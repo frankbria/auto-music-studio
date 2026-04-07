@@ -6,7 +6,14 @@ build-backend = "hatchling.build"
 name = "acemusic"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "typer>=0.9.0",
+    "python-dotenv>=0.13.0",
+    "PyYAML>=5.4",
+]
+
+[project.scripts]
+acemusic = "acemusic.cli:app"
 
 [project.optional-dependencies]
 dev = [
