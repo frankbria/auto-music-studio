@@ -155,9 +155,10 @@ def generate(
 
     # Download and save
     audio_urls: list[str] = result.get("audio_urls", [])
+    safe_name = make_slug(name) if name else None
     for i, url in enumerate(audio_urls, start=1):
-        if name:
-            filename = f"{name}-{i}.{format}"
+        if safe_name:
+            filename = f"{safe_name}-{i}.{format}"
         else:
             filename = make_filename(slug, timestamp, i, ext=format)
         dest = output_path / filename

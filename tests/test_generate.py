@@ -218,9 +218,11 @@ class TestGenerateOutputNaming:
             patch("acemusic.cli.AceStepClient", return_value=client_mock),
             patch("acemusic.cli.get_duration", return_value=3.0),
         ):
-            runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path), "--name", "my-song"])
+            result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path), "--name", "my-song"])
 
+        assert result.exit_code == 0, result.output
         names = [f.name for f in tmp_path.glob("*.wav")]
+        assert len(names) == len(COMPLETED_RESULT["audio_urls"])
         assert all(n.startswith("my-song-") for n in names)
         # No slug-like or timestamp digits beyond the index
         assert not any("upbeat" in n for n in names)
@@ -264,6 +266,33 @@ class TestGenerateOutputNaming:
 
         assert result.exit_code == 0, result.output
         assert len(list(config_dir.glob("*.wav"))) == 2
+
+    def test_output_flag_overrides_config_output_dir(self, monkeypatch, tmp_path):
+        """--output takes precedence over config output_dir."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        config_dir = tmp_path / "config-output"
+        config_dir.mkdir()
+        cli_out = tmp_path / "cli-out"
+
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, output_dir=str(config_dir)),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(cli_out)])
+
+        assert result.exit_code == 0, result.output
+        assert len(list(cli_out.glob("*.wav"))) == 2
+        assert len(list(config_dir.glob("*.wav"))) == 0
 
     def test_output_falls_back_to_cwd_when_no_config(self, monkeypatch, tmp_path):
         """When --output omitted and no config output_dir, files go to CWD."""

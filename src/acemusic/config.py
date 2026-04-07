@@ -31,20 +31,20 @@ def load_config() -> AceConfig:
     api_key = os.environ.get("ACEMUSIC_API_KEY") or None
     output_dir: str | None = None
 
-    # Fall back to ~/.acemusic/config.yaml when env vars are absent
-    if not api_url or not api_key:
-        yaml_path = Path.home() / ".acemusic" / "config.yaml"
-        if yaml_path.exists():
-            import yaml
+    # Read ~/.acemusic/config.yaml — always load for output_dir; only fill
+    # api_url/api_key from it when the env vars are absent.
+    yaml_path = Path.home() / ".acemusic" / "config.yaml"
+    if yaml_path.exists():
+        import yaml
 
-            try:
-                data = yaml.safe_load(yaml_path.read_text()) or {}
-                if not api_url:
-                    api_url = data.get("api_url") or data.get("ACEMUSIC_BASE_URL") or None
-                if not api_key:
-                    api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
-                output_dir = data.get("output_dir") or None
-            except Exception as exc:
-                logger.warning("Failed to read config file %s: %s", yaml_path, exc)
+        try:
+            data = yaml.safe_load(yaml_path.read_text()) or {}
+            if not api_url:
+                api_url = data.get("api_url") or data.get("ACEMUSIC_BASE_URL") or None
+            if not api_key:
+                api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
+            output_dir = data.get("output_dir") or None
+        except Exception as exc:
+            logger.warning("Failed to read config file %s: %s", yaml_path, exc)
 
     return AceConfig(api_url=api_url, api_key=api_key, output_dir=output_dir)
