@@ -42,6 +42,8 @@ def _make_client_mock(query_sequence, audio_bytes=FAKE_WAV):
 
 
 class TestGenerateCommand:
+    """Tests for the acemusic generate CLI command (US-2.3)."""
+
     def test_generate_creates_two_wav_files(self, monkeypatch, tmp_path):
         """Successful generation writes 2 WAV files to the output directory."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
