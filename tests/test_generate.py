@@ -1,5 +1,6 @@
 """Unit tests for acemusic generate command (US-2.3)."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -73,7 +74,8 @@ class TestGenerateCommand:
             runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path)])
 
         names = [f.name for f in tmp_path.glob("*.wav")]
-        assert any("upbeat-pop" in n for n in names)
+        assert len(names) == 2
+        assert all("upbeat-pop" in n for n in names)
 
     def test_generate_prints_file_paths(self, monkeypatch, tmp_path):
         """Output includes the absolute path of each generated file."""
@@ -171,14 +173,15 @@ class TestGenerateCommand:
     def test_generate_missing_url_exits_one(self, monkeypatch, tmp_path):
         """Missing ACEMUSIC_BASE_URL exits 1 with a friendly error."""
         monkeypatch.delenv("ACEMUSIC_BASE_URL", raising=False)
-        from acemusic import config as cfg_mod
+        from acemusic.config import AceConfig
 
-        monkeypatch.setattr(cfg_mod, "load_config", lambda: cfg_mod.AceConfig(api_url=None, api_key=None))
+        monkeypatch.setattr("acemusic.cli.load_config", lambda: AceConfig(api_url=None, api_key=None))
 
         result = runner.invoke(app, ["generate", "test", "--output", str(tmp_path)])
         assert result.exit_code != 0
 
     @pytest.mark.integration
+    @pytest.mark.skipif(not os.environ.get("ACEMUSIC_BASE_URL"), reason="ACEMUSIC_BASE_URL not set — no live server")
     def test_generate_live_server(self, tmp_path):
         """Integration: generate against real ACE-Step server."""
         result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path)])
