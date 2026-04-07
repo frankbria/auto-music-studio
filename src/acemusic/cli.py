@@ -1,17 +1,24 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3)."""
 
+from __future__ import annotations
+
+import os
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
-import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from acemusic import __version__
-from acemusic.client import AceStepClient
+from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
+from acemusic.utils import get_duration, make_filename, make_slug
 
 app = typer.Typer(help="acemusic — AI music generation CLI")
+console = Console()
 
 
 def _version_callback(value: bool) -> None:
@@ -44,28 +51,22 @@ def main(
 
 
 @app.command()
-def generate() -> None:
-    """Generate music using the ACE-Step model."""
-    typer.echo("Not yet implemented")
-
-
-@app.command()
 def health() -> None:
     """Check connectivity and stats for the ACE-Step server."""
-    console = Console()
     config = load_config()
 
     client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
     try:
         stats = client.get_stats(timeout=5.0)
-    except httpx.TimeoutException:
-        console.print("[red]Server: unreachable — connection timed out[/red]")
-        raise typer.Exit(code=1)
-    except httpx.HTTPStatusError as exc:
-        console.print(f"[red]Server: error — {exc.response.status_code} {exc.response.text}[/red]")
-        raise typer.Exit(code=1)
     except Exception as exc:
-        console.print(f"[red]Server: unreachable — {exc}[/red]")
+        import httpx
+
+        if isinstance(exc, httpx.TimeoutException):
+            console.print("[red]Server: unreachable — connection timed out[/red]")
+        elif isinstance(exc, httpx.HTTPStatusError):
+            console.print(f"[red]Server: error — {exc.response.status_code} {exc.response.text}[/red]")
+        else:
+            console.print(f"[red]Server: unreachable — {exc}[/red]")
         raise typer.Exit(code=1)
 
     console.print("[green]Server: healthy[/green]")
@@ -85,6 +86,83 @@ def health() -> None:
     table.add_row("Active jobs", str(active_jobs))
     table.add_row("Avg job time", avg_str)
     console.print(table)
+
+
+@app.command()
+def generate(
+    prompt: str = typer.Argument(..., help="Text description of the music to generate."),
+    num_clips: int = typer.Option(2, "--num-clips", help="Number of audio clips to generate."),
+    duration: Optional[float] = typer.Option(None, "--duration", help="Desired audio duration in seconds."),
+    format: str = typer.Option("wav", "--format", help="Output audio format."),
+    output: Path = typer.Option(Path("."), "--output", help="Directory to save generated files."),
+) -> None:
+    """Generate music from a text prompt using the ACE-Step model."""
+    config = load_config()
+    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+    poll_interval = 2.0
+
+    output.mkdir(parents=True, exist_ok=True)
+    slug = make_slug(prompt)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
+
+    # Submit
+    try:
+        task_id = client.submit_task(prompt=prompt, num_clips=num_clips, audio_duration=duration, format=format)
+    except AceStepError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
+
+    # Poll
+    start = time.monotonic()
+    result: dict = {}
+    with console.status("[bold green]Generating…[/bold green]", spinner="dots") as status:
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= poll_timeout:
+                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+                raise typer.Exit(code=1)
+
+            try:
+                result = client.query_result(task_id)
+            except AceStepError as exc:
+                console.print(f"[red]Error polling status: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+            job_status = result.get("status", "unknown")
+            status.update(f"[bold green]Generating… ({elapsed:.0f}s) — {job_status}[/bold green]")
+
+            if job_status == "completed":
+                break
+            if job_status == "failed":
+                error_msg = result.get("error", "unknown error")
+                console.print(f"[red]Generation failed: {error_msg}[/red]")
+                raise typer.Exit(code=1)
+
+            time.sleep(poll_interval)
+
+    # Download and save
+    audio_urls: list[str] = result.get("audio_urls", [])
+    for i, url in enumerate(audio_urls, start=1):
+        filename = make_filename(slug, timestamp, i, ext=format)
+        dest = output / filename
+        try:
+            data = client.download_audio(url)
+        except AceStepError as exc:
+            console.print(f"[red]Download failed for clip {i}: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        dest.write_bytes(data)
+        try:
+            dur = get_duration(dest)
+            dur_str = f"{dur:.1f}s"
+        except Exception:
+            dur_str = "unknown"
+
+        console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
 
 @app.command()
