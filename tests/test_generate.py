@@ -1,4 +1,4 @@
-"""Unit tests for acemusic generate command (US-2.3)."""
+"""Unit tests for acemusic generate command (US-2.3, US-2.4)."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -186,4 +186,133 @@ class TestGenerateCommand:
         """Integration: generate against real ACE-Step server."""
         result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path)])
         assert result.exit_code == 0
+        assert len(list(tmp_path.glob("*.wav"))) == 2
+
+
+class TestGenerateOutputNaming:
+    """Tests for US-2.4: --name flag and output_dir config fallback."""
+
+    def test_name_flag_produces_prefixed_filenames(self, monkeypatch, tmp_path):
+        """--name sets the filename prefix: demo-1.wav, demo-2.wav."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(tmp_path), "--name", "demo"])
+
+        assert result.exit_code == 0, result.output
+        names = sorted(f.name for f in tmp_path.glob("*.wav"))
+        assert names == ["demo-1.wav", "demo-2.wav"]
+
+    def test_name_flag_does_not_include_slug_or_timestamp(self, monkeypatch, tmp_path):
+        """--name prefix files contain no slug or timestamp in filename."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path), "--name", "my-song"])
+
+        assert result.exit_code == 0, result.output
+        names = [f.name for f in tmp_path.glob("*.wav")]
+        assert len(names) == len(COMPLETED_RESULT["audio_urls"])
+        assert all(n.startswith("my-song-") for n in names)
+        # No slug-like or timestamp digits beyond the index
+        assert not any("upbeat" in n for n in names)
+
+    def test_output_dir_created_when_missing(self, monkeypatch, tmp_path):
+        """--output creates the directory automatically if it does not exist."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        new_dir = tmp_path / "songs" / "new"
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(new_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert new_dir.exists()
+
+    def test_output_falls_back_to_config_output_dir(self, monkeypatch, tmp_path):
+        """When --output is omitted, config output_dir is used."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        from acemusic.config import AceConfig
+
+        config_dir = tmp_path / "config-output"
+        config_dir.mkdir()
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, output_dir=str(config_dir)),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test"])
+
+        assert result.exit_code == 0, result.output
+        assert len(list(config_dir.glob("*.wav"))) == 2
+
+    def test_output_flag_overrides_config_output_dir(self, monkeypatch, tmp_path):
+        """--output takes precedence over config output_dir."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        config_dir = tmp_path / "config-output"
+        config_dir.mkdir()
+        cli_out = tmp_path / "cli-out"
+
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, output_dir=str(config_dir)),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(cli_out)])
+
+        assert result.exit_code == 0, result.output
+        assert len(list(cli_out.glob("*.wav"))) == 2
+        assert len(list(config_dir.glob("*.wav"))) == 0
+
+    def test_output_falls_back_to_cwd_when_no_config(self, monkeypatch, tmp_path):
+        """When --output omitted and no config output_dir, files go to CWD."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        monkeypatch.chdir(tmp_path)
+
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, output_dir=None),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test"])
+
+        assert result.exit_code == 0, result.output
         assert len(list(tmp_path.glob("*.wav"))) == 2
