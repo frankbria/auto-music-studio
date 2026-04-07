@@ -94,14 +94,23 @@ def generate(
     num_clips: int = typer.Option(2, "--num-clips", help="Number of audio clips to generate."),
     duration: Optional[float] = typer.Option(None, "--duration", help="Desired audio duration in seconds."),
     format: str = typer.Option("wav", "--format", help="Output audio format."),
-    output: Path = typer.Option(Path("."), "--output", help="Directory to save generated files."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model."""
     config = load_config()
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
 
-    output.mkdir(parents=True, exist_ok=True)
+    # Resolve output directory: --output > config output_dir > CWD
+    if output is not None:
+        output_path = output
+    elif config.output_dir:
+        output_path = Path(config.output_dir).expanduser()
+    else:
+        output_path = Path.cwd()
+    output_path.mkdir(parents=True, exist_ok=True)
+
     slug = make_slug(prompt)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -147,8 +156,11 @@ def generate(
     # Download and save
     audio_urls: list[str] = result.get("audio_urls", [])
     for i, url in enumerate(audio_urls, start=1):
-        filename = make_filename(slug, timestamp, i, ext=format)
-        dest = output / filename
+        if name:
+            filename = f"{name}-{i}.{format}"
+        else:
+            filename = make_filename(slug, timestamp, i, ext=format)
+        dest = output_path / filename
         try:
             data = client.download_audio(url)
         except AceStepError as exc:

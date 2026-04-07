@@ -19,6 +19,7 @@ class AceConfig:
 
     api_url: str | None
     api_key: str | None
+    output_dir: str | None = None
 
 
 def load_config() -> AceConfig:
@@ -28,6 +29,7 @@ def load_config() -> AceConfig:
 
     api_url = os.environ.get("ACEMUSIC_BASE_URL") or None
     api_key = os.environ.get("ACEMUSIC_API_KEY") or None
+    output_dir: str | None = None
 
     # Fall back to ~/.acemusic/config.yaml when env vars are absent
     if not api_url or not api_key:
@@ -41,7 +43,8 @@ def load_config() -> AceConfig:
                     api_url = data.get("api_url") or data.get("ACEMUSIC_BASE_URL") or None
                 if not api_key:
                     api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
+                output_dir = data.get("output_dir") or None
             except Exception as exc:
                 logger.warning("Failed to read config file %s: %s", yaml_path, exc)
 
-    return AceConfig(api_url=api_url, api_key=api_key)
+    return AceConfig(api_url=api_url, api_key=api_key, output_dir=output_dir)
