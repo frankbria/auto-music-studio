@@ -11,10 +11,13 @@ from acemusic.cli import app
 runner = CliRunner()
 
 HEALTHY_STATS = {
-    "status": "ok",
-    "models": ["ace-step-base", "ace-step-turbo"],
-    "active_jobs": 0,
-    "avg_job_time": 4.2,
+    "data": {
+        "jobs": {"total": 10, "running": 0, "queued": 0, "succeeded": 10, "failed": 0},
+        "models": [{"name": "ace-step-base"}, {"name": "ace-step-turbo"}],
+        "avg_job_seconds": 4.2,
+    },
+    "code": 200,
+    "error": None,
 }
 
 
@@ -98,8 +101,9 @@ class TestHealthCommand:
         assert result.exit_code != 0
 
     @pytest.mark.integration
-    def test_health_live_server(self):
-        """Integration: health command against a real ACE-Step server (requires server running)."""
+    def test_health_live_server(self, integration_url, monkeypatch):
+        """Integration: health command against a real ACE-Step server (prefers ACESTEP_LOCAL_URL)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
         result = runner.invoke(app, ["health"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "healthy" in result.output.lower()

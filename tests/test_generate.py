@@ -1,6 +1,5 @@
 """Unit tests for acemusic generate command (US-2.3, US-2.4)."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -181,12 +180,37 @@ class TestGenerateCommand:
         assert result.exit_code != 0
 
     @pytest.mark.integration
-    @pytest.mark.skipif(not os.environ.get("ACEMUSIC_BASE_URL"), reason="ACEMUSIC_BASE_URL not set — no live server")
-    def test_generate_live_server(self, tmp_path):
-        """Integration: generate against real ACE-Step server."""
+    def test_generate_live_server(self, integration_url, tmp_path, monkeypatch):
+        """Integration: generate against a real ACE-Step server (prefers ACESTEP_LOCAL_URL)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
         result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(tmp_path)])
-        assert result.exit_code == 0
-        assert len(list(tmp_path.glob("*.wav"))) == 2
+        assert result.exit_code == 0, result.output
+        wav_files = list(tmp_path.glob("*.wav"))
+        assert len(wav_files) == 2
+        for f in wav_files:
+            assert f.stat().st_size > 0, f"{f.name} is empty"
+            assert f.read_bytes()[:4] == b"RIFF", f"{f.name} is not a valid WAV file"
+
+    @pytest.mark.integration
+    def test_generate_live_with_name_flag(self, integration_url, tmp_path, monkeypatch):
+        """Integration: --name produces prefix-1.wav, prefix-2.wav on a live server."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
+        result = runner.invoke(app, ["generate", "soft piano", "--output", str(tmp_path), "--name", "mytrack"])
+        assert result.exit_code == 0, result.output
+        names = sorted(f.name for f in tmp_path.glob("*.wav"))
+        assert names == ["mytrack-1.wav", "mytrack-2.wav"]
+        for f in tmp_path.glob("*.wav"):
+            assert f.read_bytes()[:4] == b"RIFF", f"{f.name} is not a valid WAV file"
+
+    @pytest.mark.integration
+    def test_generate_live_creates_output_dir(self, integration_url, tmp_path, monkeypatch):
+        """Integration: --output creates the directory automatically if missing."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", integration_url)
+        new_dir = tmp_path / "auto-created"
+        result = runner.invoke(app, ["generate", "upbeat pop", "--output", str(new_dir)])
+        assert result.exit_code == 0, result.output
+        assert new_dir.exists()
+        assert len(list(new_dir.glob("*.wav"))) == 2
 
 
 class TestGenerateOutputNaming:
