@@ -15,6 +15,7 @@ app = typer.Typer(help="acemusic — AI music generation CLI")
 
 
 def _version_callback(value: bool) -> None:
+    """Print version string and exit when --version flag is set."""
     if value:
         typer.echo(f"acemusic {__version__}")
         raise typer.Exit()

@@ -9,6 +9,7 @@ class AceStepClient:
     """Reusable HTTP client for the ACE-Step API."""
 
     def __init__(self, base_url: str, api_key: str | None = None) -> None:
+        """Initialise the client with a base URL and optional API key."""
         self.base_url = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
