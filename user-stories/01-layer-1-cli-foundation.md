@@ -196,18 +196,51 @@ Support `--output` flag to specify a target directory, and `--name` to set a cus
 
 ---
 
+#### US-2.5: Backend Selection and Cloud Fallback
+
+**As a** musician, **I want** the CLI to fall back to ElevenLabs when my local ACE-Step server is unavailable, **so that** I can still generate music without a running GPU.
+
+**Description:**
+Add a `--backend` flag to `acemusic generate` that selects the AI backend explicitly. When `--backend` is omitted and the ACE-Step server is unreachable, the CLI automatically falls back to ElevenLabs if `ELEVENLABS_API_KEY` is set. The `acemusic health` command is updated to report ElevenLabs key status alongside ACE-Step connectivity.
+
+Parameters not supported by ElevenLabs (BPM, key, vocal language, etc.) are silently ignored with a per-parameter warning printed to stderr. See spec §37.8 for the full supported parameter subset.
+
+**Functional Requirements:**
+- `--backend ace-step` (default) — uses local ACE-Step server
+- `--backend elevenlabs` — uses ElevenLabs cloud API directly
+- Auto-fallback: if ACE-Step is unreachable and `ELEVENLABS_API_KEY` is set, fall back to ElevenLabs and print: `"ACE-Step unavailable — falling back to ElevenLabs"`
+- Auto-fallback: if ACE-Step is unreachable and no `ELEVENLABS_API_KEY` is configured, fail with a clear error (no silent fallback)
+- `acemusic health` reports ElevenLabs key status: configured/not configured, and validates the key with a lightweight API call
+- Unsupported parameters on ElevenLabs backend print a warning to stderr (not a fatal error): `"Warning: --bpm not supported on elevenlabs backend, ignoring"`
+- ElevenLabs generates 1 clip per API call; to match `--num-clips N`, make N sequential calls
+- Output filenames for ElevenLabs clips use the same naming convention as ACE-Step clips
+- `ELEVENLABS_OUTPUT_FORMAT` env var controls ElevenLabs output format (default: `mp3_44100_128`)
+
+**Acceptance Criteria:**
+- [ ] `acemusic generate "upbeat pop" --backend elevenlabs` produces a playable audio file via ElevenLabs
+- [ ] With ACE-Step stopped and `ELEVENLABS_API_KEY` set: `acemusic generate "test"` falls back and prints the fallback warning
+- [ ] With ACE-Step stopped and no `ELEVENLABS_API_KEY`: `acemusic generate "test"` exits with a clear error
+- [ ] `acemusic generate "test" --backend elevenlabs --bpm 120` prints a warning about `--bpm` being ignored and still generates
+- [ ] `acemusic health` shows ElevenLabs key status (configured / not configured)
+- [ ] `acemusic generate "test" --backend elevenlabs --num-clips 2` produces 2 audio files
+
+---
+
 **Stage 2 Completion Criteria:**
-- `acemusic health` reports server status
-- `acemusic generate "any prompt"` produces playable audio files
+- `acemusic health` reports server status for both ACE-Step and ElevenLabs
+- `acemusic generate "any prompt"` produces playable audio files on either backend
+- Auto-fallback to ElevenLabs works when ACE-Step is unreachable
 - Error handling covers server-down, timeout, and API errors
 - Configuration is externalized (env vars or config file)
-- All features covered by tests (unit + integration with real ACE-Step server)
+- All features covered by tests (unit + integration with real ACE-Step server and ElevenLabs API)
 
 ---
 
 ### Stage 3: Core Generation Parameters CLI
 
 **Overview:** Expose the full parameter surface of ACE-Step-1.5 through the CLI — BPM, key, duration, seed, style tags, lyrics, vocal language, instrumental mode, model selection, and sounds mode. After this stage, the musician has precise creative control.
+
+> **ElevenLabs backend note:** Parameters added in Stage 3 are ACE-Step-specific. When `--backend elevenlabs` is active, only `--style`, `--exclude-style`, `--lyrics` (structured), `--instrumental`, `--duration`, and `--seed` (composition_plan mode only) are forwarded. All others print a per-parameter warning and are ignored. See spec §37.8.3.
 
 ---
 

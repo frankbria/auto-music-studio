@@ -51,7 +51,7 @@
 36. [Stems & MIDI Extraction](#36-stems--midi-extraction)
 
 ### Part IV — AI Engine & Model Integration
-37. [AI Engine — ACE-Step-1.5](#37-ai-engine--ace-step-15)
+37. [AI Engine — ACE-Step-1.5](#37-ai-engine--ace-step-15) · [37.8 Cloud Backend: ElevenLabs](#378-cloud-backend-elevenlabs-fallback--alternative)
 38. [Model Configuration & Selection](#38-model-configuration--selection)
 39. [LoRA Training & Personalization](#39-lora-training--personalization)
 
@@ -915,6 +915,58 @@ ACE-Step-1.5 supports six generation modes that map to platform features:
 - 50+ languages for lyrics/vocals
 - Strong support: English, Chinese, Japanese, Korean, Spanish, German, French, Portuguese, Italian, Russian
 - Non-Roman scripts handled via stochastic romanization
+
+---
+
+## 37.8 Cloud Backend: ElevenLabs (Fallback / Alternative)
+
+### 37.8.1 Overview
+ElevenLabs Music Generation (`POST https://api.elevenlabs.io/v1/music`) is supported as a secondary backend for two use cases:
+- **Auto-fallback:** When the local ACE-Step server is unreachable and `ELEVENLABS_API_KEY` is configured, generation falls back to ElevenLabs automatically with a user-visible warning.
+- **Explicit selection:** User can force ElevenLabs via `--backend elevenlabs` for cloud-based generation without requiring a local GPU.
+
+### 37.8.2 Configuration
+| Variable | Description |
+|---|---|
+| `ELEVENLABS_API_KEY` | Required to enable ElevenLabs backend |
+| `ELEVENLABS_OUTPUT_FORMAT` | Default: `mp3_44100_128` (see format table below) |
+
+### 37.8.3 Supported Parameters (ElevenLabs subset)
+
+When using the ElevenLabs backend, only the following generation parameters are supported. Unsupported parameters are ignored with a warning.
+
+| acemusic Flag | ElevenLabs Field | Notes |
+|---|---|---|
+| `prompt` | `prompt` | Full support (max 4100 chars) |
+| `--instrumental` | `force_instrumental: true` | Full support |
+| `--duration` | `music_length_ms` | Full support (3s–600s) |
+| `--style` (positive) | `composition_plan.positive_global_styles` | Requires `--backend elevenlabs`; switches to `composition_plan` mode |
+| `--exclude-style` | `composition_plan.negative_global_styles` | Requires `composition_plan` mode |
+| `--lyrics` (per section) | `composition_plan.sections[].lines` | Structured per-section; freeform `[Verse]` tags not supported |
+| `--seed` | `seed` | Only available in `composition_plan` mode, not with `prompt` |
+| `--format` | `output_format` query param | See format table below |
+
+**Unsupported on ElevenLabs backend** (silently ignored, with warning printed to stderr):
+`--bpm`, `--key`, `--time-signature`, `--vocal-language`, `--vocal-gender`, `--weirdness`, `--style-influence`, `--inference-steps`, `--thinking`, `--model`
+
+### 37.8.4 Output Formats (ElevenLabs)
+| Format value | Notes |
+|---|---|
+| `mp3_44100_128` | Default — works on all subscription tiers |
+| `mp3_44100_192` | Requires Creator tier or above |
+| `pcm_44100` | Lossless — requires Pro tier or above |
+| `opus_48000_128` | Compressed, good quality |
+
+Note: ElevenLabs outputs at 44.1kHz stereo. ACE-Step outputs at 48kHz. Files from different backends should not be mixed in the same project without resampling.
+
+### 37.8.5 Limitations vs. ACE-Step
+- Single model only (`music_v1`) — no Turbo/Standard/XL selection
+- No audio reference input (no cover, remix, repaint, lego, or complete modes)
+- No LoRA/custom voice model support
+- No vocal language or gender control
+- No BPM, key, or time signature constraints
+- Seed only works in `composition_plan` mode (not with plain `prompt`)
+- Maximum 2 clips per request (ElevenLabs generates 1 audio file per API call; call twice for 2 clips)
 
 ---
 
