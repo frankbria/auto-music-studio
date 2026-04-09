@@ -25,6 +25,8 @@ class ElevenLabsClient:
         prompt: str,
         duration: float | None = None,
         instrumental: bool = False,
+        style: str | None = None,
+        lyrics: str | None = None,
     ) -> bytes:
         """Generate music via POST /v1/music and return the raw audio bytes.
 
@@ -32,6 +34,8 @@ class ElevenLabsClient:
             prompt: Text description of the music.
             duration: Target duration in seconds (converted to music_length_ms).
             instrumental: If True, sets force_instrumental in the request body.
+            style: Comma-separated style descriptors forwarded to the API.
+            lyrics: Inline lyrics text forwarded to the API.
 
         Raises:
             ElevenLabsError: On HTTP error or connection failure.
@@ -41,6 +45,10 @@ class ElevenLabsClient:
             body["music_length_ms"] = int(duration * 1000)
         if instrumental:
             body["force_instrumental"] = True
+        if style is not None:
+            body["style"] = style
+        if lyrics is not None:
+            body["lyrics"] = lyrics
 
         try:
             response = httpx.post(

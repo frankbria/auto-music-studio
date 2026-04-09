@@ -56,6 +56,10 @@ class AceStepClient:
         num_clips: int = 2,
         audio_duration: float | None = None,
         format: str = "wav",
+        style: str | None = None,
+        lyrics: str | None = None,
+        vocal_language: str | None = None,
+        instrumental: bool = False,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -64,6 +68,10 @@ class AceStepClient:
             num_clips: Number of audio clips to generate (maps to batch_size).
             audio_duration: Target duration in seconds, or None for server default.
             format: Output audio format (maps to audio_format).
+            style: Comma-separated style descriptors (e.g. "dark electro, punchy drums").
+            lyrics: Inline lyrics text (may include structure tags like [Verse]).
+            vocal_language: ISO 639-1 vocal language code (e.g. "en", "ja").
+            instrumental: If True, suppresses vocals.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -71,6 +79,14 @@ class AceStepClient:
         payload: dict = {"prompt": prompt, "batch_size": num_clips, "audio_format": format}
         if audio_duration is not None:
             payload["audio_duration"] = audio_duration
+        if style is not None:
+            payload["style"] = style
+        if lyrics is not None:
+            payload["lyrics"] = lyrics
+        if vocal_language is not None:
+            payload["vocal_language"] = vocal_language
+        if instrumental:
+            payload["instrumental"] = True
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",
