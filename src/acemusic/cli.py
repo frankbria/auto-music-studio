@@ -153,7 +153,7 @@ def generate(
             console.print(f"[red]Lyrics file not found: {lyrics_file}[/red]")
             raise typer.Exit(code=1)
         try:
-            resolved_lyrics = lyrics_file.read_text()
+            resolved_lyrics = lyrics_file.read_text(encoding="utf-8")
         except OSError as exc:
             console.print(f"[red]Cannot read lyrics file {lyrics_file}: {exc}[/red]")
             raise typer.Exit(code=1)
