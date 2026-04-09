@@ -56,6 +56,7 @@ def health() -> None:
     """Check connectivity and stats for the ACE-Step server and ElevenLabs key status."""
     config = load_config()
 
+    ace_healthy = True
     client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
     try:
         stats = client.get_stats(timeout=5.0)
@@ -63,32 +64,34 @@ def health() -> None:
         import httpx
 
         if isinstance(exc, httpx.TimeoutException):
-            console.print("[red]Server: unreachable — connection timed out[/red]")
+            console.print("[red]ACE-Step: unreachable — connection timed out[/red]")
         elif isinstance(exc, httpx.HTTPStatusError):
-            console.print(f"[red]Server: error — {exc.response.status_code} {exc.response.text}[/red]")
+            console.print(f"[red]ACE-Step: error — {exc.response.status_code} {exc.response.text}[/red]")
         else:
-            console.print(f"[red]Server: unreachable — {exc}[/red]")
-        raise typer.Exit(code=1)
+            console.print(f"[red]ACE-Step: unreachable — {exc}[/red]")
+        ace_healthy = False
+        stats = {}
 
-    console.print("[green]Server: healthy[/green]")
+    if ace_healthy:
+        console.print("[green]ACE-Step: healthy[/green]")
 
-    models = stats.get("models", [])
-    models_str = ", ".join(models) if models else "—"
+        models = stats.get("models", [])
+        models_str = ", ".join(models) if models else "—"
 
-    active_jobs = stats.get("active_jobs", "—")
-    avg_job_time = stats.get("avg_job_time")
-    avg_str = f"{avg_job_time:.1f}s" if isinstance(avg_job_time, (int, float)) else "—"
+        active_jobs = stats.get("active_jobs", "—")
+        avg_job_time = stats.get("avg_job_time")
+        avg_str = f"{avg_job_time:.1f}s" if isinstance(avg_job_time, (int, float)) else "—"
 
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("Key", style="bold")
-    table.add_column("Value")
-    table.add_row("Server URL", config.api_url)
-    table.add_row("Loaded models", models_str)
-    table.add_row("Active jobs", str(active_jobs))
-    table.add_row("Avg job time", avg_str)
-    console.print(table)
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
+        table.add_row("Server URL", config.api_url)
+        table.add_row("Loaded models", models_str)
+        table.add_row("Active jobs", str(active_jobs))
+        table.add_row("Avg job time", avg_str)
+        console.print(table)
 
-    # ElevenLabs key status
+    # ElevenLabs key status — always shown regardless of ACE-Step health
     if config.elevenlabs_api_key:
         el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
         key_valid = el_client.validate_key()
@@ -98,6 +101,9 @@ def health() -> None:
             console.print("[red]ElevenLabs: configured (invalid — check ELEVENLABS_API_KEY)[/red]")
     else:
         console.print("[yellow]ElevenLabs: not configured (ELEVENLABS_API_KEY not set)[/yellow]")
+
+    if not ace_healthy:
+        raise typer.Exit(code=1)
 
 
 def _is_connection_error(exc: AceStepError) -> bool:
