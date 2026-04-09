@@ -123,6 +123,17 @@ def generate(
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
     backend: str = typer.Option("ace-step", "--backend", help="AI backend: 'ace-step' (default) or 'elevenlabs'."),
+    style: Optional[str] = typer.Option(
+        None, "--style", help="Comma-separated style descriptors (e.g. 'dark electro, punchy drums')."
+    ),
+    lyrics: Optional[str] = typer.Option(
+        None, "--lyrics", help="Inline lyrics text (supports structure tags like [Verse])."
+    ),
+    lyrics_file: Optional[Path] = typer.Option(None, "--lyrics-file", help="Path to a text file containing lyrics."),
+    vocal_language: Optional[str] = typer.Option(
+        None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."
+    ),
+    instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals entirely."),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
     config = load_config()
@@ -135,6 +146,17 @@ def generate(
     else:
         output_path = Path.cwd()
     output_path.mkdir(parents=True, exist_ok=True)
+
+    resolved_lyrics = lyrics
+    if lyrics_file is not None:
+        if not lyrics_file.is_file():
+            console.print(f"[red]Lyrics file not found: {lyrics_file}[/red]")
+            raise typer.Exit(code=1)
+        try:
+            resolved_lyrics = lyrics_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]Cannot read lyrics file {lyrics_file}: {exc}[/red]")
+            raise typer.Exit(code=1)
 
     slug = make_slug(prompt)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -156,6 +178,10 @@ def generate(
                 slug=slug,
                 timestamp=timestamp,
                 safe_name=safe_name,
+                style=style,
+                lyrics=resolved_lyrics,
+                vocal_language=vocal_language if vocal_language is not None else "auto",
+                instrumental=instrumental,
             )
             return
         except AceStepError as exc:
@@ -178,6 +204,10 @@ def generate(
                 "[red]ELEVENLABS_API_KEY is not configured. " "Set it in .env to use the ElevenLabs backend.[/red]"
             )
             raise typer.Exit(code=1)
+        if vocal_language is not None:
+            console.print(
+                "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
+            )
         el_client = ElevenLabsClient(
             api_key=config.elevenlabs_api_key,
             output_format=config.elevenlabs_output_format,
@@ -192,6 +222,9 @@ def generate(
             timestamp=timestamp,
             safe_name=safe_name,
             output_format=config.elevenlabs_output_format,
+            style=style,
+            lyrics=resolved_lyrics,
+            instrumental=instrumental,
         )
         return
 
@@ -210,12 +243,25 @@ def _generate_via_ace_step(
     slug: str,
     timestamp: str,
     safe_name: Optional[str],
+    style: Optional[str] = None,
+    lyrics: Optional[str] = None,
+    vocal_language: Optional[str] = None,
+    instrumental: bool = False,
 ) -> None:
     """Submit, poll, and download audio via the ACE-Step backend."""
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
 
-    task_id = ace_client.submit_task(prompt=prompt, num_clips=num_clips, audio_duration=duration, format=format)
+    task_id = ace_client.submit_task(
+        prompt=prompt,
+        num_clips=num_clips,
+        audio_duration=duration,
+        format=format,
+        style=style,
+        lyrics=lyrics,
+        vocal_language=vocal_language,
+        instrumental=instrumental,
+    )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
     start = time.monotonic()
@@ -292,6 +338,9 @@ def _generate_via_elevenlabs(
     timestamp: str,
     safe_name: Optional[str],
     output_format: str,
+    style: Optional[str] = None,
+    lyrics: Optional[str] = None,
+    instrumental: bool = False,
 ) -> None:
     """Generate N clips sequentially via ElevenLabs and save them to disk."""
     ext = _elevenlabs_ext(output_format)
@@ -299,7 +348,13 @@ def _generate_via_elevenlabs(
     for i in range(1, num_clips + 1):
         with console.status(f"[bold green]Clip {i}/{num_clips}…[/bold green]", spinner="dots"):
             try:
-                data = el_client.generate(prompt=prompt, duration=duration)
+                data = el_client.generate(
+                    prompt=prompt,
+                    duration=duration,
+                    instrumental=instrumental,
+                    style=style,
+                    lyrics=lyrics,
+                )
             except ElevenLabsError as exc:
                 console.print(f"[red]ElevenLabs error: {exc}[/red]")
                 raise typer.Exit(code=1)

@@ -362,3 +362,296 @@ class TestGenerateOutputNaming:
 
         assert result.exit_code == 0, result.output
         assert len(list(tmp_path.glob("*.wav"))) == 2
+
+
+class TestStyleLyricsFlags:
+    """Tests for US-3.1: --style, --lyrics, --lyrics-file, --vocal-language, --instrumental."""
+
+    def test_style_flag_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--style value is forwarded as 'style' kwarg to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--style", "upbeat, synth-pop", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["style"] == "upbeat, synth-pop"
+
+    def test_lyrics_flag_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--lyrics value is forwarded as 'lyrics' kwarg to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--lyrics", "[Verse]\nHello world", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["lyrics"] == "[Verse]\nHello world"
+
+    def test_lyrics_file_flag_reads_file_and_passes_content(self, monkeypatch, tmp_path):
+        """--lyrics-file reads lyrics from disk and sends file content to the API."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        lyrics_file = tmp_path / "song.txt"
+        lyrics_file.write_text("[Verse]\nHello world\n[Chorus]\nSing along")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--lyrics-file", str(lyrics_file), "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = client_mock.submit_task.call_args
+        assert "Hello world" in str(call_kwargs)
+
+    def test_lyrics_file_missing_exits_one(self, monkeypatch, tmp_path):
+        """--lyrics-file with a missing path exits 1 with a clear error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        result = runner.invoke(
+            app,
+            ["generate", "pop song", "--lyrics-file", "/nonexistent/lyrics.txt", "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower() or "lyrics" in result.output.lower()
+
+    def test_vocal_language_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--vocal-language is forwarded as 'vocal_language' kwarg to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--vocal-language", "ja", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["vocal_language"] == "ja"
+
+    def test_instrumental_flag_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--instrumental is forwarded as instrumental=True to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--instrumental", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["instrumental"] is True
+
+    def test_all_three_inputs_ace_step(self, monkeypatch, tmp_path):
+        """All three inputs (prompt + style + lyrics) are passed together to ACE-Step."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--style",
+                    "upbeat, synth-pop",
+                    "--lyrics",
+                    "[Verse]\nHello world",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        call_str = str(client_mock.submit_task.call_args)
+        assert "upbeat, synth-pop" in call_str
+        assert "Hello world" in call_str
+
+
+class TestStyleLyricsElevenLabs:
+    """Tests for US-3.1: --style, --lyrics, --instrumental forwarded to ElevenLabs."""
+
+    def test_style_forwarded_to_elevenlabs(self, monkeypatch, tmp_path):
+        """--style is forwarded to ElevenLabsClient.generate() as 'style'."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--style",
+                    "dark electro",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["style"] == "dark electro"
+
+    def test_lyrics_forwarded_to_elevenlabs(self, monkeypatch, tmp_path):
+        """--lyrics is forwarded to ElevenLabsClient.generate() as 'lyrics'."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--lyrics",
+                    "[Chorus]\nSing",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["lyrics"] == "[Chorus]\nSing"
+
+    def test_instrumental_forwarded_to_elevenlabs(self, monkeypatch, tmp_path):
+        """--instrumental is forwarded to ElevenLabsClient.generate() as instrumental=True."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop song", "--backend", "elevenlabs", "--instrumental", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["instrumental"] is True
+
+    def test_vocal_language_elevenlabs_prints_warning(self, monkeypatch, tmp_path):
+        """--vocal-language with ElevenLabs backend prints a warning and is ignored."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--vocal-language",
+                    "ja",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "warning" in result.output.lower() or "ignored" in result.output.lower()
