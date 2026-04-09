@@ -147,13 +147,16 @@ def generate(
         output_path = Path.cwd()
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Resolve lyrics: --lyrics-file overrides --lyrics
     resolved_lyrics = lyrics
     if lyrics_file is not None:
-        if not lyrics_file.exists():
+        if not lyrics_file.is_file():
             console.print(f"[red]Lyrics file not found: {lyrics_file}[/red]")
             raise typer.Exit(code=1)
-        resolved_lyrics = lyrics_file.read_text()
+        try:
+            resolved_lyrics = lyrics_file.read_text()
+        except OSError as exc:
+            console.print(f"[red]Cannot read lyrics file {lyrics_file}: {exc}[/red]")
+            raise typer.Exit(code=1)
 
     slug = make_slug(prompt)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -177,7 +180,7 @@ def generate(
                 safe_name=safe_name,
                 style=style,
                 lyrics=resolved_lyrics,
-                vocal_language=vocal_language,
+                vocal_language=vocal_language if vocal_language is not None else "auto",
                 instrumental=instrumental,
             )
             return

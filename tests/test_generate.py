@@ -364,11 +364,6 @@ class TestGenerateOutputNaming:
         assert len(list(tmp_path.glob("*.wav"))) == 2
 
 
-# ---------------------------------------------------------------------------
-# US-3.1: Style, lyrics, vocal-language, instrumental flags
-# ---------------------------------------------------------------------------
-
-
 class TestStyleLyricsFlags:
     """Tests for US-3.1: --style, --lyrics, --lyrics-file, --vocal-language, --instrumental."""
 
@@ -388,8 +383,8 @@ class TestStyleLyricsFlags:
             )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = client_mock.submit_task.call_args
-        assert call_kwargs.kwargs.get("style") == "upbeat, synth-pop" or "upbeat, synth-pop" in str(call_kwargs)
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["style"] == "upbeat, synth-pop"
 
     def test_lyrics_flag_passed_to_submit_task(self, monkeypatch, tmp_path):
         """--lyrics value is forwarded as 'lyrics' kwarg to AceStepClient.submit_task."""
@@ -407,8 +402,8 @@ class TestStyleLyricsFlags:
             )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = client_mock.submit_task.call_args
-        assert call_kwargs.kwargs.get("lyrics") == "[Verse]\nHello world" or "[Verse]" in str(call_kwargs)
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["lyrics"] == "[Verse]\nHello world"
 
     def test_lyrics_file_flag_reads_file_and_passes_content(self, monkeypatch, tmp_path):
         """--lyrics-file reads lyrics from disk and sends file content to the API."""
@@ -441,7 +436,8 @@ class TestStyleLyricsFlags:
             ["generate", "pop song", "--lyrics-file", "/nonexistent/lyrics.txt", "--output", str(tmp_path)],
         )
 
-        assert result.exit_code != 0
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower() or "lyrics" in result.output.lower()
 
     def test_vocal_language_passed_to_submit_task(self, monkeypatch, tmp_path):
         """--vocal-language is forwarded as 'vocal_language' kwarg to AceStepClient.submit_task."""
@@ -459,8 +455,8 @@ class TestStyleLyricsFlags:
             )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = client_mock.submit_task.call_args
-        assert call_kwargs.kwargs.get("vocal_language") == "ja" or "ja" in str(call_kwargs)
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["vocal_language"] == "ja"
 
     def test_instrumental_flag_passed_to_submit_task(self, monkeypatch, tmp_path):
         """--instrumental is forwarded as instrumental=True to AceStepClient.submit_task."""
@@ -478,8 +474,8 @@ class TestStyleLyricsFlags:
             )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = client_mock.submit_task.call_args
-        assert call_kwargs.kwargs.get("instrumental") is True or "True" in str(call_kwargs)
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["instrumental"] is True
 
     def test_all_three_inputs_ace_step(self, monkeypatch, tmp_path):
         """All three inputs (prompt + style + lyrics) are passed together to ACE-Step."""
@@ -550,8 +546,8 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        call_str = str(el_mock.generate.call_args)
-        assert "dark electro" in call_str
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["style"] == "dark electro"
 
     def test_lyrics_forwarded_to_elevenlabs(self, monkeypatch, tmp_path):
         """--lyrics is forwarded to ElevenLabsClient.generate() as 'lyrics'."""
@@ -589,8 +585,8 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        call_str = str(el_mock.generate.call_args)
-        assert "Sing" in call_str
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["lyrics"] == "[Chorus]\nSing"
 
     def test_instrumental_forwarded_to_elevenlabs(self, monkeypatch, tmp_path):
         """--instrumental is forwarded to ElevenLabsClient.generate() as instrumental=True."""
@@ -619,8 +615,8 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        call_str = str(el_mock.generate.call_args)
-        assert "True" in call_str or "instrumental=True" in call_str
+        assert el_mock.generate.call_args is not None
+        assert el_mock.generate.call_args.kwargs["instrumental"] is True
 
     def test_vocal_language_elevenlabs_prints_warning(self, monkeypatch, tmp_path):
         """--vocal-language with ElevenLabs backend prints a warning and is ignored."""
@@ -658,8 +654,4 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        assert (
-            "warning" in result.output.lower()
-            or "ignored" in result.output.lower()
-            or "elevenlabs" in result.output.lower()
-        )
+        assert "warning" in result.output.lower() or "ignored" in result.output.lower()
