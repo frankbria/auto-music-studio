@@ -537,7 +537,16 @@ class TestStyleLyricsElevenLabs:
         ):
             result = runner.invoke(
                 app,
-                ["generate", "pop song", "--backend", "elevenlabs", "--style", "dark electro", "--output", str(tmp_path)],
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--style",
+                    "dark electro",
+                    "--output",
+                    str(tmp_path),
+                ],
             )
 
         assert result.exit_code == 0, result.output
@@ -567,7 +576,16 @@ class TestStyleLyricsElevenLabs:
         ):
             result = runner.invoke(
                 app,
-                ["generate", "pop song", "--backend", "elevenlabs", "--lyrics", "[Chorus]\nSing", "--output", str(tmp_path)],
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--lyrics",
+                    "[Chorus]\nSing",
+                    "--output",
+                    str(tmp_path),
+                ],
             )
 
         assert result.exit_code == 0, result.output
@@ -640,4 +658,8 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        assert "warning" in result.output.lower() or "ignored" in result.output.lower() or "elevenlabs" in result.output.lower()
+        assert (
+            "warning" in result.output.lower()
+            or "ignored" in result.output.lower()
+            or "elevenlabs" in result.output.lower()
+        )

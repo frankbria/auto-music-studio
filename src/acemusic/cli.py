@@ -123,10 +123,16 @@ def generate(
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
     backend: str = typer.Option("ace-step", "--backend", help="AI backend: 'ace-step' (default) or 'elevenlabs'."),
-    style: Optional[str] = typer.Option(None, "--style", help="Comma-separated style descriptors (e.g. 'dark electro, punchy drums')."),
-    lyrics: Optional[str] = typer.Option(None, "--lyrics", help="Inline lyrics text (supports structure tags like [Verse])."),
+    style: Optional[str] = typer.Option(
+        None, "--style", help="Comma-separated style descriptors (e.g. 'dark electro, punchy drums')."
+    ),
+    lyrics: Optional[str] = typer.Option(
+        None, "--lyrics", help="Inline lyrics text (supports structure tags like [Verse])."
+    ),
     lyrics_file: Optional[Path] = typer.Option(None, "--lyrics-file", help="Path to a text file containing lyrics."),
-    vocal_language: Optional[str] = typer.Option(None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."),
+    vocal_language: Optional[str] = typer.Option(
+        None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."
+    ),
     instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals entirely."),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
