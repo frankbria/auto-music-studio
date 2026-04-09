@@ -276,6 +276,8 @@ def _elevenlabs_ext(output_format: str) -> str:
         return "wav"
     if output_format.startswith("opus"):
         return "opus"
+    if output_format.startswith("ulaw") or output_format.startswith("alaw"):
+        return "wav"
     return "mp3"
 
 
