@@ -20,6 +20,8 @@ class AceConfig:
     api_url: str | None
     api_key: str | None
     output_dir: str | None = None
+    elevenlabs_api_key: str | None = None
+    elevenlabs_output_format: str = "mp3_44100_128"
 
 
 def load_config() -> AceConfig:
@@ -47,4 +49,13 @@ def load_config() -> AceConfig:
         except Exception as exc:
             logger.warning("Failed to read config file %s: %s", yaml_path, exc)
 
-    return AceConfig(api_url=api_url, api_key=api_key, output_dir=output_dir)
+    elevenlabs_api_key = os.environ.get("ELEVENLABS_API_KEY") or None
+    elevenlabs_output_format = os.environ.get("ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
+
+    return AceConfig(
+        api_url=api_url,
+        api_key=api_key,
+        output_dir=output_dir,
+        elevenlabs_api_key=elevenlabs_api_key,
+        elevenlabs_output_format=elevenlabs_output_format,
+    )

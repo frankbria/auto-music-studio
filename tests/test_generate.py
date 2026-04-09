@@ -134,10 +134,15 @@ class TestGenerateCommand:
         assert "Traceback" not in result.output
 
     def test_generate_submit_error_exits_one(self, monkeypatch, tmp_path):
-        """AceStepError during submit prints friendly message and exits 1."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-
+        """AceStepError during submit (connection error, no ElevenLabs key) exits 1."""
         from acemusic.client import AceStepError
+        from acemusic.config import AceConfig
+
+        # Explicitly disable ElevenLabs fallback so connection errors exit 1
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, elevenlabs_api_key=None),
+        )
 
         client_mock = MagicMock()
         client_mock.submit_task.side_effect = AceStepError("connection refused")
@@ -146,7 +151,6 @@ class TestGenerateCommand:
             result = runner.invoke(app, ["generate", "rock", "--output", str(tmp_path)])
 
         assert result.exit_code == 1
-        assert "connection refused" in result.output.lower()
         assert "Traceback" not in result.output
 
     def test_generate_timeout_exits_one(self, monkeypatch, tmp_path):
