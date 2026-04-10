@@ -187,16 +187,18 @@ def generate(
     inference_steps: Optional[int] = typer.Option(
         None, "--inference-steps", help="Number of diffusion steps (Turbo: 8, Standard: 32-64). ACE-Step only."
     ),
-    weirdness: int = typer.Option(50, "--weirdness", help="Deviation from conventional structures (0-100). ACE-Step only."),
-    style_influence: int = typer.Option(50, "--style-influence", help="Adherence to style descriptors (0-100). ACE-Step only."),
+    weirdness: int = typer.Option(
+        50, "--weirdness", help="Deviation from conventional structures (0-100). ACE-Step only."
+    ),
+    style_influence: int = typer.Option(
+        50, "--style-influence", help="Adherence to style descriptors (0-100). ACE-Step only."
+    ),
     thinking: bool = typer.Option(False, "--thinking", help="Enable Chain-of-Thought mode. ACE-Step only."),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
     _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
     if format not in _VALID_FORMATS:
-        console.print(
-            f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]"
-        )
+        console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
         raise typer.Exit(code=1)
 
     if not (0 <= weirdness <= 100):
@@ -326,17 +328,13 @@ def generate(
                 "[yellow]Warning: --inference-steps is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
             )
         if weirdness != 50:
-            console.print(
-                "[yellow]Warning: --weirdness is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
-            )
+            console.print("[yellow]Warning: --weirdness is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
         if style_influence != 50:
             console.print(
                 "[yellow]Warning: --style-influence is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
             )
         if thinking:
-            console.print(
-                "[yellow]Warning: --thinking is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
-            )
+            console.print("[yellow]Warning: --thinking is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
 
         prompt_additions: list[str] = []
         if parsed_bpm is not None and parsed_bpm != "auto":

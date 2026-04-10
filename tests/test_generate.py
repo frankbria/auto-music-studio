@@ -1137,9 +1137,7 @@ class TestFormatValidation:
                 patch("acemusic.cli.AceStepClient", return_value=client_mock),
                 patch("acemusic.cli.get_duration", return_value=3.0),
             ):
-                result = runner.invoke(
-                    app, ["generate", "pop", "--format", fmt, "--output", str(tmp_path)]
-                )
+                result = runner.invoke(app, ["generate", "pop", "--format", fmt, "--output", str(tmp_path)])
             assert result.exit_code == 0, f"Format {fmt!r} was rejected: {result.output}"
 
     def test_invalid_format_exits_one(self, monkeypatch, tmp_path):
@@ -1164,6 +1162,7 @@ class TestQualityCreativeParamsElevenLabs:
 
     def _el_config(self, monkeypatch):
         from acemusic.config import AceConfig
+
         monkeypatch.setattr(
             "acemusic.cli.load_config",
             lambda: AceConfig(
