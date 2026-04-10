@@ -1070,6 +1070,22 @@ class TestQualityCreativeParamsAceStep:
         assert result.exit_code == 0, result.output
         assert client_mock.submit_task.call_args.kwargs["thinking"] is False
 
+    def test_inference_steps_zero_exits_one(self, monkeypatch, tmp_path):
+        """--inference-steps 0 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--inference-steps", "0", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "inference-steps" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_inference_steps_negative_exits_one(self, monkeypatch, tmp_path):
+        """--inference-steps -1 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--inference-steps", "-1", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "inference-steps" in result.output.lower()
+        assert "Traceback" not in result.output
+
     def test_weirdness_too_low_exits_one(self, monkeypatch, tmp_path):
         """--weirdness -1 exits 1 with a validation error."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")

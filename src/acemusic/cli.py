@@ -201,6 +201,12 @@ def generate(
         console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
         raise typer.Exit(code=1)
 
+    if inference_steps is not None and inference_steps <= 0:
+        console.print(
+            f"[red]Invalid --inference-steps: {inference_steps}. --inference-steps must be a positive integer.[/red]"
+        )
+        raise typer.Exit(code=1)
+
     if not (0 <= weirdness <= 100):
         console.print(f"[red]Invalid --weirdness: {weirdness}. Must be between 0 and 100.[/red]")
         raise typer.Exit(code=1)
