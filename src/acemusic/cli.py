@@ -176,7 +176,6 @@ def generate(
     ),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
-    # --- Validate musical parameters ---
     parsed_bpm: int | str | None = None
     if bpm is not None:
         try:
@@ -193,10 +192,17 @@ def generate(
         raise typer.Exit(code=1)
 
     if duration is not None and not (_DURATION_MIN <= duration <= _DURATION_MAX):
-        console.print(
-            f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
-        )
-        raise typer.Exit(code=1)
+        if duration == 15.0:
+            console.print(
+                f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
+                f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
+            )
+            duration = _DURATION_MIN
+        else:
+            console.print(
+                f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
+            )
+            raise typer.Exit(code=1)
 
     config = load_config()
 
@@ -275,7 +281,6 @@ def generate(
                 "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
             )
 
-        # Build augmented prompt: inject ACE-Step-specific musical params as text descriptors
         prompt_additions: list[str] = []
         if parsed_bpm is not None:
             console.print(
@@ -294,7 +299,7 @@ def generate(
             prompt_additions.append(f"{time_signature} time signature")
         if seed is not None:
             console.print(
-                "[yellow]Warning: --seed is ACE-Step-specific and cannot be replicated in ElevenLabs. Seed is ignored.[/yellow]"
+                "[yellow]Warning: --seed requires ElevenLabs composition_plan mode, which is not yet implemented. Seed is ignored.[/yellow]"
             )
 
         augmented_prompt = prompt

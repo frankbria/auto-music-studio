@@ -875,7 +875,7 @@ class TestMusicalParametersElevenLabs:
         assert "3/4" in prompt_sent
 
     def test_seed_elevenlabs_warns_only_no_injection(self, monkeypatch, tmp_path):
-        """--seed with ElevenLabs prints a warning; seed is not injected into the prompt."""
+        """--seed with ElevenLabs prints a warning; seed value is not injected into the prompt."""
         self._el_config(monkeypatch)
         el_mock = self._el_mock()
         with (
@@ -888,6 +888,9 @@ class TestMusicalParametersElevenLabs:
             )
         assert result.exit_code == 0, result.output
         assert "seed" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "42" not in prompt_sent
+        assert "seed" not in prompt_sent.lower()
 
     def test_no_musical_params_prompt_unchanged(self, monkeypatch, tmp_path):
         """When no musical params set, prompt sent to ElevenLabs is unchanged."""
