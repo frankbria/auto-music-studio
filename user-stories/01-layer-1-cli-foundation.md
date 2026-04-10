@@ -211,7 +211,7 @@ Parameters not supported by ElevenLabs (BPM, key, vocal language, etc.) are sile
 - Auto-fallback: if ACE-Step is unreachable and `ELEVENLABS_API_KEY` is set, fall back to ElevenLabs and print: `"ACE-Step unavailable — falling back to ElevenLabs"`
 - Auto-fallback: if ACE-Step is unreachable and no `ELEVENLABS_API_KEY` is configured, fail with a clear error (no silent fallback)
 - `acemusic health` reports ElevenLabs key status: configured/not configured, and validates the key with a lightweight API call
-- Unsupported parameters on ElevenLabs backend print a warning to stderr (not a fatal error): `"Warning: --bpm not supported on elevenlabs backend, ignoring"`
+- Unsupported parameters on ElevenLabs backend print a warning to stderr (not a fatal error). Numeric `--bpm`, `--key`, and `--time-signature` values are injected into the prompt text (e.g. `"128 BPM"`); sentinel values `'auto'`/`'any'` are skipped; `--seed` warns that composition_plan mode is not yet implemented and is ignored.
 - ElevenLabs generates 1 clip per API call; to match `--num-clips N`, make N sequential calls
 - Output filenames for ElevenLabs clips use the same naming convention as ACE-Step clips
 - `ELEVENLABS_OUTPUT_FORMAT` env var controls ElevenLabs output format (default: `mp3_44100_128`)
