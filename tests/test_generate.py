@@ -1,4 +1,4 @@
-"""Unit tests for acemusic generate command (US-2.3, US-2.4)."""
+"""Unit tests for acemusic generate command (US-2.3, US-2.4, US-3.2)."""
 
 from unittest.mock import MagicMock, patch
 
@@ -655,3 +655,283 @@ class TestStyleLyricsElevenLabs:
 
         assert result.exit_code == 0, result.output
         assert "warning" in result.output.lower() or "ignored" in result.output.lower()
+
+
+class TestMusicalParametersAceStep:
+    """Tests for US-3.2: --bpm, --key, --time-signature, --seed forwarded to ACE-Step."""
+
+    def test_bpm_integer_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--bpm 128 forwards bpm=128 to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--bpm", "128", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["bpm"] == 128
+
+    def test_bpm_auto_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--bpm auto forwards bpm='auto' to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--bpm", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["bpm"] == "auto"
+
+    def test_bpm_too_high_exits_one(self, monkeypatch, tmp_path):
+        """--bpm 999 exits 1 with a validation error (not an API crash)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--bpm", "999", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "bpm" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_bpm_too_low_exits_one(self, monkeypatch, tmp_path):
+        """--bpm 50 exits 1 (below 60 minimum)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--bpm", "50", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "bpm" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_bpm_invalid_string_exits_one(self, monkeypatch, tmp_path):
+        """--bpm 'fast' (not a number or 'auto') exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--bpm", "fast", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "bpm" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_key_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--key 'C major' forwards key='C major' to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--key", "C major", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["key"] == "C major"
+
+    def test_time_signature_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--time-signature '3/4' forwards time_signature='3/4' to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--time-signature", "3/4", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["time_signature"] == "3/4"
+
+    def test_time_signature_invalid_exits_one(self, monkeypatch, tmp_path):
+        """--time-signature '11/4' exits 1 (not in allowed set)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--time-signature", "11/4", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "time" in result.output.lower() or "signature" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_seed_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--seed 42 forwards seed=42 to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--seed", "42", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["seed"] == 42
+
+    def test_seed_minus_one_passed_to_submit_task(self, monkeypatch, tmp_path):
+        """--seed -1 is accepted and forwarded (means 'random')."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--seed", "-1", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["seed"] == -1
+
+    def test_duration_too_short_exits_one(self, monkeypatch, tmp_path):
+        """--duration 10 exits 1 (below 30s minimum)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--duration", "10", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "duration" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_duration_too_long_exits_one(self, monkeypatch, tmp_path):
+        """--duration 500 exits 1 (above 240s maximum)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--duration", "500", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "duration" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_duration_valid_range_accepted(self, monkeypatch, tmp_path):
+        """--duration 60 is within range and forwarded to submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=60.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--duration", "60", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["audio_duration"] == 60.0
+
+
+class TestMusicalParametersElevenLabs:
+    """Tests for US-3.2: musical params warn + inject into prompt on ElevenLabs backend."""
+
+    def _el_config(self, monkeypatch):
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+    def _el_mock(self):
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+        return el_mock
+
+    def test_bpm_elevenlabs_warns_and_injects_into_prompt(self, monkeypatch, tmp_path):
+        """--bpm with ElevenLabs prints a warning and injects '128 BPM' into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--bpm", "128", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "bpm" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "128 bpm" in prompt_sent.lower() or "128bpm" in prompt_sent.lower()
+
+    def test_key_elevenlabs_warns_and_injects_into_prompt(self, monkeypatch, tmp_path):
+        """--key with ElevenLabs prints a warning and injects 'C major' into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--key", "C major", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "key" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "c major" in prompt_sent.lower()
+
+    def test_time_signature_elevenlabs_warns_and_injects_into_prompt(self, monkeypatch, tmp_path):
+        """--time-signature with ElevenLabs prints a warning and injects the value into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop",
+                    "--backend",
+                    "elevenlabs",
+                    "--time-signature",
+                    "3/4",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "time" in result.output.lower() or "signature" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "3/4" in prompt_sent
+
+    def test_seed_elevenlabs_warns_only_no_injection(self, monkeypatch, tmp_path):
+        """--seed with ElevenLabs prints a warning; seed is not injected into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--seed", "42", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "seed" in result.output.lower()
+
+    def test_no_musical_params_prompt_unchanged(self, monkeypatch, tmp_path):
+        """When no musical params set, prompt sent to ElevenLabs is unchanged."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "soft jazz", "--backend", "elevenlabs", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert prompt_sent == "soft jazz"
+
+    def test_multiple_params_all_injected(self, monkeypatch, tmp_path):
+        """All three ACE-Step params injected together produce a combined augmented prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop",
+                    "--backend",
+                    "elevenlabs",
+                    "--bpm",
+                    "120",
+                    "--key",
+                    "A minor",
+                    "--time-signature",
+                    "4/4",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "120" in prompt_sent
+        assert "a minor" in prompt_sent.lower()
+        assert "4/4" in prompt_sent
