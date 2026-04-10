@@ -60,6 +60,10 @@ class AceStepClient:
         lyrics: str | None = None,
         vocal_language: str | None = None,
         instrumental: bool = False,
+        bpm: int | str | None = None,
+        key: str | None = None,
+        time_signature: str | None = None,
+        seed: int | None = None,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -72,6 +76,10 @@ class AceStepClient:
             lyrics: Inline lyrics text (may include structure tags like [Verse]).
             vocal_language: ISO 639-1 vocal language code (e.g. "en", "ja").
             instrumental: If True, suppresses vocals.
+            bpm: Tempo in BPM (60–180) or "auto".
+            key: Tonal center (e.g. "C major") or "any".
+            time_signature: Meter (e.g. "4/4", "3/4", "6/8", "5/4", "7/8").
+            seed: Fixed seed for reproducibility (-1 or None for random).
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -87,6 +95,14 @@ class AceStepClient:
             payload["vocal_language"] = vocal_language
         if instrumental:
             payload["instrumental"] = True
+        if bpm is not None:
+            payload["bpm"] = bpm
+        if key is not None:
+            payload["key"] = key
+        if time_signature is not None:
+            payload["time_signature"] = time_signature
+        if seed is not None:
+            payload["seed"] = seed
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",

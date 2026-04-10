@@ -43,6 +43,8 @@ uv run python -c "import acemusic"
 uv run acemusic --help
 uv run acemusic health
 uv run acemusic generate "upbeat pop" --output ./output --name demo
+uv run acemusic generate "dark electro" --bpm 128 --key "C minor" --time-signature "4/4" --seed 42 --duration 60
+uv run acemusic generate "ambient pad" --backend elevenlabs --instrumental
 ```
 
 ## Architecture

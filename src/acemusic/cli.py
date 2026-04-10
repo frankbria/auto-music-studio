@@ -114,11 +114,43 @@ def _is_connection_error(exc: AceStepError) -> bool:
     )
 
 
+_VALID_TIME_SIGNATURES = {"4/4", "3/4", "6/8", "5/4", "7/8"}
+_BPM_MIN = 60
+_BPM_MAX = 180
+_DURATION_MIN = 30.0
+_DURATION_MAX = 240.0
+
+
+def _parse_bpm(value: str) -> int | str:
+    """Parse --bpm value: 'auto' is returned as-is; otherwise validate integer 60–180."""
+    if value.lower() == "auto":
+        return "auto"
+    try:
+        bpm_int = int(value)
+    except ValueError:
+        raise typer.BadParameter(f"BPM must be an integer ({_BPM_MIN}–{_BPM_MAX}) or 'auto', got: {value!r}")
+    if not (_BPM_MIN <= bpm_int <= _BPM_MAX):
+        raise typer.BadParameter(f"BPM must be between {_BPM_MIN} and {_BPM_MAX} (or 'auto'), got: {bpm_int}")
+    return bpm_int
+
+
+def _validate_key(value: str | None) -> str | None:
+    """Validate --key: strip whitespace, reject empty/blank values."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise typer.BadParameter("--key cannot be empty or whitespace-only")
+    return stripped
+
+
 @app.command()
 def generate(
     prompt: str = typer.Argument(..., help="Text description of the music to generate."),
     num_clips: int = typer.Option(2, "--num-clips", help="Number of audio clips to generate."),
-    duration: Optional[float] = typer.Option(None, "--duration", help="Desired audio duration in seconds."),
+    duration: Optional[float] = typer.Option(
+        None, "--duration", help=f"Target duration in seconds ({int(_DURATION_MIN)}–{int(_DURATION_MAX)})."
+    ),
     format: str = typer.Option("wav", "--format", help="Output audio format."),
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
@@ -134,8 +166,60 @@ def generate(
         None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."
     ),
     instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals entirely."),
+    bpm: Optional[str] = typer.Option(
+        None,
+        "--bpm",
+        help=f"Tempo in BPM ({_BPM_MIN}–{_BPM_MAX}) or 'auto'. ACE-Step native; injected into prompt for ElevenLabs.",
+    ),
+    key: Optional[str] = typer.Option(
+        None,
+        "--key",
+        help="Tonal center (e.g. 'C major') or 'any'. ACE-Step native; injected into prompt for ElevenLabs.",
+    ),
+    time_signature: Optional[str] = typer.Option(
+        None,
+        "--time-signature",
+        help=f"Meter: {', '.join(sorted(_VALID_TIME_SIGNATURES))}. ACE-Step native; injected into prompt for ElevenLabs.",
+    ),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Fixed seed for reproducibility (-1 for random). ACE-Step only."
+    ),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
+    parsed_bpm: int | str | None = None
+    if bpm is not None:
+        try:
+            parsed_bpm = _parse_bpm(bpm)
+        except typer.BadParameter as exc:
+            console.print(f"[red]Invalid --bpm: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    try:
+        key = _validate_key(key)
+    except typer.BadParameter as exc:
+        console.print(f"[red]Invalid --key: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if time_signature is not None and time_signature not in _VALID_TIME_SIGNATURES:
+        console.print(
+            f"[red]Invalid --time-signature: {time_signature!r}. "
+            f"Allowed values: {', '.join(sorted(_VALID_TIME_SIGNATURES))}[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if duration is not None and not (_DURATION_MIN <= duration <= _DURATION_MAX):
+        if duration == 15.0:
+            console.print(
+                f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
+                f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
+            )
+            duration = _DURATION_MIN
+        else:
+            console.print(
+                f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
+            )
+            raise typer.Exit(code=1)
+
     config = load_config()
 
     # Resolve output directory: --output > config output_dir > CWD
@@ -182,6 +266,10 @@ def generate(
                 lyrics=resolved_lyrics,
                 vocal_language=vocal_language if vocal_language is not None else "auto",
                 instrumental=instrumental,
+                bpm=parsed_bpm,
+                key=key,
+                time_signature=time_signature,
+                seed=seed,
             )
             return
         except AceStepError as exc:
@@ -208,13 +296,47 @@ def generate(
             console.print(
                 "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
             )
+
+        prompt_additions: list[str] = []
+        if parsed_bpm is not None and parsed_bpm != "auto":
+            console.print(
+                f"[yellow]Warning: --bpm is ACE-Step-specific; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(f"{parsed_bpm} BPM")
+        elif parsed_bpm == "auto":
+            console.print(
+                "[yellow]Warning: --bpm auto has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
+            )
+        if key is not None and key.lower() != "any":
+            console.print(
+                f"[yellow]Warning: --key is ACE-Step-specific; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(key)
+        elif key is not None and key.lower() == "any":
+            console.print(
+                "[yellow]Warning: --key any has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
+            )
+        if time_signature is not None:
+            console.print(
+                f"[yellow]Warning: --time-signature is ACE-Step-specific; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(f"{time_signature} time signature")
+        if seed is not None:
+            console.print(
+                "[yellow]Warning: --seed requires ElevenLabs composition_plan mode, which is not yet implemented. Seed is ignored.[/yellow]"
+            )
+
+        augmented_prompt = prompt
+        if prompt_additions:
+            augmented_prompt = f"{prompt}, {', '.join(prompt_additions)}"
+
         el_client = ElevenLabsClient(
             api_key=config.elevenlabs_api_key,
             output_format=config.elevenlabs_output_format,
         )
         _generate_via_elevenlabs(
             el_client=el_client,
-            prompt=prompt,
+            prompt=augmented_prompt,
             num_clips=num_clips,
             duration=duration,
             output_path=output_path,
@@ -247,6 +369,10 @@ def _generate_via_ace_step(
     lyrics: Optional[str] = None,
     vocal_language: Optional[str] = None,
     instrumental: bool = False,
+    bpm: "int | str | None" = None,
+    key: Optional[str] = None,
+    time_signature: Optional[str] = None,
+    seed: Optional[int] = None,
 ) -> None:
     """Submit, poll, and download audio via the ACE-Step backend."""
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
@@ -261,6 +387,10 @@ def _generate_via_ace_step(
         lyrics=lyrics,
         vocal_language=vocal_language,
         instrumental=instrumental,
+        bpm=bpm,
+        key=key,
+        time_signature=time_signature,
+        seed=seed,
     )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
