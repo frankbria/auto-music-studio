@@ -184,8 +184,37 @@ def generate(
     seed: Optional[int] = typer.Option(
         None, "--seed", help="Fixed seed for reproducibility (-1 for random). ACE-Step only."
     ),
+    inference_steps: Optional[int] = typer.Option(
+        None, "--inference-steps", help="Number of diffusion steps (Turbo: 8, Standard: 32-64). ACE-Step only."
+    ),
+    weirdness: int = typer.Option(
+        50, "--weirdness", help="Deviation from conventional structures (0-100). ACE-Step only."
+    ),
+    style_influence: int = typer.Option(
+        50, "--style-influence", help="Adherence to style descriptors (0-100). ACE-Step only."
+    ),
+    thinking: bool = typer.Option(False, "--thinking", help="Enable Chain-of-Thought mode. ACE-Step only."),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
+    _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
+    if format not in _VALID_FORMATS:
+        console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
+        raise typer.Exit(code=1)
+
+    if inference_steps is not None and inference_steps <= 0:
+        console.print(
+            f"[red]Invalid --inference-steps: {inference_steps}. --inference-steps must be a positive integer.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if not (0 <= weirdness <= 100):
+        console.print(f"[red]Invalid --weirdness: {weirdness}. Must be between 0 and 100.[/red]")
+        raise typer.Exit(code=1)
+
+    if not (0 <= style_influence <= 100):
+        console.print(f"[red]Invalid --style-influence: {style_influence}. Must be between 0 and 100.[/red]")
+        raise typer.Exit(code=1)
+
     parsed_bpm: int | str | None = None
     if bpm is not None:
         try:
@@ -270,6 +299,10 @@ def generate(
                 key=key,
                 time_signature=time_signature,
                 seed=seed,
+                inference_steps=inference_steps,
+                weirdness=weirdness,
+                style_influence=style_influence,
+                thinking=thinking,
             )
             return
         except AceStepError as exc:
@@ -296,6 +329,18 @@ def generate(
             console.print(
                 "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
             )
+        if inference_steps is not None:
+            console.print(
+                "[yellow]Warning: --inference-steps is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
+            )
+        if weirdness != 50:
+            console.print("[yellow]Warning: --weirdness is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
+        if style_influence != 50:
+            console.print(
+                "[yellow]Warning: --style-influence is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
+            )
+        if thinking:
+            console.print("[yellow]Warning: --thinking is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
 
         prompt_additions: list[str] = []
         if parsed_bpm is not None and parsed_bpm != "auto":
@@ -373,6 +418,10 @@ def _generate_via_ace_step(
     key: Optional[str] = None,
     time_signature: Optional[str] = None,
     seed: Optional[int] = None,
+    inference_steps: Optional[int] = None,
+    weirdness: int = 50,
+    style_influence: int = 50,
+    thinking: bool = False,
 ) -> None:
     """Submit, poll, and download audio via the ACE-Step backend."""
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
@@ -391,6 +440,10 @@ def _generate_via_ace_step(
         key=key,
         time_signature=time_signature,
         seed=seed,
+        inference_steps=inference_steps,
+        weirdness=weirdness,
+        style_influence=style_influence,
+        thinking=thinking,
     )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 

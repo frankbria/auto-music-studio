@@ -64,6 +64,10 @@ class AceStepClient:
         key: str | None = None,
         time_signature: str | None = None,
         seed: int | None = None,
+        inference_steps: int | None = None,
+        weirdness: int | None = None,
+        style_influence: int | None = None,
+        thinking: bool = False,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -80,6 +84,10 @@ class AceStepClient:
             key: Tonal center (e.g. "C major") or "any".
             time_signature: Meter (e.g. "4/4", "3/4", "6/8", "5/4", "7/8").
             seed: Fixed seed for reproducibility (-1 or None for random).
+            inference_steps: Number of diffusion steps (Turbo: 8, Standard: 32–64).
+            weirdness: Deviation from conventional structures (0–100).
+            style_influence: Adherence to style descriptors (0–100).
+            thinking: If True, enables Chain-of-Thought mode.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -103,6 +111,14 @@ class AceStepClient:
             payload["time_signature"] = time_signature
         if seed is not None:
             payload["seed"] = seed
+        if inference_steps is not None:
+            payload["inference_steps"] = inference_steps
+        if weirdness is not None:
+            payload["weirdness"] = weirdness
+        if style_influence is not None:
+            payload["style_influence"] = style_influence
+        if thinking:
+            payload["thinking"] = True
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",
