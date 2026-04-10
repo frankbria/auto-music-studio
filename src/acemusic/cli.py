@@ -134,6 +134,16 @@ def _parse_bpm(value: str) -> int | str:
     return bpm_int
 
 
+def _validate_key(value: str | None) -> str | None:
+    """Validate --key: strip whitespace, reject empty/blank values."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise typer.BadParameter("--key cannot be empty or whitespace-only")
+    return stripped
+
+
 @app.command()
 def generate(
     prompt: str = typer.Argument(..., help="Text description of the music to generate."),
@@ -183,6 +193,12 @@ def generate(
         except typer.BadParameter as exc:
             console.print(f"[red]Invalid --bpm: {exc}[/red]")
             raise typer.Exit(code=1)
+
+    try:
+        key = _validate_key(key)
+    except typer.BadParameter as exc:
+        console.print(f"[red]Invalid --key: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     if time_signature is not None and time_signature not in _VALID_TIME_SIGNATURES:
         console.print(
@@ -282,16 +298,24 @@ def generate(
             )
 
         prompt_additions: list[str] = []
-        if parsed_bpm is not None:
+        if parsed_bpm is not None and parsed_bpm != "auto":
             console.print(
                 f"[yellow]Warning: --bpm is ACE-Step-specific; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
             )
             prompt_additions.append(f"{parsed_bpm} BPM")
-        if key is not None:
+        elif parsed_bpm == "auto":
+            console.print(
+                "[yellow]Warning: --bpm auto has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
+            )
+        if key is not None and key.lower() != "any":
             console.print(
                 f"[yellow]Warning: --key is ACE-Step-specific; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
             )
             prompt_additions.append(key)
+        elif key is not None and key.lower() == "any":
+            console.print(
+                "[yellow]Warning: --key any has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
+            )
         if time_signature is not None:
             console.print(
                 f"[yellow]Warning: --time-signature is ACE-Step-specific; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"

@@ -792,6 +792,22 @@ class TestMusicalParametersAceStep:
         assert result.exit_code == 0, result.output
         assert client_mock.submit_task.call_args.kwargs["audio_duration"] == 60.0
 
+    def test_key_empty_string_exits_one(self, monkeypatch, tmp_path):
+        """--key '' exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--key", "", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "key" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_key_whitespace_only_exits_one(self, monkeypatch, tmp_path):
+        """--key '   ' (whitespace-only) exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--key", "   ", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "key" in result.output.lower()
+        assert "Traceback" not in result.output
+
 
 class TestMusicalParametersElevenLabs:
     """Tests for US-3.2: musical params warn + inject into prompt on ElevenLabs backend."""
@@ -938,3 +954,37 @@ class TestMusicalParametersElevenLabs:
         assert "120" in prompt_sent
         assert "a minor" in prompt_sent.lower()
         assert "4/4" in prompt_sent
+
+    def test_bpm_auto_elevenlabs_skips_injection(self, monkeypatch, tmp_path):
+        """--bpm auto with ElevenLabs warns and does NOT inject 'auto' into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--bpm", "auto", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "bpm" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "auto" not in prompt_sent.lower()
+
+    def test_key_any_elevenlabs_skips_injection(self, monkeypatch, tmp_path):
+        """--key any with ElevenLabs warns and does NOT inject 'any' into the prompt."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--key", "any", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "key" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "any" not in prompt_sent.lower()
