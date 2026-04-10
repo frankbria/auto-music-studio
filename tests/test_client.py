@@ -120,6 +120,78 @@ class TestSubmitTask:
         payload = mock_post.call_args.kwargs["json"]
         assert "audio_duration" not in payload
 
+    def test_includes_inference_steps_when_provided(self):
+        """Includes inference_steps in the POST payload when provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", inference_steps=8)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["inference_steps"] == 8
+
+    def test_omits_inference_steps_when_none(self):
+        """Omits inference_steps from the POST payload when None."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", inference_steps=None)
+        payload = mock_post.call_args.kwargs["json"]
+        assert "inference_steps" not in payload
+
+    def test_includes_weirdness_when_provided(self):
+        """Includes weirdness in the POST payload when provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", weirdness=75)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["weirdness"] == 75
+
+    def test_omits_weirdness_when_none(self):
+        """Omits weirdness from the POST payload when None."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", weirdness=None)
+        payload = mock_post.call_args.kwargs["json"]
+        assert "weirdness" not in payload
+
+    def test_includes_style_influence_when_provided(self):
+        """Includes style_influence in the POST payload when provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", style_influence=80)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["style_influence"] == 80
+
+    def test_omits_style_influence_when_none(self):
+        """Omits style_influence from the POST payload when None."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", style_influence=None)
+        payload = mock_post.call_args.kwargs["json"]
+        assert "style_influence" not in payload
+
+    def test_includes_thinking_true_when_set(self):
+        """Includes thinking=True in the POST payload when enabled."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", thinking=True)
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["thinking"] is True
+
+    def test_omits_thinking_when_false(self):
+        """Omits thinking from the POST payload when False (default)."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", thinking=False)
+        payload = mock_post.call_args.kwargs["json"]
+        assert "thinking" not in payload
+
 
 # ---------------------------------------------------------------------------
 # query_result

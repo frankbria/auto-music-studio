@@ -988,3 +988,268 @@ class TestMusicalParametersElevenLabs:
         assert "key" in result.output.lower()
         prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
         assert "any" not in prompt_sent.lower()
+
+
+# ---------------------------------------------------------------------------
+# US-3.3: Quality/speed and creative parameters
+# ---------------------------------------------------------------------------
+
+
+class TestQualityCreativeParamsAceStep:
+    """Tests for US-3.3: --inference-steps, --weirdness, --style-influence, --thinking forwarded to ACE-Step."""
+
+    def test_inference_steps_forwarded(self, monkeypatch, tmp_path):
+        """--inference-steps 8 forwards inference_steps=8 to submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--inference-steps", "8", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["inference_steps"] == 8
+
+    def test_inference_steps_default_is_none(self, monkeypatch, tmp_path):
+        """When --inference-steps not given, inference_steps=None is forwarded."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["inference_steps"] is None
+
+    def test_weirdness_forwarded(self, monkeypatch, tmp_path):
+        """--weirdness 75 forwards weirdness=75 to submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--weirdness", "75", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["weirdness"] == 75
+
+    def test_style_influence_forwarded(self, monkeypatch, tmp_path):
+        """--style-influence 80 forwards style_influence=80 to submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--style-influence", "80", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["style_influence"] == 80
+
+    def test_thinking_forwarded(self, monkeypatch, tmp_path):
+        """--thinking forwards thinking=True to submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--thinking", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["thinking"] is True
+
+    def test_thinking_default_is_false(self, monkeypatch, tmp_path):
+        """When --thinking not given, thinking=False is forwarded."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["thinking"] is False
+
+    def test_weirdness_too_low_exits_one(self, monkeypatch, tmp_path):
+        """--weirdness -1 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--weirdness", "-1", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "weirdness" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_weirdness_too_high_exits_one(self, monkeypatch, tmp_path):
+        """--weirdness 101 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--weirdness", "101", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "weirdness" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_style_influence_too_low_exits_one(self, monkeypatch, tmp_path):
+        """--style-influence -1 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--style-influence", "-1", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "style-influence" in result.output.lower() or "style_influence" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_style_influence_too_high_exits_one(self, monkeypatch, tmp_path):
+        """--style-influence 101 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--style-influence", "101", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "style-influence" in result.output.lower() or "style_influence" in result.output.lower()
+        assert "Traceback" not in result.output
+
+
+class TestFormatValidation:
+    """Tests for US-3.3: --format validation."""
+
+    def test_valid_format_wav_accepted(self, monkeypatch, tmp_path):
+        """--format wav is accepted."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--format", "wav", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+
+    def test_valid_format_mp3_accepted(self, monkeypatch, tmp_path):
+        """--format mp3 is accepted."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "pop", "--format", "mp3", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+
+    def test_valid_formats_all_accepted(self, monkeypatch, tmp_path):
+        """All valid formats (wav, flac, mp3, aac, opus) are accepted."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        for fmt in ("wav", "flac", "mp3", "aac", "opus"):
+            client_mock = _make_client_mock([COMPLETED_RESULT])
+            with (
+                patch("acemusic.cli.AceStepClient", return_value=client_mock),
+                patch("acemusic.cli.get_duration", return_value=3.0),
+            ):
+                result = runner.invoke(
+                    app, ["generate", "pop", "--format", fmt, "--output", str(tmp_path)]
+                )
+            assert result.exit_code == 0, f"Format {fmt!r} was rejected: {result.output}"
+
+    def test_invalid_format_exits_one(self, monkeypatch, tmp_path):
+        """--format ogg exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--format", "ogg", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "format" in result.output.lower()
+        assert "Traceback" not in result.output
+
+    def test_invalid_format_mp4_exits_one(self, monkeypatch, tmp_path):
+        """--format mp4 exits 1 with a validation error."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["generate", "pop", "--format", "mp4", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "format" in result.output.lower()
+        assert "Traceback" not in result.output
+
+
+class TestQualityCreativeParamsElevenLabs:
+    """Tests for US-3.3: ElevenLabs warnings for ACE-Step-only quality params."""
+
+    def _el_config(self, monkeypatch):
+        from acemusic.config import AceConfig
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="el-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+    def _el_mock(self):
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_WAV
+        return el_mock
+
+    def test_inference_steps_warns_on_elevenlabs(self, monkeypatch, tmp_path):
+        """--inference-steps warns when used with ElevenLabs backend."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--inference-steps", "8", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "inference" in result.output.lower() or "warning" in result.output.lower()
+
+    def test_weirdness_nondefault_warns_on_elevenlabs(self, monkeypatch, tmp_path):
+        """--weirdness 75 (non-default) warns when used with ElevenLabs backend."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--weirdness", "75", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "weirdness" in result.output.lower()
+
+    def test_weirdness_default_no_warning(self, monkeypatch, tmp_path):
+        """--weirdness 50 (default) does NOT warn when used with ElevenLabs backend."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--weirdness", "50", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "--weirdness is ace-step-specific" not in result.output.lower()
+
+    def test_style_influence_nondefault_warns_on_elevenlabs(self, monkeypatch, tmp_path):
+        """--style-influence 80 (non-default) warns when used with ElevenLabs backend."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--style-influence", "80", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "style-influence" in result.output.lower() or "style_influence" in result.output.lower()
+
+    def test_thinking_warns_on_elevenlabs(self, monkeypatch, tmp_path):
+        """--thinking warns when used with ElevenLabs backend."""
+        self._el_config(monkeypatch)
+        el_mock = self._el_mock()
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "pop", "--backend", "elevenlabs", "--thinking", "--output", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "thinking" in result.output.lower()
