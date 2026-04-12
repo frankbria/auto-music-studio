@@ -95,7 +95,7 @@ Confirmation prompt shown when clips exist. ✓ The --force flag skips the promp
 
 ## Criterion 4: New generations are saved to the active workspace
 
-The generate command output priority is: --output > config.output_dir > active workspace clips dir > cwd.
+The generate command output priority is: --output > config.output_dir > active workspace clips dir.
 Test evidence from the pytest suite (test_output_falls_back_to_active_workspace_when_no_config):
 
 ```bash

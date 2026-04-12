@@ -101,7 +101,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace"):  # offline-safe subcommands skip URL check
+    elif ctx.invoked_subcommand not in ("models", "workspace"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -335,7 +335,6 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    # Resolve output directory: --output > config output_dir > active workspace > CWD
     if output is not None:
         output_path = output
     elif config.output_dir:
