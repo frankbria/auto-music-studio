@@ -340,12 +340,15 @@ class TestGenerateOutputNaming:
         assert len(list(cli_out.glob("*.wav"))) == 2
         assert len(list(config_dir.glob("*.wav"))) == 0
 
-    def test_output_falls_back_to_cwd_when_no_config(self, monkeypatch, tmp_path):
-        """When --output omitted and no config output_dir, files go to CWD."""
+    def test_output_falls_back_to_active_workspace_when_no_config(self, monkeypatch, tmp_path):
+        """When --output omitted and no config output_dir, files go to the active workspace."""
+        import acemusic.db as _db
+
+        monkeypatch.setattr(_db, "DB_DIR", tmp_path / ".acemusic")
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        monkeypatch.chdir(tmp_path)
 
         from acemusic.config import AceConfig
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         monkeypatch.setattr(
             "acemusic.cli.load_config",
@@ -361,7 +364,39 @@ class TestGenerateOutputNaming:
             result = runner.invoke(app, ["generate", "test"])
 
         assert result.exit_code == 0, result.output
-        assert len(list(tmp_path.glob("*.wav"))) == 2
+        active_ws = get_active_workspace()
+        clips_dir = get_workspace_path(active_ws.id)
+        assert len(list(clips_dir.glob("*.wav"))) == 2
+
+    def test_output_uses_switched_workspace(self, monkeypatch, tmp_path):
+        """Files go to the switched active workspace when no --output or config output_dir."""
+        import acemusic.db as _db
+
+        monkeypatch.setattr(_db, "DB_DIR", tmp_path / ".acemusic")
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        from acemusic.config import AceConfig
+        from acemusic.workspace import create_workspace, get_workspace_path, switch_workspace
+
+        ws = create_workspace("MyProject")
+        switch_workspace("MyProject")
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, output_dir=None),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(app, ["generate", "test"])
+
+        assert result.exit_code == 0, result.output
+        clips_dir = get_workspace_path(ws.id)
+        assert len(list(clips_dir.glob("*.wav"))) == 2
 
 
 class TestStyleLyricsFlags:
