@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–2 complete. CLI entry point, health check, basic generation, output naming all implemented.
+**Current progress:** Stages 1–4 complete. CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, and workspace management all implemented.
 
 ## Commands
 
@@ -45,6 +45,14 @@ uv run acemusic health
 uv run acemusic generate "upbeat pop" --output ./output --name demo
 uv run acemusic generate "dark electro" --bpm 128 --key "C minor" --time-signature "4/4" --seed 42 --duration 60
 uv run acemusic generate "ambient pad" --backend elevenlabs --instrumental
+
+# Workspace management (US-4.1)
+uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
+uv run acemusic workspace create "My Album"           # create a new workspace
+uv run acemusic workspace switch "My Album"           # set active workspace
+uv run acemusic workspace rename "My Album" "Debut"   # rename a workspace
+uv run acemusic workspace delete "Debut"              # delete (prompts if clips exist)
+uv run acemusic workspace delete "Debut" --force      # delete without confirmation
 ```
 
 ## Architecture
@@ -54,10 +62,12 @@ uv run acemusic generate "ambient pad" --backend elevenlabs --instrumental
 ```
 src/acemusic/
   __init__.py       # Package metadata (__version__)
-  cli.py            # Typer CLI app (health, generate, status commands)
+  cli.py            # Typer CLI app (health, generate, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
   config.py         # Config loading: env > .env > ~/.acemusic/config.yaml
+  db.py             # SQLite connection and schema init (~/.acemusic/metadata.db)
   utils.py          # Filename helpers (make_slug, make_filename, get_duration)
+  workspace.py      # Workspace CRUD — create, list, switch, rename, delete
 
 tests/
   conftest.py       # Fixtures: ace_server (session-scoped lifecycle), integration_url
@@ -68,6 +78,7 @@ tests/
   test_utils.py     # Utility function tests
   test_package.py   # Package import/version tests
   test_smoke.py     # Test runner smoke test
+  test_workspace.py # Workspace command tests
   features/         # pytest-bdd feature files (not yet populated)
 
 web/                # Next.js frontend (placeholder, Layer 3)
@@ -78,8 +89,10 @@ docs/               # Additional documentation (placeholder)
 ### Key Modules
 
 - **`client.py`** — The core integration with ACE-Step-1.5. Understands the API envelope (`{"data": ..., "code": 200}`), integer status codes (0=pending, 1=completed, 2=failed), and the `/release_task` → `/query_result` → `/v1/audio` workflow.
-- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `status` (stub). Uses `AceStepClient` for all API communication.
+- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `models`, and the `workspace` subcommand group (`create`, `list`, `switch`, `rename`, `delete`). Uses `AceStepClient` for generation and `workspace.py` for workspace ops.
 - **`config.py`** — Returns `AceConfig(api_url, api_key, output_dir)`. Priority: env vars > `.env` > `~/.acemusic/config.yaml`.
+- **`db.py`** — Opens (and schema-inits on first use) the SQLite metadata database at `~/.acemusic/metadata.db`. All workspace state is persisted here.
+- **`workspace.py`** — CRUD operations on workspaces. Audio clips are stored under `~/.acemusic/workspaces/{id}/clips/`. A "Default" workspace is auto-created on first access. `generate` falls back to the active workspace's clips directory when `--output` and `config.output_dir` are both unset.
 
 ### ACE-Step API Contract
 
