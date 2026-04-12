@@ -308,8 +308,9 @@ class TestSoundsCommand:
         assert result.exit_code == 0
         assert "sounds" in result.output
 
-    def test_sounds_help_shows_type_option(self):
+    def test_sounds_help_shows_type_option(self, monkeypatch):
         """acemusic sounds --help mentions the --type option."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
         result = runner.invoke(app, ["sounds", "--help"])
         assert result.exit_code == 0
         assert "--type" in result.output
