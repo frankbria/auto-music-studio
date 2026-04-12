@@ -23,14 +23,12 @@ def get_db() -> sqlite3.Connection:
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS workspaces (
             id         TEXT PRIMARY KEY,
             name       TEXT UNIQUE NOT NULL,
             is_active  INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
         )
-        """
-    )
+        """)
     conn.commit()

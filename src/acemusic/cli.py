@@ -877,9 +877,7 @@ def workspace_delete(
     try:
         clips = get_clip_count(get_workspace_by_name(name).id)
         if clips > 0 and not force:
-            confirmed = typer.confirm(
-                f"Workspace {name!r} contains {clips} clip(s). Delete anyway?"
-            )
+            confirmed = typer.confirm(f"Workspace {name!r} contains {clips} clip(s). Delete anyway?")
             if not confirmed:
                 console.print("Aborted.")
                 return

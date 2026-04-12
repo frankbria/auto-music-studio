@@ -99,9 +99,7 @@ def get_active_workspace() -> Workspace:
         row = conn.execute("SELECT * FROM workspaces WHERE is_active = 1").fetchone()
         if row is None:
             # Edge case: workspaces exist but none is active — activate the oldest.
-            first = conn.execute(
-                "SELECT * FROM workspaces ORDER BY created_at LIMIT 1"
-            ).fetchone()
+            first = conn.execute("SELECT * FROM workspaces ORDER BY created_at LIMIT 1").fetchone()
             conn.execute("UPDATE workspaces SET is_active = 1 WHERE id = ?", (first["id"],))
             conn.commit()
             row = first
