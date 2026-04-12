@@ -54,27 +54,21 @@ class TestSoundsValidation:
     def test_invalid_type_exits_one(self, monkeypatch, tmp_path):
         """--type must be 'one-shot' or 'loop'; any other value exits 1."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        result = runner.invoke(
-            app, ["sounds", "deep kick drum", "--type", "full-song", "--output", str(tmp_path)]
-        )
+        result = runner.invoke(app, ["sounds", "deep kick drum", "--type", "full-song", "--output", str(tmp_path)])
         assert result.exit_code == 1
         assert "one-shot" in result.output or "loop" in result.output or "invalid" in result.output.lower()
 
     def test_invalid_bpm_exits_one(self, monkeypatch, tmp_path):
         """BPM outside 60-180 exits 1 with an error message."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        result = runner.invoke(
-            app, ["sounds", "hi-hat", "--type", "loop", "--bpm", "999", "--output", str(tmp_path)]
-        )
+        result = runner.invoke(app, ["sounds", "hi-hat", "--type", "loop", "--bpm", "999", "--output", str(tmp_path)])
         assert result.exit_code == 1
         assert "bpm" in result.output.lower() or "180" in result.output
 
     def test_empty_key_exits_one(self, monkeypatch, tmp_path):
         """--key with blank value exits 1."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        result = runner.invoke(
-            app, ["sounds", "pad", "--type", "loop", "--key", "   ", "--output", str(tmp_path)]
-        )
+        result = runner.invoke(app, ["sounds", "pad", "--type", "loop", "--key", "   ", "--output", str(tmp_path)])
         assert result.exit_code == 1
 
     def test_missing_api_url_exits_one(self, monkeypatch, tmp_path):
@@ -125,7 +119,18 @@ class TestSoundsCommand:
         ):
             result = runner.invoke(
                 app,
-                ["sounds", "ambient pad", "--type", "loop", "--bpm", "120", "--key", "A minor", "--output", str(tmp_path)],
+                [
+                    "sounds",
+                    "ambient pad",
+                    "--type",
+                    "loop",
+                    "--bpm",
+                    "120",
+                    "--key",
+                    "A minor",
+                    "--output",
+                    str(tmp_path),
+                ],
             )
 
         assert result.exit_code == 0, result.output
@@ -248,9 +253,7 @@ class TestSoundsCommand:
             patch("acemusic.cli.AceStepClient", return_value=client_mock),
             patch("acemusic.cli.get_duration", return_value=1.5),
         ):
-            result = runner.invoke(
-                app, ["sounds", "snare", "--type", "one-shot", "--output", str(tmp_path)]
-            )
+            result = runner.invoke(app, ["sounds", "snare", "--type", "one-shot", "--output", str(tmp_path)])
 
         assert str(tmp_path) in result.output
 
@@ -264,9 +267,7 @@ class TestSoundsCommand:
             patch("acemusic.cli.AceStepClient", return_value=client_mock),
             patch("acemusic.cli.get_duration", return_value=2.5),
         ):
-            result = runner.invoke(
-                app, ["sounds", "snare", "--type", "one-shot", "--output", str(tmp_path)]
-            )
+            result = runner.invoke(app, ["sounds", "snare", "--type", "one-shot", "--output", str(tmp_path)])
 
         assert "2.5" in result.output
 
@@ -277,9 +278,7 @@ class TestSoundsCommand:
         client_mock = _make_client_mock(query_sequence=[FAILED_RESULT])
 
         with patch("acemusic.cli.AceStepClient", return_value=client_mock):
-            result = runner.invoke(
-                app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)]
-            )
+            result = runner.invoke(app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)])
 
         assert result.exit_code == 1
         assert "Traceback" not in result.output
@@ -298,9 +297,7 @@ class TestSoundsCommand:
         client_mock.submit_task.side_effect = AceStepError("connection refused")
 
         with patch("acemusic.cli.AceStepClient", return_value=client_mock):
-            result = runner.invoke(
-                app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)]
-            )
+            result = runner.invoke(app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)])
 
         assert result.exit_code == 1
         assert "Traceback" not in result.output
