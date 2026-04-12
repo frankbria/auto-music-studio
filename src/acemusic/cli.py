@@ -20,8 +20,10 @@ from acemusic.utils import get_duration, make_filename, make_slug
 from acemusic.workspace import (
     create_workspace,
     delete_workspace,
+    ensure_default_workspace,
     get_active_workspace,
     get_clip_count,
+    get_workspace_by_name,
     get_workspace_path,
     list_workspaces,
     rename_workspace,
@@ -828,8 +830,6 @@ def workspace_create(name: str = typer.Argument(..., help="Workspace name.")) ->
 @workspace_app.command("list")
 def workspace_list() -> None:
     """List all workspaces."""
-    from acemusic.workspace import ensure_default_workspace
-
     ensure_default_workspace()
     workspaces = list_workspaces()
     table = Table(title="Workspaces", show_header=True)
@@ -875,7 +875,7 @@ def workspace_delete(
 ) -> None:
     """Delete a workspace (prompts if non-empty, unless --force)."""
     try:
-        clips = get_clip_count(_get_workspace_id(name))
+        clips = get_clip_count(get_workspace_by_name(name).id)
         if clips > 0 and not force:
             confirmed = typer.confirm(
                 f"Workspace {name!r} contains {clips} clip(s). Delete anyway?"
@@ -888,14 +888,6 @@ def workspace_delete(
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
-
-
-def _get_workspace_id(name: str) -> str:
-    """Return the workspace id for the given name, or raise ValueError."""
-    for ws in list_workspaces():
-        if ws.name == name:
-            return ws.id
-    raise ValueError(f"Workspace {name!r} not found")
 
 
 @app.command()

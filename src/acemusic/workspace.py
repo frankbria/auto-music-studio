@@ -64,8 +64,7 @@ def create_workspace(name: str) -> Workspace:
             (ws_id, name, created_at),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
-        return _row_to_workspace(row)
+        return Workspace(id=ws_id, name=name, is_active=False, created_at=created_at)
     finally:
         conn.close()
 
@@ -76,6 +75,18 @@ def list_workspaces() -> list[Workspace]:
     try:
         rows = conn.execute("SELECT * FROM workspaces ORDER BY created_at").fetchall()
         return [_row_to_workspace(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_workspace_by_name(name: str) -> Workspace:
+    """Return the workspace with the given name, or raise ValueError if not found."""
+    conn = _db.get_db()
+    try:
+        row = conn.execute("SELECT * FROM workspaces WHERE name = ?", (name,)).fetchone()
+        if row is None:
+            raise ValueError(f"Workspace {name!r} not found")
+        return _row_to_workspace(row)
     finally:
         conn.close()
 
@@ -93,8 +104,13 @@ def get_active_workspace() -> Workspace:
             ).fetchone()
             conn.execute("UPDATE workspaces SET is_active = 1 WHERE id = ?", (first["id"],))
             conn.commit()
-            row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (first["id"],)).fetchone()
-        return _row_to_workspace(row)
+            row = first
+        return Workspace(
+            id=row["id"],
+            name=row["name"],
+            is_active=True,
+            created_at=row["created_at"],
+        )
     finally:
         conn.close()
 
