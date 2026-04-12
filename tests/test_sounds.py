@@ -1,10 +1,17 @@
 """Unit tests for acemusic sounds command (US-3.5)."""
 
+import re
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from acemusic.cli import app
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes from text (Rich emits these in CI environments)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
 
 runner = CliRunner()
 
@@ -313,7 +320,7 @@ class TestSoundsCommand:
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
         result = runner.invoke(app, ["sounds", "--help"])
         assert result.exit_code == 0
-        assert "--type" in result.output
+        assert "--type" in _plain(result.output)
 
     def test_bpm_auto_accepted_for_loop(self, monkeypatch, tmp_path):
         """--bpm auto is accepted for loops."""
