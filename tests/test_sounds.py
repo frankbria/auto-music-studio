@@ -15,10 +15,6 @@ def _plain(text: str) -> str:
 
 runner = CliRunner()
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 TASK_ID = "task-sounds-123"
 AUDIO_URL_1 = "http://localhost:8001/audio/oneshot1.wav"
 
@@ -42,11 +38,6 @@ def _make_client_mock(query_sequence=None, audio_bytes=FAKE_WAV):
     client.query_result.side_effect = query_sequence or [COMPLETED_RESULT]
     client.download_audio.return_value = audio_bytes
     return client
-
-
-# ---------------------------------------------------------------------------
-# Validation tests
-# ---------------------------------------------------------------------------
 
 
 class TestSoundsValidation:
@@ -78,6 +69,31 @@ class TestSoundsValidation:
         result = runner.invoke(app, ["sounds", "pad", "--type", "loop", "--key", "   ", "--output", str(tmp_path)])
         assert result.exit_code == 1
 
+    def test_invalid_format_exits_one(self, monkeypatch, tmp_path):
+        """--format with an unsupported value exits 1."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(
+            app, ["sounds", "kick", "--type", "one-shot", "--format", "ogg", "--output", str(tmp_path)]
+        )
+        assert result.exit_code == 1
+        assert "format" in result.output.lower() or "wav" in result.output.lower()
+
+    def test_bpm_with_oneshot_exits_one(self, monkeypatch, tmp_path):
+        """--bpm is rejected with --type one-shot."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(app, ["sounds", "kick", "--type", "one-shot", "--bpm", "120", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "loop" in result.output.lower() or "bpm" in result.output.lower()
+
+    def test_key_with_oneshot_exits_one(self, monkeypatch, tmp_path):
+        """--key is rejected with --type one-shot."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        result = runner.invoke(
+            app, ["sounds", "kick", "--type", "one-shot", "--key", "C major", "--output", str(tmp_path)]
+        )
+        assert result.exit_code == 1
+        assert "loop" in result.output.lower() or "key" in result.output.lower()
+
     def test_missing_api_url_exits_one(self, monkeypatch, tmp_path):
         """Missing ACEMUSIC_BASE_URL exits 1 with a friendly error."""
         monkeypatch.delenv("ACEMUSIC_BASE_URL", raising=False)
@@ -86,11 +102,6 @@ class TestSoundsValidation:
         monkeypatch.setattr("acemusic.cli.load_config", lambda: AceConfig(api_url=None, api_key=None))
         result = runner.invoke(app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)])
         assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# Happy-path tests
-# ---------------------------------------------------------------------------
 
 
 class TestSoundsCommand:
@@ -158,9 +169,7 @@ class TestSoundsCommand:
 
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        # mode="sound" must be passed
-        assert kwargs.get("mode") == "sound" or "sound" in str(call_kwargs)
+        assert call_kwargs.kwargs["mode"] == "sound"
 
     def test_sounds_passes_sound_type_to_client(self, monkeypatch, tmp_path):
         """sounds command passes sound_type to submit_task."""
@@ -176,8 +185,7 @@ class TestSoundsCommand:
 
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert kwargs.get("sound_type") == "loop"
+        assert call_kwargs.kwargs["sound_type"] == "loop"
 
     def test_sounds_passes_bpm_to_client(self, monkeypatch, tmp_path):
         """--bpm is forwarded to submit_task."""
@@ -195,8 +203,7 @@ class TestSoundsCommand:
 
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert kwargs.get("bpm") == 140
+        assert call_kwargs.kwargs["bpm"] == 140
 
     def test_sounds_passes_key_to_client(self, monkeypatch, tmp_path):
         """--key is forwarded to submit_task."""
@@ -214,8 +221,7 @@ class TestSoundsCommand:
 
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert kwargs.get("key") == "A minor"
+        assert call_kwargs.kwargs["key"] == "A minor"
 
     def test_sounds_filenames_contain_slug(self, monkeypatch, tmp_path):
         """Generated filenames include a slug derived from the prompt."""
@@ -316,11 +322,14 @@ class TestSoundsCommand:
         assert "sounds" in result.output
 
     def test_sounds_help_shows_type_option(self, monkeypatch):
-        """acemusic sounds --help mentions the --type option."""
+        """acemusic sounds --help documents the --type option with its valid values."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
         result = runner.invoke(app, ["sounds", "--help"])
         assert result.exit_code == 0
-        assert "--type" in _plain(result.output)
+        plain = _plain(result.output).lower()
+        assert "type" in plain
+        assert "one-shot" in plain
+        assert "loop" in plain
 
     def test_bpm_auto_accepted_for_loop(self, monkeypatch, tmp_path):
         """--bpm auto is accepted for loops."""
@@ -352,5 +361,4 @@ class TestSoundsCommand:
 
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert kwargs.get("num_clips", 1) == 1
+        assert call_kwargs.kwargs["num_clips"] == 1

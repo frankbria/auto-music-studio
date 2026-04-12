@@ -656,6 +656,11 @@ def sounds(
     ),
 ) -> None:
     """Generate short audio samples (loops or one-shots) using the ACE-Step model."""
+    _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
+    if format not in _VALID_FORMATS:
+        console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
+        raise typer.Exit(code=1)
+
     if sound_type not in _VALID_SOUND_TYPES:
         console.print(
             f"[red]Invalid --type: {sound_type!r}. Allowed values: {', '.join(sorted(_VALID_SOUND_TYPES))}[/red]"
@@ -674,6 +679,10 @@ def sounds(
         key = _validate_key(key)
     except typer.BadParameter as exc:
         console.print(f"[red]Invalid --key: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if sound_type == "one-shot" and (parsed_bpm is not None or key is not None):
+        console.print("[red]--bpm and --key are only valid with --type 'loop'.[/red]")
         raise typer.Exit(code=1)
 
     config = load_config()
