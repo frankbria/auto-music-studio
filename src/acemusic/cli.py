@@ -632,6 +632,166 @@ def _generate_via_elevenlabs(
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
 
+_VALID_SOUND_TYPES = {"one-shot", "loop"}
+
+
+@app.command()
+def sounds(
+    prompt: str = typer.Argument(..., help="Text description of the sound to generate."),
+    sound_type: str = typer.Option(..., "--type", help="Sound type: 'one-shot' or 'loop'."),
+    num_clips: int = typer.Option(1, "--num-clips", help="Number of audio clips to generate."),
+    duration: Optional[float] = typer.Option(None, "--duration", help="Target duration in seconds."),
+    format: str = typer.Option("wav", "--format", help="Output audio format."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'kick' → kick-1.wav)."),
+    bpm: Optional[str] = typer.Option(
+        None,
+        "--bpm",
+        help=f"Tempo in BPM ({_BPM_MIN}–{_BPM_MAX}) or 'auto'. Applies to loops.",
+    ),
+    key: Optional[str] = typer.Option(
+        None,
+        "--key",
+        help="Tonal center (e.g. 'A minor'). Applies to loops.",
+    ),
+) -> None:
+    """Generate short audio samples (loops or one-shots) using the ACE-Step model."""
+    if sound_type not in _VALID_SOUND_TYPES:
+        console.print(
+            f"[red]Invalid --type: {sound_type!r}. Allowed values: {', '.join(sorted(_VALID_SOUND_TYPES))}[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    parsed_bpm: int | str | None = None
+    if bpm is not None:
+        try:
+            parsed_bpm = _parse_bpm(bpm)
+        except typer.BadParameter as exc:
+            console.print(f"[red]Invalid --bpm: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    try:
+        key = _validate_key(key)
+    except typer.BadParameter as exc:
+        console.print(f"[red]Invalid --key: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    config = load_config()
+
+    if output is not None:
+        output_path = output
+    elif config.output_dir:
+        output_path = Path(config.output_dir).expanduser()
+    else:
+        output_path = Path.cwd()
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    slug = make_slug(prompt)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    safe_name = make_slug(name) if name else None
+
+    ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
+    try:
+        _sounds_via_ace_step(
+            ace_client=ace_client,
+            prompt=prompt,
+            sound_type=sound_type,
+            num_clips=num_clips,
+            duration=duration,
+            format=format,
+            output_path=output_path,
+            slug=slug,
+            timestamp=timestamp,
+            safe_name=safe_name,
+            bpm=parsed_bpm,
+            key=key,
+        )
+    except AceStepError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _sounds_via_ace_step(
+    *,
+    ace_client: AceStepClient,
+    prompt: str,
+    sound_type: str,
+    num_clips: int,
+    duration: Optional[float],
+    format: str,
+    output_path: Path,
+    slug: str,
+    timestamp: str,
+    safe_name: Optional[str],
+    bpm: "int | str | None" = None,
+    key: Optional[str] = None,
+) -> None:
+    """Submit, poll, and download a short audio sample via the ACE-Step backend."""
+    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+    poll_interval = 2.0
+
+    task_id = ace_client.submit_task(
+        prompt=prompt,
+        num_clips=num_clips,
+        audio_duration=duration,
+        format=format,
+        bpm=bpm,
+        key=key,
+        mode="sound",
+        sound_type=sound_type,
+    )
+    console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
+
+    start = time.monotonic()
+    result: dict = {}
+    with console.status("[bold green]Generating…[/bold green]", spinner="dots") as status:
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= poll_timeout:
+                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+                raise typer.Exit(code=1)
+
+            try:
+                result = ace_client.query_result(task_id)
+            except AceStepError as exc:
+                console.print(f"[red]Error polling status: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+            job_status = result.get("status", "unknown")
+            status.update(f"[bold green]Generating… ({elapsed:.0f}s) — {job_status}[/bold green]")
+
+            if job_status == "completed":
+                break
+            if job_status == "failed":
+                error_msg = result.get("error", "unknown error")
+                console.print(f"[red]Generation failed: {error_msg}[/red]")
+                raise typer.Exit(code=1)
+
+            time.sleep(poll_interval)
+
+    audio_urls: list[str] = result.get("audio_urls", [])
+    for i, url in enumerate(audio_urls, start=1):
+        if safe_name:
+            filename = f"{safe_name}-{i}.{format}"
+        else:
+            filename = make_filename(slug, timestamp, i, ext=format)
+        dest = output_path / filename
+        try:
+            data = ace_client.download_audio(url)
+        except AceStepError as exc:
+            console.print(f"[red]Download failed for clip {i}: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        dest.write_bytes(data)
+        try:
+            dur = get_duration(dest)
+            dur_str = f"{dur:.1f}s"
+        except Exception:
+            dur_str = "unknown"
+
+        console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
 @app.command()
 def status() -> None:
     """Check the status of the ACE-Step server."""
