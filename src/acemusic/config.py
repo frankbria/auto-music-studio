@@ -22,6 +22,8 @@ class AceConfig:
     output_dir: str | None = None
     elevenlabs_api_key: str | None = None
     elevenlabs_output_format: str = "mp3_44100_128"
+    # Loaded from ACEMUSIC_DEFAULT_MODEL env var or `default_model` in config.yaml.
+    # Not validated at load time; invalid values are caught by generate() at runtime.
     default_model: str | None = None
 
 

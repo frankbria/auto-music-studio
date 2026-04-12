@@ -21,45 +21,41 @@ from acemusic.utils import get_duration, make_filename, make_slug
 app = typer.Typer(help="acemusic — AI music generation CLI")
 console = Console()
 
-# ACE-Step model registry (US-3.4)
-MODELS: dict[str, dict] = {
+# ACE-Step model registry (US-3.4).
+# Keys map directly to the --model flag value and the API's model field.
+# All fields are rendered in `acemusic models` output.
+MODELS: dict[str, dict[str, str]] = {
     "turbo": {
-        "name": "ACE-Step Turbo (2B)",
         "description": "Fastest generation; best for quick drafts and iteration",
         "vram": "~2.4GB",
         "steps": "8",
         "dit_size": "2B",
     },
     "base": {
-        "name": "ACE-Step Base (2B)",
         "description": "Balanced quality/speed; general-purpose generation",
         "vram": "~2.4GB",
         "steps": "32-64",
         "dit_size": "2B",
     },
     "sft": {
-        "name": "ACE-Step SFT (2B)",
         "description": "Fine-tuned on supervised data; improved coherence",
         "vram": "~2.4GB",
         "steps": "32-64",
         "dit_size": "2B",
     },
     "xl-base": {
-        "name": "ACE-Step XL Base (4B)",
         "description": "Highest quality; best for professional-grade output",
         "vram": "~8GB",
         "steps": "32-64",
         "dit_size": "4B",
     },
     "xl-sft": {
-        "name": "ACE-Step XL SFT (4B)",
         "description": "XL fine-tuned; premium quality with improved coherence",
         "vram": "~8GB",
         "steps": "32-64",
         "dit_size": "4B",
     },
     "xl-turbo": {
-        "name": "ACE-Step XL Turbo (4B)",
         "description": "Fast XL generation; high quality with reduced steps",
         "vram": "~8GB",
         "steps": "8",
@@ -91,7 +87,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models",):
+    elif ctx.invoked_subcommand not in ("models",):  # offline-safe subcommands skip URL check
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -159,10 +155,11 @@ def models() -> None:
     table = Table(title="ACE-Step Model Variants", show_header=True)
     table.add_column("Model", style="cyan", no_wrap=True)
     table.add_column("Description")
-    table.add_column("VRAM", style="yellow", no_wrap=True)
+    table.add_column("VRAM (DIT size)", style="yellow", no_wrap=True)
     table.add_column("Inference Steps", style="green", no_wrap=True)
     for key, info in MODELS.items():
-        table.add_row(key, info["description"], info["vram"], info["steps"])
+        vram_dit = f"{info['vram']} ({info['dit_size']})"
+        table.add_row(key, info["description"], vram_dit, info["steps"])
     console.print(table)
 
 
