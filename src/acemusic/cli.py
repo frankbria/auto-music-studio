@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,22 @@ from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.utils import get_duration, make_filename, make_slug
+from acemusic.workspace import (
+    create_workspace,
+    delete_workspace,
+    ensure_default_workspace,
+    get_active_workspace,
+    get_clip_count,
+    get_workspace_by_name,
+    get_workspace_path,
+    list_workspaces,
+    rename_workspace,
+    switch_workspace,
+)
 
 app = typer.Typer(help="acemusic — AI music generation CLI")
+workspace_app = typer.Typer(help="Manage workspaces")
+app.add_typer(workspace_app, name="workspace")
 console = Console()
 
 # ACE-Step model registry (US-3.4).
@@ -87,7 +102,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models",):  # offline-safe subcommands skip URL check
+    elif ctx.invoked_subcommand not in ("models", "workspace"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -321,13 +336,13 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    # Resolve output directory: --output > config output_dir > CWD
     if output is not None:
         output_path = output
     elif config.output_dir:
         output_path = Path(config.output_dir).expanduser()
     else:
-        output_path = Path.cwd()
+        active_ws = get_active_workspace()
+        output_path = get_workspace_path(active_ws.id)
     output_path.mkdir(parents=True, exist_ok=True)
 
     resolved_lyrics = lyrics
@@ -799,6 +814,82 @@ def _sounds_via_ace_step(
             dur_str = "unknown"
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
+@workspace_app.command("create")
+def workspace_create(name: str = typer.Argument(..., help="Workspace name.")) -> None:
+    """Create a new workspace."""
+    try:
+        ws = create_workspace(name)
+        console.print(f"[green]Created workspace:[/green] {ws.name}")
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@workspace_app.command("list")
+def workspace_list() -> None:
+    """List all workspaces."""
+    try:
+        ensure_default_workspace()
+        workspaces = list_workspaces()
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+    table = Table(title="Workspaces", show_header=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Clips", justify="right")
+    table.add_column("Active", justify="center")
+    table.add_column("Created")
+    for ws in workspaces:
+        active_mark = "[green]\u2713[/green]" if ws.is_active else ""
+        table.add_row(ws.name, str(get_clip_count(ws.id)), active_mark, ws.created_at[:10])
+    console.print(table)
+
+
+@workspace_app.command("switch")
+def workspace_switch(name: str = typer.Argument(..., help="Workspace name to activate.")) -> None:
+    """Switch the active workspace."""
+    try:
+        switch_workspace(name)
+        console.print(f"[green]Switched to workspace:[/green] {name}")
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@workspace_app.command("rename")
+def workspace_rename(
+    old_name: str = typer.Argument(..., help="Current workspace name."),
+    new_name: str = typer.Argument(..., help="New workspace name."),
+) -> None:
+    """Rename a workspace."""
+    try:
+        rename_workspace(old_name, new_name)
+        console.print(f"[green]Renamed workspace:[/green] {old_name!r} → {new_name!r}")
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@workspace_app.command("delete")
+def workspace_delete(
+    name: str = typer.Argument(..., help="Workspace name to delete."),
+    force: bool = typer.Option(False, "--force", help="Skip confirmation prompt."),
+) -> None:
+    """Delete a workspace (prompts if non-empty, unless --force)."""
+    try:
+        clips = get_clip_count(get_workspace_by_name(name).id)
+        if clips > 0 and not force:
+            confirmed = typer.confirm(f"Workspace {name!r} contains {clips} clip(s). Delete anyway?")
+            if not confirmed:
+                console.print("Aborted.")
+                return
+        delete_workspace(name)
+        console.print(f"[green]Deleted workspace:[/green] {name}")
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command()
