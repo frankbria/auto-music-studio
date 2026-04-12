@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -821,7 +822,7 @@ def workspace_create(name: str = typer.Argument(..., help="Workspace name.")) ->
     try:
         ws = create_workspace(name)
         console.print(f"[green]Created workspace:[/green] {ws.name}")
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
@@ -829,8 +830,12 @@ def workspace_create(name: str = typer.Argument(..., help="Workspace name.")) ->
 @workspace_app.command("list")
 def workspace_list() -> None:
     """List all workspaces."""
-    ensure_default_workspace()
-    workspaces = list_workspaces()
+    try:
+        ensure_default_workspace()
+        workspaces = list_workspaces()
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
     table = Table(title="Workspaces", show_header=True)
     table.add_column("Name", style="cyan")
     table.add_column("Clips", justify="right")
@@ -848,7 +853,7 @@ def workspace_switch(name: str = typer.Argument(..., help="Workspace name to act
     try:
         switch_workspace(name)
         console.print(f"[green]Switched to workspace:[/green] {name}")
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
@@ -862,7 +867,7 @@ def workspace_rename(
     try:
         rename_workspace(old_name, new_name)
         console.print(f"[green]Renamed workspace:[/green] {old_name!r} → {new_name!r}")
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
@@ -882,7 +887,7 @@ def workspace_delete(
                 return
         delete_workspace(name)
         console.print(f"[green]Deleted workspace:[/green] {name}")
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
