@@ -21,6 +21,53 @@ from acemusic.utils import get_duration, make_filename, make_slug
 app = typer.Typer(help="acemusic — AI music generation CLI")
 console = Console()
 
+# ACE-Step model registry (US-3.4)
+MODELS: dict[str, dict] = {
+    "turbo": {
+        "name": "ACE-Step Turbo (2B)",
+        "description": "Fastest generation; best for quick drafts and iteration",
+        "vram": "~2.4GB",
+        "steps": "8",
+        "dit_size": "2B",
+    },
+    "base": {
+        "name": "ACE-Step Base (2B)",
+        "description": "Balanced quality/speed; general-purpose generation",
+        "vram": "~2.4GB",
+        "steps": "32-64",
+        "dit_size": "2B",
+    },
+    "sft": {
+        "name": "ACE-Step SFT (2B)",
+        "description": "Fine-tuned on supervised data; improved coherence",
+        "vram": "~2.4GB",
+        "steps": "32-64",
+        "dit_size": "2B",
+    },
+    "xl-base": {
+        "name": "ACE-Step XL Base (4B)",
+        "description": "Highest quality; best for professional-grade output",
+        "vram": "~8GB",
+        "steps": "32-64",
+        "dit_size": "4B",
+    },
+    "xl-sft": {
+        "name": "ACE-Step XL SFT (4B)",
+        "description": "XL fine-tuned; premium quality with improved coherence",
+        "vram": "~8GB",
+        "steps": "32-64",
+        "dit_size": "4B",
+    },
+    "xl-turbo": {
+        "name": "ACE-Step XL Turbo (4B)",
+        "description": "Fast XL generation; high quality with reduced steps",
+        "vram": "~8GB",
+        "steps": "8",
+        "dit_size": "4B",
+    },
+}
+VALID_MODELS: frozenset[str] = frozenset(MODELS.keys())
+
 
 def _version_callback(value: bool) -> None:
     """Print version string and exit when --version flag is set."""
@@ -44,7 +91,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    else:
+    elif ctx.invoked_subcommand not in ("models",):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -104,6 +151,19 @@ def health() -> None:
 
     if not ace_healthy:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def models() -> None:
+    """List available ACE-Step model variants with VRAM and inference step requirements."""
+    table = Table(title="ACE-Step Model Variants", show_header=True)
+    table.add_column("Model", style="cyan", no_wrap=True)
+    table.add_column("Description")
+    table.add_column("VRAM", style="yellow", no_wrap=True)
+    table.add_column("Inference Steps", style="green", no_wrap=True)
+    for key, info in MODELS.items():
+        table.add_row(key, info["description"], info["vram"], info["steps"])
+    console.print(table)
 
 
 def _is_connection_error(exc: AceStepError) -> bool:
@@ -194,6 +254,11 @@ def generate(
         50, "--style-influence", help="Adherence to style descriptors (0-100). ACE-Step only."
     ),
     thinking: bool = typer.Option(False, "--thinking", help="Enable Chain-of-Thought mode. ACE-Step only."),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help=f"ACE-Step model variant ({', '.join(sorted(VALID_MODELS))}). ACE-Step only.",
+    ),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
     _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
@@ -251,6 +316,14 @@ def generate(
 
     config = load_config()
 
+    # Resolve model: --model flag > config.default_model > None (server default)
+    resolved_model = model or config.default_model or None
+    if resolved_model is not None and resolved_model not in VALID_MODELS:
+        console.print(
+            f"[red]Invalid --model: {resolved_model!r}. Valid options: {', '.join(sorted(VALID_MODELS))}[/red]"
+        )
+        raise typer.Exit(code=1)
+
     # Resolve output directory: --output > config output_dir > CWD
     if output is not None:
         output_path = output
@@ -303,6 +376,7 @@ def generate(
                 weirdness=weirdness,
                 style_influence=style_influence,
                 thinking=thinking,
+                model=resolved_model,
             )
             return
         except AceStepError as exc:
@@ -313,7 +387,7 @@ def generate(
             # Connection failure — attempt auto-fallback
             if not config.elevenlabs_api_key:
                 console.print(
-                    f"[red]ACE-Step unavailable ({exc}). " "Set ELEVENLABS_API_KEY to enable automatic fallback.[/red]"
+                    f"[red]ACE-Step unavailable ({exc}). Set ELEVENLABS_API_KEY to enable automatic fallback.[/red]"
                 )
                 raise typer.Exit(code=1)
             console.print("[yellow]ACE-Step unavailable — falling back to ElevenLabs[/yellow]")
@@ -322,7 +396,7 @@ def generate(
     if effective_backend == "elevenlabs":
         if not config.elevenlabs_api_key:
             console.print(
-                "[red]ELEVENLABS_API_KEY is not configured. " "Set it in .env to use the ElevenLabs backend.[/red]"
+                "[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the ElevenLabs backend.[/red]"
             )
             raise typer.Exit(code=1)
         if vocal_language is not None:
@@ -341,6 +415,8 @@ def generate(
             )
         if thinking:
             console.print("[yellow]Warning: --thinking is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
+        if resolved_model is not None:
+            console.print("[yellow]Warning: --model is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
 
         prompt_additions: list[str] = []
         if parsed_bpm is not None and parsed_bpm != "auto":
@@ -422,6 +498,7 @@ def _generate_via_ace_step(
     weirdness: int = 50,
     style_influence: int = 50,
     thinking: bool = False,
+    model: Optional[str] = None,
 ) -> None:
     """Submit, poll, and download audio via the ACE-Step backend."""
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
@@ -444,6 +521,7 @@ def _generate_via_ace_step(
         weirdness=weirdness,
         style_influence=style_influence,
         thinking=thinking,
+        model=model,
     )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 

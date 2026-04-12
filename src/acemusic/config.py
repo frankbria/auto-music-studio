@@ -22,6 +22,7 @@ class AceConfig:
     output_dir: str | None = None
     elevenlabs_api_key: str | None = None
     elevenlabs_output_format: str = "mp3_44100_128"
+    default_model: str | None = None
 
 
 def load_config() -> AceConfig:
@@ -32,6 +33,7 @@ def load_config() -> AceConfig:
     api_url = os.environ.get("ACEMUSIC_BASE_URL") or None
     api_key = os.environ.get("ACEMUSIC_API_KEY") or None
     output_dir: str | None = None
+    yaml_default_model: str | None = None
 
     # Read ~/.acemusic/config.yaml — always load for output_dir; only fill
     # api_url/api_key from it when the env vars are absent.
@@ -46,11 +48,13 @@ def load_config() -> AceConfig:
             if not api_key:
                 api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
             output_dir = data.get("output_dir") or None
+            yaml_default_model = data.get("default_model") or None
         except Exception as exc:
             logger.warning("Failed to read config file %s: %s", yaml_path, exc)
 
     elevenlabs_api_key = os.environ.get("ELEVENLABS_API_KEY") or None
     elevenlabs_output_format = os.environ.get("ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
+    default_model: str | None = os.environ.get("ACEMUSIC_DEFAULT_MODEL") or yaml_default_model or None
 
     return AceConfig(
         api_url=api_url,
@@ -58,4 +62,5 @@ def load_config() -> AceConfig:
         output_dir=output_dir,
         elevenlabs_api_key=elevenlabs_api_key,
         elevenlabs_output_format=elevenlabs_output_format,
+        default_model=default_model,
     )

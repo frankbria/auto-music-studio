@@ -1268,3 +1268,138 @@ class TestQualityCreativeParamsElevenLabs:
             )
         assert result.exit_code == 0, result.output
         assert "thinking" in result.output.lower()
+
+
+class TestModelSelection:
+    """Tests for US-3.4: --model flag and model selection."""
+
+    def test_model_flag_passes_to_submit_task(self, monkeypatch, tmp_path):
+        """--model turbo passes model='turbo' to AceStepClient.submit_task."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "jazz", "--model", "turbo", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args is not None
+        assert client_mock.submit_task.call_args.kwargs["model"] == "turbo"
+
+    def test_no_model_flag_passes_none(self, monkeypatch, tmp_path):
+        """Omitting --model with no config default passes model=None to submit_task."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, default_model=None),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "jazz", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["model"] is None
+
+    def test_config_default_model_used_when_flag_omitted(self, monkeypatch, tmp_path):
+        """When --model is omitted, config.default_model is passed to submit_task."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, default_model="xl-turbo"),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "jazz", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["model"] == "xl-turbo"
+
+    def test_explicit_model_flag_overrides_config_default(self, monkeypatch, tmp_path):
+        """--model flag takes precedence over config.default_model."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, default_model="xl-turbo"),
+        )
+
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "jazz", "--model", "base", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.submit_task.call_args.kwargs["model"] == "base"
+
+    def test_invalid_model_exits_one(self, monkeypatch, tmp_path):
+        """--model with an invalid name exits 1 and lists valid options."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        result = runner.invoke(
+            app,
+            ["generate", "jazz", "--model", "invalid-name", "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == 1
+        assert "invalid-name" in result.output
+        assert "turbo" in result.output
+
+    def test_model_warns_on_elevenlabs(self, monkeypatch, tmp_path):
+        """--model with --backend elevenlabs prints a warning but continues."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="el-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "jazz", "--model", "turbo", "--backend", "elevenlabs", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "model" in result.output.lower()
+        assert "ignored" in result.output.lower() or "warning" in result.output.lower()

@@ -50,3 +50,42 @@ def test_missing_api_url_produces_friendly_error(monkeypatch):
     assert "ACEMUSIC_BASE_URL" in result.output
     assert "traceback" not in result.output.lower()
     assert "Traceback" not in result.output
+
+
+class TestModelsCommand:
+    """Tests for US-3.4: acemusic models command."""
+
+    def test_models_exits_zero(self):
+        """acemusic models exits with code 0."""
+        result = runner.invoke(app, ["models"])
+        assert result.exit_code == 0
+
+    def test_models_lists_all_variants(self):
+        """acemusic models output contains all six ACE-Step model names."""
+        result = runner.invoke(app, ["models"])
+        assert result.exit_code == 0
+        for name in ("turbo", "base", "sft", "xl-base", "xl-sft", "xl-turbo"):
+            assert name in result.output, f"Expected model '{name}' in output"
+
+    def test_models_shows_vram_info(self):
+        """acemusic models output includes VRAM information."""
+        result = runner.invoke(app, ["models"])
+        assert result.exit_code == 0
+        assert "GB" in result.output or "vram" in result.output.lower()
+
+    def test_models_shows_inference_steps(self):
+        """acemusic models output includes inference steps information."""
+        result = runner.invoke(app, ["models"])
+        assert result.exit_code == 0
+        # Should show step counts like "8" for turbo or "32" for standard models
+        assert any(s in result.output for s in ("8", "32", "64", "steps"))
+
+    def test_models_works_without_api_url(self, monkeypatch):
+        """acemusic models succeeds even when ACEMUSIC_BASE_URL is not configured."""
+        monkeypatch.delenv("ACEMUSIC_BASE_URL", raising=False)
+        from acemusic import config as cfg_mod
+
+        monkeypatch.setattr(cfg_mod, "load_config", lambda: cfg_mod.AceConfig(api_url=None, api_key=None))
+        result = runner.invoke(app, ["models"])
+        assert result.exit_code == 0
+        assert "turbo" in result.output

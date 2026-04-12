@@ -68,6 +68,7 @@ class AceStepClient:
         weirdness: int | None = None,
         style_influence: int | None = None,
         thinking: bool = False,
+        model: str | None = None,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -88,6 +89,7 @@ class AceStepClient:
             weirdness: Deviation from conventional structures (0–100).
             style_influence: Adherence to style descriptors (0–100).
             thinking: If True, enables Chain-of-Thought mode.
+            model: ACE-Step model variant key (e.g. "turbo", "xl-base"). None uses server default.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -119,6 +121,8 @@ class AceStepClient:
             payload["style_influence"] = style_influence
         if thinking:
             payload["thinking"] = True
+        if model is not None:
+            payload["model"] = model
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",
