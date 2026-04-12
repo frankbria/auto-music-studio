@@ -69,6 +69,8 @@ class AceStepClient:
         style_influence: int | None = None,
         thinking: bool = False,
         model: str | None = None,
+        mode: str | None = None,
+        sound_type: str | None = None,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -90,6 +92,8 @@ class AceStepClient:
             style_influence: Adherence to style descriptors (0–100).
             thinking: If True, enables Chain-of-Thought mode.
             model: ACE-Step model variant key (e.g. "turbo", "xl-base"). None uses server default.
+            mode: Generation mode (e.g. "sound" for sounds mode). None uses server default.
+            sound_type: Sound type for sounds mode ("one-shot" or "loop"). None uses server default.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -123,6 +127,10 @@ class AceStepClient:
             payload["thinking"] = True
         if model is not None:
             payload["model"] = model
+        if mode is not None:
+            payload["mode"] = mode
+        if sound_type is not None:
+            payload["sound_type"] = sound_type
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",
