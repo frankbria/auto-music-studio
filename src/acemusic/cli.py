@@ -1199,7 +1199,11 @@ def import_clip(
 
     dest_name = f"{uuid.uuid4().hex}{ext}"
     dest_path = clips_dir / dest_name
-    shutil.copy2(file_path, dest_path)
+    try:
+        shutil.copy2(file_path, dest_path)
+    except OSError as exc:
+        console.print(f"[red]Error copying file: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     clip_title = title if title is not None else file_path.stem
     duration = get_duration(dest_path)
@@ -1218,7 +1222,12 @@ def import_clip(
         generation_mode="upload",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
-    create_clip(clip)
+    try:
+        create_clip(clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     bpm_display = str(bpm) if bpm is not None else "unknown"
     key_display = key if key is not None else "unknown"

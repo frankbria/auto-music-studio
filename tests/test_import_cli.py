@@ -155,13 +155,15 @@ class TestImportCommand:
 
     def test_import_nonexistent_file_errors(self, workspace_with_clips_dir):
         result = runner.invoke(app, ["import", "/no/such/file.wav"])
-        assert result.exit_code != 0 or "error" in result.output.lower() or "not found" in result.output.lower()
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
 
     def test_import_unsupported_format_errors(self, workspace_with_clips_dir, tmp_path):
         bad_file = tmp_path / "video.mp4"
         bad_file.write_bytes(b"fake video")
         result = runner.invoke(app, ["import", str(bad_file)])
-        assert result.exit_code != 0 or "unsupported" in result.output.lower() or "error" in result.output.lower()
+        assert result.exit_code == 1
+        assert "unsupported" in result.output.lower()
 
 
 class TestClipsListShowsUploadBadge:

@@ -36,9 +36,11 @@ class TestDetectBpm:
         fake_path = tmp_path / "song.wav"
         fake_path.write_bytes(b"fake audio")
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.return_value = (MagicMock(), 22050)
-            mock_librosa.beat.beat_track.return_value = (120.0, MagicMock())
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (MagicMock(), 22050)
+        mock_librosa.beat.beat_track.return_value = (120.0, MagicMock())
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_bpm(fake_path)
 
         assert isinstance(result, float)
@@ -48,8 +50,10 @@ class TestDetectBpm:
         fake_path = tmp_path / "bad.wav"
         fake_path.write_bytes(b"not audio")
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.side_effect = Exception("load failed")
+        mock_librosa = MagicMock()
+        mock_librosa.load.side_effect = Exception("load failed")
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_bpm(fake_path)
 
         assert result is None
@@ -58,9 +62,11 @@ class TestDetectBpm:
         fake_path = tmp_path / "song.wav"
         fake_path.write_bytes(b"fake audio")
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.return_value = (MagicMock(), 22050)
-            mock_librosa.beat.beat_track.side_effect = Exception("beat track failed")
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (MagicMock(), 22050)
+        mock_librosa.beat.beat_track.side_effect = Exception("beat track failed")
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_bpm(fake_path)
 
         assert result is None
@@ -76,9 +82,11 @@ class TestDetectKey:
         chroma = np.zeros((12, 100))
         chroma[0, :] = 1.0  # Dominant pitch class 0 = C
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.return_value = (MagicMock(), 22050)
-            mock_librosa.feature.chroma_cqt.return_value = chroma
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (MagicMock(), 22050)
+        mock_librosa.feature.chroma_cqt.return_value = chroma
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_key(fake_path)
 
         assert isinstance(result, str)
@@ -88,8 +96,10 @@ class TestDetectKey:
         fake_path = tmp_path / "bad.wav"
         fake_path.write_bytes(b"not audio")
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.side_effect = Exception("load failed")
+        mock_librosa = MagicMock()
+        mock_librosa.load.side_effect = Exception("load failed")
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_key(fake_path)
 
         assert result is None
@@ -98,9 +108,11 @@ class TestDetectKey:
         fake_path = tmp_path / "song.wav"
         fake_path.write_bytes(b"fake audio")
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.return_value = (MagicMock(), 22050)
-            mock_librosa.feature.chroma_cqt.side_effect = Exception("chroma failed")
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (MagicMock(), 22050)
+        mock_librosa.feature.chroma_cqt.side_effect = Exception("chroma failed")
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_key(fake_path)
 
         assert result is None
@@ -114,10 +126,11 @@ class TestDetectKey:
         chroma = np.zeros((12, 100))
         chroma[9, :] = 1.0  # Dominant pitch class 9 = A
 
-        with patch("acemusic.audio.librosa") as mock_librosa:
-            mock_librosa.load.return_value = (MagicMock(), 22050)
-            mock_librosa.feature.chroma_cqt.return_value = chroma
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (MagicMock(), 22050)
+        mock_librosa.feature.chroma_cqt.return_value = chroma
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa}):
             result = detect_key(fake_path)
 
-        assert result is not None
-        assert "major" in result.lower() or "minor" in result.lower()
+        assert result == "A major"
