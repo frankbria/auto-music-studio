@@ -404,9 +404,11 @@ class TestGenerateWithPreset:
             ],
         )
 
-    def test_generate_preset_not_found(self, isolated_db):
+    def test_generate_preset_not_found(self, isolated_db, monkeypatch):
         from acemusic.workspace import ensure_default_workspace
 
+        # Set a dummy URL so the main callback's api_url guard passes
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:9999")
         ensure_default_workspace()
         result = runner.invoke(
             app,
