@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -619,8 +620,8 @@ def _generate_via_ace_step(
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             create_clip(clip)
-        except Exception:
-            pass  # metadata recording is best-effort; never block generation output
+        except Exception as exc:
+            warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
@@ -698,8 +699,8 @@ def _generate_via_elevenlabs(
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             create_clip(clip)
-        except Exception:
-            pass  # metadata recording is best-effort; never block generation output
+        except Exception as exc:
+            warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 

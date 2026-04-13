@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -47,7 +47,7 @@ def _insert_test_clip(db_path: Path, **overrides) -> int:
         "inference_steps": 32,
         "parent_clip_id": None,
         "generation_mode": "generate",
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     defaults.update(overrides)
     conn = sqlite3.connect(str(db_path))
@@ -120,7 +120,7 @@ class TestClipsCRUD:
             inference_steps=32,
             parent_clip_id=None,
             generation_mode="generate",
-            created_at=datetime.now().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
         clip_id = create_clip(clip)
         assert isinstance(clip_id, int)
@@ -162,7 +162,7 @@ class TestClipsCRUD:
                 file_path=f"/tmp/{title}.wav",
                 format="wav",
                 duration=30.0,
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
 
         create_clip(_make("Alpha", "ws-a"))
