@@ -19,13 +19,11 @@ from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
     create_clip,
+    delete_clip,
     get_clip,
     list_clips,
     search_clips,
     update_clip_title,
-)
-from acemusic.db import (
-    delete_clip as _db_delete_clip,
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip
@@ -1063,7 +1061,7 @@ def clips_delete(
         raise typer.Exit(code=1)
     if not yes:
         typer.confirm(f"Delete clip {clip_id} and file {clip.file_path}?", abort=True)
-    _db_delete_clip(clip_id)
+    delete_clip(clip_id)
     Path(clip.file_path).unlink(missing_ok=True)
     console.print(f"[green]Deleted clip {clip_id}[/green] and file {clip.file_path}")
 
