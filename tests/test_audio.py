@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
 
