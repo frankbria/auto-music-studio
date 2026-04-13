@@ -372,9 +372,11 @@ class TestPresetDeleteCommand:
 
 class TestGenerateWithPreset:
     @patch("acemusic.cli._generate_via_ace_step")
-    def test_generate_applies_preset(self, mock_generate, isolated_db):
+    def test_generate_applies_preset(self, mock_generate, isolated_db, monkeypatch):
         import acemusic.db as _db
 
+        # Set a dummy URL so the main callback's api_url guard passes
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:9999")
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -389,12 +391,13 @@ class TestGenerateWithPreset:
             style="dark electro",
             bpm=128,
             key="C minor",
+            model=None,  # "ace-step-base" default is not a valid model name
         )
 
         # Mock the generation to avoid actual API calls
         mock_generate.return_value = None
 
-        runner.invoke(
+        result = runner.invoke(
             app,
             [
                 "generate",
@@ -403,6 +406,8 @@ class TestGenerateWithPreset:
                 "DarkPreset",
             ],
         )
+        assert result.exit_code == 0
+        mock_generate.assert_called_once()
 
     def test_generate_preset_not_found(self, isolated_db, monkeypatch):
         from acemusic.workspace import ensure_default_workspace
