@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,18 @@ from rich.table import Table
 from acemusic import __version__
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
+from acemusic.db import (
+    create_clip,
+    get_clip,
+    list_clips,
+    search_clips,
+    update_clip_title,
+)
+from acemusic.db import (
+    delete_clip as _db_delete_clip,
+)
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
+from acemusic.models import Clip
 from acemusic.utils import get_duration, make_filename, make_slug
 from acemusic.workspace import (
     create_workspace,
@@ -33,7 +44,9 @@ from acemusic.workspace import (
 
 app = typer.Typer(help="acemusic — AI music generation CLI")
 workspace_app = typer.Typer(help="Manage workspaces")
+clips_app = typer.Typer(help="Manage audio clips")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(clips_app, name="clips")
 console = Console()
 
 # ACE-Step model registry (US-3.4).
@@ -102,7 +115,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -578,11 +591,36 @@ def _generate_via_ace_step(
             raise typer.Exit(code=1)
 
         dest.write_bytes(data)
+        dur: Optional[float] = None
         try:
             dur = get_duration(dest)
             dur_str = f"{dur:.1f}s"
         except Exception:
             dur_str = "unknown"
+
+        try:
+            ws = get_active_workspace()
+            bpm_int = bpm if isinstance(bpm, int) else None
+            clip = Clip(
+                title=f"{slug}-{i}",
+                workspace_id=ws.id,
+                file_path=str(dest.resolve()),
+                format=format,
+                duration=dur,
+                bpm=bpm_int,
+                key=key,
+                style_tags=style,
+                lyrics=lyrics,
+                vocal_language=vocal_language,
+                model=model,
+                seed=seed,
+                inference_steps=inference_steps,
+                generation_mode="generate",
+                created_at=datetime.now().isoformat(),
+            )
+            create_clip(clip)
+        except Exception:
+            pass  # metadata recording is best-effort; never block generation output
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
@@ -638,11 +676,30 @@ def _generate_via_elevenlabs(
             filename = make_filename(slug, timestamp, i, ext=ext)
         dest = output_path / filename
         dest.write_bytes(data)
+        el_dur: Optional[float] = None
         try:
-            dur = get_duration(dest)
-            dur_str = f"{dur:.1f}s"
+            el_dur = get_duration(dest)
+            dur_str = f"{el_dur:.1f}s"
         except Exception:
             dur_str = "unknown"
+
+        try:
+            ws = get_active_workspace()
+            clip = Clip(
+                title=f"{slug}-{i}",
+                workspace_id=ws.id,
+                file_path=str(dest.resolve()),
+                format=ext,
+                duration=el_dur,
+                style_tags=style,
+                lyrics=lyrics,
+                model="elevenlabs",
+                generation_mode="generate",
+                created_at=datetime.now().isoformat(),
+            )
+            create_clip(clip)
+        except Exception:
+            pass  # metadata recording is best-effort; never block generation output
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
@@ -896,3 +953,169 @@ def workspace_delete(
 def status() -> None:
     """Check the status of the ACE-Step server."""
     typer.echo("Not yet implemented")
+
+
+# ---------------------------------------------------------------------------
+# clips sub-application (US-4.2)
+# ---------------------------------------------------------------------------
+
+
+def _fmt_duration(seconds: Optional[float]) -> str:
+    """Format a duration in seconds as MM:SS, or '-' if None."""
+    if seconds is None:
+        return "-"
+    mins = int(seconds) // 60
+    secs = int(seconds) % 60
+    return f"{mins:02d}:{secs:02d}"
+
+
+@clips_app.command("list")
+def clips_list() -> None:
+    """List all clips in the active workspace."""
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips = list_clips(ws.id)
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if not clips:
+        console.print("No clips found.")
+        return
+
+    table = Table(title=f"Clips — {ws.name}", show_header=True)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Duration", justify="right")
+    table.add_column("BPM", justify="right")
+    table.add_column("Model")
+    table.add_column("Created")
+    for clip in clips:
+        table.add_row(
+            str(clip.id),
+            clip.title or "-",
+            _fmt_duration(clip.duration),
+            str(clip.bpm) if clip.bpm is not None else "-",
+            clip.model or "-",
+            (clip.created_at or "")[:10],
+        )
+    console.print(table)
+
+
+@clips_app.command("info")
+def clips_info(clip_id: int = typer.Argument(..., help="Clip ID.")) -> None:
+    """Show full metadata for a clip."""
+    clip = get_clip(clip_id)
+    if clip is None:
+        console.print(f"[red]Clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    fields = [
+        ("ID", str(clip.id)),
+        ("Title", clip.title or "-"),
+        ("Workspace", clip.workspace_id),
+        ("File", clip.file_path),
+        ("Format", clip.format or "-"),
+        ("Duration", _fmt_duration(clip.duration)),
+        ("BPM", str(clip.bpm) if clip.bpm is not None else "-"),
+        ("Key", clip.key or "-"),
+        ("Style Tags", clip.style_tags or "-"),
+        ("Lyrics", clip.lyrics or "-"),
+        ("Vocal Language", clip.vocal_language or "-"),
+        ("Model", clip.model or "-"),
+        ("Seed", str(clip.seed) if clip.seed is not None else "-"),
+        ("Inference Steps", str(clip.inference_steps) if clip.inference_steps is not None else "-"),
+        ("Parent Clip ID", str(clip.parent_clip_id) if clip.parent_clip_id is not None else "-"),
+        ("Generation Mode", clip.generation_mode or "-"),
+        ("Created", clip.created_at),
+    ]
+    for field_name, value in fields:
+        table.add_row(field_name, value)
+    console.print(table)
+
+
+@clips_app.command("rename")
+def clips_rename(
+    clip_id: int = typer.Argument(..., help="Clip ID."),
+    new_title: str = typer.Argument(..., help="New title for the clip."),
+) -> None:
+    """Rename a clip."""
+    success = update_clip_title(clip_id, new_title)
+    if not success:
+        console.print(f"[red]Clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]Renamed clip {clip_id}:[/green] {new_title!r}")
+
+
+@clips_app.command("delete")
+def clips_delete(clip_id: int = typer.Argument(..., help="Clip ID.")) -> None:
+    """Delete a clip and its audio file."""
+    file_path = _db_delete_clip(clip_id)
+    if file_path is None:
+        console.print(f"[red]Clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+    Path(file_path).unlink(missing_ok=True)
+    console.print(f"[green]Deleted clip {clip_id}[/green] and file {file_path}")
+
+
+@clips_app.command("search")
+def clips_search(
+    style: Optional[str] = typer.Option(None, "--style", help="Filter by style tag (substring match)."),
+    bpm_range: Optional[str] = typer.Option(None, "--bpm-range", help="BPM range as MIN-MAX (e.g. 100-140)."),
+    key: Optional[str] = typer.Option(None, "--key", help="Filter by key (exact match, e.g. 'C major')."),
+    model: Optional[str] = typer.Option(None, "--model", help="Filter by model name."),
+    date_from: Optional[str] = typer.Option(None, "--date-from", help="Include clips created on or after this date (YYYY-MM-DD)."),
+    date_to: Optional[str] = typer.Option(None, "--date-to", help="Include clips created on or before this date (YYYY-MM-DD)."),
+) -> None:
+    """Search clips with optional filters."""
+    bpm_min: Optional[int] = None
+    bpm_max: Optional[int] = None
+    if bpm_range is not None:
+        parts = bpm_range.split("-")
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            console.print(f"[red]Invalid --bpm-range: {bpm_range!r}. Expected format: MIN-MAX (e.g. 100-140).[/red]")
+            raise typer.Exit(code=1)
+        bpm_min, bpm_max = int(parts[0]), int(parts[1])
+
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips = search_clips(
+            workspace_id=ws.id,
+            style=style,
+            bpm_min=bpm_min,
+            bpm_max=bpm_max,
+            key=key,
+            model=model,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if not clips:
+        console.print("No clips found matching the given filters.")
+        return
+
+    table = Table(title="Search Results", show_header=True)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Duration", justify="right")
+    table.add_column("BPM", justify="right")
+    table.add_column("Model")
+    table.add_column("Created")
+    for clip in clips:
+        table.add_row(
+            str(clip.id),
+            clip.title or "-",
+            _fmt_duration(clip.duration),
+            str(clip.bpm) if clip.bpm is not None else "-",
+            clip.model or "-",
+            (clip.created_at or "")[:10],
+        )
+    console.print(table)
