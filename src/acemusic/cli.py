@@ -19,14 +19,19 @@ from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
     create_clip,
+    create_preset,
     delete_clip,
+    delete_preset,
     get_clip,
+    get_preset,
     list_clips,
+    list_presets,
     search_clips,
     update_clip_title,
+    update_preset,
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
-from acemusic.models import Clip
+from acemusic.models import Clip, Preset
 from acemusic.utils import get_duration, make_filename, make_slug
 from acemusic.workspace import (
     create_workspace,
@@ -46,6 +51,9 @@ workspace_app = typer.Typer(help="Manage workspaces")
 clips_app = typer.Typer(help="Manage audio clips")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(clips_app, name="clips")
+
+presets_app = typer.Typer(help="Manage generation presets")
+app.add_typer(presets_app, name="preset")
 console = Console()
 
 # ACE-Step model registry (US-3.4).
@@ -116,6 +124,34 @@ def main(
         raise typer.Exit(0)
     elif ctx.invoked_subcommand not in ("models", "workspace", "clips"):
         config = load_config()
+
+    if preset is not None:
+        try:
+            ensure_default_workspace()
+            ws = get_active_workspace()
+            preset_obj = get_preset(ws.id, preset)
+            if preset_obj is None:
+                console.print(f"[red]Error: Preset '{preset}' not found.[/red]")
+                raise typer.Exit(code=1)
+            
+            # Apply preset values, but allow CLI flags to override
+            style = style or preset_obj.style
+            resolved_lyrics = lyrics or (lyrics_file.read_text() if lyrics_file else None) or preset_obj.lyrics
+            bpm = bpm or (str(preset_obj.bpm) if preset_obj.bpm else None)
+            key = key or preset_obj.key
+            duration = duration or preset_obj.duration
+            model = model or preset_obj.model
+            seed = seed or preset_obj.seed
+            inference_steps = inference_steps or preset_obj.inference_steps
+            vocal_language = vocal_language or preset_obj.vocal_language
+            instrumental = instrumental or bool(preset_obj.instrumental)
+            time_signature = time_signature or preset_obj.time_signature
+            # Note: quality, weirdness, style_influence not yet implemented in generate
+            
+        except sqlite3.Error as exc:
+            console.print(f"[red]Error loading preset: {exc}[/red]")
+            raise typer.Exit(code=1)
+
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
             raise typer.Exit(1)
@@ -239,6 +275,7 @@ def generate(
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
     backend: str = typer.Option("ace-step", "--backend", help="AI backend: 'ace-step' (default) or 'elevenlabs'."),
+    preset: Optional[str] = typer.Option(None, "--preset", help="Apply a saved preset (flags override preset values)."),
     style: Optional[str] = typer.Option(
         None, "--style", help="Comma-separated style descriptors (e.g. 'dark electro, punchy drums')."
     ),
@@ -339,6 +376,33 @@ def generate(
             raise typer.Exit(code=1)
 
     config = load_config()
+
+    # Load and apply preset if provided
+    if preset is not None:
+        try:
+            ensure_default_workspace()
+            ws = get_active_workspace()
+            preset_obj = get_preset(ws.id, preset)
+            if preset_obj is None:
+                console.print(f"[red]Error: Preset '{preset}' not found.[/red]")
+                raise typer.Exit(code=1)
+            
+            # Apply preset values, but allow CLI flags to override
+            style = style or preset_obj.style
+            bpm = bpm or (str(preset_obj.bpm) if preset_obj.bpm else None)
+            key = key or preset_obj.key
+            duration = duration or preset_obj.duration
+            model = model or preset_obj.model
+            seed = seed or preset_obj.seed
+            inference_steps = inference_steps or preset_obj.inference_steps
+            vocal_language = vocal_language or preset_obj.vocal_language
+            instrumental = instrumental or bool(preset_obj.instrumental)
+            time_signature = time_signature or preset_obj.time_signature
+            
+        except sqlite3.Error as exc:
+            console.print(f"[red]Error loading preset: {exc}[/red]")
+            raise typer.Exit(code=1)
+
 
     # Resolve model: --model flag > config.default_model > None (server default)
     resolved_model = model or config.default_model or None
@@ -1130,3 +1194,187 @@ def clips_search(
             (clip.created_at or "")[:10],
         )
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Preset commands (US-4.3)
+# ---------------------------------------------------------------------------
+
+
+@presets_app.command("save")
+def preset_save(
+    name: str = typer.Argument(..., help="Name of the preset to save."),
+    from_last: bool = typer.Option(False, "--from-last", help="Save parameters from the last generation."),
+    style: Optional[str] = typer.Option(None, "--style", help="Comma-separated style descriptors."),
+    lyrics: Optional[str] = typer.Option(None, "--lyrics", help="Lyrics text."),
+    bpm: Optional[str] = typer.Option(None, "--bpm", help="Tempo in BPM."),
+    key: Optional[str] = typer.Option(None, "--key", help="Tonal center."),
+    duration: Optional[int] = typer.Option(None, "--duration", help="Duration in seconds."),
+    model: Optional[str] = typer.Option(None, "--model", help="AI model variant."),
+    seed: Optional[int] = typer.Option(None, "--seed", help="Fixed seed for reproducibility."),
+    inference_steps: Optional[int] = typer.Option(None, "--inference-steps", help="Number of diffusion steps."),
+    vocal_language: Optional[str] = typer.Option(None, "--vocal-language", help="ISO 639-1 vocal language code."),
+    instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals."),
+    quality: Optional[str] = typer.Option(None, "--quality", help="Quality preset (turbo/standard/high)."),
+    weirdness: Optional[int] = typer.Option(None, "--weirdness", help="Deviation from conventional (0-100)."),
+    style_influence: Optional[int] = typer.Option(None, "--style-influence", help="Adherence to style (0-100)."),
+    exclude_style: Optional[str] = typer.Option(None, "--exclude-style", help="Styles to exclude."),
+    time_signature: Optional[str] = typer.Option(None, "--time-signature", help="Meter (4/4, 3/4, etc.)."),
+) -> None:
+    """Save a generation preset with parameters."""
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        
+        # TODO: If from_last, load last generation parameters from config or state file
+        # For now, just require explicit parameters
+        if from_last:
+            console.print("[red]Error: --from-last not yet implemented (requires tracking last generation).[/red]")
+            raise typer.Exit(code=1)
+        
+        # Parse BPM
+        parsed_bpm = None
+        if bpm is not None:
+            try:
+                parsed_bpm = _parse_bpm(bpm)
+                if isinstance(parsed_bpm, str):
+                    parsed_bpm = None  # 'auto' is not stored in preset
+            except typer.BadParameter:
+                console.print(f"[red]Invalid --bpm: {bpm}[/red]")
+                raise typer.Exit(code=1)
+        
+        # Create preset
+        now = datetime.now(timezone.utc).isoformat()
+        preset = Preset(
+            workspace_id=ws.id,
+            name=name,
+            style=style,
+            lyrics=lyrics,
+            bpm=int(parsed_bpm) if isinstance(parsed_bpm, int) else None,
+            key=key,
+            duration=duration,
+            model=model,
+            seed=seed,
+            inference_steps=inference_steps,
+            vocal_language=vocal_language,
+            instrumental=1 if instrumental else None,
+            quality=quality,
+            weirdness=float(weirdness) if weirdness is not None else None,
+            style_influence=float(style_influence) if style_influence is not None else None,
+            exclude_style=exclude_style,
+            time_signature=time_signature,
+            created_at=now,
+        )
+        
+        create_preset(preset)
+        console.print(f"[green]✓ Preset '{name}' saved successfully.[/green]")
+        
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+    except sqlite3.IntegrityError:
+        console.print(f"[red]Error: Preset '{name}' already exists in this workspace.[/red]")
+        raise typer.Exit(code=1)
+    except sqlite3.Error as exc:
+        console.print(f"[red]Database error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@presets_app.command("list")
+def preset_list() -> None:
+    """List all presets in the active workspace."""
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        presets = list_presets(ws.id)
+        
+        if not presets:
+            console.print("No presets found in this workspace.")
+            return
+        
+        table = Table(title="Presets", show_header=True)
+        table.add_column("Name", style="cyan")
+        table.add_column("Style")
+        table.add_column("BPM", justify="right")
+        table.add_column("Key")
+        table.add_column("Model")
+        table.add_column("Created", justify="right")
+        
+        for p in presets:
+            table.add_row(
+                p.name,
+                p.style or "-",
+                str(p.bpm) if p.bpm else "-",
+                p.key or "-",
+                p.model or "-",
+                (p.created_at or "")[:10],
+            )
+        console.print(table)
+        
+    except (ValueError, sqlite3.Error) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@presets_app.command("load")
+def preset_load(name: str = typer.Argument(..., help="Name of the preset to load.")) -> None:
+    """Display parameters of a saved preset."""
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        preset = get_preset(ws.id, name)
+        
+        if not preset:
+            console.print(f"[red]Error: Preset '{name}' not found.[/red]")
+            raise typer.Exit(code=1)
+        
+        console.print(f"\n[bold]Preset: {preset.name}[/bold]")
+        console.print(f"Created: {preset.created_at}")
+        console.print("")
+        
+        params = [
+            ("Style", preset.style),
+            ("Lyrics", f"{len(preset.lyrics)} chars" if preset.lyrics else None),
+            ("BPM", preset.bpm),
+            ("Key", preset.key),
+            ("Duration", f"{preset.duration}s" if preset.duration else None),
+            ("Model", preset.model),
+            ("Seed", preset.seed),
+            ("Inference Steps", preset.inference_steps),
+            ("Vocal Language", preset.vocal_language),
+            ("Instrumental", "Yes" if preset.instrumental else None),
+            ("Quality", preset.quality),
+            ("Weirdness", f"{preset.weirdness}%" if preset.weirdness else None),
+            ("Style Influence", f"{preset.style_influence}%" if preset.style_influence else None),
+            ("Exclude Style", preset.exclude_style),
+            ("Time Signature", preset.time_signature),
+        ]
+        
+        for key, value in params:
+            if value is not None:
+                console.print(f"  {key}: {value}")
+        
+        console.print("")
+        
+    except (ValueError, sqlite3.Error) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@presets_app.command("delete")
+def preset_delete(name: str = typer.Argument(..., help="Name of the preset to delete.")) -> None:
+    """Delete a preset."""
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        success = delete_preset(ws.id, name)
+        
+        if not success:
+            console.print(f"[red]Error: Preset '{name}' not found.[/red]")
+            raise typer.Exit(code=1)
+        
+        console.print(f"[green]✓ Preset '{name}' deleted.[/green]")
+        
+    except (ValueError, sqlite3.Error) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)

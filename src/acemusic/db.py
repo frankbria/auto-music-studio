@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from acemusic.models import Clip
+from acemusic.models import Clip, Preset
 
 DB_DIR: Path = Path.home() / ".acemusic"
 
@@ -56,6 +56,32 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """)
     conn.commit()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS presets (
+            id               INTEGER PRIMARY KEY,
+            workspace_id     TEXT NOT NULL,
+            name             TEXT NOT NULL,
+            style            TEXT,
+            lyrics           TEXT,
+            bpm              INTEGER,
+            key              TEXT,
+            duration         INTEGER,
+            model            TEXT,
+            seed             INTEGER,
+            inference_steps  INTEGER,
+            vocal_language   TEXT,
+            instrumental     INTEGER,
+            quality          TEXT,
+            weirdness        REAL,
+            style_influence  REAL,
+            exclude_style    TEXT,
+            time_signature   TEXT,
+            created_at       TEXT NOT NULL,
+            UNIQUE(workspace_id, name)
+        )
+        """)
+    conn.commit()
+
 
 
 # ---------------------------------------------------------------------------
@@ -213,5 +239,148 @@ def search_clips(
             params,
         ).fetchall()
         return [_row_to_clip(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Preset CRUD
+# ---------------------------------------------------------------------------
+
+
+def _row_to_preset(row: sqlite3.Row) -> Preset:
+    return Preset(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        name=row["name"],
+        style=row["style"],
+        lyrics=row["lyrics"],
+        bpm=row["bpm"],
+        key=row["key"],
+        duration=row["duration"],
+        model=row["model"],
+        seed=row["seed"],
+        inference_steps=row["inference_steps"],
+        vocal_language=row["vocal_language"],
+        instrumental=row["instrumental"],
+        quality=row["quality"],
+        weirdness=row["weirdness"],
+        style_influence=row["style_influence"],
+        exclude_style=row["exclude_style"],
+        time_signature=row["time_signature"],
+        created_at=row["created_at"],
+    )
+
+
+def create_preset(preset: Preset) -> int:
+    """Insert a preset record and return the new row id."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO presets
+               (workspace_id, name, style, lyrics, bpm, key, duration, model,
+                seed, inference_steps, vocal_language, instrumental, quality,
+                weirdness, style_influence, exclude_style, time_signature, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                preset.workspace_id,
+                preset.name,
+                preset.style,
+                preset.lyrics,
+                preset.bpm,
+                preset.key,
+                preset.duration,
+                preset.model,
+                preset.seed,
+                preset.inference_steps,
+                preset.vocal_language,
+                preset.instrumental,
+                preset.quality,
+                preset.weirdness,
+                preset.style_influence,
+                preset.exclude_style,
+                preset.time_signature,
+                preset.created_at,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_preset(workspace_id: str, name: str) -> Optional[Preset]:
+    """Return the preset with the given workspace_id and name, or None if not found."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM presets WHERE workspace_id = ? AND name = ?",
+            (workspace_id, name),
+        ).fetchone()
+        return _row_to_preset(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_presets(workspace_id: str) -> list[Preset]:
+    """Return all presets for a workspace, newest first."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM presets WHERE workspace_id = ? ORDER BY created_at DESC",
+            (workspace_id,),
+        ).fetchall()
+        return [_row_to_preset(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def delete_preset(workspace_id: str, name: str) -> bool:
+    """Delete a preset. Returns True if the record existed, False otherwise."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM presets WHERE workspace_id = ? AND name = ?",
+            (workspace_id, name),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_preset(preset: Preset) -> bool:
+    """Update an existing preset. Returns True if successful, False if not found."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """UPDATE presets SET
+               style = ?, lyrics = ?, bpm = ?, key = ?, duration = ?, model = ?,
+               seed = ?, inference_steps = ?, vocal_language = ?, instrumental = ?,
+               quality = ?, weirdness = ?, style_influence = ?, exclude_style = ?,
+               time_signature = ?
+               WHERE workspace_id = ? AND name = ?""",
+            (
+                preset.style,
+                preset.lyrics,
+                preset.bpm,
+                preset.key,
+                preset.duration,
+                preset.model,
+                preset.seed,
+                preset.inference_steps,
+                preset.vocal_language,
+                preset.instrumental,
+                preset.quality,
+                preset.weirdness,
+                preset.style_influence,
+                preset.exclude_style,
+                preset.time_signature,
+                preset.workspace_id,
+                preset.name,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()

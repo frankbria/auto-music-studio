@@ -27,3 +27,28 @@ class Clip:
     inference_steps: Optional[int] = None
     parent_clip_id: Optional[int] = None
     generation_mode: Optional[str] = None
+
+
+@dataclass
+class Preset:
+    """Represents a saved generation preset with style, lyrics, and parameters."""
+
+    workspace_id: str
+    name: str
+    created_at: str
+    id: Optional[int] = None
+    style: Optional[str] = None
+    lyrics: Optional[str] = None
+    bpm: Optional[int] = None
+    key: Optional[str] = None
+    duration: Optional[int] = None
+    model: Optional[str] = None
+    seed: Optional[int] = None
+    inference_steps: Optional[int] = None
+    vocal_language: Optional[str] = None
+    instrumental: Optional[int] = None  # 0=False, 1=True, None=not set
+    quality: Optional[str] = None
+    weirdness: Optional[float] = None
+    style_influence: Optional[float] = None
+    exclude_style: Optional[str] = None
+    time_signature: Optional[str] = None
