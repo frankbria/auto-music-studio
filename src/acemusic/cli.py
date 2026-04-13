@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -600,7 +600,7 @@ def _generate_via_ace_step(
 
         try:
             ws = get_active_workspace()
-            bpm_int = bpm if isinstance(bpm, int) else None
+            bpm_int = int(bpm) if isinstance(bpm, (int, float)) else None
             clip = Clip(
                 title=f"{slug}-{i}",
                 workspace_id=ws.id,
@@ -616,7 +616,7 @@ def _generate_via_ace_step(
                 seed=seed,
                 inference_steps=inference_steps,
                 generation_mode="generate",
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
             create_clip(clip)
         except Exception:
@@ -695,7 +695,7 @@ def _generate_via_elevenlabs(
                 lyrics=lyrics,
                 model="elevenlabs",
                 generation_mode="generate",
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
             create_clip(clip)
         except Exception:
@@ -964,8 +964,7 @@ def _fmt_duration(seconds: Optional[float]) -> str:
     """Format a duration in seconds as MM:SS, or '-' if None."""
     if seconds is None:
         return "-"
-    mins = int(seconds) // 60
-    secs = int(seconds) % 60
+    mins, secs = divmod(int(seconds), 60)
     return f"{mins:02d}:{secs:02d}"
 
 
@@ -1052,14 +1051,20 @@ def clips_rename(
 
 
 @clips_app.command("delete")
-def clips_delete(clip_id: int = typer.Argument(..., help="Clip ID.")) -> None:
-    """Delete a clip and its audio file."""
-    file_path = _db_delete_clip(clip_id)
-    if file_path is None:
+def clips_delete(
+    clip_id: int = typer.Argument(..., help="Clip ID."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Delete a clip and its audio file (permanent — also removes the audio from disk)."""
+    clip = get_clip(clip_id)
+    if clip is None:
         console.print(f"[red]Clip {clip_id} not found.[/red]")
         raise typer.Exit(code=1)
-    Path(file_path).unlink(missing_ok=True)
-    console.print(f"[green]Deleted clip {clip_id}[/green] and file {file_path}")
+    if not yes:
+        typer.confirm(f"Delete clip {clip_id} and file {clip.file_path}?", abort=True)
+    _db_delete_clip(clip_id)
+    Path(clip.file_path).unlink(missing_ok=True)
+    console.print(f"[green]Deleted clip {clip_id}[/green] and file {clip.file_path}")
 
 
 @clips_app.command("search")
@@ -1084,6 +1089,9 @@ def clips_search(
             console.print(f"[red]Invalid --bpm-range: {bpm_range!r}. Expected format: MIN-MAX (e.g. 100-140).[/red]")
             raise typer.Exit(code=1)
         bpm_min, bpm_max = int(parts[0]), int(parts[1])
+        if bpm_min > bpm_max:
+            console.print(f"[red]Invalid --bpm-range: min ({bpm_min}) must be ≤ max ({bpm_max}).[/red]")
+            raise typer.Exit(code=1)
 
     try:
         ensure_default_workspace()

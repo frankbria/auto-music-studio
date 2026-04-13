@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
-if TYPE_CHECKING:
-    from acemusic.models import Clip
+from acemusic.models import Clip
 
 DB_DIR: Path = Path.home() / ".acemusic"
 
@@ -64,9 +63,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _row_to_clip(row: sqlite3.Row) -> "Clip":
-    from acemusic.models import Clip
-
+def _row_to_clip(row: sqlite3.Row) -> Clip:
     return Clip(
         id=row["id"],
         title=row["title"],
@@ -88,7 +85,7 @@ def _row_to_clip(row: sqlite3.Row) -> "Clip":
     )
 
 
-def create_clip(clip: "Clip") -> int:
+def create_clip(clip: Clip) -> int:
     """Insert a clip record and return the new row id."""
     conn = get_db()
     try:
@@ -123,7 +120,7 @@ def create_clip(clip: "Clip") -> int:
         conn.close()
 
 
-def get_clip(clip_id: int) -> Optional["Clip"]:
+def get_clip(clip_id: int) -> Optional[Clip]:
     """Return the clip with the given id, or None if not found."""
     conn = get_db()
     try:
@@ -133,7 +130,7 @@ def get_clip(clip_id: int) -> Optional["Clip"]:
         conn.close()
 
 
-def list_clips(workspace_id: str) -> list["Clip"]:
+def list_clips(workspace_id: str) -> list[Clip]:
     """Return all clips for a workspace, newest first."""
     conn = get_db()
     try:
@@ -181,7 +178,7 @@ def search_clips(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-) -> list["Clip"]:
+) -> list[Clip]:
     """Return clips matching the given filters, newest first."""
     conditions = ["workspace_id = ?"]
     params: list = [workspace_id]

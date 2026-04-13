@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -13,17 +13,17 @@ class Clip:
     workspace_id: str
     file_path: str
     created_at: str
-    id: Optional[int] = field(default=None)
-    title: Optional[str] = field(default=None)
-    format: Optional[str] = field(default=None)
-    duration: Optional[float] = field(default=None)
-    bpm: Optional[int] = field(default=None)
-    key: Optional[str] = field(default=None)
-    style_tags: Optional[str] = field(default=None)
-    lyrics: Optional[str] = field(default=None)
-    vocal_language: Optional[str] = field(default=None)
-    model: Optional[str] = field(default=None)
-    seed: Optional[int] = field(default=None)
-    inference_steps: Optional[int] = field(default=None)
-    parent_clip_id: Optional[int] = field(default=None)
-    generation_mode: Optional[str] = field(default=None)
+    id: Optional[int] = None
+    title: Optional[str] = None
+    format: Optional[str] = None
+    duration: Optional[float] = None
+    bpm: Optional[int] = None
+    key: Optional[str] = None
+    style_tags: Optional[str] = None
+    lyrics: Optional[str] = None
+    vocal_language: Optional[str] = None
+    model: Optional[str] = None
+    seed: Optional[int] = None
+    inference_steps: Optional[int] = None
+    parent_clip_id: Optional[int] = None
+    generation_mode: Optional[str] = None

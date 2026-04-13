@@ -484,7 +484,7 @@ class TestClipsDeleteCommand:
         audio_file.write_bytes(b"fake audio data")
         clip_id = _insert_test_clip(db_path, title="Delete Me", workspace_id=ws.id, file_path=str(audio_file))
 
-        result = runner.invoke(app, ["clips", "delete", str(clip_id)])
+        result = runner.invoke(app, ["clips", "delete", str(clip_id), "--yes"])
         assert result.exit_code == 0
         assert not audio_file.exists()
 
@@ -499,7 +499,7 @@ class TestClipsDeleteCommand:
         from acemusic.workspace import ensure_default_workspace
 
         ensure_default_workspace()
-        result = runner.invoke(app, ["clips", "delete", "9999"])
+        result = runner.invoke(app, ["clips", "delete", "9999", "--yes"])
         assert result.exit_code != 0 or "not found" in result.output.lower()
 
 
@@ -553,6 +553,16 @@ class TestClipsSearchCommand:
 
         ensure_default_workspace()
         result = runner.invoke(app, ["clips", "search", "--bpm-range", "abc"])
+        assert result.exit_code != 0 or "invalid" in result.output.lower()
+
+    def test_search_bpm_range_min_gt_max(self, isolated_db):
+        import acemusic.db as _db
+
+        _db.get_db().close()
+        from acemusic.workspace import ensure_default_workspace
+
+        ensure_default_workspace()
+        result = runner.invoke(app, ["clips", "search", "--bpm-range", "140-100"])
         assert result.exit_code != 0 or "invalid" in result.output.lower()
 
     def test_search_no_results(self, isolated_db):
