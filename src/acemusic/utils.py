@@ -24,9 +24,11 @@ def make_filename(slug: str, timestamp: str, index: int, ext: str = "wav") -> st
     return f"{slug}-{timestamp}-{index}.{ext}"
 
 
-def get_duration(path: Path | str) -> float:
-    """Return the duration in seconds of a WAV file using mutagen."""
-    from mutagen.wave import WAVE
+def get_duration(path: Path | str) -> float | None:
+    """Return the duration in seconds of an audio file using mutagen, or None on failure."""
+    import mutagen
 
-    audio = WAVE(str(path))
+    audio = mutagen.File(str(path))
+    if audio is None:
+        return None
     return audio.info.length

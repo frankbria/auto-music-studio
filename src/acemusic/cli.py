@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import time
+import uuid
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from acemusic import __version__
+from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
@@ -121,7 +124,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -1021,14 +1024,17 @@ def clips_list() -> None:
     table.add_column("Title")
     table.add_column("Duration", justify="right")
     table.add_column("BPM", justify="right")
+    table.add_column("Source")
     table.add_column("Model")
     table.add_column("Created")
     for clip in clips:
+        source = clip.generation_mode or "-"
         table.add_row(
             str(clip.id),
             clip.title or "-",
             _fmt_duration(clip.duration),
             str(clip.bpm) if clip.bpm is not None else "-",
+            source,
             clip.model or "-",
             (clip.created_at or "")[:10],
         )
@@ -1164,6 +1170,74 @@ def clips_search(
             (clip.created_at or "")[:10],
         )
     console.print(table)
+
+
+@app.command(name="import")
+def import_clip(
+    file_path: Path = typer.Argument(..., help="Path to the audio file to import."),
+    title: Optional[str] = typer.Option(None, "--title", help="Title for the imported clip (defaults to filename)."),
+) -> None:
+    """Import an existing audio file into the active workspace."""
+    if not file_path.exists():
+        console.print(f"[red]Error: file not found: {file_path}[/red]")
+        raise typer.Exit(code=1)
+
+    ext = file_path.suffix.lower()
+    if ext not in SUPPORTED_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_FORMATS))
+        console.print(f"[red]Error: unsupported format '{ext}'. Supported: {supported}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dest_name = f"{uuid.uuid4().hex}{ext}"
+    dest_path = clips_dir / dest_name
+    try:
+        shutil.copy2(file_path, dest_path)
+    except OSError as exc:
+        console.print(f"[red]Error copying file: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    clip_title = title if title is not None else file_path.stem
+    duration = get_duration(dest_path)
+    bpm_raw = detect_bpm(dest_path)
+    key = detect_key(dest_path)
+    bpm = int(round(bpm_raw)) if bpm_raw is not None else None
+
+    clip = Clip(
+        title=clip_title,
+        workspace_id=ws.id,
+        file_path=str(dest_path.resolve()),
+        format=ext.lstrip("."),
+        duration=duration,
+        bpm=bpm,
+        key=key,
+        generation_mode="upload",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        create_clip(clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    bpm_display = str(bpm) if bpm is not None else "unknown"
+    key_display = key if key is not None else "unknown"
+    duration_display = _fmt_duration(duration) if duration is not None else "unknown"
+
+    console.print(f"  [green]\u2713[/green] Imported: {clip_title}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {duration_display}")
+    console.print(f"    BPM:      {bpm_display}")
+    console.print(f"    Key:      {key_display}")
 
 
 # ---------------------------------------------------------------------------
