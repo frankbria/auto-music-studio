@@ -125,36 +125,6 @@ def main(
     elif ctx.invoked_subcommand not in ("models", "workspace", "clips"):
         config = load_config()
 
-    if preset is not None:
-        try:
-            ensure_default_workspace()
-            ws = get_active_workspace()
-            preset_obj = get_preset(ws.id, preset)
-            if preset_obj is None:
-                console.print(f"[red]Error: Preset '{preset}' not found.[/red]")
-                raise typer.Exit(code=1)
-            
-            # Apply preset values, but allow CLI flags to override
-            style = style or preset_obj.style
-            resolved_lyrics = lyrics or (lyrics_file.read_text() if lyrics_file else None) or preset_obj.lyrics
-            bpm = bpm or (str(preset_obj.bpm) if preset_obj.bpm else None)
-            key = key or preset_obj.key
-            duration = duration or preset_obj.duration
-            model = model or preset_obj.model
-            seed = seed or preset_obj.seed
-            inference_steps = inference_steps or preset_obj.inference_steps
-            vocal_language = vocal_language or preset_obj.vocal_language
-            instrumental = instrumental or bool(preset_obj.instrumental)
-            time_signature = time_signature or preset_obj.time_signature
-            # Note: quality, weirdness, style_influence not yet implemented in generate
-            
-        except sqlite3.Error as exc:
-            console.print(f"[red]Error loading preset: {exc}[/red]")
-            raise typer.Exit(code=1)
-
-        if not config.api_url:
-            typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
-            raise typer.Exit(1)
 
 
 @app.command()
