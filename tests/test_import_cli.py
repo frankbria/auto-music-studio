@@ -203,3 +203,25 @@ class TestClipsListShowsUploadBadge:
         assert result.exit_code == 0, result.output
         assert "My Import" in result.output
         assert "upload" in result.output.lower()
+
+
+class TestImportNoApiUrl:
+    def test_import_works_without_api_url(self, workspace_with_clips_dir, tmp_path, monkeypatch):
+        """acemusic import must not require ACEMUSIC_BASE_URL."""
+        monkeypatch.delenv("ACEMUSIC_BASE_URL", raising=False)
+        from acemusic import config as cfg_mod
+
+        monkeypatch.setattr(cfg_mod, "load_config", lambda: cfg_mod.AceConfig(api_url=None, api_key=None))
+
+        source_wav = tmp_path / "track.wav"
+        source_wav.write_bytes(FAKE_WAV)
+
+        with (
+            patch("acemusic.cli.detect_bpm", return_value=None),
+            patch("acemusic.cli.detect_key", return_value=None),
+            patch("acemusic.cli.get_duration", return_value=None),
+        ):
+            result = runner.invoke(app, ["import", str(source_wav)])
+
+        assert "ACEMUSIC_BASE_URL" not in result.output
+        assert result.exit_code == 0, result.output
