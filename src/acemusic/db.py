@@ -26,15 +26,18 @@ def get_db() -> sqlite3.Connection:
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS workspaces (
             id         TEXT PRIMARY KEY,
             name       TEXT UNIQUE NOT NULL,
             is_active  INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
         )
-        """)
-    conn.execute("""
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS clips (
             id               INTEGER PRIMARY KEY,
             title            TEXT,
@@ -54,9 +57,11 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             generation_mode  TEXT,
             created_at       TEXT NOT NULL
         )
-        """)
+        """
+    )
     conn.commit()
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS presets (
             id               INTEGER PRIMARY KEY,
             workspace_id     TEXT NOT NULL,
@@ -79,9 +84,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             created_at       TEXT NOT NULL,
             UNIQUE(workspace_id, name)
         )
-        """)
+        """
+    )
     conn.commit()
-
 
 
 # ---------------------------------------------------------------------------

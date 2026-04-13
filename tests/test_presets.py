@@ -32,11 +32,11 @@ def isolated_db(tmp_path, monkeypatch):
 def _insert_test_preset(db_path: Path, **overrides) -> int:
     """Insert a preset record directly via sqlite3 and return its id."""
     from acemusic.db import get_db
-    
+
     # Initialize database first
     conn = get_db()
     conn.close()
-    
+
     defaults = {
         "workspace_id": "ws-test",
         "name": "Test Preset",
@@ -89,16 +89,14 @@ class TestPresetSchemaInit:
         from acemusic.db import get_db
 
         conn = get_db()
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='presets'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='presets'")
         assert cursor.fetchone() is not None
         conn.close()
 
     def test_presets_table_has_unique_constraint(self, isolated_db):
         db_path = _get_db_path(isolated_db)
         _insert_test_preset(db_path, workspace_id="ws-1", name="Preset1")
-        
+
         # Try to insert duplicate
         conn = sqlite3.connect(str(db_path))
         with pytest.raises(sqlite3.IntegrityError):
@@ -139,7 +137,7 @@ class TestPresetsCRUD:
 
         db_path = _get_db_path(isolated_db)
         _insert_test_preset(db_path, workspace_id="ws-1", name="Chill Vibes", bpm=85)
-        
+
         preset = get_preset("ws-1", "Chill Vibes")
         assert preset is not None
         assert preset.name == "Chill Vibes"
@@ -158,7 +156,7 @@ class TestPresetsCRUD:
         _insert_test_preset(db_path, workspace_id="ws-1", name="Preset1")
         _insert_test_preset(db_path, workspace_id="ws-1", name="Preset2")
         _insert_test_preset(db_path, workspace_id="ws-2", name="Preset3")
-        
+
         ws1_presets = list_presets("ws-1")
         assert len(ws1_presets) == 2
         assert all(p.workspace_id == "ws-1" for p in ws1_presets)
@@ -174,10 +172,10 @@ class TestPresetsCRUD:
 
         db_path = _get_db_path(isolated_db)
         _insert_test_preset(db_path, workspace_id="ws-1", name="ToDelete")
-        
+
         success = delete_preset("ws-1", "ToDelete")
         assert success is True
-        
+
         preset = get_preset("ws-1", "ToDelete")
         assert preset is None
 
@@ -200,12 +198,12 @@ class TestPresetsCRUD:
             created_at=now,
         )
         create_preset(preset)
-        
+
         preset.style = "updated"
         preset.bpm = 140
         success = update_preset(preset)
         assert success is True
-        
+
         updated = get_preset("ws-1", "Preset1")
         assert updated.style == "updated"
         assert updated.bpm == 140
@@ -221,12 +219,20 @@ class TestPresetSaveCommand:
         from acemusic.workspace import ensure_default_workspace
 
         ensure_default_workspace()
-        result = runner.invoke(app, [
-            "preset", "save", "MyPreset",
-            "--style", "lo-fi, chill",
-            "--bpm", "85",
-            "--key", "D minor",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "preset",
+                "save",
+                "MyPreset",
+                "--style",
+                "lo-fi, chill",
+                "--bpm",
+                "85",
+                "--key",
+                "D minor",
+            ],
+        )
         assert result.exit_code == 0
         assert "✓" in result.output
 
@@ -242,10 +248,10 @@ class TestPresetSaveCommand:
         from acemusic.workspace import ensure_default_workspace
 
         ensure_default_workspace()
-        
+
         # Save first preset
         runner.invoke(app, ["preset", "save", "Duplicate", "--style", "test"])
-        
+
         # Try to save duplicate
         result = runner.invoke(app, ["preset", "save", "Duplicate", "--style", "test"])
         assert result.exit_code == 1
@@ -261,7 +267,7 @@ class TestPresetListCommand:
     def test_list_empty(self, isolated_db):
         import acemusic.db as _db
         from acemusic.workspace import ensure_default_workspace
-        
+
         conn = _db.get_db()
         conn.close()
         ensure_default_workspace()
@@ -365,7 +371,7 @@ class TestPresetDeleteCommand:
 
 
 class TestGenerateWithPreset:
-    @patch('acemusic.cli._generate_via_ace_step')
+    @patch("acemusic.cli._generate_via_ace_step")
     def test_generate_applies_preset(self, mock_generate, isolated_db):
         import acemusic.db as _db
 
@@ -384,22 +390,32 @@ class TestGenerateWithPreset:
             bpm=128,
             key="C minor",
         )
-        
+
         # Mock the generation to avoid actual API calls
         mock_generate.return_value = None
 
-        runner.invoke(app, [
-            "generate", "test prompt",
-            "--preset", "DarkPreset",
-        ])
+        runner.invoke(
+            app,
+            [
+                "generate",
+                "test prompt",
+                "--preset",
+                "DarkPreset",
+            ],
+        )
 
     def test_generate_preset_not_found(self, isolated_db):
         from acemusic.workspace import ensure_default_workspace
 
         ensure_default_workspace()
-        result = runner.invoke(app, [
-            "generate", "test prompt",
-            "--preset", "NonExistent",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "test prompt",
+                "--preset",
+                "NonExistent",
+            ],
+        )
         assert result.exit_code == 1
         assert "not found" in result.output
