@@ -1068,8 +1068,12 @@ def clips_search(
     bpm_range: Optional[str] = typer.Option(None, "--bpm-range", help="BPM range as MIN-MAX (e.g. 100-140)."),
     key: Optional[str] = typer.Option(None, "--key", help="Filter by key (exact match, e.g. 'C major')."),
     model: Optional[str] = typer.Option(None, "--model", help="Filter by model name."),
-    date_from: Optional[str] = typer.Option(None, "--date-from", help="Include clips created on or after this date (YYYY-MM-DD)."),
-    date_to: Optional[str] = typer.Option(None, "--date-to", help="Include clips created on or before this date (YYYY-MM-DD)."),
+    date_from: Optional[str] = typer.Option(
+        None, "--date-from", help="Include clips created on or after this date (YYYY-MM-DD)."
+    ),
+    date_to: Optional[str] = typer.Option(
+        None, "--date-to", help="Include clips created on or before this date (YYYY-MM-DD)."
+    ),
 ) -> None:
     """Search clips with optional filters."""
     bpm_min: Optional[int] = None

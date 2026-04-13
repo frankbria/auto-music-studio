@@ -81,10 +81,7 @@ class TestSchemaInit:
         import acemusic.db as _db
 
         conn = _db.get_db()
-        tables = [
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        ]
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         conn.close()
         assert "clips" in tables
 
@@ -92,10 +89,7 @@ class TestSchemaInit:
         import acemusic.db as _db
 
         conn = _db.get_db()
-        tables = [
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        ]
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         conn.close()
         assert "workspaces" in tables
 
@@ -146,6 +140,7 @@ class TestClipsCRUD:
 
     def test_list_clips_empty(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()  # ensure schema is initialized
         from acemusic.db import list_clips
 
@@ -154,6 +149,7 @@ class TestClipsCRUD:
 
     def test_list_clips_returns_workspace_clips(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         from acemusic.db import create_clip, list_clips
@@ -181,6 +177,7 @@ class TestClipsCRUD:
 
     def test_list_clips_ordered_newest_first(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         from acemusic.db import create_clip, list_clips
@@ -196,6 +193,7 @@ class TestClipsCRUD:
 
     def test_update_clip_title(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -211,6 +209,7 @@ class TestClipsCRUD:
 
     def test_update_clip_title_not_found(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.db import update_clip_title
 
@@ -219,6 +218,7 @@ class TestClipsCRUD:
 
     def test_delete_clip_returns_file_path(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -232,6 +232,7 @@ class TestClipsCRUD:
 
     def test_delete_clip_not_found(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.db import delete_clip
 
@@ -246,13 +247,50 @@ class TestClipsCRUD:
 class TestClipsSearch:
     def _seed_clips(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
-        _insert_test_clip(db_path, title="Rock Track", workspace_id="ws-1", style_tags="rock, hard", bpm=140, key="E minor", model="ace-step-base", created_at="2026-01-01T10:00:00")
-        _insert_test_clip(db_path, title="Pop Track", workspace_id="ws-1", style_tags="pop, bright", bpm=100, key="C major", model="elevenlabs", created_at="2026-01-02T10:00:00")
-        _insert_test_clip(db_path, title="Jazz Track", workspace_id="ws-1", style_tags="jazz, smooth", bpm=90, key="Bb major", model="ace-step-xl", created_at="2026-01-03T10:00:00")
-        _insert_test_clip(db_path, title="Other WS", workspace_id="ws-2", style_tags="rock", bpm=120, key="G major", model="ace-step-base", created_at="2026-01-01T12:00:00")
+        _insert_test_clip(
+            db_path,
+            title="Rock Track",
+            workspace_id="ws-1",
+            style_tags="rock, hard",
+            bpm=140,
+            key="E minor",
+            model="ace-step-base",
+            created_at="2026-01-01T10:00:00",
+        )
+        _insert_test_clip(
+            db_path,
+            title="Pop Track",
+            workspace_id="ws-1",
+            style_tags="pop, bright",
+            bpm=100,
+            key="C major",
+            model="elevenlabs",
+            created_at="2026-01-02T10:00:00",
+        )
+        _insert_test_clip(
+            db_path,
+            title="Jazz Track",
+            workspace_id="ws-1",
+            style_tags="jazz, smooth",
+            bpm=90,
+            key="Bb major",
+            model="ace-step-xl",
+            created_at="2026-01-03T10:00:00",
+        )
+        _insert_test_clip(
+            db_path,
+            title="Other WS",
+            workspace_id="ws-2",
+            style_tags="rock",
+            bpm=120,
+            key="G major",
+            model="ace-step-base",
+            created_at="2026-01-01T12:00:00",
+        )
 
     def test_search_no_filters_returns_all_workspace_clips(self, isolated_db):
         self._seed_clips(isolated_db)
@@ -338,6 +376,7 @@ class TestClipsListCommand:
 
     def test_list_shows_clips(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -360,6 +399,7 @@ class TestClipsListCommand:
 class TestClipsInfoCommand:
     def test_info_valid_id(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -376,6 +416,7 @@ class TestClipsInfoCommand:
 
     def test_info_not_found(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.workspace import ensure_default_workspace
 
@@ -392,6 +433,7 @@ class TestClipsInfoCommand:
 class TestClipsRenameCommand:
     def test_rename_success(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -412,6 +454,7 @@ class TestClipsRenameCommand:
 
     def test_rename_not_found(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.workspace import ensure_default_workspace
 
@@ -428,6 +471,7 @@ class TestClipsRenameCommand:
 class TestClipsDeleteCommand:
     def test_delete_removes_record_and_file(self, isolated_db, tmp_path):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -450,6 +494,7 @@ class TestClipsDeleteCommand:
 
     def test_delete_not_found(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.workspace import ensure_default_workspace
 
@@ -466,6 +511,7 @@ class TestClipsDeleteCommand:
 class TestClipsSearchCommand:
     def test_search_by_style_option(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -483,6 +529,7 @@ class TestClipsSearchCommand:
 
     def test_search_by_bpm_range(self, isolated_db):
         import acemusic.db as _db
+
         conn = _db.get_db()
         conn.close()
         db_path = _get_db_path(isolated_db)
@@ -500,6 +547,7 @@ class TestClipsSearchCommand:
 
     def test_search_bpm_range_invalid(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.workspace import ensure_default_workspace
 
@@ -509,6 +557,7 @@ class TestClipsSearchCommand:
 
     def test_search_no_results(self, isolated_db):
         import acemusic.db as _db
+
         _db.get_db().close()
         from acemusic.workspace import ensure_default_workspace
 
