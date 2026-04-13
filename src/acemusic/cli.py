@@ -28,7 +28,6 @@ from acemusic.db import (
     list_presets,
     search_clips,
     update_clip_title,
-    update_preset,
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip, Preset
@@ -122,9 +121,11 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset"):
         config = load_config()
-
+        if not config.api_url:
+            typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -356,7 +357,7 @@ def generate(
             if preset_obj is None:
                 console.print(f"[red]Error: Preset '{preset}' not found.[/red]")
                 raise typer.Exit(code=1)
-            
+
             # Apply preset values, but allow CLI flags to override
             style = style or preset_obj.style
             bpm = bpm or (str(preset_obj.bpm) if preset_obj.bpm else None)
@@ -368,11 +369,10 @@ def generate(
             vocal_language = vocal_language or preset_obj.vocal_language
             instrumental = instrumental or bool(preset_obj.instrumental)
             time_signature = time_signature or preset_obj.time_signature
-            
+
         except sqlite3.Error as exc:
             console.print(f"[red]Error loading preset: {exc}[/red]")
             raise typer.Exit(code=1)
-
 
     # Resolve model: --model flag > config.default_model > None (server default)
     resolved_model = model or config.default_model or None
@@ -1195,13 +1195,13 @@ def preset_save(
     try:
         ensure_default_workspace()
         ws = get_active_workspace()
-        
+
         # TODO: If from_last, load last generation parameters from config or state file
         # For now, just require explicit parameters
         if from_last:
             console.print("[red]Error: --from-last not yet implemented (requires tracking last generation).[/red]")
             raise typer.Exit(code=1)
-        
+
         # Parse BPM
         parsed_bpm = None
         if bpm is not None:
@@ -1212,7 +1212,7 @@ def preset_save(
             except typer.BadParameter:
                 console.print(f"[red]Invalid --bpm: {bpm}[/red]")
                 raise typer.Exit(code=1)
-        
+
         # Create preset
         now = datetime.now(timezone.utc).isoformat()
         preset = Preset(
@@ -1235,10 +1235,10 @@ def preset_save(
             time_signature=time_signature,
             created_at=now,
         )
-        
+
         create_preset(preset)
         console.print(f"[green]✓ Preset '{name}' saved successfully.[/green]")
-        
+
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
@@ -1257,11 +1257,11 @@ def preset_list() -> None:
         ensure_default_workspace()
         ws = get_active_workspace()
         presets = list_presets(ws.id)
-        
+
         if not presets:
             console.print("No presets found in this workspace.")
             return
-        
+
         table = Table(title="Presets", show_header=True)
         table.add_column("Name", style="cyan")
         table.add_column("Style")
@@ -1269,7 +1269,7 @@ def preset_list() -> None:
         table.add_column("Key")
         table.add_column("Model")
         table.add_column("Created", justify="right")
-        
+
         for p in presets:
             table.add_row(
                 p.name,
@@ -1280,7 +1280,7 @@ def preset_list() -> None:
                 (p.created_at or "")[:10],
             )
         console.print(table)
-        
+
     except (ValueError, sqlite3.Error) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
@@ -1293,15 +1293,15 @@ def preset_load(name: str = typer.Argument(..., help="Name of the preset to load
         ensure_default_workspace()
         ws = get_active_workspace()
         preset = get_preset(ws.id, name)
-        
+
         if not preset:
             console.print(f"[red]Error: Preset '{name}' not found.[/red]")
             raise typer.Exit(code=1)
-        
+
         console.print(f"\n[bold]Preset: {preset.name}[/bold]")
         console.print(f"Created: {preset.created_at}")
         console.print("")
-        
+
         params = [
             ("Style", preset.style),
             ("Lyrics", f"{len(preset.lyrics)} chars" if preset.lyrics else None),
@@ -1319,13 +1319,13 @@ def preset_load(name: str = typer.Argument(..., help="Name of the preset to load
             ("Exclude Style", preset.exclude_style),
             ("Time Signature", preset.time_signature),
         ]
-        
+
         for key, value in params:
             if value is not None:
                 console.print(f"  {key}: {value}")
-        
+
         console.print("")
-        
+
     except (ValueError, sqlite3.Error) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
@@ -1338,13 +1338,13 @@ def preset_delete(name: str = typer.Argument(..., help="Name of the preset to de
         ensure_default_workspace()
         ws = get_active_workspace()
         success = delete_preset(ws.id, name)
-        
+
         if not success:
             console.print(f"[red]Error: Preset '{name}' not found.[/red]")
             raise typer.Exit(code=1)
-        
+
         console.print(f"[green]✓ Preset '{name}' deleted.[/green]")
-        
+
     except (ValueError, sqlite3.Error) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
