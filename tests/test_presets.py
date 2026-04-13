@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -96,8 +96,6 @@ class TestPresetSchemaInit:
         conn.close()
 
     def test_presets_table_has_unique_constraint(self, isolated_db):
-        from acemusic.db import get_db
-
         db_path = _get_db_path(isolated_db)
         _insert_test_preset(db_path, workspace_id="ws-1", name="Preset1")
         
@@ -261,8 +259,8 @@ class TestPresetSaveCommand:
 
 class TestPresetListCommand:
     def test_list_empty(self, isolated_db):
-        from acemusic.workspace import ensure_default_workspace
         import acemusic.db as _db
+        from acemusic.workspace import ensure_default_workspace
         
         conn = _db.get_db()
         conn.close()
@@ -390,13 +388,10 @@ class TestGenerateWithPreset:
         # Mock the generation to avoid actual API calls
         mock_generate.return_value = None
 
-        result = runner.invoke(app, [
+        runner.invoke(app, [
             "generate", "test prompt",
             "--preset", "DarkPreset",
         ])
-        
-        # The generate command should succeed (though actual generation is mocked)
-        # In a real scenario, the preset values would be applied
 
     def test_generate_preset_not_found(self, isolated_db):
         from acemusic.workspace import ensure_default_workspace
