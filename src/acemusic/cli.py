@@ -1289,13 +1289,17 @@ def crop(
     if source.duration is not None:
         source_duration_ms = int(round(source.duration * 1000))
         if end_ms > source_duration_ms:
-            console.print(f"[red]Error: --end ({end}) exceeds clip duration " f"({source.duration:.1f}s).[/red]")
+            console.print(f"[red]Error: --end ({end}) exceeds clip duration ({source.duration:.1f}s).[/red]")
             raise typer.Exit(code=1)
+    else:
+        console.print(
+            f"[red]Error: clip {clip_id} has no duration metadata — cannot validate --end. "
+            f"Re-import the clip to detect duration.[/red]"
+        )
+        raise typer.Exit(code=1)
 
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
-        clips_dir = get_workspace_path(ws.id)
+        clips_dir = get_workspace_path(source.workspace_id)
         clips_dir.mkdir(parents=True, exist_ok=True)
     except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")

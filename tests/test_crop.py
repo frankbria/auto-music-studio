@@ -159,6 +159,28 @@ class TestCropCommand:
         assert kwargs["start_ms"] == 10000
         assert kwargs["end_ms"] == 45500
 
+    def test_crop_stores_file_in_source_workspace(self, workspace_with_clips_dir):
+        """Cropped file is stored in the source clip's workspace, not the active one."""
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "ws_test.wav"
+        src_wav.write_bytes(b"audio")
+
+        from acemusic.db import create_clip, list_clips
+
+        clip_id = create_clip(_make_clip(ws.id, str(src_wav), duration=60.0))
+
+        with patch("acemusic.cli.crop_audio"):
+            result = runner.invoke(app, ["crop", str(clip_id), "--start", "5s", "--end", "25s"])
+
+        assert result.exit_code == 0, result.output
+        cropped = [c for c in list_clips(ws.id) if c.generation_mode == "crop"]
+        assert len(cropped) == 1
+        # File path must be under the source workspace's clips directory
+        assert str(clips_dir) in cropped[0].file_path
+
     def test_crop_output_message_contains_new_clip_id(self, workspace_with_clips_dir):
         """Success output shows the new clip ID and file path."""
         from acemusic.workspace import get_active_workspace, get_workspace_path
@@ -241,6 +263,23 @@ class TestCropValidation:
         result = runner.invoke(app, ["crop", str(clip_id), "--start", "5s", "--end", "20s", "--snap-to-beat"])
         assert result.exit_code == 1
         assert "bpm" in result.output.lower()
+
+    def test_null_duration_rejects_crop(self, workspace_with_clips_dir):
+        """Clip with no duration metadata must be rejected."""
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_no_dur.wav"
+        src_wav.write_bytes(b"audio")
+
+        from acemusic.db import create_clip
+
+        clip_id = create_clip(_make_clip(ws.id, str(src_wav), duration=None))
+
+        result = runner.invoke(app, ["crop", str(clip_id), "--start", "0s", "--end", "10s"])
+        assert result.exit_code == 1
+        assert "duration" in result.output.lower()
 
     def test_start_equal_to_end_returns_error(self, workspace_with_clips_dir):
         """start == end should be rejected (zero-length segment)."""
