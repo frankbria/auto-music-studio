@@ -62,9 +62,6 @@ def parse_time_string(time_str: str) -> int:
         seconds = float(m.group("seconds"))
         seconds += minutes * 60
 
-    if seconds < 0:
-        raise ValueError(f"Time value must be non-negative, got: {time_str!r}")
-
     return int(round(seconds * 1000))
 
 

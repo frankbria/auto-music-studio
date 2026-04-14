@@ -139,35 +139,33 @@ class TestDetectKey:
 class TestCropAudio:
     """Tests for crop_audio() — the pure audio trim/fade function."""
 
-    def test_crop_audio_correct_duration(self, tmp_path):
-        """Output duration equals end_ms - start_ms."""
-        from unittest.mock import MagicMock, patch
-
+    def test_crop_audio_slices_correct_range(self, tmp_path):
+        """crop_audio slices the audio segment to [start_ms:end_ms]."""
         input_path = tmp_path / "input.wav"
         output_path = tmp_path / "output.wav"
         input_path.write_bytes(b"fake")
 
-        mock_segment = MagicMock()
+        mock_seg = MagicMock()
         mock_sliced = MagicMock()
-        mock_segment.__getitem__.return_value = mock_sliced
+        mock_seg.__getitem__ = MagicMock(return_value=mock_sliced)
         mock_sliced.fade_in.return_value = mock_sliced
         mock_sliced.fade_out.return_value = mock_sliced
 
-        mock_audio_segment = MagicMock()
-        mock_audio_segment.from_file.return_value = mock_segment
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
 
-        with patch.dict("sys.modules", {"pydub": MagicMock(), "pydub.AudioSegment": mock_audio_segment}):
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            from acemusic.audio import crop_audio as _crop
 
-            import acemusic.audio as audio_mod
+            _crop(
+                input_path=str(input_path),
+                output_path=str(output_path),
+                start_ms=10_000,
+                end_ms=45_000,
+            )
 
-            with patch.object(audio_mod, "crop_audio") as mock_crop_audio:
-                mock_crop_audio(
-                    input_path=str(input_path),
-                    output_path=str(output_path),
-                    start_ms=10_000,
-                    end_ms=45_000,
-                )
-                mock_crop_audio.assert_called_once()
+        mock_seg.__getitem__.assert_called_once_with(slice(10_000, 45_000))
+        mock_sliced.export.assert_called_once()
 
     def test_crop_audio_applies_fade_in(self, tmp_path):
         """crop_audio applies fade_in when fade_in_ms > 0."""

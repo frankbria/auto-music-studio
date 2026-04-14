@@ -1277,7 +1277,13 @@ def crop(
         end_ms = snap_to_beat(end_ms, source.bpm)
 
     if start_ms >= end_ms:
-        console.print(f"[red]Error: --start ({start}) must be less than --end ({end}).[/red]")
+        if snap_to_beat_flag:
+            console.print(
+                f"[red]Error: after beat-snapping, start ({start_ms / 1000:.3f}s) "
+                f"is not less than end ({end_ms / 1000:.3f}s).[/red]"
+            )
+        else:
+            console.print(f"[red]Error: --start ({start}) must be less than --end ({end}).[/red]")
         raise typer.Exit(code=1)
 
     if source.duration is not None:

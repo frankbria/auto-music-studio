@@ -56,5 +56,5 @@ def crop_audio(
         segment = segment.fade_in(fade_in_ms)
     if fade_out_ms > 0:
         segment = segment.fade_out(fade_out_ms)
-    fmt = output_path.rsplit(".", 1)[-1] if "." in output_path else "wav"
+    fmt = output_path.rsplit(".", 1)[-1].lower() if "." in output_path else "wav"
     segment.export(output_path, format=fmt)
