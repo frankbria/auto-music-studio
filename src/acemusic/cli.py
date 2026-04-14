@@ -17,7 +17,14 @@ from rich.console import Console
 from rich.table import Table
 
 from acemusic import __version__
-from acemusic.audio import SUPPORTED_FORMATS, crop_audio, detect_bpm, detect_key
+from acemusic.audio import (
+    SUPPORTED_FORMATS,
+    calculate_speed_multiplier,
+    crop_audio,
+    detect_bpm,
+    detect_key,
+    time_stretch_audio,
+)
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
@@ -1347,6 +1354,119 @@ def crop(
 
 
 # ---------------------------------------------------------------------------
+
+
+@app.command()
+def speed(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to adjust speed for."),
+    target_bpm: Optional[float] = typer.Option(
+        None, "--target-bpm", help="Target BPM (e.g. 100, 120.5). Either this or --rate is required."
+    ),
+    rate: Optional[float] = typer.Option(
+        None,
+        "--rate",
+        help="Speed multiplier (e.g. 0.9 for 90% speed, 1.1 for 110%). Either this or --target-bpm is required.",
+    ),
+) -> None:
+    """Adjust playback speed of a clip without changing pitch (time-stretch). Original is preserved."""
+    # Validate that exactly one of --target-bpm or --rate is provided
+    if target_bpm is not None and rate is not None:
+        console.print(f"[red]Error: provide either --target-bpm or --rate, not both.[/red]")
+        raise typer.Exit(code=1)
+
+    if target_bpm is None and rate is None:
+        console.print(f"[red]Error: must provide either --target-bpm or --rate.[/red]")
+        raise typer.Exit(code=1)
+
+    # Get source clip
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    # Determine the rate to use
+    if target_bpm is not None:
+        if source.bpm is None:
+            console.print(f"[red]Error: --target-bpm requires BPM metadata on clip {clip_id}, but none is set.[/red]")
+            raise typer.Exit(code=1)
+        try:
+            final_rate = calculate_speed_multiplier(source.bpm, target_bpm)
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(code=1)
+    else:
+        final_rate = rate
+
+    # Validate rate
+    if final_rate <= 0:
+        console.print(f"[red]Error: rate must be positive, got {final_rate}.[/red]")
+        raise typer.Exit(code=1)
+
+    # Validate source has duration
+    if source.duration is None:
+        console.print(
+            f"[red]Error: clip {clip_id} has no duration metadata — cannot calculate new duration. "
+            f"Re-import the clip to detect duration.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    # Get workspace and create output path
+    try:
+        clips_dir = get_workspace_path(source.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    src_ext = Path(source.file_path).suffix.lower() or ".wav"
+    dest_name = f"{uuid.uuid4().hex}{src_ext}"
+    dest_path = clips_dir / dest_name
+
+    # Perform time-stretch
+    try:
+        time_stretch_audio(
+            input_path=source.file_path,
+            output_path=str(dest_path),
+            rate=final_rate,
+        )
+    except Exception as exc:
+        console.print(f"[red]Error during time-stretch: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # Calculate new duration and BPM
+    new_duration_s = source.duration / final_rate
+    new_bpm = None
+    if source.bpm is not None:
+        new_bpm = source.bpm * final_rate
+
+    # Create new clip record
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        format=source.format,
+        duration=new_duration_s,
+        bpm=new_bpm,
+        key=source.key,
+        parent_clip_id=source.id,
+        generation_mode="speed",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # Format output message
+    rate_pct = final_rate * 100
+    bpm_str = f" (→ {new_bpm:.1f} BPM)" if new_bpm is not None else ""
+    console.print(f"  [green]✓[/green] Speed adjusted on clip {clip_id} → clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {_fmt_duration(source.duration)} → {_fmt_duration(new_duration_s)}")
+    console.print(f"    Speed:    {rate_pct:.1f}%{bpm_str}")
+
+
 # Preset commands (US-4.3)
 # ---------------------------------------------------------------------------
 

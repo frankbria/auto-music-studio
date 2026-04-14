@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
 
+import pytest
+
 
 class TestSupportedFormats:
     def test_wav_in_supported(self):
@@ -252,3 +254,164 @@ class TestCropAudio:
 
         mock_sliced.fade_in.assert_not_called()
         mock_sliced.fade_out.assert_not_called()
+
+
+class TestCalculateSpeedMultiplier:
+    """Tests for calculate_speed_multiplier() — BPM-based rate calculation."""
+
+    def test_same_bpm_returns_one(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        result = calculate_speed_multiplier(120, 120)
+        assert result == 1.0
+
+    def test_lower_target_bpm_returns_less_than_one(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        # 100 BPM target from 120 BPM = 100/120 = 0.833...
+        result = calculate_speed_multiplier(120, 100)
+        assert result == pytest.approx(100 / 120)
+        assert result < 1.0
+
+    def test_higher_target_bpm_returns_greater_than_one(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        # 150 BPM target from 120 BPM = 150/120 = 1.25
+        result = calculate_speed_multiplier(120, 150)
+        assert result == pytest.approx(150 / 120)
+        assert result > 1.0
+
+    def test_zero_original_bpm_raises_error(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        with pytest.raises(ValueError, match="original_bpm must be positive"):
+            calculate_speed_multiplier(0, 100)
+
+    def test_zero_target_bpm_raises_error(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        with pytest.raises(ValueError, match="target_bpm must be positive"):
+            calculate_speed_multiplier(120, 0)
+
+    def test_negative_original_bpm_raises_error(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        with pytest.raises(ValueError, match="original_bpm must be positive"):
+            calculate_speed_multiplier(-120, 100)
+
+    def test_negative_target_bpm_raises_error(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        with pytest.raises(ValueError, match="target_bpm must be positive"):
+            calculate_speed_multiplier(120, -100)
+
+    def test_fractional_bpm(self):
+        from acemusic.audio import calculate_speed_multiplier
+
+        # 120.5 BPM target from 100 BPM
+        result = calculate_speed_multiplier(100, 120.5)
+        assert result == pytest.approx(120.5 / 100)
+
+
+class TestTimeStretchAudio:
+    """Tests for time_stretch_audio() — the pure audio stretch function."""
+
+    def test_time_stretch_with_valid_rate(self, tmp_path):
+        """time_stretch_audio loads, stretches, and exports audio."""
+        input_path = tmp_path / "input.wav"
+        output_path = tmp_path / "output.wav"
+        input_path.write_bytes(b"fake")
+
+        import numpy as np
+
+        mock_audio = np.array([[0.1, 0.2], [0.3, 0.4]])
+        mock_stretched = np.array([[0.1, 0.15, 0.2], [0.3, 0.35, 0.4]])
+
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (mock_audio, 22050)
+        mock_librosa.effects.time_stretch.return_value = mock_stretched
+
+        mock_sf = MagicMock()
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa, "soundfile": mock_sf}):
+            from acemusic.audio import time_stretch_audio
+
+            time_stretch_audio(str(input_path), str(output_path), rate=1.5)
+
+        mock_librosa.load.assert_called_once_with(str(input_path), mono=False)
+        mock_librosa.effects.time_stretch.assert_called_once_with(mock_audio, rate=1.5)
+        mock_sf.write.assert_called_once()
+
+    def test_time_stretch_zero_rate_raises_error(self, tmp_path):
+        """time_stretch_audio rejects rate <= 0."""
+        input_path = tmp_path / "in.wav"
+        output_path = tmp_path / "out.wav"
+        input_path.write_bytes(b"fake")
+
+        from acemusic.audio import time_stretch_audio
+
+        with pytest.raises(ValueError, match="rate must be positive"):
+            time_stretch_audio(str(input_path), str(output_path), rate=0)
+
+    def test_time_stretch_negative_rate_raises_error(self, tmp_path):
+        """time_stretch_audio rejects negative rate."""
+        input_path = tmp_path / "in.wav"
+        output_path = tmp_path / "out.wav"
+        input_path.write_bytes(b"fake")
+
+        from acemusic.audio import time_stretch_audio
+
+        with pytest.raises(ValueError, match="rate must be positive"):
+            time_stretch_audio(str(input_path), str(output_path), rate=-0.5)
+
+    def test_time_stretch_slow_rate(self, tmp_path):
+        """time_stretch_audio handles rate < 1 (slowing down)."""
+        input_path = tmp_path / "slow.wav"
+        output_path = tmp_path / "slow_out.wav"
+        input_path.write_bytes(b"fake")
+
+        import numpy as np
+
+        mock_audio = np.array([[0.1, 0.2], [0.3, 0.4]])
+        mock_stretched = np.array([[0.1, 0.15, 0.2], [0.3, 0.35, 0.4]])
+
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (mock_audio, 22050)
+        mock_librosa.effects.time_stretch.return_value = mock_stretched
+
+        mock_sf = MagicMock()
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa, "soundfile": mock_sf}):
+            from acemusic.audio import time_stretch_audio
+
+            time_stretch_audio(str(input_path), str(output_path), rate=0.8)
+
+        # Verify rate was passed to librosa
+        args, kwargs = mock_librosa.effects.time_stretch.call_args
+        assert kwargs["rate"] == 0.8
+
+    def test_time_stretch_fast_rate(self, tmp_path):
+        """time_stretch_audio handles rate > 1 (speeding up)."""
+        input_path = tmp_path / "fast.wav"
+        output_path = tmp_path / "fast_out.wav"
+        input_path.write_bytes(b"fake")
+
+        import numpy as np
+
+        mock_audio = np.array([[0.1, 0.2], [0.3, 0.4]])
+        mock_stretched = np.array([[0.1, 0.15, 0.2, 0.25], [0.3, 0.35, 0.4, 0.45]])
+
+        mock_librosa = MagicMock()
+        mock_librosa.load.return_value = (mock_audio, 22050)
+        mock_librosa.effects.time_stretch.return_value = mock_stretched
+
+        mock_sf = MagicMock()
+
+        with patch.dict("sys.modules", {"librosa": mock_librosa, "soundfile": mock_sf}):
+            from acemusic.audio import time_stretch_audio
+
+            time_stretch_audio(str(input_path), str(output_path), rate=1.25)
+
+        # Verify rate was passed to librosa
+        args, kwargs = mock_librosa.effects.time_stretch.call_args
+        assert kwargs["rate"] == 1.25
