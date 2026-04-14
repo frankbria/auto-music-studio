@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from acemusic import __version__
-from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
+from acemusic.audio import SUPPORTED_FORMATS, crop_audio, detect_bpm, detect_key
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
@@ -34,7 +34,7 @@ from acemusic.db import (
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip, Preset
-from acemusic.utils import get_duration, make_filename, make_slug
+from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
 from acemusic.workspace import (
     create_workspace,
     delete_workspace,
@@ -124,7 +124,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -1238,6 +1238,102 @@ def import_clip(
     console.print(f"    Duration: {duration_display}")
     console.print(f"    BPM:      {bpm_display}")
     console.print(f"    Key:      {key_display}")
+
+
+# ---------------------------------------------------------------------------
+# Crop command (US-5.1)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def crop(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to crop."),
+    start: str = typer.Option(..., "--start", help="Start time (e.g. '10s', '1m30s')."),
+    end: str = typer.Option(..., "--end", help="End time (e.g. '45s', '2m')."),
+    fade_in: str = typer.Option("0s", "--fade-in", help="Fade-in duration (e.g. '0.5s')."),
+    fade_out: str = typer.Option("0s", "--fade-out", help="Fade-out duration (e.g. '1s')."),
+    snap_to_beat_flag: bool = typer.Option(False, "--snap-to-beat", help="Round start/end to nearest beat boundary."),
+) -> None:
+    """Crop an existing clip to a time range, creating a new clip. Original is preserved."""
+    try:
+        start_ms = parse_time_string(start)
+        end_ms = parse_time_string(end)
+        fade_in_ms = parse_time_string(fade_in)
+        fade_out_ms = parse_time_string(fade_out)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    if snap_to_beat_flag:
+        if source.bpm is None:
+            console.print(f"[red]Error: --snap-to-beat requires BPM metadata on clip {clip_id}, but none is set.[/red]")
+            raise typer.Exit(code=1)
+        start_ms = snap_to_beat(start_ms, source.bpm)
+        end_ms = snap_to_beat(end_ms, source.bpm)
+
+    if start_ms >= end_ms:
+        console.print(f"[red]Error: --start ({start}) must be less than --end ({end}).[/red]")
+        raise typer.Exit(code=1)
+
+    if source.duration is not None:
+        source_duration_ms = int(round(source.duration * 1000))
+        if end_ms > source_duration_ms:
+            console.print(f"[red]Error: --end ({end}) exceeds clip duration " f"({source.duration:.1f}s).[/red]")
+            raise typer.Exit(code=1)
+
+    try:
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    src_ext = Path(source.file_path).suffix.lower() or ".wav"
+    dest_name = f"{uuid.uuid4().hex}{src_ext}"
+    dest_path = clips_dir / dest_name
+
+    try:
+        crop_audio(
+            input_path=source.file_path,
+            output_path=str(dest_path),
+            start_ms=start_ms,
+            end_ms=end_ms,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+        )
+    except Exception as exc:
+        console.print(f"[red]Error during crop: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    duration_s = (end_ms - start_ms) / 1000.0
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        format=source.format,
+        duration=duration_s,
+        bpm=source.bpm,
+        key=source.key,
+        parent_clip_id=source.id,
+        generation_mode="crop",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"  [green]\u2713[/green] Cropped clip {clip_id} → clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {_fmt_duration(duration_s)}")
 
 
 # ---------------------------------------------------------------------------

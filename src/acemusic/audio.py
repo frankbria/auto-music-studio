@@ -1,4 +1,4 @@
-"""Audio analysis utilities for acemusic (US-4.4)."""
+"""Audio analysis and manipulation utilities for acemusic (US-4.4, US-5.1)."""
 
 from __future__ import annotations
 
@@ -32,3 +32,29 @@ def detect_key(path: Path) -> str | None:
         return f"{_PITCH_CLASSES[dominant]} major"
     except Exception:
         return None
+
+
+def crop_audio(
+    input_path: str,
+    output_path: str,
+    start_ms: int,
+    end_ms: int,
+    fade_in_ms: int = 0,
+    fade_out_ms: int = 0,
+) -> None:
+    """Trim an audio file to [start_ms, end_ms] and optionally apply fades.
+
+    Loads input_path, slices to the given range, applies fade-in/fade-out if
+    requested, and exports to output_path preserving the original format.
+    The original file is never modified.
+    """
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_file(input_path)
+    segment = audio[start_ms:end_ms]
+    if fade_in_ms > 0:
+        segment = segment.fade_in(fade_in_ms)
+    if fade_out_ms > 0:
+        segment = segment.fade_out(fade_out_ms)
+    fmt = output_path.rsplit(".", 1)[-1] if "." in output_path else "wav"
+    segment.export(output_path, format=fmt)
