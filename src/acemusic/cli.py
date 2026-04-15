@@ -40,8 +40,8 @@ from acemusic.db import (
     update_clip_title,
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
-from acemusic.models import Clip, Preset
 from acemusic.midi_client import MidiClient, MidiError
+from acemusic.models import Clip, Preset
 from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
 from acemusic.workspace import (
