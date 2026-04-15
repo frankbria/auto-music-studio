@@ -1591,6 +1591,10 @@ def midi(
         console.print(f"[red]Error: clip {clip_id} not found.[/red]")
         raise typer.Exit(code=1)
 
+    if bpm is not None and not (20.0 <= bpm <= 300.0):
+        console.print("[red]Error: --bpm must be between 20 and 300.[/red]")
+        raise typer.Exit(code=1)
+
     # Resolve output directory
     if output is not None:
         midi_dir = output
@@ -1639,7 +1643,9 @@ def midi(
     # Register each MIDI output as a child clip
     new_ids = []
     for label, midi_path in midi_path_map.items():
-        dur = source.duration or 180.0
+        # Use last note end time from extracted data, or fall back to source duration
+        notes = extracted.get(label, [])
+        dur = max((n[1] for n in notes), default=0.0) if notes else (source.duration or 0.0)
         midi_clip = Clip(
             workspace_id=source.workspace_id,
             file_path=str(midi_path.resolve()),

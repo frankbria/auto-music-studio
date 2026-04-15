@@ -271,6 +271,23 @@ class TestMidiValidation:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_invalid_bpm_returns_error(self, workspace_with_clips_dir):
+        """BPM outside 20-300 range is rejected."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "song.wav"
+        src_wav.write_bytes(b"fake audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=180.0)
+        clip_id = create_clip(src_clip)
+
+        result = runner.invoke(app, ["midi", str(clip_id), "--bpm", "500"])
+        assert result.exit_code == 1
+        assert "20" in result.output and "300" in result.output
+
     def test_extraction_failure_returns_error(self, workspace_with_clips_dir):
         """Extraction error from MidiClient is reported."""
         from acemusic.db import create_clip

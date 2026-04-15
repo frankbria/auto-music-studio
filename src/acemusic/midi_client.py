@@ -33,7 +33,7 @@ CHANNEL_MAP: dict[str, int] = {
 }
 
 # Pitch range boundaries for categorisation
-_BASS_CEILING = 48  # C3 and below -> bass
+_BASS_CEILING = 48  # Below C3 -> bass
 _MELODY_FLOOR = 72  # C5 and above -> melody
 # Everything in between -> chords
 
