@@ -133,7 +133,17 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop", "speed", "stems", "midi"):
+    elif ctx.invoked_subcommand not in (
+        "models",
+        "workspace",
+        "clips",
+        "preset",
+        "import",
+        "crop",
+        "speed",
+        "stems",
+        "midi",
+    ):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -1636,7 +1646,7 @@ def midi(
             created_at=datetime.now(timezone.utc).isoformat(),
             format="mid",
             duration=dur,
-            bpm=int(tempo) if tempo else source.bpm,
+            bpm=int(round(tempo)) if tempo else source.bpm,
             key=source.key,
             title=f"midi-{label}",
             parent_clip_id=source.id,

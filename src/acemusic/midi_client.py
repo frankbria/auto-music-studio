@@ -68,8 +68,8 @@ class MidiClient:
         drum_path = audio_path
 
         if from_stems and stem_paths:
-            if "vocals" in stem_paths:
-                pitched_path = Path(stem_paths["vocals"])
+            if "other" in stem_paths:
+                pitched_path = Path(stem_paths["other"])
             if "drums" in stem_paths:
                 drum_path = Path(stem_paths["drums"])
 
@@ -101,8 +101,9 @@ class MidiClient:
                 categorized["bass"] = [
                     (float(n[0]), float(n[1]), int(round(n[2])), int(round(n[3]))) for n in bass_events
                 ]
-            except Exception:
-                pass  # Keep the categorized bass from full mix
+            except Exception as exc:
+                if progress_callback:
+                    progress_callback(f"Bass stem extraction failed, using full mix: {exc}")
 
         return categorized
 
@@ -143,10 +144,10 @@ class MidiClient:
             return []
 
         drums: list[tuple[float, float, int, int]] = []
-        for t in onset_times:
-            # Map onsets to GM drum: kick=36, snare=38, hi-hat=42
-            # Simple heuristic: alternate kick/snare on beat, hi-hat off-beat
-            drums.append((float(t), float(t) + 0.1, 36, 100))
+        for i, t in enumerate(onset_times):
+            # Alternate kick (36) and snare (38)
+            note = 36 if i % 2 == 0 else 38
+            drums.append((float(t), float(t) + 0.1, note, 100))
 
         return drums
 
