@@ -196,8 +196,48 @@ class TestMidiCommand:
         assert result.exit_code == 0, result.output
         assert "no stems found" in result.output.lower() or "warning" in result.output.lower()
 
+    def test_midi_with_from_stems_found(self, workspace_with_clips_dir):
+        """--from-stems with existing stems passes stem paths to MidiClient."""
+        from acemusic.db import create_clip
+        from acemusic.stems_client import STEM_LABELS
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "fullmix.wav"
+        src_wav.write_bytes(b"fake audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=180.0)
+        clip_id = create_clip(src_clip)
+
+        # Create stem child clips (as if stems command had been run)
+        for label in STEM_LABELS:
+            stem_path = clips_dir / "stems" / f"fullmix-{label}.wav"
+            stem_path.parent.mkdir(parents=True, exist_ok=True)
+            stem_path.write_bytes(b"fake stem")
+            stem_clip = _make_clip(ws.id, str(stem_path), generation_mode="stems")
+            stem_clip.parent_clip_id = clip_id
+            stem_clip.title = label
+            create_clip(stem_clip)
+
+        mock_cls = _make_midi_client_mock()
+
+        with patch("acemusic.cli.MidiClient", mock_cls):
+            result = runner.invoke(app, ["midi", str(clip_id), "--from-stems"])
+
+        assert result.exit_code == 0, result.output
+        assert "using" in result.output.lower() and "stems" in result.output.lower()
+        # Verify extract was called with from_stems=True and stem_paths populated
+        mock_instance = mock_cls.return_value
+        call_kwargs = mock_instance.extract.call_args
+        assert call_kwargs[1].get("from_stems") is True
+        assert call_kwargs[1].get("stem_paths") is not None
+        assert len(call_kwargs[1]["stem_paths"]) == 4
+
     def test_midi_with_bpm_override(self, workspace_with_clips_dir):
         """--bpm overrides the clip's BPM metadata."""
+        from unittest.mock import ANY
+
         from acemusic.db import create_clip
         from acemusic.workspace import get_active_workspace, get_workspace_path
 
@@ -215,10 +255,8 @@ class TestMidiCommand:
             result = runner.invoke(app, ["midi", str(clip_id), "--bpm", "140"])
 
         assert result.exit_code == 0, result.output
-        # Verify save_midi was called with bpm=140.0
         mock_instance = mock_cls.return_value
-        call_kwargs = mock_instance.save_midi.call_args
-        assert call_kwargs[1].get("bpm") == 140.0 or (len(call_kwargs[0]) > 3 and call_kwargs[0][3] == 140.0)
+        mock_instance.save_midi.assert_called_once_with(ANY, ANY, ANY, bpm=140.0)
 
 
 # ---------------------------------------------------------------------------
