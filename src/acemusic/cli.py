@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3, US-5.4)."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from acemusic.db import (
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip, Preset
+from acemusic.midi_client import MidiClient, MidiError
 from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
 from acemusic.workspace import (
@@ -1561,6 +1562,103 @@ def stems(
     for label, nid, spath, dur in new_ids:
         dur_str = _fmt_duration(dur)
         console.print(f"    {label:<8} → clip {nid}  {spath}  ({dur_str})")
+
+
+
+# MIDI extraction (US-5.4)
+# ---------------------------------------------------------------------------
+
+
+@app.command("midi")
+def midi(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to extract MIDI from."),
+    from_stems: bool = typer.Option(False, "--from-stems", help="Use separated stems for better accuracy."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Output directory (default: midi/ next to source)."),
+) -> None:
+    """Extract MIDI from a clip (melody, chords, drums, bass) using AI transcription."""
+    # Get source clip
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    # Resolve output directory
+    if output is not None:
+        midi_dir = output
+    else:
+        midi_dir = Path(source.file_path).parent / "midi"
+    midi_dir.mkdir(parents=True, exist_ok=True)
+
+    # Derive base name from source file
+    base_name = Path(source.file_path).stem
+
+    # Load stem paths if requested
+    stem_paths = None
+    if from_stems:
+        clips = list_clips(source.workspace_id)
+        stem_clips = {c.title: c for c in clips if c.parent_clip_id == clip_id and c.generation_mode == "stems"}
+        if stem_clips:
+            stem_paths = {label: Path(c.file_path) for label, c in stem_clips.items()}
+            console.print(f"[cyan]Using {len(stem_paths)} extracted stems for improved accuracy.[/cyan]")
+        else:
+            console.print(f"[yellow]Warning: --from-stems requested but no stems found. Using full mix.[/yellow]")
+
+    # Extract MIDI
+    client = MidiClient()
+    start_time = time.time()
+    try:
+        with console.status("[bold green]Loading audio and extracting MIDI...") as status:
+
+            def _progress(msg: str) -> None:
+                status.update(f"[bold green]{msg}")
+
+            midi_data = client.extract(
+                source.file_path,
+                from_stems=from_stems,
+                stem_paths=stem_paths,
+                progress_callback=_progress,
+            )
+            status.update("[bold green]Saving MIDI files...")
+            midi_path_map = client.save_midi(
+                midi_data,
+                midi_dir,
+                base_name,
+                tempo=source.bpm or 120.0,
+            )
+    except MidiError as exc:
+        console.print(f"[red]Error during MIDI extraction: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    elapsed = time.time() - start_time
+
+    # Register each MIDI output as a child clip
+    new_ids = []
+    for label, midi_path in midi_path_map.items():
+        # For MIDI files, we use a symbolic duration (based on source)
+        dur = source.duration or 180.0
+        midi_clip = Clip(
+            workspace_id=source.workspace_id,
+            file_path=str(midi_path.resolve()),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format="mid",
+            duration=dur,
+            bpm=source.bpm,
+            key=source.key,
+            title=f"midi-{label}",
+            parent_clip_id=source.id,
+            generation_mode="midi",
+        )
+        try:
+            new_id = create_clip(midi_clip)
+            new_ids.append((label, new_id, midi_path))
+        except Exception as exc:
+            console.print(f"[red]Error saving MIDI clip record: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    # Print summary
+    console.print(f"\n  [green]✓[/green] Extracted MIDI from clip {clip_id} ({elapsed:.1f}s)")
+    for label, nid, midi_path in new_ids:
+        console.print(f"    {label:<8} → clip {nid}  {midi_path}")
 
 
 # Preset commands (US-4.3)
