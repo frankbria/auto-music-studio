@@ -376,6 +376,25 @@ class TestSpeedValidation:
 
         assert result.exit_code == 0, result.output
 
+    def test_target_bpm_out_of_range_returns_contextual_error(self, workspace_with_clips_dir):
+        """--target-bpm that produces rate outside 0.5-2.0 shows BPM context in error."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_bpm_range.wav"
+        src_wav.write_bytes(b"audio")
+
+        # 120 BPM → 300 BPM = rate 2.5, outside 0.5–2.0
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0, bpm=120)
+        clip_id = create_clip(src_clip)
+
+        result = runner.invoke(app, ["speed", str(clip_id), "--target-bpm", "300"])
+        assert result.exit_code == 1
+        assert "300" in result.output
+        assert "0.5" in result.output and "2.0" in result.output
+
     def test_zero_target_bpm_returns_error(self, workspace_with_clips_dir):
         """target_bpm <= 0 is an error."""
         from acemusic.db import create_clip

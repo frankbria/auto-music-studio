@@ -1403,7 +1403,13 @@ def speed(
         raise typer.Exit(code=1)
 
     if not (0.5 <= final_rate <= 2.0):
-        console.print(f"[red]Error: rate must be between 0.5 and 2.0, got {final_rate}.[/red]")
+        if target_bpm is not None:
+            console.print(
+                f"[red]Error: target BPM of {target_bpm} would require a rate of {final_rate:.4g}x, "
+                f"which is outside the allowed range 0.5–2.0.[/red]"
+            )
+        else:
+            console.print(f"[red]Error: rate must be between 0.5 and 2.0, got {final_rate}.[/red]")
         raise typer.Exit(code=1)
 
     # Validate source has duration
