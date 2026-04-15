@@ -132,7 +132,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop", "speed"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop", "speed", "stems"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
