@@ -1371,11 +1371,11 @@ def speed(
     """Adjust playback speed of a clip without changing pitch (time-stretch). Original is preserved."""
     # Validate that exactly one of --target-bpm or --rate is provided
     if target_bpm is not None and rate is not None:
-        console.print(f"[red]Error: provide either --target-bpm or --rate, not both.[/red]")
+        console.print("[red]Error: provide either --target-bpm or --rate, not both.[/red]")
         raise typer.Exit(code=1)
 
     if target_bpm is None and rate is None:
-        console.print(f"[red]Error: must provide either --target-bpm or --rate.[/red]")
+        console.print("[red]Error: must provide either --target-bpm or --rate.[/red]")
         raise typer.Exit(code=1)
 
     # Get source clip
@@ -1400,6 +1400,10 @@ def speed(
     # Validate rate
     if final_rate <= 0:
         console.print(f"[red]Error: rate must be positive, got {final_rate}.[/red]")
+        raise typer.Exit(code=1)
+
+    if not (0.5 <= final_rate <= 2.0):
+        console.print(f"[red]Error: rate must be between 0.5 and 2.0, got {final_rate}.[/red]")
         raise typer.Exit(code=1)
 
     # Validate source has duration
