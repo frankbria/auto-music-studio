@@ -32,9 +32,7 @@ class StemsClient:
 
     def _load_model(self):
         if demucs_pretrained is None:
-            raise StemsError(
-                "demucs is not installed. Install with: uv pip install 'acemusic[audio-ml]'"
-            )
+            raise StemsError("demucs is not installed. Install with: uv pip install 'acemusic[audio-ml]'")
         if self._model is None:
             self._model = demucs_pretrained.get_model(self._model_name)
             self._model.eval()
