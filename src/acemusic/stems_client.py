@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 try:
     import demucs.apply as demucs_apply
@@ -30,7 +30,13 @@ class StemsClient:
         self._model_name = model_name
         self._model = None
 
-    def _load_model(self):
+    @property
+    def model_samplerate(self) -> int:
+        """Return the sample rate expected by the loaded model."""
+        model = self._load_model()
+        return model.samplerate
+
+    def _load_model(self) -> Any:
         if demucs_pretrained is None:
             raise StemsError("demucs is not installed. Install with: uv pip install 'acemusic[audio-ml]'")
         if self._model is None:
@@ -64,6 +70,8 @@ class StemsClient:
 
         try:
             model = self._load_model()
+        except StemsError:
+            raise
         except Exception as exc:
             raise StemsError(f"Failed to load model: {exc}") from exc
 
@@ -84,9 +92,12 @@ class StemsClient:
 
         try:
             ref = wav.mean(0)
-            wav = (wav - ref.mean()) / ref.std()
+            std = ref.std()
+            if std < 1e-8:
+                std = torch.tensor(1.0)
+            wav = (wav - ref.mean()) / std
             sources = demucs_apply.apply_model(model, wav[None], progress=False)
-            sources = sources * ref.std() + ref.mean()
+            sources = sources * std + ref.mean()
         except Exception as exc:
             raise StemsError(f"Separation failed: {exc}") from exc
 
@@ -104,28 +115,31 @@ class StemsClient:
         base_name: str,
         sample_rate: int = 44100,
         output_format: str = "wav",
-    ) -> list[Path]:
+    ) -> dict[str, Path]:
         """Save separated stems to files.
 
         Args:
-            stems: Dict of label → tensor [channels, samples].
+            stems: Dict of label -> tensor [channels, samples].
             output_dir: Directory to write stem files into.
             base_name: Base filename (without extension).
             sample_rate: Audio sample rate.
             output_format: Output format ('wav' or 'flac').
 
         Returns:
-            List of paths to the written stem files.
+            Dict mapping stem label to the path of the written file.
         """
+        if ta is None:
+            raise StemsError("torchaudio is not installed. Install with: uv pip install 'acemusic[audio-ml]'")
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        paths = []
+        paths: dict[str, Path] = {}
         for label in STEM_LABELS:
             if label not in stems:
                 continue
             path = output_dir / f"{base_name}-{label}.{output_format}"
             ta.save(str(path), stems[label], sample_rate)
-            paths.append(path)
+            paths[label] = path
 
         return paths

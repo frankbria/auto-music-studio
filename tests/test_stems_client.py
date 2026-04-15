@@ -104,12 +104,12 @@ class TestStemsClientSaveStems:
         """save_stems() writes 4 WAV files with correct naming."""
         stems = {label: torch.randn(2, 44100) for label in STEM_LABELS}
         client = StemsClient()
-        paths = client.save_stems(stems, tmp_path, "mysong", sample_rate=44100, output_format="wav")
+        path_map = client.save_stems(stems, tmp_path, "mysong", sample_rate=44100, output_format="wav")
 
-        assert len(paths) == 4
+        assert len(path_map) == 4
         for label in STEM_LABELS:
             expected = tmp_path / f"mysong-{label}.wav"
-            assert expected in paths
+            assert path_map[label] == expected
             mock_ta.save.assert_any_call(str(expected), stems[label], 44100)
 
     @patch("acemusic.stems_client.ta")
@@ -117,11 +117,11 @@ class TestStemsClientSaveStems:
         """save_stems() with format=flac writes FLAC files."""
         stems = {label: torch.randn(2, 44100) for label in STEM_LABELS}
         client = StemsClient()
-        paths = client.save_stems(stems, tmp_path, "mysong", sample_rate=44100, output_format="flac")
+        path_map = client.save_stems(stems, tmp_path, "mysong", sample_rate=44100, output_format="flac")
 
         for label in STEM_LABELS:
             expected = tmp_path / f"mysong-{label}.flac"
-            assert expected in paths
+            assert path_map[label] == expected
 
     @patch("acemusic.stems_client.ta")
     def test_save_stems_creates_output_dir(self, mock_ta, tmp_path):

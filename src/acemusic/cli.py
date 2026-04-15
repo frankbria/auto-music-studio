@@ -41,7 +41,7 @@ from acemusic.db import (
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip, Preset
-from acemusic.stems_client import STEM_LABELS, StemsClient, StemsError
+from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
 from acemusic.workspace import (
     create_workspace,
@@ -1520,11 +1520,11 @@ def stems(
 
             stem_data = client.separate(source.file_path, progress_callback=_progress)
             status.update("[bold green]Saving stems...")
-            stem_paths = client.save_stems(
+            stem_path_map = client.save_stems(
                 stem_data,
                 stems_dir,
                 base_name,
-                sample_rate=44100,
+                sample_rate=client.model_samplerate,
                 output_format=output_format,
             )
     except StemsError as exc:
@@ -1535,7 +1535,7 @@ def stems(
 
     # Register each stem as a child clip
     new_ids = []
-    for label, stem_path in zip(STEM_LABELS, stem_paths):
+    for label, stem_path in stem_path_map.items():
         dur = get_duration(stem_path)
         stem_clip = Clip(
             workspace_id=source.workspace_id,

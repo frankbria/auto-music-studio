@@ -60,9 +60,10 @@ def _make_stems_client_mock():
 
     stems = {label: MagicMock() for label in STEM_LABELS}
     mock_instance.separate.return_value = stems
-    mock_instance.save_stems.side_effect = lambda stems, out_dir, base, **kw: [
-        _write_stub_stem(out_dir, base, label, kw.get("output_format", "wav")) for label in STEM_LABELS
-    ]
+    mock_instance.model_samplerate = 44100
+    mock_instance.save_stems.side_effect = lambda stems, out_dir, base, **kw: {
+        label: _write_stub_stem(out_dir, base, label, kw.get("output_format", "wav")) for label in STEM_LABELS
+    }
 
     return mock_client_cls
 
