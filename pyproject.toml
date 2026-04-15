@@ -21,6 +21,11 @@ dependencies = [
 acemusic = "acemusic.cli:app"
 
 [project.optional-dependencies]
+audio-ml = [
+    "demucs>=4.0",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+]
 dev = [
     "pytest",
     "pytest-bdd",
