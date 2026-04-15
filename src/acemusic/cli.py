@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3)."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from acemusic.db import (
 )
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.models import Clip, Preset
+from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
 from acemusic.workspace import (
     create_workspace,
@@ -131,7 +132,7 @@ def main(
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
-    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop", "speed"):
+    elif ctx.invoked_subcommand not in ("models", "workspace", "clips", "preset", "import", "crop", "speed", "stems"):
         config = load_config()
         if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
@@ -1475,6 +1476,91 @@ def speed(
     console.print(f"    Path:     {dest_path}")
     console.print(f"    Duration: {_fmt_duration(source.duration)} → {_fmt_duration(new_duration_s)}")
     console.print(f"    Speed:    {rate_pct:.1f}%{bpm_str}")
+
+
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def stems(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to separate into stems."),
+    output_format: str = typer.Option("wav", "--output-format", help="Stem output format: wav or flac."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Output directory (default: stems/ next to source)."),
+) -> None:
+    """Separate a clip into individual stems (vocals, drums, bass, other) using AI source separation."""
+    # Validate output format
+    if output_format not in ("wav", "flac"):
+        console.print(f"[red]Error: --output-format must be wav or flac, got {output_format!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    # Get source clip
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    # Resolve output directory
+    if output is not None:
+        stems_dir = output
+    else:
+        stems_dir = Path(source.file_path).parent / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+
+    # Derive base name from source file
+    base_name = Path(source.file_path).stem
+
+    # Separate stems
+    client = StemsClient()
+    start_time = time.time()
+    try:
+        with console.status("[bold green]Loading model and separating stems...") as status:
+
+            def _progress(msg: str) -> None:
+                status.update(f"[bold green]{msg}")
+
+            stem_data = client.separate(source.file_path, progress_callback=_progress)
+            status.update("[bold green]Saving stems...")
+            stem_path_map = client.save_stems(
+                stem_data,
+                stems_dir,
+                base_name,
+                sample_rate=client.model_samplerate,
+                output_format=output_format,
+            )
+    except StemsError as exc:
+        console.print(f"[red]Error during separation: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    elapsed = time.time() - start_time
+
+    # Register each stem as a child clip
+    new_ids = []
+    for label, stem_path in stem_path_map.items():
+        dur = get_duration(stem_path)
+        stem_clip = Clip(
+            workspace_id=source.workspace_id,
+            file_path=str(stem_path.resolve()),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format=output_format,
+            duration=dur,
+            bpm=source.bpm,
+            key=source.key,
+            title=label,
+            parent_clip_id=source.id,
+            generation_mode="stems",
+        )
+        try:
+            new_id = create_clip(stem_clip)
+            new_ids.append((label, new_id, stem_path, dur))
+        except Exception as exc:
+            console.print(f"[red]Error saving {label} clip record: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    # Print summary
+    console.print(f"\n  [green]✓[/green] Separated clip {clip_id} into {len(new_ids)} stems ({elapsed:.1f}s)")
+    for label, nid, spath, dur in new_ids:
+        dur_str = _fmt_duration(dur)
+        console.print(f"    {label:<8} → clip {nid}  {spath}  ({dur_str})")
 
 
 # Preset commands (US-4.3)
