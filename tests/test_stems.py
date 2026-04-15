@@ -54,13 +54,11 @@ def _make_clip(workspace_id: str, file_path: str, **kwargs) -> Clip:
 
 def _make_stems_client_mock():
     """Create a mock StemsClient that returns plausible stem data."""
-    import torch
-
     mock_client_cls = MagicMock()
     mock_instance = MagicMock()
     mock_client_cls.return_value = mock_instance
 
-    stems = {label: torch.randn(2, 44100) for label in STEM_LABELS}
+    stems = {label: MagicMock() for label in STEM_LABELS}
     mock_instance.separate.return_value = stems
     mock_instance.save_stems.side_effect = lambda stems, out_dir, base, **kw: [
         _write_stub_stem(out_dir, base, label, kw.get("output_format", "wav")) for label in STEM_LABELS
