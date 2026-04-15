@@ -117,8 +117,5 @@ def time_stretch_audio(
     # Apply time-stretch using phase vocoder
     y_stretched = librosa.effects.time_stretch(y, rate=rate)
 
-    # Infer output format from extension
-    fmt = output_path.rsplit(".", 1)[-1].lower() if "." in output_path else "wav"
-
     # Export to file
     sf.write(output_path, y_stretched.T if y_stretched.ndim > 1 else y_stretched, sr, subtype="PCM_16")

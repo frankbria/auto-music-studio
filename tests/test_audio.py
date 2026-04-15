@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
-
 import pytest
+
+from acemusic.audio import SUPPORTED_FORMATS, detect_bpm, detect_key
 
 
 class TestSupportedFormats:

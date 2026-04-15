@@ -58,8 +58,8 @@ def _make_clip(workspace_id: str, file_path: str, **kwargs) -> Clip:
 class TestSpeedCommand:
     def test_speed_with_rate_creates_new_clip(self, workspace_with_clips_dir):
         """Speed command with --rate creates a new clip with updated duration."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -84,8 +84,8 @@ class TestSpeedCommand:
 
     def test_speed_with_target_bpm_creates_new_clip(self, workspace_with_clips_dir):
         """Speed command with --target-bpm calculates rate from BPM."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -110,8 +110,8 @@ class TestSpeedCommand:
 
     def test_speed_preserves_original_clip(self, workspace_with_clips_dir):
         """Original clip remains unchanged after speed adjustment."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip, get_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -131,8 +131,8 @@ class TestSpeedCommand:
 
     def test_speed_updates_bpm_when_present(self, workspace_with_clips_dir):
         """BPM is recalculated when changing speed."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -153,8 +153,8 @@ class TestSpeedCommand:
 
     def test_speed_preserves_key(self, workspace_with_clips_dir):
         """Key is preserved when speed is adjusted."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -174,8 +174,8 @@ class TestSpeedCommand:
 
     def test_speed_output_message_contains_new_clip_id(self, workspace_with_clips_dir):
         """Success output shows the new clip ID and statistics."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -206,8 +206,8 @@ class TestSpeedValidation:
 
     def test_both_rate_and_target_bpm_returns_error(self, workspace_with_clips_dir):
         """Providing both --rate and --target-bpm is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -223,8 +223,8 @@ class TestSpeedValidation:
 
     def test_neither_rate_nor_target_bpm_returns_error(self, workspace_with_clips_dir):
         """Not providing --rate or --target-bpm is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -240,8 +240,8 @@ class TestSpeedValidation:
 
     def test_target_bpm_without_source_bpm_returns_error(self, workspace_with_clips_dir):
         """--target-bpm without BPM in source metadata is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -257,8 +257,8 @@ class TestSpeedValidation:
 
     def test_zero_rate_returns_error(self, workspace_with_clips_dir):
         """rate <= 0 is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -274,8 +274,8 @@ class TestSpeedValidation:
 
     def test_negative_rate_returns_error(self, workspace_with_clips_dir):
         """Negative rate is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -291,8 +291,8 @@ class TestSpeedValidation:
 
     def test_null_duration_rejects_speed(self, workspace_with_clips_dir):
         """Clip with no duration metadata must be rejected."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
@@ -306,10 +306,99 @@ class TestSpeedValidation:
         assert result.exit_code == 1
         assert "duration" in result.output.lower()
 
+    def test_rate_below_minimum_returns_error(self, workspace_with_clips_dir):
+        """Rate below 0.5 is rejected."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_slow.wav"
+        src_wav.write_bytes(b"audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0)
+        clip_id = create_clip(src_clip)
+
+        result = runner.invoke(app, ["speed", str(clip_id), "--rate", "0.3"])
+        assert result.exit_code == 1
+        assert "0.5" in result.output and "2.0" in result.output
+
+    def test_rate_above_maximum_returns_error(self, workspace_with_clips_dir):
+        """Rate above 2.0 is rejected."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_fast.wav"
+        src_wav.write_bytes(b"audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0)
+        clip_id = create_clip(src_clip)
+
+        result = runner.invoke(app, ["speed", str(clip_id), "--rate", "2.5"])
+        assert result.exit_code == 1
+        assert "0.5" in result.output and "2.0" in result.output
+
+    def test_rate_at_boundary_0_5_succeeds(self, workspace_with_clips_dir):
+        """Rate exactly 0.5 is accepted."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_bound_low.wav"
+        src_wav.write_bytes(b"audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0, bpm=120)
+        clip_id = create_clip(src_clip)
+
+        with patch("acemusic.cli.time_stretch_audio"):
+            result = runner.invoke(app, ["speed", str(clip_id), "--rate", "0.5"])
+
+        assert result.exit_code == 0, result.output
+
+    def test_rate_at_boundary_2_0_succeeds(self, workspace_with_clips_dir):
+        """Rate exactly 2.0 is accepted."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_bound_high.wav"
+        src_wav.write_bytes(b"audio")
+
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0, bpm=120)
+        clip_id = create_clip(src_clip)
+
+        with patch("acemusic.cli.time_stretch_audio"):
+            result = runner.invoke(app, ["speed", str(clip_id), "--rate", "2.0"])
+
+        assert result.exit_code == 0, result.output
+
+    def test_target_bpm_out_of_range_returns_contextual_error(self, workspace_with_clips_dir):
+        """--target-bpm that produces rate outside 0.5-2.0 shows BPM context in error."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
+
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        src_wav = clips_dir / "src_bpm_range.wav"
+        src_wav.write_bytes(b"audio")
+
+        # 120 BPM → 300 BPM = rate 2.5, outside 0.5–2.0
+        src_clip = _make_clip(ws.id, str(src_wav), duration=60.0, bpm=120)
+        clip_id = create_clip(src_clip)
+
+        result = runner.invoke(app, ["speed", str(clip_id), "--target-bpm", "300"])
+        assert result.exit_code == 1
+        assert "300" in result.output
+        assert "0.5" in result.output and "2.0" in result.output
+
     def test_zero_target_bpm_returns_error(self, workspace_with_clips_dir):
         """target_bpm <= 0 is an error."""
-        from acemusic.workspace import get_active_workspace, get_workspace_path
         from acemusic.db import create_clip
+        from acemusic.workspace import get_active_workspace, get_workspace_path
 
         ws = get_active_workspace()
         clips_dir = get_workspace_path(ws.id)
