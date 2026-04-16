@@ -65,6 +65,17 @@ def parse_time_string(time_str: str) -> int:
     return int(round(seconds * 1000))
 
 
+def generate_remaster_filename(original_path: Path) -> Path:
+    """Generate a remaster output filename in the same directory as the original.
+
+    Produces: {stem}-remaster-{timestamp}.{ext}
+    """
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    return original_path.parent / f"{original_path.stem}-remaster-{timestamp}{original_path.suffix}"
+
+
 def snap_to_beat(time_ms: int | float, bpm: int | float) -> int:
     """Round time_ms to the nearest beat boundary for the given BPM.
 
