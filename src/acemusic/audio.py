@@ -156,7 +156,7 @@ def normalize_loudness(audio: np.ndarray, sample_rate: int, target_lufs: float) 
 def apply_eq(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Apply gentle EQ: presence boost (~3kHz) and low-end warmth (~100Hz).
 
-    Uses scipy second-order sections (SOS) for numerical stability.
+    Uses scipy IIR peak filters (second-order) for frequency-selective boosts.
     """
     from scipy.signal import iirpeak, lfilter
 
