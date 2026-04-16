@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3, US-5.4)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3, US-5.4, US-5.5)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from acemusic.audio import (
     crop_audio,
     detect_bpm,
     detect_key,
+    remaster_audio,
     time_stretch_audio,
 )
 from acemusic.client import AceStepClient, AceStepError
@@ -43,7 +44,14 @@ from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
 from acemusic.stems_client import StemsClient, StemsError
-from acemusic.utils import get_duration, make_filename, make_slug, parse_time_string, snap_to_beat
+from acemusic.utils import (
+    generate_remaster_filename,
+    get_duration,
+    make_filename,
+    make_slug,
+    parse_time_string,
+    snap_to_beat,
+)
 from acemusic.workspace import (
     create_workspace,
     delete_workspace,
@@ -143,6 +151,7 @@ def main(
         "speed",
         "stems",
         "midi",
+        "remaster",
     ):
         config = load_config()
         if not config.api_url:
@@ -1671,6 +1680,76 @@ def midi(
     console.print(f"\n  [green]✓[/green] Extracted MIDI from clip {clip_id} ({elapsed:.1f}s)")
     for label, nid, mpath in new_ids:
         console.print(f"    {label:<8} → clip {nid}  {mpath}")
+
+
+# ---------------------------------------------------------------------------
+# Remaster command (US-5.5)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def remaster(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to remaster."),
+    target_lufs: float = typer.Option(-14.0, "--target-lufs", help="Target loudness in LUFS (default: -14)."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Custom output file path."),
+) -> None:
+    """Apply audio enhancement: loudness normalization, EQ, compression, and stereo widening. Original is preserved."""
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    src_path = Path(source.file_path)
+    if not src_path.exists():
+        console.print(f"[red]Error: source file not found: {src_path}[/red]")
+        raise typer.Exit(code=1)
+
+    src_ext = src_path.suffix.lower()
+    if src_ext not in {".wav"}:
+        console.print(
+            f"[red]Error: unsupported format '{src_ext}' for remastering. Currently only .wav is supported.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if output is not None:
+        dest_path = output
+    else:
+        dest_path = generate_remaster_filename(src_path)
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with console.status("[bold green]Remastering..."):
+            result = remaster_audio(src_path, dest_path, target_lufs=target_lufs)
+    except Exception as exc:
+        console.print(f"[red]Error during remastering: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # Register new clip in DB
+    dur = get_duration(dest_path)
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        format=source.format,
+        duration=dur,
+        bpm=source.bpm,
+        key=source.key,
+        parent_clip_id=source.id,
+        generation_mode="remaster",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    before_lufs = result["before_lufs"]
+    after_lufs = result["after_lufs"]
+    console.print(f"  [green]\u2713[/green] Remastered clip {clip_id} \u2192 clip {new_id}")
+    console.print(f"    Path:   {dest_path}")
+    console.print(f"    LUFS:   {before_lufs:.1f} \u2192 {after_lufs:.1f}")
 
 
 # Preset commands (US-4.3)
