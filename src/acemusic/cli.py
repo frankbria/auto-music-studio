@@ -1637,6 +1637,9 @@ def midi(
     except MidiError as exc:
         console.print(f"[red]Error during MIDI extraction: {exc}[/red]")
         raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[red]Unexpected error: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     elapsed = time.time() - start_time
 
@@ -1652,7 +1655,7 @@ def midi(
             created_at=datetime.now(timezone.utc).isoformat(),
             format="mid",
             duration=dur,
-            bpm=int(round(tempo)) if tempo else source.bpm,
+            bpm=int(round(tempo)),
             key=source.key,
             title=f"midi-{label}",
             parent_clip_id=source.id,
