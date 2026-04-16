@@ -142,6 +142,10 @@ def normalize_loudness(audio: np.ndarray, sample_rate: int, target_lufs: float) 
 
     meter = pyln.Meter(sample_rate)
     current_lufs = meter.integrated_loudness(audio)
+
+    if not np.isfinite(current_lufs):
+        return audio.copy()
+
     normalized = pyln.normalize.loudness(audio, current_lufs, target_lufs)
 
     # True-peak limiting at -1 dBTP (~0.891)
@@ -188,8 +192,8 @@ def apply_eq(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 def apply_compression(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Apply soft-knee dynamic range compression.
 
-    Uses RMS-based envelope detection with moderate ratio (3:1),
-    ~10ms attack, ~100ms release, and automatic makeup gain.
+    Uses envelope-following with moderate ratio (3:1), ~10ms attack, ~100ms release.
+    Loudness recovery is handled by the pipeline's final normalization pass.
     """
     threshold_db = -20.0
     ratio = 3.0
@@ -206,25 +210,34 @@ def apply_compression(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     else:
         envelope_signal = np.abs(result)
 
+    # Pre-compute sample dB levels as a vector (avoids per-sample np calls)
+    sample_db_all = 20.0 * np.log10(envelope_signal + 1e-10)
+
     n_samples = len(envelope_signal)
-    gain_db = np.zeros(n_samples)
+    env_db_arr = np.empty(n_samples)
     env_db = -120.0
 
+    # Envelope follower (sequential — state-dependent)
     for i in range(n_samples):
-        sample_db = 20.0 * np.log10(envelope_signal[i] + 1e-10)
-
-        if sample_db > env_db:
-            env_db = attack_coeff * env_db + (1.0 - attack_coeff) * sample_db
+        s = sample_db_all[i]
+        if s > env_db:
+            env_db = attack_coeff * env_db + (1.0 - attack_coeff) * s
         else:
-            env_db = release_coeff * env_db + (1.0 - release_coeff) * sample_db
+            env_db = release_coeff * env_db + (1.0 - release_coeff) * s
+        env_db_arr[i] = env_db
 
-        over_db = env_db - threshold_db
-        if over_db <= -knee_db / 2:
-            gain_db[i] = 0.0
-        elif over_db >= knee_db / 2:
-            gain_db[i] = -(1.0 - 1.0 / ratio) * over_db
-        else:
-            gain_db[i] = -(1.0 - 1.0 / ratio) * (over_db + knee_db / 2) ** 2 / (2.0 * knee_db)
+    # Vectorized gain computation (soft-knee)
+    over_db = env_db_arr - threshold_db
+    gain_reduction = 1.0 - 1.0 / ratio
+    gain_db = np.where(
+        over_db <= -knee_db / 2,
+        0.0,
+        np.where(
+            over_db >= knee_db / 2,
+            -gain_reduction * over_db,
+            -gain_reduction * (over_db + knee_db / 2) ** 2 / (2.0 * knee_db),
+        ),
+    )
 
     gain_linear = 10.0 ** (gain_db / 20.0)
 

@@ -1722,6 +1722,7 @@ def remaster(
         with console.status("[bold green]Remastering..."):
             result = remaster_audio(src_path, dest_path, target_lufs=target_lufs)
     except Exception as exc:
+        dest_path.unlink(missing_ok=True)
         console.print(f"[red]Error during remastering: {exc}[/red]")
         raise typer.Exit(code=1)
 
