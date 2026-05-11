@@ -46,6 +46,11 @@ uv run acemusic generate "upbeat pop" --output ./output --name demo
 uv run acemusic generate "dark electro" --bpm 128 --key "C minor" --time-signature "4/4" --seed 42 --duration 60
 uv run acemusic generate "ambient pad" --backend elevenlabs --instrumental
 
+# Iterative generation (US-6.1) — extend an existing clip with AI-generated continuation
+uv run acemusic extend 42 --duration 60s                          # extend clip 42 by 60s from its end
+uv run acemusic extend 42 --duration 30s --from 45s               # extend from a mid-clip timestamp
+uv run acemusic extend 42 --duration 30s --style "add a bridge feel" --lyrics "[Bridge]\nWe cross the river"
+
 # Workspace management (US-4.1)
 uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
 uv run acemusic workspace create "My Album"           # create a new workspace
