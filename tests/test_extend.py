@@ -34,6 +34,7 @@ def isolated_db(tmp_path, monkeypatch):
     import acemusic.db as _db
 
     monkeypatch.setattr(_db, "DB_DIR", tmp_path / ".acemusic")
+    monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
     return tmp_path
 
 
