@@ -83,3 +83,86 @@ def snap_to_beat(time_ms: int | float, bpm: int | float) -> int:
     """
     beat_ms = 60_000 / bpm
     return round(round(time_ms / beat_ms) * beat_ms)
+
+
+# ---------------------------------------------------------------------------
+# Audio manipulation utilities (US-6.1)
+# ---------------------------------------------------------------------------
+
+
+def concatenate_audio(original_path: Path | str, extension_path: Path | str, output_path: Path | str) -> Path:
+    """Concatenate two audio files end-to-end and write the result to output_path.
+
+    The sample rate of the first file is preserved. If the second file has a
+    different sample rate it is resampled to match.
+
+    Returns the output path.
+    Raises FileNotFoundError if either input is missing, or RuntimeError on read failure.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    original_path = Path(original_path)
+    extension_path = Path(extension_path)
+    output_path = Path(output_path)
+
+    if not original_path.exists():
+        raise FileNotFoundError(f"Original audio file not found: {original_path}")
+    if not extension_path.exists():
+        raise FileNotFoundError(f"Extension audio file not found: {extension_path}")
+
+    a_data, a_sr = sf.read(str(original_path))
+    b_data, b_sr = sf.read(str(extension_path))
+
+    if b_sr != a_sr:
+        import librosa
+
+        if b_data.ndim > 1:
+            # librosa expects (channels, samples)
+            b_data = librosa.resample(b_data.T, orig_sr=b_sr, target_sr=a_sr).T
+        else:
+            b_data = librosa.resample(b_data, orig_sr=b_sr, target_sr=a_sr)
+
+    # Align channel counts (mono → stereo if needed)
+    if a_data.ndim != b_data.ndim:
+        if a_data.ndim == 1:
+            a_data = np.column_stack([a_data, a_data])
+        if b_data.ndim == 1:
+            b_data = np.column_stack([b_data, b_data])
+
+    joined = np.concatenate([a_data, b_data], axis=0)
+    sf.write(str(output_path), joined, a_sr)
+    return output_path
+
+
+def slice_audio(input_path: Path | str, head_seconds: float, output_path: Path | str) -> Path:
+    """Trim an audio file to the first head_seconds and write it to output_path.
+
+    Used by the extend command to truncate the source when --from <timestamp>
+    is supplied so the model only sees audio up to the splice point.
+
+    Returns the output path.
+    Raises ValueError when head_seconds is non-positive or exceeds the input duration.
+    Raises FileNotFoundError if the input is missing.
+    """
+    import soundfile as sf
+
+    if head_seconds <= 0:
+        raise ValueError(f"head_seconds must be positive, got {head_seconds}")
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input audio file not found: {input_path}")
+
+    data, sr = sf.read(str(input_path))
+    total_samples = data.shape[0]
+    requested_samples = int(round(head_seconds * sr))
+
+    if requested_samples > total_samples:
+        actual_duration = total_samples / sr
+        raise ValueError(f"head_seconds ({head_seconds}) exceeds input duration ({actual_duration:.3f}s)")
+
+    sliced = data[:requested_samples]
+    sf.write(str(output_path), sliced, sr)
+    return output_path

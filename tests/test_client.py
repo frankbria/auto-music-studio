@@ -352,3 +352,74 @@ class TestDownloadAudio:
         with patch("acemusic.client.httpx.get", side_effect=httpx.ConnectError("refused")):
             with pytest.raises(AceStepError, match="Download failed"):
                 client.download_audio("http://localhost:8001/v1/audio?path=clip.wav")
+
+
+# ---------------------------------------------------------------------------
+# submit_task — repaint/extend parameters (US-6.1)
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitTaskRepaint:
+    """Tests for the repaint/continuation parameters used by extend (US-6.1)."""
+
+    def test_omits_task_type_when_default(self):
+        """task_type is omitted from the payload when at its default value."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop")
+        payload = mock_post.call_args.kwargs["json"]
+        assert "task_type" not in payload
+
+    def test_includes_task_type_when_repaint(self):
+        """task_type='repaint' appears in the payload."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", task_type="repaint")
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["task_type"] == "repaint"
+
+    def test_includes_src_audio_path(self):
+        """src_audio_path appears in the payload when provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop", task_type="repaint", src_audio_path="/tmp/src.wav")
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["src_audio_path"] == "/tmp/src.wav"
+
+    def test_omits_src_audio_path_when_none(self):
+        """src_audio_path is omitted from the payload when None."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop")
+        payload = mock_post.call_args.kwargs["json"]
+        assert "src_audio_path" not in payload
+
+    def test_includes_repainting_start_and_end(self):
+        """repainting_start/repainting_end appear in the payload when provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task(
+                "pop",
+                task_type="repaint",
+                src_audio_path="/tmp/src.wav",
+                repainting_start=30.0,
+                repainting_end=90.0,
+            )
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["repainting_start"] == 30.0
+        assert payload["repainting_end"] == 90.0
+
+    def test_omits_repainting_params_when_none(self):
+        """repainting_start/repainting_end are omitted when not provided."""
+        resp = _make_response(200, _wrapped({"task_id": "t1"}))
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
+            client.submit_task("pop")
+        payload = mock_post.call_args.kwargs["json"]
+        assert "repainting_start" not in payload
+        assert "repainting_end" not in payload

@@ -71,6 +71,10 @@ class AceStepClient:
         model: str | None = None,
         mode: str | None = None,
         sound_type: str | None = None,
+        task_type: str = "text2music",
+        src_audio_path: str | None = None,
+        repainting_start: float | None = None,
+        repainting_end: float | None = None,
     ) -> str:
         """Submit a generation task via POST /release_task and return the task_id.
 
@@ -94,6 +98,10 @@ class AceStepClient:
             model: ACE-Step model variant key (e.g. "turbo", "xl-base"). None uses server default.
             mode: Generation mode (e.g. "sound" for sounds mode). None uses server default.
             sound_type: Sound type for sounds mode ("one-shot" or "loop"). None uses server default.
+            task_type: ACE-Step task type. Defaults to "text2music"; use "repaint" for extend/edit.
+            src_audio_path: Server-side path to source audio (for repaint/cover/complete tasks).
+            repainting_start: Region start (seconds) for repaint tasks.
+            repainting_end: Region end (seconds) for repaint tasks.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
@@ -131,6 +139,14 @@ class AceStepClient:
             payload["mode"] = mode
         if sound_type is not None:
             payload["sound_type"] = sound_type
+        if task_type != "text2music":
+            payload["task_type"] = task_type
+        if src_audio_path is not None:
+            payload["src_audio_path"] = src_audio_path
+        if repainting_start is not None:
+            payload["repainting_start"] = repainting_start
+        if repainting_end is not None:
+            payload["repainting_end"] = repainting_end
         try:
             response = httpx.post(
                 f"{self.base_url}/release_task",
