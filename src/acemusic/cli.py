@@ -1918,7 +1918,11 @@ def extend(
         if trimmed is not None:
             trimmed.unlink(missing_ok=True)
 
-    new_duration = get_duration(dest_path)
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"extended clip duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
 
     new_title = f"{source.title} (extended)" if source.title else None
     new_clip = Clip(
