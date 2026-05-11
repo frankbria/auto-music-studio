@@ -112,6 +112,38 @@ class TestExtendCommand:
         assert len(extended) == 1
         assert extended[0].parent_clip_id == clip_id
 
+    def test_extended_clip_inherits_title(self, isolated_db, write_tone):
+        """When the source has a title, the extended clip derives a title from it."""
+        from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        src_wav = clips_dir / "source.wav"
+        write_tone(src_wav, duration_s=2.0)
+
+        clip = Clip(
+            workspace_id=ws.id,
+            file_path=str(src_wav),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            title="Morning Theme",
+            format="wav",
+            duration=2.0,
+            generation_mode="generate",
+        )
+        clip_id = create_clip(clip)
+
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["extend", str(clip_id), "--duration", "1s"])
+        assert result.exit_code == 0, result.output
+
+        extended = [c for c in list_clips(ws.id) if c.generation_mode == "extend"]
+        assert len(extended) == 1
+        assert extended[0].title == "Morning Theme (extended)"
+
     def test_submits_repaint_task_with_correct_params(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
         client = _make_client_mock()
@@ -261,6 +293,22 @@ class TestExtendValidation:
         # source is 2.0s; --from 5s exceeds duration
         result = runner.invoke(app, ["extend", str(clip_id), "--duration", "1s", "--from", "5s"])
         assert result.exit_code == 1
+
+    def test_from_zero_returns_error(self, workspace_with_clip):
+        """--from 0s is below the minimum boundary (must be > 0)."""
+        ws, clip_id, src_wav = workspace_with_clip
+        result = runner.invoke(app, ["extend", str(clip_id), "--duration", "1s", "--from", "0s"])
+        assert result.exit_code == 1
+
+    def test_from_exactly_at_clip_end_succeeds(self, workspace_with_clip):
+        """--from <source_duration> should succeed (same as --from end)."""
+        ws, clip_id, src_wav = workspace_with_clip
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["extend", str(clip_id), "--duration", "1s", "--from", "2s"])
+        assert result.exit_code == 0, result.output
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["repainting_start"] == pytest.approx(2.0, abs=0.01)
 
     def test_api_failure_returns_error(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip

@@ -376,7 +376,7 @@ class TestSubmitTaskRepaint:
         resp = _make_response(200, _wrapped({"task_id": "t1"}))
         client = AceStepClient("http://localhost:8001")
         with patch("acemusic.client.httpx.post", return_value=resp) as mock_post:
-            client.submit_task("pop", task_type="repaint")
+            client.submit_task("pop", task_type="repaint", src_audio_path="/tmp/src.wav")
         payload = mock_post.call_args.kwargs["json"]
         assert payload["task_type"] == "repaint"
 
@@ -423,3 +423,9 @@ class TestSubmitTaskRepaint:
         payload = mock_post.call_args.kwargs["json"]
         assert "repainting_start" not in payload
         assert "repainting_end" not in payload
+
+    def test_repaint_without_src_audio_raises_value_error(self):
+        """task_type='repaint' without src_audio_path raises a clear ValueError."""
+        client = AceStepClient("http://localhost:8001")
+        with pytest.raises(ValueError, match="src_audio_path is required"):
+            client.submit_task("pop", task_type="repaint")

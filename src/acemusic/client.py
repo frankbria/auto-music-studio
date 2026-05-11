@@ -13,8 +13,11 @@ ACE-Step 1.5 API contract:
 from __future__ import annotations
 
 import json as _json
+from typing import Literal
 
 import httpx
+
+TaskType = Literal["text2music", "cover", "repaint", "extract", "lego", "complete"]
 
 
 class AceStepError(Exception):
@@ -71,7 +74,7 @@ class AceStepClient:
         model: str | None = None,
         mode: str | None = None,
         sound_type: str | None = None,
-        task_type: str = "text2music",
+        task_type: TaskType = "text2music",
         src_audio_path: str | None = None,
         repainting_start: float | None = None,
         repainting_end: float | None = None,
@@ -105,7 +108,11 @@ class AceStepClient:
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
+            ValueError: when task_type='repaint' is requested without src_audio_path.
         """
+        if task_type == "repaint" and src_audio_path is None:
+            raise ValueError("src_audio_path is required when task_type='repaint'")
+
         payload: dict = {"prompt": prompt, "batch_size": num_clips, "audio_format": format}
         if audio_duration is not None:
             payload["audio_duration"] = audio_duration

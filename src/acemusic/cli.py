@@ -1920,10 +1920,12 @@ def extend(
 
     new_duration = get_duration(dest_path)
 
+    new_title = f"{source.title} (extended)" if source.title else None
     new_clip = Clip(
         workspace_id=source.workspace_id,
         file_path=str(dest_path.resolve()),
         created_at=datetime.now(timezone.utc).isoformat(),
+        title=new_title,
         format=ext,
         duration=new_duration,
         bpm=source.bpm,
