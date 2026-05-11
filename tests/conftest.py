@@ -165,3 +165,33 @@ def integration_url(ace_server, monkeypatch) -> str:
 def app_config():
     """Minimal application configuration fixture."""
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Audio test helpers (shared across audio-related test modules)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def write_tone():
+    """Return a callable that writes a stereo sine-wave WAV to a path.
+
+    Signature: write_tone(path, frequency=440.0, duration_s=1.0,
+                          sample_rate=44100, amplitude=0.3)
+    """
+    import numpy as np
+    import soundfile as sf
+
+    def _writer(
+        path,
+        frequency: float = 440.0,
+        duration_s: float = 1.0,
+        sample_rate: int = 44100,
+        amplitude: float = 0.3,
+    ):
+        t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+        mono = (amplitude * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+        stereo = np.column_stack([mono, mono])
+        sf.write(str(path), stereo, sample_rate)
+
+    return _writer

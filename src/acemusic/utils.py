@@ -123,11 +123,12 @@ def concatenate_audio(original_path: Path | str, extension_path: Path | str, out
         else:
             b_data = librosa.resample(b_data, orig_sr=b_sr, target_sr=a_sr)
 
-    # Align channel counts (mono → stereo if needed)
+    # Align channel counts (mono → stereo if needed). Only one branch can fire
+    # because the outer guard requires the two ndims differ.
     if a_data.ndim != b_data.ndim:
         if a_data.ndim == 1:
             a_data = np.column_stack([a_data, a_data])
-        if b_data.ndim == 1:
+        elif b_data.ndim == 1:
             b_data = np.column_stack([b_data, b_data])
 
     joined = np.concatenate([a_data, b_data], axis=0)

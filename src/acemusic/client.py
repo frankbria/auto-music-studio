@@ -139,6 +139,9 @@ class AceStepClient:
             payload["mode"] = mode
         if sound_type is not None:
             payload["sound_type"] = sound_type
+        # ACE-Step defaults to text2music server-side; omit to avoid changing
+        # existing behavior for the generate command. If the server ever changes
+        # its default, switch this to always send task_type.
         if task_type != "text2music":
             payload["task_type"] = task_type
         if src_audio_path is not None:

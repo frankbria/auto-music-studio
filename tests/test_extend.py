@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -21,12 +22,14 @@ COMPLETED_RESULT = {"status": "completed", "audio_urls": [AUDIO_URL]}
 FAILED_RESULT = {"status": "failed", "audio_urls": [], "error": "model overloaded"}
 
 
-def _write_tone(path, duration_s: float = 1.0, sample_rate: int = 44100):
-    """Write a short stereo sine-wave WAV file for use as test source audio."""
+def _wav_bytes(duration_s: float, sample_rate: int = 44100) -> bytes:
+    """Return bytes of a stereo sine-wave WAV at the requested duration."""
+    buf = io.BytesIO()
     t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
     mono = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
     stereo = np.column_stack([mono, mono])
-    sf.write(str(path), stereo, sample_rate)
+    sf.write(buf, stereo, sample_rate, format="WAV")
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -39,7 +42,7 @@ def isolated_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def workspace_with_clip(isolated_db):
+def workspace_with_clip(isolated_db, write_tone):
     """Set up a workspace with a single source clip backed by a real WAV file."""
     from acemusic.db import create_clip
     from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
@@ -50,7 +53,7 @@ def workspace_with_clip(isolated_db):
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     src_wav = clips_dir / "source.wav"
-    _write_tone(src_wav, duration_s=2.0)
+    write_tone(src_wav, duration_s=2.0)
 
     clip = Clip(
         workspace_id=ws.id,
@@ -68,17 +71,13 @@ def workspace_with_clip(isolated_db):
 
 
 def _make_client_mock(audio_bytes: bytes | None = None, query_sequence=None):
-    """Return a MagicMock AceStepClient with happy-path defaults."""
-    if audio_bytes is None:
-        # Generate fresh extended audio with longer duration (3.0s, matches 2.0 src + 1.0 ext)
-        import io
+    """Return a MagicMock AceStepClient with happy-path defaults.
 
-        buf = io.BytesIO()
-        t = np.linspace(0, 3.0, int(44100 * 3.0), endpoint=False)
-        mono = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
-        stereo = np.column_stack([mono, mono])
-        sf.write(buf, stereo, 44100, format="WAV")
-        audio_bytes = buf.getvalue()
+    Default audio output is a 3.0s WAV — matching a 2.0s source clip extended
+    by 1.0s, which is the standard fixture scenario.
+    """
+    if audio_bytes is None:
+        audio_bytes = _wav_bytes(3.0)
 
     client = MagicMock()
     client.submit_task.return_value = TASK_ID
@@ -201,15 +200,7 @@ class TestExtendCommand:
         first_extend_id = extended[0].id
 
         # Second extend on the first extended clip — produce a longer (4s) clip
-        import io
-
-        buf = io.BytesIO()
-        t = np.linspace(0, 4.0, int(44100 * 4.0), endpoint=False)
-        mono = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
-        stereo = np.column_stack([mono, mono])
-        sf.write(buf, stereo, 44100, format="WAV")
-
-        client2 = _make_client_mock(audio_bytes=buf.getvalue())
+        client2 = _make_client_mock(audio_bytes=_wav_bytes(4.0))
         with patch("acemusic.cli.AceStepClient", return_value=client2):
             r2 = runner.invoke(app, ["extend", str(first_extend_id), "--duration", "1s"])
         assert r2.exit_code == 0, r2.output

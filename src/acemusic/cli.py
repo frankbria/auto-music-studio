@@ -1780,6 +1780,10 @@ def extend(
     src_audio and a repainting region covering the new section. The result is
     saved as a new clip with `parent_clip_id` set to the source and
     `generation_mode='extend'`. Multiple extends can be chained.
+
+    Note: Requires ACE-Step to run on the same host (or with shared filesystem
+    access), since the source audio is passed via an absolute server-side path.
+    Remote ACE-Step deployments are not yet supported.
     """
     try:
         duration_ms = parse_time_string(duration)
@@ -1834,84 +1838,85 @@ def extend(
     # lines up with the splice point even when the user wants to discard audio
     # past the splice. The trimmed file is held in a tmp location and not registered.
     src_for_api: Path = src_path
+    trimmed: Optional[Path] = None
     if from_seconds < source.duration:
         trimmed = clips_dir / f"{uuid.uuid4().hex}-trim.wav"
         try:
             slice_audio(src_path, from_seconds, trimmed)
         except Exception as exc:
+            trimmed.unlink(missing_ok=True)
             console.print(f"[red]Error trimming source audio: {exc}[/red]")
             raise typer.Exit(code=1)
         src_for_api = trimmed
 
     prompt = source.style_tags or source.title or "continue the song"
-
-    try:
-        task_id = ace_client.submit_task(
-            prompt=prompt,
-            num_clips=1,
-            audio_duration=target_audio_duration,
-            format=source.format or "wav",
-            style=style,
-            lyrics=lyrics,
-            bpm=source.bpm,
-            key=source.key,
-            seed=source.seed,
-            task_type="repaint",
-            src_audio_path=str(src_for_api.resolve()),
-            repainting_start=repaint_start,
-            repainting_end=repaint_end,
-        )
-    except AceStepError as exc:
-        console.print(f"[red]Error submitting extend task: {exc}[/red]")
-        raise typer.Exit(code=1)
-
-    console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
-
-    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
-    poll_interval = 2.0
-    start = time.monotonic()
-    result: dict = {}
-    with console.status("[bold green]Extending\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(f"[bold green]Extending\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Generation failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
-
-    audio_urls: list[str] = result.get("audio_urls", [])
-    if not audio_urls:
-        console.print("[red]Error: ACE-Step returned no audio URLs.[/red]")
-        raise typer.Exit(code=1)
-
     ext = source.format or "wav"
     dest_name = f"{make_slug(source.title or 'clip')}-extend-{uuid.uuid4().hex[:8]}.{ext}"
     dest_path = clips_dir / dest_name
 
     try:
-        data = ace_client.download_audio(audio_urls[0])
-    except AceStepError as exc:
-        console.print(f"[red]Error downloading extended clip: {exc}[/red]")
-        raise typer.Exit(code=1)
+        try:
+            task_id = ace_client.submit_task(
+                prompt=prompt,
+                num_clips=1,
+                audio_duration=target_audio_duration,
+                format=ext,
+                style=style,
+                lyrics=lyrics,
+                bpm=source.bpm,
+                key=source.key,
+                seed=source.seed,
+                task_type="repaint",
+                src_audio_path=str(src_for_api.resolve()),
+                repainting_start=repaint_start,
+                repainting_end=repaint_end,
+            )
+        except AceStepError as exc:
+            console.print(f"[red]Error submitting extend task: {exc}[/red]")
+            raise typer.Exit(code=1)
 
-    dest_path.write_bytes(data)
+        console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
-    # Clean up any temporary trimmed source file
-    if src_for_api != src_path:
-        src_for_api.unlink(missing_ok=True)
+        poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+        poll_interval = 2.0
+        start = time.monotonic()
+        result: dict = {}
+        with console.status("[bold green]Extending\u2026[/bold green]", spinner="dots") as status_bar:
+            while True:
+                elapsed = time.monotonic() - start
+                if elapsed >= poll_timeout:
+                    console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+                    raise typer.Exit(code=1)
+                try:
+                    result = ace_client.query_result(task_id)
+                except AceStepError as exc:
+                    console.print(f"[red]Error polling status: {exc}[/red]")
+                    raise typer.Exit(code=1)
+                job_status = result.get("status", "unknown")
+                status_bar.update(f"[bold green]Extending\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
+                if job_status == "completed":
+                    break
+                if job_status == "failed":
+                    error_msg = result.get("error", "unknown error")
+                    console.print(f"[red]Generation failed: {error_msg}[/red]")
+                    raise typer.Exit(code=1)
+                time.sleep(poll_interval)
+
+        audio_urls: list[str] = result.get("audio_urls", [])
+        if not audio_urls:
+            console.print("[red]Error: ACE-Step returned no audio URLs.[/red]")
+            raise typer.Exit(code=1)
+
+        try:
+            data = ace_client.download_audio(audio_urls[0])
+        except AceStepError as exc:
+            console.print(f"[red]Error downloading extended clip: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        dest_path.write_bytes(data)
+    finally:
+        if trimmed is not None:
+            trimmed.unlink(missing_ok=True)
 
     new_duration = get_duration(dest_path)
 
