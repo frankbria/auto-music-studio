@@ -1,8 +1,16 @@
-"""Unit tests for acemusic utility helpers (US-2.3, US-5.1)."""
+"""Unit tests for acemusic utility helpers (US-2.3, US-5.1, US-6.1)."""
 
 import pytest
+import soundfile as sf
 
-from acemusic.utils import make_filename, make_slug, parse_time_string, snap_to_beat
+from acemusic.utils import (
+    concatenate_audio,
+    make_filename,
+    make_slug,
+    parse_time_string,
+    slice_audio,
+    snap_to_beat,
+)
 
 
 class TestMakeSlug:
@@ -119,3 +127,106 @@ class TestSnapToBeat:
 
     def test_snap_zero_stays_zero(self):
         assert snap_to_beat(0, 120) == 0
+
+
+# ---------------------------------------------------------------------------
+# Audio utilities (US-6.1)
+# ---------------------------------------------------------------------------
+
+
+class TestConcatenateAudio:
+    """Tests for concatenate_audio — joins two WAV files end-to-end."""
+
+    def test_output_file_created(self, tmp_path, write_tone):
+        a = tmp_path / "a.wav"
+        b = tmp_path / "b.wav"
+        out = tmp_path / "joined.wav"
+        write_tone(a, frequency=440.0, duration_s=1.0)
+        write_tone(b, frequency=660.0, duration_s=1.0)
+
+        concatenate_audio(a, b, out)
+
+        assert out.exists()
+
+    def test_duration_is_sum_of_inputs(self, tmp_path, write_tone):
+        a = tmp_path / "a.wav"
+        b = tmp_path / "b.wav"
+        out = tmp_path / "joined.wav"
+        write_tone(a, frequency=440.0, duration_s=1.0)
+        write_tone(b, frequency=660.0, duration_s=0.5)
+
+        concatenate_audio(a, b, out)
+
+        data, sr = sf.read(str(out))
+        duration = len(data) / sr
+        assert abs(duration - 1.5) < 0.01
+
+    def test_preserves_sample_rate_of_first(self, tmp_path, write_tone):
+        a = tmp_path / "a.wav"
+        b = tmp_path / "b.wav"
+        out = tmp_path / "joined.wav"
+        write_tone(a, frequency=440.0, duration_s=0.5, sample_rate=44100)
+        write_tone(b, frequency=660.0, duration_s=0.5, sample_rate=44100)
+
+        concatenate_audio(a, b, out)
+
+        _, sr = sf.read(str(out))
+        assert sr == 44100
+
+    def test_missing_original_raises(self, tmp_path, write_tone):
+        b = tmp_path / "b.wav"
+        write_tone(b, frequency=440.0, duration_s=0.5)
+        with pytest.raises((FileNotFoundError, RuntimeError, OSError)):
+            concatenate_audio(tmp_path / "missing.wav", b, tmp_path / "out.wav")
+
+    def test_missing_extension_raises(self, tmp_path, write_tone):
+        a = tmp_path / "a.wav"
+        write_tone(a, frequency=440.0, duration_s=0.5)
+        with pytest.raises((FileNotFoundError, RuntimeError, OSError)):
+            concatenate_audio(a, tmp_path / "missing.wav", tmp_path / "out.wav")
+
+
+class TestSliceAudio:
+    """Tests for slice_audio — trims audio to the leading head_seconds."""
+
+    def test_output_file_created(self, tmp_path, write_tone):
+        src = tmp_path / "src.wav"
+        out = tmp_path / "sliced.wav"
+        write_tone(src, frequency=440.0, duration_s=2.0)
+
+        slice_audio(src, 1.0, out)
+
+        assert out.exists()
+
+    def test_duration_matches_requested(self, tmp_path, write_tone):
+        src = tmp_path / "src.wav"
+        out = tmp_path / "sliced.wav"
+        write_tone(src, frequency=440.0, duration_s=2.0)
+
+        slice_audio(src, 1.0, out)
+
+        data, sr = sf.read(str(out))
+        duration = len(data) / sr
+        assert abs(duration - 1.0) < 0.01
+
+    def test_zero_seconds_raises(self, tmp_path, write_tone):
+        src = tmp_path / "src.wav"
+        write_tone(src, frequency=440.0, duration_s=1.0)
+        with pytest.raises(ValueError):
+            slice_audio(src, 0.0, tmp_path / "out.wav")
+
+    def test_negative_seconds_raises(self, tmp_path, write_tone):
+        src = tmp_path / "src.wav"
+        write_tone(src, frequency=440.0, duration_s=1.0)
+        with pytest.raises(ValueError):
+            slice_audio(src, -1.0, tmp_path / "out.wav")
+
+    def test_seconds_exceeds_duration_raises(self, tmp_path, write_tone):
+        src = tmp_path / "src.wav"
+        write_tone(src, frequency=440.0, duration_s=1.0)
+        with pytest.raises(ValueError):
+            slice_audio(src, 5.0, tmp_path / "out.wav")
+
+    def test_missing_input_raises(self, tmp_path):
+        with pytest.raises((FileNotFoundError, RuntimeError, OSError)):
+            slice_audio(tmp_path / "missing.wav", 0.5, tmp_path / "out.wav")
