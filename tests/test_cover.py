@@ -219,6 +219,8 @@ class TestCoverCommand:
             )
         assert result.exit_code == 0, result.output
         assert "Stage 25" in result.output
+        kwargs = client.submit_task.call_args.kwargs
+        assert "voice" not in kwargs
 
     def test_polls_until_complete(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip

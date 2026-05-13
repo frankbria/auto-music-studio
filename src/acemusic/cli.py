@@ -2076,7 +2076,11 @@ def cover(
         console.print(f"[red]Error downloading cover clip: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    dest_path.write_bytes(data)
+    try:
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing cover clip to {dest_path}: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     try:
         new_duration = get_duration(dest_path)
