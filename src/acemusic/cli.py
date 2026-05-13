@@ -2001,11 +2001,9 @@ def cover(
     dest_name = f"{title_slug}-cover-{uuid.uuid4().hex[:8]}.{ext}"
     dest_path = clips_dir / dest_name
 
-    prompt = style
-
     try:
         task_id = ace_client.submit_task(
-            prompt=prompt,
+            prompt=style,
             num_clips=1,
             audio_duration=source.duration,
             format=ext,
@@ -2067,7 +2065,12 @@ def cover(
         warnings.warn(f"cover clip duration probe failed: {exc}", stacklevel=2)
         new_duration = None
 
-    new_title = f"{source.title} (cover)" if source.title else None
+    if name:
+        new_title = name
+    elif source.title:
+        new_title = f"{source.title} (cover)"
+    else:
+        new_title = None
     new_clip = Clip(
         workspace_id=source.workspace_id,
         file_path=str(dest_path.resolve()),

@@ -161,8 +161,40 @@ class TestCoverCommand:
         client.submit_task.assert_called_once()
         kwargs = client.submit_task.call_args.kwargs
         assert kwargs["task_type"] == "cover"
-        assert kwargs["src_audio_path"] == str(src_wav)
+        assert kwargs["src_audio_path"] == str(src_wav.resolve())
         assert kwargs["style"] == "jazz piano trio"
+        assert kwargs["prompt"] == "jazz piano trio"
+
+    def test_output_directory_overrides_default(self, workspace_with_clip, tmp_path):
+        ws, clip_id, src_wav = workspace_with_clip
+        custom_dir = tmp_path / "custom-out"
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["cover", str(clip_id), "--style", "jazz", "--output", str(custom_dir)],
+            )
+        assert result.exit_code == 0, result.output
+        assert custom_dir.exists()
+        produced = list(custom_dir.glob("*.wav"))
+        assert len(produced) == 1
+
+    def test_name_option_sets_filename_and_title(self, workspace_with_clip):
+        ws, clip_id, src_wav = workspace_with_clip
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["cover", str(clip_id), "--style", "jazz", "--name", "My Jazz Take"],
+            )
+        assert result.exit_code == 0, result.output
+
+        from acemusic.db import list_clips
+
+        covers = [c for c in list_clips(ws.id) if c.generation_mode == "cover"]
+        assert len(covers) == 1
+        assert covers[0].title == "My Jazz Take"
+        assert "my-jazz-take" in covers[0].file_path.lower()
 
     def test_lyrics_override_passed_to_api(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
