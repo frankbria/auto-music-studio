@@ -230,6 +230,15 @@ class TestCoverCommand:
         assert result.exit_code == 0, result.output
         assert client.query_result.call_count == 2
 
+    def test_poll_timeout_returns_error(self, workspace_with_clip, monkeypatch):
+        ws, clip_id, src_wav = workspace_with_clip
+        monkeypatch.setenv("ACEMUSIC_POLL_TIMEOUT", "0")
+        client = _make_client_mock(query_sequence=[PENDING_RESULT] * 20)
+        with patch("acemusic.cli.AceStepClient", return_value=client), patch("acemusic.cli.time.sleep"):
+            result = runner.invoke(app, ["cover", str(clip_id), "--style", "jazz piano trio"])
+        assert result.exit_code == 1
+        assert "timed out" in result.output.lower()
+
 
 class TestCoverValidation:
     """Tests for input validation and error handling of the cover command."""

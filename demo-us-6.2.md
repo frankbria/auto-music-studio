@@ -44,7 +44,7 @@ $ acemusic cover --help
 - `parent_clip_id` = source clip id
 - `generation_mode = "cover"`
 - `style_tags` set to the new style
-- Inherited `bpm`, `key`, `seed`, `vocal_language`, `model` from the source
+- Inherited `bpm`, `key`, `seed`, `vocal_language` from the source. `model` and `inference_steps` are intentionally **not** inherited: the cover request does not send those parameters to ACE-Step, so persisting them on the child clip would misrepresent the cover's true provenance.
 - Title becomes `"<source title> (cover)"` (e.g. `"Morning Theme (cover)"` — `test_cover_inherits_title`)
 
 ### 2. API contract
