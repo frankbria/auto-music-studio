@@ -51,6 +51,10 @@ uv run acemusic extend 42 --duration 60s                          # extend clip 
 uv run acemusic extend 42 --duration 30s --from 45s               # extend from a mid-clip timestamp
 uv run acemusic extend 42 --duration 30s --style "add a bridge feel" --lyrics "[Bridge]\nWe cross the river"
 
+# Cover mode (US-6.2) — restyle an existing clip in a different genre
+uv run acemusic cover 42 --style "jazz piano trio"                # cover clip 42 in a new style
+uv run acemusic cover 42 --style "lo-fi hip hop" --lyrics "[Verse]\nNew words"   # cover with lyric override
+
 # Workspace management (US-4.1)
 uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
 uv run acemusic workspace create "My Album"           # create a new workspace
