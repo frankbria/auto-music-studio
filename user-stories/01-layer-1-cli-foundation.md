@@ -640,9 +640,9 @@ Preserves the melodic structure of the source while restyling instrumentation, a
 - New clip created with `generation_mode: cover`
 
 **Acceptance Criteria:**
-- [ ] Cover output is recognizably derived from the source melody
-- [ ] Style is audibly different from the original
-- [ ] Lyrics override changes the words while keeping the melodic feel
+- [x] Cover output is recognizably derived from the source melody
+- [x] Style is audibly different from the original
+- [x] Lyrics override changes the words while keeping the melodic feel
 
 ---
 
