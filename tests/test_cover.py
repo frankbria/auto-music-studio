@@ -265,6 +265,87 @@ class TestCoverValidation:
         result = runner.invoke(app, ["cover", str(clip_id)])
         assert result.exit_code != 0
 
+    def test_non_audio_source_returns_error(self, isolated_db, tmp_path):
+        from acemusic.db import create_clip
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        midi_path = tmp_path / "source.mid"
+        midi_path.write_bytes(b"MThd")
+        clip = Clip(
+            workspace_id=ws.id,
+            file_path=str(midi_path),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format="mid",
+            duration=10.0,
+            generation_mode="midi",
+        )
+        clip_id = create_clip(clip)
+        result = runner.invoke(app, ["cover", str(clip_id), "--style", "jazz piano trio"])
+        assert result.exit_code == 1
+        assert "not an audio file" in result.output.lower() or "audio" in result.output.lower()
+
+    def test_missing_duration_returns_error(self, isolated_db, write_tone, monkeypatch):
+        """When source.duration is None and probe fails, command exits 1."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        src_wav = clips_dir / "source.wav"
+        write_tone(src_wav, duration_s=2.0)
+
+        clip = Clip(
+            workspace_id=ws.id,
+            file_path=str(src_wav),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format="wav",
+            duration=None,
+            generation_mode="generate",
+        )
+        clip_id = create_clip(clip)
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("probe failed")
+
+        monkeypatch.setattr("acemusic.cli.get_duration", _raise)
+        result = runner.invoke(app, ["cover", str(clip_id), "--style", "jazz piano trio"])
+        assert result.exit_code == 1
+        assert "duration" in result.output.lower()
+
+    def test_missing_duration_falls_back_to_probe(self, isolated_db, write_tone):
+        """When source.duration is None but file is probeable, command succeeds."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        src_wav = clips_dir / "source.wav"
+        write_tone(src_wav, duration_s=2.0)
+
+        clip = Clip(
+            workspace_id=ws.id,
+            file_path=str(src_wav),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format="wav",
+            duration=None,
+            generation_mode="generate",
+        )
+        clip_id = create_clip(clip)
+
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["cover", str(clip_id), "--style", "jazz piano trio"])
+        assert result.exit_code == 0, result.output
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["audio_duration"] is not None
+        assert kwargs["audio_duration"] > 0
+
     def test_api_failure_returns_error(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
         client = _make_client_mock(query_sequence=[FAILED_RESULT])
@@ -304,6 +385,10 @@ class TestCoverIntegration:
             created_at=datetime.now(timezone.utc).isoformat(),
             format="wav",
             duration=30.0,
+            bpm=120,
+            key="C major",
+            seed=42,
+            style_tags="ambient",
             generation_mode="generate",
         )
         clip_id = create_clip(clip)

@@ -1984,6 +1984,25 @@ def cover(
         console.print(f"[red]Error: source file not found: {src_path}[/red]")
         raise typer.Exit(code=1)
 
+    if src_path.suffix.lower() not in SUPPORTED_FORMATS:
+        console.print(
+            f"[red]Error: source clip {clip_id} is not an audio file "
+            f"({src_path.suffix or 'no extension'}). Cover requires one of: "
+            f"{', '.join(sorted(SUPPORTED_FORMATS))}.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    cover_duration = source.duration
+    if cover_duration is None or cover_duration <= 0:
+        try:
+            cover_duration = get_duration(src_path)
+        except Exception as exc:
+            console.print(f"[red]Error: unable to determine source duration for clip {clip_id}: {exc}[/red]")
+            raise typer.Exit(code=1)
+        if cover_duration is None or cover_duration <= 0:
+            console.print(f"[red]Error: source clip {clip_id} has no valid duration metadata.[/red]")
+            raise typer.Exit(code=1)
+
     if voice is not None:
         console.print("[yellow]Voice selection available in Stage 25.[/yellow]")
 
@@ -2005,7 +2024,7 @@ def cover(
         task_id = ace_client.submit_task(
             prompt=style,
             num_clips=1,
-            audio_duration=source.duration,
+            audio_duration=cover_duration,
             format=ext,
             style=style,
             lyrics=lyrics if lyrics is not None else source.lyrics,
@@ -2024,7 +2043,7 @@ def cover(
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
     start = time.monotonic()
-    result: dict = {}
+    result: dict = {}  # set below by the polling loop; initialized to satisfy mypy/lint on the post-loop read
     with console.status("[bold green]Covering\u2026[/bold green]", spinner="dots") as status_bar:
         while True:
             elapsed = time.monotonic() - start
@@ -2083,9 +2102,7 @@ def cover(
         style_tags=style,
         lyrics=lyrics if lyrics is not None else source.lyrics,
         vocal_language=source.vocal_language,
-        model=source.model,
         seed=source.seed,
-        inference_steps=source.inference_steps,
         parent_clip_id=source.id,
         generation_mode="cover",
     )

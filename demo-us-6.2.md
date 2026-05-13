@@ -6,7 +6,7 @@
 
 ## CLI Surface
 
-```
+```text
 $ acemusic cover --help
  Usage: acemusic cover [OPTIONS] CLIP_ID
 
@@ -80,7 +80,7 @@ The integration test `TestCoverIntegration.test_cover_live_server` (gated by `@p
 
 ## Test summary
 
-```
+```bash
 $ uv run pytest tests/test_cover.py
 collected 14 items / 1 deselected / 13 selected
 
