@@ -82,10 +82,10 @@ The integration test `TestCoverIntegration.test_cover_live_server` (gated by `@p
 
 ```bash
 $ uv run pytest tests/test_cover.py
-collected 14 items / 1 deselected / 13 selected
+collected 20 items / 1 deselected / 19 selected
 
-tests/test_cover.py .............    [100%]
-13 passed, 1 deselected
+tests/test_cover.py ...................    [100%]
+19 passed, 1 deselected
 ```
 
-Full suite: **463 passed, 1 skipped**.
+Full suite: **469 passed, 1 skipped**.
