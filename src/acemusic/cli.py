@@ -2284,11 +2284,13 @@ def repaint(
         raise typer.Exit(code=1)
 
     # Splice the regenerated section into the original with crossfade at the seams.
+    # Passing format= explicitly so pydub uses Python's wave module for WAVs and
+    # avoids invoking ffprobe (which is not always available, e.g. in CI runners).
     try:
         from pydub import AudioSegment
 
-        original = AudioSegment.from_file(str(src_path))
-        repaint_full = AudioSegment.from_file(io.BytesIO(repaint_bytes))
+        original = AudioSegment.from_file(str(src_path), format=ext)
+        repaint_full = AudioSegment.from_file(io.BytesIO(repaint_bytes), format=ext)
         before = original[: int(start_ms)]
         middle = repaint_full[int(start_ms) : int(end_ms)]
         after = original[int(end_ms) :]
