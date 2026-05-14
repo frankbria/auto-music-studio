@@ -660,9 +660,11 @@ Remix restyles the entire clip. Repaint regenerates only a selected time range w
 - Both create new clips with lineage tracking
 
 **Acceptance Criteria:**
-- [ ] Remix produces a full-length clip with the new style applied
-- [ ] Repaint changes only the specified time range; surrounding audio is intact
-- [ ] Transitions at repaint boundaries are smooth (no audible clicks/jumps)
+- [x] Remix produces a full-length clip with the new style applied *(served by `acemusic cover` from US-6.2)*
+- [x] Repaint changes only the specified time range; surrounding audio is intact
+- [x] Transitions at repaint boundaries are smooth (no audible clicks/jumps)
+
+**Implementation note (US-6.3):** The standalone `remix` command was not added because `acemusic cover` already restyles a full clip via ACE-Step's cover mode. `acemusic repaint` is the new command added in this story.
 
 ---
 

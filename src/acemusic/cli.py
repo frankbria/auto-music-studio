@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import sqlite3
@@ -21,6 +22,7 @@ from acemusic.audio import (
     SUPPORTED_FORMATS,
     calculate_speed_multiplier,
     crop_audio,
+    crossfade_stitch,
     detect_bpm,
     detect_key,
     remaster_audio,
@@ -2122,6 +2124,222 @@ def cover(
     console.print(f"    Path:     {dest_path}")
     console.print(f"    Duration: {dur_str}")
     console.print(f"    Style:    {style}")
+
+
+# ---------------------------------------------------------------------------
+# Repaint command (US-6.3)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def repaint(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to repaint."),
+    start: str = typer.Option(..., "--start", help="Start of the region to regenerate (e.g. '10s', '1m30s')."),
+    end: str = typer.Option(..., "--end", help="End of the region to regenerate (e.g. '20s', '2m')."),
+    prompt: str = typer.Option(..., "--prompt", help="Prompt describing what should fill the region."),
+    style: Optional[str] = typer.Option(None, "--style", help="Optional style override for the regenerated section."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the repainted clip."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix for the repainted clip."),
+    crossfade_ms: int = typer.Option(
+        50,
+        "--crossfade-ms",
+        help="Crossfade length at the splice boundaries (milliseconds).",
+    ),
+) -> None:
+    """Regenerate a section of a clip while preserving the surrounding audio.
+
+    Submits a ``task_type=repaint`` request to ACE-Step with the source clip as
+    src_audio and the [start, end] region marked for regeneration. The model's
+    output for that section is spliced into the original audio with a short
+    crossfade at each boundary so transitions are inaudible. The result is
+    saved as a new clip with ``parent_clip_id`` set to the source and
+    ``generation_mode='repaint'``.
+
+    Note: Requires ACE-Step to run on the same host (or with shared filesystem
+    access), since the source audio is passed via an absolute server-side path.
+    """
+    try:
+        start_ms = parse_time_string(start)
+        end_ms = parse_time_string(end)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    start_s = start_ms / 1000.0
+    end_s = end_ms / 1000.0
+
+    if start_s >= end_s:
+        console.print(f"[red]Error: --start ({start!r}) must be less than --end ({end!r}).[/red]")
+        raise typer.Exit(code=1)
+
+    if start_s < 0:
+        console.print(f"[red]Error: --start ({start!r}) must be non-negative.[/red]")
+        raise typer.Exit(code=1)
+
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    src_path = Path(source.file_path)
+    if not src_path.exists():
+        console.print(f"[red]Error: source file not found: {src_path}[/red]")
+        raise typer.Exit(code=1)
+
+    if src_path.suffix.lower() not in SUPPORTED_FORMATS:
+        console.print(
+            f"[red]Error: source clip {clip_id} is not a supported audio file "
+            f"({src_path.suffix or 'no extension'}). Repaint requires one of: "
+            f"{', '.join(sorted(SUPPORTED_FORMATS))}.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    source_duration = source.duration
+    if source_duration is None or source_duration <= 0:
+        try:
+            source_duration = get_duration(src_path)
+        except Exception as exc:
+            console.print(f"[red]Error: unable to determine source duration for clip {clip_id}: {exc}[/red]")
+            raise typer.Exit(code=1)
+        if source_duration is None or source_duration <= 0:
+            console.print(f"[red]Error: source clip {clip_id} has no valid duration metadata.[/red]")
+            raise typer.Exit(code=1)
+
+    if end_s > source_duration + 0.01:
+        console.print(
+            f"[red]Error: --end ({end!r}={end_s:.2f}s) exceeds source duration ({source_duration:.2f}s).[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if crossfade_ms < 0:
+        console.print(f"[red]Error: --crossfade-ms must be non-negative, got {crossfade_ms}.[/red]")
+        raise typer.Exit(code=1)
+
+    config = load_config()
+    ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
+
+    clips_dir = output if output is not None else get_workspace_path(source.workspace_id)
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = source.format or "wav"
+    title_slug = make_slug(name or source.title or "clip")
+    dest_name = f"{title_slug}-repaint-{uuid.uuid4().hex[:8]}.{ext}"
+    dest_path = clips_dir / dest_name
+
+    try:
+        task_id = ace_client.submit_task(
+            prompt=prompt,
+            num_clips=1,
+            audio_duration=source_duration,
+            format=ext,
+            style=style,
+            bpm=source.bpm,
+            key=source.key,
+            seed=source.seed,
+            task_type="repaint",
+            src_audio_path=str(src_path.resolve()),
+            repainting_start=start_s,
+            repainting_end=end_s,
+        )
+    except AceStepError as exc:
+        console.print(f"[red]Error submitting repaint task: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
+
+    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+    poll_interval = 2.0
+    poll_start = time.monotonic()
+    result: dict = {}
+    with console.status("[bold green]Repainting\u2026[/bold green]", spinner="dots") as status_bar:
+        while True:
+            elapsed = time.monotonic() - poll_start
+            if elapsed >= poll_timeout:
+                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+                raise typer.Exit(code=1)
+            try:
+                result = ace_client.query_result(task_id)
+            except AceStepError as exc:
+                console.print(f"[red]Error polling status: {exc}[/red]")
+                raise typer.Exit(code=1)
+            job_status = result.get("status", "unknown")
+            status_bar.update(f"[bold green]Repainting\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
+            if job_status == "completed":
+                break
+            if job_status == "failed":
+                error_msg = result.get("error", "unknown error")
+                console.print(f"[red]Repaint failed: {error_msg}[/red]")
+                raise typer.Exit(code=1)
+            time.sleep(poll_interval)
+
+    audio_urls: list[str] = result.get("audio_urls", [])
+    if not audio_urls:
+        console.print("[red]Error: ACE-Step returned no audio URLs.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        repaint_bytes = ace_client.download_audio(audio_urls[0])
+    except AceStepError as exc:
+        console.print(f"[red]Error downloading repainted clip: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # Splice the regenerated section into the original with crossfade at the seams.
+    try:
+        from pydub import AudioSegment
+
+        original = AudioSegment.from_file(str(src_path))
+        repaint_full = AudioSegment.from_file(io.BytesIO(repaint_bytes))
+        before = original[: int(start_ms)]
+        middle = repaint_full[int(start_ms) : int(end_ms)]
+        after = original[int(end_ms) :]
+        stitched = crossfade_stitch(before, middle, after, fade_ms=crossfade_ms)
+        stitched.export(str(dest_path), format=ext)
+    except Exception as exc:
+        console.print(f"[red]Error stitching repainted section: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"repaint clip duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
+
+    if name:
+        new_title = name
+    elif source.title:
+        new_title = f"{source.title} (repaint)"
+    else:
+        new_title = None
+
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        title=new_title,
+        format=ext,
+        duration=new_duration,
+        bpm=source.bpm,
+        key=source.key,
+        style_tags=style or source.style_tags,
+        lyrics=source.lyrics,
+        vocal_language=source.vocal_language,
+        model=source.model,
+        seed=source.seed,
+        inference_steps=source.inference_steps,
+        parent_clip_id=source.id,
+        generation_mode="repaint",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dur_str = f"{new_duration:.1f}s" if new_duration is not None else "unknown"
+    console.print(f"  [green]\u2713[/green] Repainted clip {clip_id} ({start}\u2013{end}) \u2192 clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {dur_str}")
 
 
 # Preset commands (US-4.3)

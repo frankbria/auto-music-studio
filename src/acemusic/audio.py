@@ -1,4 +1,4 @@
-"""Audio analysis and manipulation utilities for acemusic (US-4.4, US-5.1, US-5.5)."""
+"""Audio analysis and manipulation utilities for acemusic (US-4.4, US-5.1, US-5.5, US-6.3)."""
 
 from __future__ import annotations
 
@@ -34,6 +34,28 @@ def detect_key(path: Path) -> str | None:
         return f"{_PITCH_CLASSES[dominant]} major"
     except Exception:
         return None
+
+
+def crossfade_stitch(before, middle, after, fade_ms: int = 50):
+    """Concatenate three pydub AudioSegments with crossfade transitions at the seams.
+
+    Used by repaint (US-6.3) to splice a regenerated section into the original
+    audio without audible clicks. ``fade_ms`` is clamped per-seam to the shorter
+    of the two adjacent segments minus 1ms, since pydub's append() requires the
+    crossfade to be shorter than both pieces.
+
+    Total output length = len(before) + len(middle) + len(after) - 2 * effective_fade.
+    For full-length segments the effective fade equals ``fade_ms``; the equality
+    only breaks when a segment is shorter than the requested fade.
+    """
+    if fade_ms <= 0:
+        return before + middle + after
+
+    head_fade = max(0, min(fade_ms, len(before) - 1, len(middle) - 1))
+    tail_fade = max(0, min(fade_ms, len(middle) - 1, len(after) - 1))
+    stitched = before.append(middle, crossfade=head_fade)
+    stitched = stitched.append(after, crossfade=tail_fade)
+    return stitched
 
 
 def crop_audio(

@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend and US-6.2 cover implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, and cover-mode restyle all implemented.
+**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, and US-6.3 repaint implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, and section repaint with crossfade blending all implemented.
 
 ## Commands
 
@@ -55,6 +55,10 @@ uv run acemusic extend 42 --duration 30s --style "add a bridge feel" --lyrics "[
 uv run acemusic cover 42 --style "jazz piano trio"                # cover clip 42 in a new style
 uv run acemusic cover 42 --style "lo-fi hip hop" --lyrics "[Verse]\nNew words"   # cover with lyric override
 
+# Repaint (US-6.3) — regenerate a section of a clip with crossfade-blended boundaries
+uv run acemusic repaint 42 --start 10s --end 20s --prompt "add a guitar solo"   # regenerate 10s–20s
+uv run acemusic repaint 42 --start 30s --end 45s --prompt "soft strings" --style "ambient" --crossfade-ms 100
+
 # Workspace management (US-4.1)
 uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
 uv run acemusic workspace create "My Album"           # create a new workspace
@@ -98,7 +102,7 @@ docs/               # Additional documentation (placeholder)
 ### Key Modules
 
 - **`client.py`** — The core integration with ACE-Step-1.5. Understands the API envelope (`{"data": ..., "code": 200}`), integer status codes (0=pending, 1=completed, 2=failed), and the `/release_task` → `/query_result` → `/v1/audio` workflow.
-- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `models`, `extend`, `cover`, and the `workspace` subcommand group (`create`, `list`, `switch`, `rename`, `delete`). Uses `AceStepClient` for generation and `workspace.py` for workspace ops.
+- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `models`, `extend`, `cover`, `repaint`, and the `workspace` subcommand group (`create`, `list`, `switch`, `rename`, `delete`). Uses `AceStepClient` for generation and `workspace.py` for workspace ops.
 - **`config.py`** — Returns `AceConfig(api_url, api_key, output_dir)`. Priority: env vars > `.env` > `~/.acemusic/config.yaml`.
 - **`db.py`** — Opens (and schema-inits on first use) the SQLite metadata database at `~/.acemusic/metadata.db`. All workspace state is persisted here.
 - **`workspace.py`** — CRUD operations on workspaces. Audio clips are stored under `~/.acemusic/workspaces/{id}/clips/`. A "Default" workspace is auto-created on first access. `generate` falls back to the active workspace's clips directory when `--output` and `config.output_dir` are both unset.
