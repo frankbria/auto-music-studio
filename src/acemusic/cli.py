@@ -2172,10 +2172,6 @@ def repaint(
         console.print(f"[red]Error: --start ({start!r}) must be less than --end ({end!r}).[/red]")
         raise typer.Exit(code=1)
 
-    if start_s < 0:
-        console.print(f"[red]Error: --start ({start!r}) must be non-negative.[/red]")
-        raise typer.Exit(code=1)
-
     source = get_clip(clip_id)
     if source is None:
         console.print(f"[red]Error: clip {clip_id} not found.[/red]")
@@ -2286,11 +2282,23 @@ def repaint(
     # Splice the regenerated section into the original with crossfade at the seams.
     # Passing format= explicitly so pydub uses Python's wave module for WAVs and
     # avoids invoking ffprobe (which is not always available, e.g. in CI runners).
-    try:
-        from pydub import AudioSegment
+    from pydub import AudioSegment
 
+    try:
         original = AudioSegment.from_file(str(src_path), format=ext)
         repaint_full = AudioSegment.from_file(io.BytesIO(repaint_bytes), format=ext)
+    except Exception as exc:
+        console.print(f"[red]Error decoding audio for stitching: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if len(repaint_full) < end_ms - 10:
+        console.print(
+            f"[red]Error: ACE-Step output is {len(repaint_full)}ms but the repaint "
+            f"window ends at {end_ms}ms — the model returned a truncated clip.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
         before = original[: int(start_ms)]
         middle = repaint_full[int(start_ms) : int(end_ms)]
         after = original[int(end_ms) :]

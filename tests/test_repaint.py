@@ -186,6 +186,19 @@ class TestRepaintCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_truncated_model_output_exits(self, workspace_with_clip):
+        """If ACE-Step returns audio shorter than the repaint window, exit with error."""
+        ws, clip_id, src_wav = workspace_with_clip
+        # Window is 1s–2s but model returns only 1.5s of audio
+        client = _make_client_mock(audio_bytes=_wav_bytes(1.5, frequency=880.0))
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["repaint", str(clip_id), "--start", "1s", "--end", "2s", "--prompt", "x"],
+            )
+        assert result.exit_code != 0
+        assert "truncated" in result.output.lower()
+
     def test_failed_task_exits(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
         client = _make_client_mock(query_sequence=[FAILED_RESULT])
@@ -198,10 +211,10 @@ class TestRepaintCommand:
         assert "failed" in result.output.lower()
 
     def test_output_preserves_total_duration(self, workspace_with_clip):
-        """Repaint output should have the same overall duration as the source.
+        """Repaint output duration ≈ source duration − 2 × crossfade_ms.
 
-        The stitched result is original[0:start] + repaint[start:end] + original[end:],
-        which sums to the original duration regardless of crossfade overlap.
+        For the default 50ms crossfade, a 4.0s source yields a ~3.9s output;
+        the 0.2s tolerance covers both the fade subtraction and encode rounding.
         """
         from acemusic.utils import get_duration
 

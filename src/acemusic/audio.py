@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from pydub import AudioSegment
 
 SUPPORTED_FORMATS: set[str] = {".wav", ".flac", ".mp3", ".ogg", ".aac", ".aiff"}
 
@@ -36,7 +40,12 @@ def detect_key(path: Path) -> str | None:
         return None
 
 
-def crossfade_stitch(before, middle, after, fade_ms: int = 50):
+def crossfade_stitch(
+    before: AudioSegment,
+    middle: AudioSegment,
+    after: AudioSegment,
+    fade_ms: int = 50,
+) -> AudioSegment:
     """Concatenate three pydub AudioSegments with crossfade transitions at the seams.
 
     Used by repaint (US-6.3) to splice a regenerated section into the original
