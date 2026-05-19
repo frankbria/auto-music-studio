@@ -520,6 +520,80 @@ class TestMashupCommand:
         assert "electronic" in tags
         assert "dub" in tags
 
+    def test_key_mismatch_warns_and_omits_key(self, workspace_with_two_clips):
+        """When clip keys differ, the user is warned and submit_task is called with key=None.
+
+        The fixture sets clip1.key='C major' and clip2.key='G major', so the
+        mismatch path is exercised on every default invocation against this fixture.
+        """
+        ws, clip1, clip2, _src1, _src2 = workspace_with_two_clips
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["mashup", str(clip1), str(clip2)])
+        assert result.exit_code == 0, result.output
+        assert "Key mismatch" in result.output
+        assert "C major" in result.output
+        assert "G major" in result.output
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["key"] is None
+
+        from acemusic.db import list_clips
+
+        mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
+        # The recorded clip key is None when sources disagreed
+        assert mashups[0].key is None
+
+    def test_matching_keys_pass_through(self, isolated_db, write_tone):
+        """When both clips share a key, no warning and the key is forwarded to submit_task."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import (
+            ensure_default_workspace,
+            get_active_workspace,
+            get_workspace_path,
+        )
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        src_a = clips_dir / "a.wav"
+        src_b = clips_dir / "b.wav"
+        write_tone(src_a, duration_s=1.0)
+        write_tone(src_b, duration_s=1.0)
+
+        c_a = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_a),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=120,
+                key="C major",
+                generation_mode="generate",
+            )
+        )
+        c_b = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_b),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=120,
+                key="C major",
+                generation_mode="generate",
+            )
+        )
+
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["mashup", str(c_a), str(c_b)])
+        assert result.exit_code == 0, result.output
+        assert "Key mismatch" not in result.output
+        assert client.submit_task.call_args.kwargs["key"] == "C major"
+
     def test_bpm_alignment_failure_falls_back_to_original(self, workspace_with_two_clips):
         """When time_stretch_audio raises, the command still succeeds using the original clip."""
         ws, clip1, clip2, _src1, src2 = workspace_with_two_clips

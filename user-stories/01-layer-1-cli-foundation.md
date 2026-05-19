@@ -687,7 +687,7 @@ Takes 2+ source clips and generates a new clip that blends their elements. Suppo
 - [x] The three blend modes produce audibly different results
 - [x] BPM/key alignment is attempted (clips at different tempos are harmonized)
 
-**Implementation note (US-6.4):** `acemusic mashup` accepts two clip IDs, validates them against the workspace clip DB, attempts BPM alignment via the US-5.2 `time_stretch_audio` helper when both BPMs are known and differ, and submits a `task_type=mashup` request to ACE-Step with `src_audio_path` / `ref_audio_path` / `blend_mode`. The aligned secondary clip is written to a `tempfile.TemporaryDirectory` so early exits never leak files into the user's workspace. Style tags from both source clips are deduplicated when merged onto the new clip.
+**Implementation note (US-6.4):** `acemusic mashup` accepts two clip IDs, validates them against the workspace clip DB, attempts BPM alignment via the US-5.2 `time_stretch_audio` helper when both BPMs are known and differ, and submits a `task_type=mashup` request to ACE-Step with `src_audio_path` / `ref_audio_path` / `blend_mode`. The aligned secondary clip is written to a `tempfile.TemporaryDirectory` so early exits never leak files into the user's workspace. Style tags from both source clips are deduplicated when merged onto the new clip. **Key alignment** is detected and warned but not transposed: when the two source clips have known but different keys, the user is warned and the mashup is submitted without a key constraint (full pitch-shifting transposition is deferred to a future story).
 
 ---
 

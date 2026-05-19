@@ -2390,7 +2390,7 @@ def _align_clips_bpm(
     try:
         time_stretch_audio(str(secondary_path), str(aligned_path), rate)
     except Exception as exc:
-        warnings.warn(f"BPM alignment failed, using original clip: {exc}", stacklevel=2)
+        console.print(f"[yellow]ℹ BPM alignment failed, using original clip: {exc}[/yellow]")
         aligned_path.unlink(missing_ok=True)
         return secondary_path
 
@@ -2490,6 +2490,18 @@ def mashup(
             workdir=Path(align_dir),
         )
 
+        # Key alignment is out of scope for this story (would require pitch-shifting
+        # the secondary clip). When the two clips have known but different keys, warn
+        # the user and submit without a key constraint so we don't falsely claim the
+        # primary's key applies to the blended output.
+        submitted_key = primary.key
+        if primary.key and secondary.key and primary.key != secondary.key:
+            console.print(
+                f"[yellow]ℹ Key mismatch: {primary.key} vs {secondary.key}. "
+                f"Submitting without a key constraint — output may sound dissonant.[/yellow]"
+            )
+            submitted_key = None
+
         prompt_parts = [part for part in (primary.title, secondary.title) if part]
         prompt_text = style or (f"mashup of {' and '.join(prompt_parts)}" if prompt_parts else "mashup")
         try:
@@ -2500,7 +2512,7 @@ def mashup(
                 format=ext,
                 style=style,
                 bpm=primary.bpm,
-                key=primary.key,
+                key=submitted_key,
                 task_type="mashup",
                 src_audio_path=str(primary_path.resolve()),
                 ref_audio_path=str(aligned_secondary.resolve()),
@@ -2588,7 +2600,7 @@ def mashup(
         format=ext,
         duration=new_duration,
         bpm=primary.bpm,
-        key=primary.key,
+        key=submitted_key,
         style_tags=style_tags,
         parent_clip_id=primary.id,
         generation_mode="mashup",
