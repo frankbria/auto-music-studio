@@ -382,7 +382,74 @@ class TestMashupCommand:
         assert result.exit_code == 1
         client.submit_task.assert_not_called()
 
-    def test_records_blend_in_style_tags(self, workspace_with_two_clips):
+    def test_identical_clip_ids_rejected(self, workspace_with_two_clips):
+        ws, clip1, _clip2, _src1, _src2 = workspace_with_two_clips
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["mashup", str(clip1), str(clip1)])
+        assert result.exit_code == 1
+        assert "different" in result.output.lower()
+        client.submit_task.assert_not_called()
+
+    def test_zero_or_negative_bpm_skips_alignment(self, isolated_db, write_tone):
+        from acemusic.db import create_clip
+        from acemusic.workspace import (
+            ensure_default_workspace,
+            get_active_workspace,
+            get_workspace_path,
+        )
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        src_a = clips_dir / "zero.wav"
+        src_b = clips_dir / "negative.wav"
+        write_tone(src_a, duration_s=1.0)
+        write_tone(src_b, duration_s=1.0)
+
+        c_a = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_a),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=0,
+                generation_mode="generate",
+            )
+        )
+        c_b = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_b),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=120,
+                generation_mode="generate",
+            )
+        )
+
+        client = _make_client_mock()
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client),
+            patch("acemusic.cli.time_stretch_audio") as stretch_mock,
+        ):
+            result = runner.invoke(app, ["mashup", str(c_a), str(c_b)])
+        assert result.exit_code == 0, result.output
+        stretch_mock.assert_not_called()
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["ref_audio_path"] == str(src_b.resolve())
+
+    def test_style_option_persisted_to_style_tags(self, workspace_with_two_clips):
+        """The --style value is recorded in the merged style_tags column.
+
+        Note: --blend is currently surfaced in console output and threaded to the
+        API request, but is not persisted to a dedicated DB column; that can be
+        added when the clips table grows a blend_mode field.
+        """
         ws, clip1, clip2, _src1, _src2 = workspace_with_two_clips
         client = _make_client_mock()
         with patch("acemusic.cli.AceStepClient", return_value=client):
@@ -394,3 +461,75 @@ class TestMashupCommand:
         mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
         assert mashups[0].style_tags is not None
         assert "jazz" in mashups[0].style_tags
+
+    def test_style_tags_dedup_across_sources(self, isolated_db, write_tone):
+        """When both source clips share a tag, merged style_tags deduplicates it."""
+        from acemusic.db import create_clip
+        from acemusic.workspace import (
+            ensure_default_workspace,
+            get_active_workspace,
+            get_workspace_path,
+        )
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        src_a = clips_dir / "a.wav"
+        src_b = clips_dir / "b.wav"
+        write_tone(src_a, duration_s=1.0)
+        write_tone(src_b, duration_s=1.0)
+
+        c_a = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_a),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=120,
+                style_tags="ambient, electronic",
+                generation_mode="generate",
+            )
+        )
+        c_b = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(src_b),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                duration=1.0,
+                bpm=120,
+                style_tags="ambient, dub",
+                generation_mode="generate",
+            )
+        )
+
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["mashup", str(c_a), str(c_b)])
+        assert result.exit_code == 0, result.output
+
+        from acemusic.db import list_clips
+
+        mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
+        tags = mashups[0].style_tags or ""
+        # "ambient" appears in both sources but should only be listed once
+        assert tags.lower().count("ambient") == 1
+        assert "electronic" in tags
+        assert "dub" in tags
+
+    def test_bpm_alignment_failure_falls_back_to_original(self, workspace_with_two_clips):
+        """When time_stretch_audio raises, the command still succeeds using the original clip."""
+        ws, clip1, clip2, _src1, src2 = workspace_with_two_clips
+        client = _make_client_mock()
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client),
+            patch("acemusic.cli.time_stretch_audio", side_effect=RuntimeError("librosa exploded")),
+        ):
+            result = runner.invoke(app, ["mashup", str(clip1), str(clip2)])
+        assert result.exit_code == 0, result.output
+        # Fallback: ref_audio_path is the original secondary clip, not an aligned temp file
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["ref_audio_path"] == str(src2.resolve())

@@ -29,8 +29,6 @@ from acemusic.audio import (
     remaster_audio,
     time_stretch_audio,
 )
-
-VALID_BLEND_MODES: frozenset[str] = frozenset({"layered", "sequential", "ai-guided"})
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.db import (
@@ -123,6 +121,9 @@ MODELS: dict[str, dict[str, str]] = {
     },
 }
 VALID_MODELS: frozenset[str] = frozenset(MODELS.keys())
+
+# Mashup blend strategies (US-6.4).
+VALID_BLEND_MODES: frozenset[str] = frozenset({"layered", "sequential", "ai-guided"})
 
 
 def _version_callback(value: bool) -> None:
@@ -2378,6 +2379,9 @@ def _align_clips_bpm(
     if primary_bpm is None or secondary_bpm is None:
         console.print("[yellow]\u2139 BPM alignment skipped (one or both BPMs unknown).[/yellow]")
         return secondary_path
+    if primary_bpm <= 0 or secondary_bpm <= 0:
+        console.print(f"[yellow]\u2139 BPM alignment skipped (invalid BPM: {primary_bpm}, {secondary_bpm}).[/yellow]")
+        return secondary_path
     if primary_bpm == secondary_bpm:
         return secondary_path
 
@@ -2422,6 +2426,10 @@ def mashup(
     """
     if blend not in VALID_BLEND_MODES:
         console.print(f"[red]Error: --blend must be one of {sorted(VALID_BLEND_MODES)}, got {blend!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    if clip_id_1 == clip_id_2:
+        console.print("[red]Error: clip_id_1 and clip_id_2 must be different clips.[/red]")
         raise typer.Exit(code=1)
 
     primary = get_clip(clip_id_1)
@@ -2482,7 +2490,8 @@ def mashup(
             workdir=Path(align_dir),
         )
 
-        prompt_text = style or "mashup"
+        prompt_parts = [part for part in (primary.title, secondary.title) if part]
+        prompt_text = style or (f"mashup of {' and '.join(prompt_parts)}" if prompt_parts else "mashup")
         try:
             task_id = ace_client.submit_task(
                 prompt=prompt_text,
@@ -2560,7 +2569,16 @@ def mashup(
     else:
         new_title = None
 
-    style_tags = ", ".join(part for part in (primary.style_tags, secondary.style_tags, style) if part) or None
+    seen: set[str] = set()
+    merged_tags: list[str] = []
+    for source in (primary.style_tags, secondary.style_tags, style):
+        if not source:
+            continue
+        for tag in (t.strip() for t in source.split(",")):
+            if tag and tag.lower() not in seen:
+                seen.add(tag.lower())
+                merged_tags.append(tag)
+    style_tags = ", ".join(merged_tags) or None
 
     new_clip = Clip(
         workspace_id=primary.workspace_id,
