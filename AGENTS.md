@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, and US-6.3 repaint implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, and section repaint with crossfade blending all implemented.
+**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, US-6.3 repaint, and US-6.4 mashup implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, section repaint with crossfade blending, and two-clip mashup with BPM alignment all implemented.
 
 ## Commands
 
@@ -58,6 +58,11 @@ uv run acemusic cover 42 --style "lo-fi hip hop" --lyrics "[Verse]\nNew words"  
 # Repaint (US-6.3) — regenerate a section of a clip with crossfade-blended boundaries
 uv run acemusic repaint 42 --start 10s --end 20s --prompt "add a guitar solo"   # regenerate 10s–20s
 uv run acemusic repaint 42 --start 30s --end 45s --prompt "soft strings" --style "ambient" --crossfade-ms 100
+
+# Mashup (US-6.4) — combine elements from two clips with BPM alignment
+uv run acemusic mashup 42 43                                                    # layered blend (default), BPM aligned
+uv run acemusic mashup 42 43 --blend sequential                                 # section-by-section blend
+uv run acemusic mashup 42 43 --blend ai-guided --style "lo-fi hip hop"          # model chooses; unifying style applied
 
 # Workspace management (US-4.1)
 uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
