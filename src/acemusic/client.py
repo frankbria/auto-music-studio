@@ -17,7 +17,7 @@ from typing import Literal
 
 import httpx
 
-TaskType = Literal["text2music", "cover", "repaint", "extract", "lego", "complete"]
+TaskType = Literal["text2music", "cover", "repaint", "extract", "lego", "complete", "mashup"]
 
 
 class AceStepError(Exception):
@@ -76,6 +76,8 @@ class AceStepClient:
         sound_type: str | None = None,
         task_type: TaskType = "text2music",
         src_audio_path: str | None = None,
+        ref_audio_path: str | None = None,
+        blend_mode: str | None = None,
         repainting_start: float | None = None,
         repainting_end: float | None = None,
     ) -> str:
@@ -102,16 +104,21 @@ class AceStepClient:
             mode: Generation mode (e.g. "sound" for sounds mode). None uses server default.
             sound_type: Sound type for sounds mode ("one-shot" or "loop"). None uses server default.
             task_type: ACE-Step task type. Defaults to "text2music"; use "repaint" for extend/edit.
-            src_audio_path: Server-side path to source audio (for repaint/cover/complete tasks).
+            src_audio_path: Server-side path to source audio (for repaint/cover/complete/mashup tasks).
+            ref_audio_path: Server-side path to the second source audio (mashup tasks combine src + ref).
+            blend_mode: Blend strategy for mashup tasks ("layered", "sequential", "ai-guided").
             repainting_start: Region start (seconds) for repaint tasks.
             repainting_end: Region end (seconds) for repaint tasks.
 
         Raises:
             AceStepError: on HTTP error, connection failure, or missing task_id.
-            ValueError: when task_type='repaint' is requested without src_audio_path.
+            ValueError: when task_type='repaint' is requested without src_audio_path, or
+                when task_type='mashup' is requested without both src_audio_path and ref_audio_path.
         """
         if task_type == "repaint" and src_audio_path is None:
             raise ValueError("src_audio_path is required when task_type='repaint'")
+        if task_type == "mashup" and (src_audio_path is None or ref_audio_path is None):
+            raise ValueError("Both src_audio_path and ref_audio_path are required when task_type='mashup'")
 
         payload: dict = {"prompt": prompt, "batch_size": num_clips, "audio_format": format}
         if audio_duration is not None:
@@ -153,6 +160,10 @@ class AceStepClient:
             payload["task_type"] = task_type
         if src_audio_path is not None:
             payload["src_audio_path"] = src_audio_path
+        if ref_audio_path is not None:
+            payload["ref_audio_path"] = ref_audio_path
+        if blend_mode is not None:
+            payload["blend_mode"] = blend_mode
         if repainting_start is not None:
             payload["repainting_start"] = repainting_start
         if repainting_end is not None:
