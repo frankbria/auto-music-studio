@@ -165,7 +165,6 @@ class TestMashupCommand:
         with patch("acemusic.cli.AceStepClient", return_value=client):
             result = runner.invoke(app, ["mashup", str(clip1), str(clip2), "--blend", "bogus"])
         assert result.exit_code != 0
-        # submit_task should not be reached when blend mode is invalid
         client.submit_task.assert_not_called()
 
     def test_style_option_forwarded(self, workspace_with_two_clips):
@@ -266,15 +265,18 @@ class TestMashupCommand:
         from acemusic.db import list_clips
 
         mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
-        # Default title should mention both source titles when available
         assert mashups[0].title is not None
         assert "Clip One" in mashups[0].title
         assert "Clip Two" in mashups[0].title
 
     def test_bpm_alignment_invoked_when_bpms_differ(self, workspace_with_two_clips):
-        """Acceptance criterion: BPM/key alignment is attempted (clips at different tempos)."""
+        """Acceptance criterion: BPM alignment is attempted when source tempos differ.
+
+        Fixture state: clip1.bpm=120, clip2.bpm=100. Expected stretch rate is
+        target_bpm / original_bpm = 120 / 100 = 1.2; ``time_stretch_audio`` is
+        called positionally as (input_path, output_path, rate).
+        """
         ws, clip1, clip2, _src1, _src2 = workspace_with_two_clips
-        # The fixture sets clip1.bpm=120 and clip2.bpm=100, so alignment should occur.
         client = _make_client_mock()
         with (
             patch("acemusic.cli.AceStepClient", return_value=client),
@@ -282,11 +284,8 @@ class TestMashupCommand:
         ):
             result = runner.invoke(app, ["mashup", str(clip1), str(clip2)])
         assert result.exit_code == 0, result.output
-        # time_stretch_audio is invoked to align clip2's BPM to clip1's BPM
         stretch_mock.assert_called_once()
         call_kwargs = stretch_mock.call_args
-        # rate = target_bpm / original_bpm = 120 / 100 = 1.2
-        # Positional arg layout: (input_path, output_path, rate) — check the rate.
         args, kwargs = call_kwargs.args, call_kwargs.kwargs
         rate = kwargs.get("rate", args[2] if len(args) >= 3 else None)
         assert rate is not None
@@ -514,11 +513,8 @@ class TestMashupCommand:
         from acemusic.db import list_clips
 
         mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
-        tags = mashups[0].style_tags or ""
-        # "ambient" appears in both sources but should only be listed once
-        assert tags.lower().count("ambient") == 1
-        assert "electronic" in tags
-        assert "dub" in tags
+        tags = {token.strip().lower() for token in (mashups[0].style_tags or "").split(",") if token.strip()}
+        assert tags == {"ambient", "electronic", "dub"}
 
     def test_key_mismatch_warns_and_omits_key(self, workspace_with_two_clips):
         """When clip keys differ, the user is warned and submit_task is called with key=None.
