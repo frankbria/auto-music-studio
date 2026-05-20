@@ -705,9 +705,9 @@ Selects a time range from a source clip, extracts it as a sample, and uses it as
 - Attribution metadata links back to the source clip
 
 **Acceptance Criteria:**
-- [ ] Sample is audible in the generated output
-- [ ] Different roles produce different placements of the sample
-- [ ] Metadata includes attribution to the source clip and time range
+- [x] Sample is audible in the generated output
+- [x] Different roles produce different placements of the sample
+- [x] Metadata includes attribution to the source clip and time range
 
 ---
 

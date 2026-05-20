@@ -415,3 +415,154 @@ class TestTimeStretchAudio:
         # Verify rate was passed to librosa
         args, kwargs = mock_librosa.effects.time_stretch.call_args
         assert kwargs["rate"] == 1.25
+
+
+class TestCombineSample:
+    """Tests for combine_sample() — role-based sample/generated audio combination (US-6.5)."""
+
+    def test_rejects_unknown_role(self, tmp_path, write_tone):
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        out = tmp_path / "out.wav"
+        write_tone(sample, duration_s=1.0)
+        write_tone(gen, duration_s=2.0)
+
+        with pytest.raises(ValueError, match="Unknown sample role"):
+            combine_sample(sample, gen, out, role="not-a-role")
+
+    def test_loop_bed_produces_output_matching_generated_length(self, tmp_path, write_tone):
+        """loop-bed overlays the sample at -10dB; output length matches generated."""
+        from pydub import AudioSegment
+
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        out = tmp_path / "out.wav"
+        write_tone(sample, duration_s=1.0)
+        write_tone(gen, duration_s=3.0)
+
+        combine_sample(sample, gen, out, role="loop-bed")
+        result = AudioSegment.from_file(str(out), format="wav")
+        assert abs(len(result) - 3000) < 50
+
+    def test_intro_outro_extends_beyond_generated(self, tmp_path, write_tone):
+        """intro-outro prepends + appends the sample, so output > generated length."""
+        from pydub import AudioSegment
+
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        out = tmp_path / "out.wav"
+        write_tone(sample, duration_s=1.0)
+        write_tone(gen, duration_s=2.0)
+
+        combine_sample(sample, gen, out, role="intro-outro")
+        result = AudioSegment.from_file(str(out), format="wav")
+        assert len(result) > 3000
+
+    def test_melodic_hook_extends_beyond_generated(self, tmp_path, write_tone):
+        """melodic-hook prepends the sample with a crossfade."""
+        from pydub import AudioSegment
+
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        out = tmp_path / "out.wav"
+        write_tone(sample, duration_s=1.0)
+        write_tone(gen, duration_s=2.0)
+
+        combine_sample(sample, gen, out, role="melodic-hook")
+        result = AudioSegment.from_file(str(out), format="wav")
+        assert len(result) > 2500
+
+    def test_rhythmic_element_matches_generated_length(self, tmp_path, write_tone):
+        """rhythmic-element overlays sample at intervals; output matches generated."""
+        from pydub import AudioSegment
+
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        out = tmp_path / "out.wav"
+        write_tone(sample, duration_s=0.5)
+        write_tone(gen, duration_s=8.0)
+
+        combine_sample(sample, gen, out, role="rhythmic-element")
+        result = AudioSegment.from_file(str(out), format="wav")
+        assert abs(len(result) - 8000) < 50
+
+    def test_roles_produce_different_audio(self, tmp_path, write_tone):
+        """Different roles must produce different output byte content."""
+        from pathlib import Path
+
+        from acemusic.audio import combine_sample
+
+        sample = tmp_path / "s.wav"
+        gen = tmp_path / "g.wav"
+        write_tone(sample, duration_s=1.0)
+        write_tone(gen, duration_s=4.0)
+
+        outputs: dict[str, bytes] = {}
+        for role in ("loop-bed", "intro-outro", "rhythmic-element", "melodic-hook"):
+            out = tmp_path / f"out-{role}.wav"
+            combine_sample(sample, gen, out, role=role)
+            outputs[role] = Path(out).read_bytes()
+
+        assert len({hash(v) for v in outputs.values()}) == 4
+
+
+class TestWriteSampleMetadata:
+    """Tests for write_sample_metadata() — JSON sidecar attribution (US-6.5)."""
+
+    def test_sidecar_written_next_to_audio(self, tmp_path):
+        import json
+
+        from acemusic.utils import write_sample_metadata
+
+        audio = tmp_path / "out.wav"
+        audio.write_bytes(b"fake")
+        sidecar = write_sample_metadata(
+            audio,
+            source_clip_id=42,
+            source_file="/path/to/source.wav",
+            start_ms=1000,
+            end_ms=3000,
+            role="loop-bed",
+            prompt="chill",
+            backend="ace-step",
+        )
+        assert sidecar == tmp_path / "out.wav.meta.json"
+        data = json.loads(sidecar.read_text())
+        assert data["source_clip_id"] == 42
+        assert data["source_file"] == "/path/to/source.wav"
+        assert data["start_ms"] == 1000
+        assert data["end_ms"] == 3000
+        assert data["role"] == "loop-bed"
+        assert data["prompt"] == "chill"
+        assert data["backend"] == "ace-step"
+        assert data["created_at"]
+
+    def test_sidecar_accepts_none_clip_id(self, tmp_path):
+        import json
+
+        from acemusic.utils import write_sample_metadata
+
+        audio = tmp_path / "out.wav"
+        audio.write_bytes(b"fake")
+        sidecar = write_sample_metadata(
+            audio,
+            source_clip_id=None,
+            source_file="/path/to/source.wav",
+            start_ms=0,
+            end_ms=1000,
+            role="melodic-hook",
+            prompt="x",
+            backend="ace-step",
+        )
+        data = json.loads(sidecar.read_text())
+        assert data["source_clip_id"] is None

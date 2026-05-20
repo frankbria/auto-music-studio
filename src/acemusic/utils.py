@@ -1,4 +1,4 @@
-"""Filename and audio duration utilities for acemusic (US-2.3, US-5.1)."""
+"""Filename and audio duration utilities for acemusic (US-2.3, US-5.1, US-6.5)."""
 
 from __future__ import annotations
 
@@ -167,3 +167,44 @@ def slice_audio(input_path: Path | str, head_seconds: float, output_path: Path |
     sliced = data[:requested_samples]
     sf.write(str(output_path), sliced, sr)
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Sample attribution metadata (US-6.5)
+# ---------------------------------------------------------------------------
+
+
+def write_sample_metadata(
+    output_audio_path: Path | str,
+    *,
+    source_clip_id: int | None,
+    source_file: str,
+    start_ms: int,
+    end_ms: int,
+    role: str,
+    prompt: str,
+    backend: str,
+) -> Path:
+    """Write a ``{filename}.meta.json`` sidecar describing a sample's provenance.
+
+    The sidecar lives next to the audio file. Tooling can read it later to trace
+    the new clip back to its source range and the user's intent (role, prompt).
+    Returns the path to the written sidecar.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    output_audio_path = Path(output_audio_path)
+    metadata = {
+        "source_clip_id": source_clip_id,
+        "source_file": source_file,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "role": role,
+        "prompt": prompt,
+        "backend": backend,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sidecar = output_audio_path.with_name(output_audio_path.name + ".meta.json")
+    sidecar.write_text(json.dumps(metadata, indent=2))
+    return sidecar

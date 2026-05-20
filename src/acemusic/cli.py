@@ -1,4 +1,4 @@
-"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3, US-5.4, US-5.5, US-6.2, US-6.4)."""
+"""CLI entry point for acemusic (US-2.1, US-2.2, US-2.3, US-4.2, US-5.1, US-5.3, US-5.4, US-5.5, US-6.2, US-6.4, US-6.5)."""
 
 from __future__ import annotations
 
@@ -20,8 +20,10 @@ from rich.table import Table
 
 from acemusic import __version__
 from acemusic.audio import (
+    SAMPLE_ROLES,
     SUPPORTED_FORMATS,
     calculate_speed_multiplier,
+    combine_sample,
     crop_audio,
     crossfade_stitch,
     detect_bpm,
@@ -55,6 +57,7 @@ from acemusic.utils import (
     parse_time_string,
     slice_audio,
     snap_to_beat,
+    write_sample_metadata,
 )
 from acemusic.workspace import (
     create_workspace,
@@ -2619,6 +2622,326 @@ def mashup(
     console.print(f"    Blend:    {blend}")
 
 
+# ---------------------------------------------------------------------------
+# Sample command (US-6.5)
+# ---------------------------------------------------------------------------
+
+
+_ROLE_PROMPT_PREFIX: dict[str, str] = {
+    "loop-bed": "Create a track that works as an overlay on top of a repeating loop.",
+    "intro-outro": "Create a track that transitions smoothly from and back to a musical phrase.",
+    "rhythmic-element": "Create a track with space for a recurring rhythmic sample.",
+    "melodic-hook": "Create a track that follows and develops from a melodic hook.",
+}
+
+_VALID_SAMPLE_BACKENDS: frozenset[str] = frozenset({"ace-step", "elevenlabs"})
+
+
+def _build_sample_prompt(base_prompt: str, role: str, sample_duration_sec: float) -> str:
+    """Prepend role-specific instructions and sample duration context to the prompt."""
+    prefix = _ROLE_PROMPT_PREFIX.get(role, "")
+    duration_hint = f"The reference sample is about {sample_duration_sec:.1f}s long."
+    return f"{prefix} {duration_hint} {base_prompt}".strip()
+
+
+@app.command()
+def sample(
+    clip_id: int = typer.Argument(..., help="ID of the source clip to sample from."),
+    start: str = typer.Option(..., "--start", help="Sample start time (e.g. '4s', '500ms', '1m30s')."),
+    end: str = typer.Option(..., "--end", help="Sample end time (e.g. '8s')."),
+    role: str = typer.Option(
+        ...,
+        "--role",
+        help=f"Sample role: one of {', '.join(sorted(SAMPLE_ROLES))}.",
+    ),
+    prompt: str = typer.Option(..., "--prompt", help="Text prompt describing the new song to generate."),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the sampled clip."),
+    backend: str = typer.Option("ace-step", "--backend", help="Generation backend: ace-step or elevenlabs."),
+    num_clips: int = typer.Option(1, "--num-clips", help="Number of variations to generate."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and title for the new clip."),
+) -> None:
+    """Extract a sample from an existing clip and build a new song around it.
+
+    The selected time range is extracted from the source clip and combined with
+    text-generated audio according to ``--role``. The sample is physically
+    present in the output so it is always audible. An attribution sidecar
+    (``{filename}.meta.json``) records the source clip, time range, role, and
+    prompt for later tooling.
+    """
+    if role not in SAMPLE_ROLES:
+        console.print(f"[red]Error: --role must be one of {sorted(SAMPLE_ROLES)}, got {role!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    if backend not in _VALID_SAMPLE_BACKENDS:
+        console.print(f"[red]Error: --backend must be one of {sorted(_VALID_SAMPLE_BACKENDS)}, got {backend!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    if num_clips < 1:
+        console.print(f"[red]Error: --num-clips must be >= 1, got {num_clips}.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        start_ms = parse_time_string(start)
+        end_ms = parse_time_string(end)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    source = get_clip(clip_id)
+    if source is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    src_path = Path(source.file_path)
+    if not src_path.exists():
+        console.print(f"[red]Error: source file not found: {src_path}[/red]")
+        raise typer.Exit(code=1)
+
+    if src_path.suffix.lower() not in SUPPORTED_FORMATS:
+        console.print(
+            f"[red]Error: source clip {clip_id} is not an audio file "
+            f"({src_path.suffix or 'no extension'}). Sample requires one of: "
+            f"{', '.join(sorted(SUPPORTED_FORMATS))}.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    source_duration = source.duration
+    if source_duration is None or source_duration <= 0:
+        try:
+            source_duration = get_duration(src_path)
+        except Exception as exc:
+            console.print(f"[red]Error: unable to determine source duration for clip {clip_id}: {exc}[/red]")
+            raise typer.Exit(code=1)
+        if source_duration is None or source_duration <= 0:
+            console.print(f"[red]Error: clip {clip_id} has no valid duration metadata.[/red]")
+            raise typer.Exit(code=1)
+
+    duration_ms = int(source_duration * 1000)
+    if start_ms < 0 or end_ms <= start_ms or end_ms > duration_ms:
+        console.print(
+            f"[red]Error: invalid time range [{start_ms}, {end_ms}] ms \u2014 "
+            f"must satisfy 0 <= start < end <= {duration_ms} ms (source duration).[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    sample_duration_sec = (end_ms - start_ms) / 1000.0
+
+    if output is not None:
+        out_dir = output
+    else:
+        out_dir = get_workspace_path(source.workspace_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = source.format or "wav"
+    config = load_config()
+    title_slug = make_slug(name or source.title or "clip")
+    enhanced_prompt = _build_sample_prompt(prompt, role, sample_duration_sec)
+
+    with tempfile.TemporaryDirectory(prefix="acemusic-sample-") as workdir:
+        workdir_path = Path(workdir)
+
+        sample_path = workdir_path / f"sample.{ext}"
+        try:
+            crop_audio(
+                input_path=str(src_path),
+                output_path=str(sample_path),
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        except Exception as exc:
+            console.print(f"[red]Error extracting sample range: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        if backend == "ace-step":
+            ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
+            generated_paths = _generate_sample_via_ace_step(
+                ace_client=ace_client,
+                prompt=enhanced_prompt,
+                num_clips=num_clips,
+                workdir=workdir_path,
+                ext=ext,
+            )
+        else:
+            if not config.elevenlabs_api_key:
+                console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+                raise typer.Exit(code=1)
+            el_client = ElevenLabsClient(
+                api_key=config.elevenlabs_api_key,
+                output_format=config.elevenlabs_output_format,
+            )
+            generated_paths = _generate_sample_via_elevenlabs(
+                el_client=el_client,
+                prompt=enhanced_prompt,
+                num_clips=num_clips,
+                workdir=workdir_path,
+                output_format=config.elevenlabs_output_format,
+            )
+
+        created_ids: list[tuple[int, Path]] = []
+        for idx, generated_path in enumerate(generated_paths, start=1):
+            suffix = f"-{idx}" if num_clips > 1 else ""
+            dest_name = f"{title_slug}-sample-{uuid.uuid4().hex[:8]}{suffix}.{ext}"
+            dest_path = out_dir / dest_name
+
+            try:
+                combine_sample(
+                    sample_path=sample_path,
+                    generated_path=generated_path,
+                    output_path=dest_path,
+                    role=role,
+                )
+            except Exception as exc:
+                dest_path.unlink(missing_ok=True)
+                console.print(f"[red]Error combining sample with generated audio: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+            try:
+                write_sample_metadata(
+                    dest_path,
+                    source_clip_id=source.id,
+                    source_file=str(src_path),
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    role=role,
+                    prompt=prompt,
+                    backend=backend,
+                )
+            except Exception as exc:
+                warnings.warn(f"failed to write sample metadata sidecar: {exc}", stacklevel=2)
+
+            try:
+                new_duration = get_duration(dest_path)
+            except Exception as exc:
+                warnings.warn(f"sampled clip duration probe failed: {exc}", stacklevel=2)
+                new_duration = None
+
+            if name:
+                new_title = name if num_clips == 1 else f"{name}-{idx}"
+            elif source.title:
+                new_title = f"{source.title} (sample, {role})"
+            else:
+                new_title = None
+
+            new_clip = Clip(
+                workspace_id=source.workspace_id,
+                file_path=str(dest_path.resolve()),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                title=new_title,
+                format=ext,
+                duration=new_duration,
+                bpm=source.bpm,
+                key=source.key,
+                style_tags=source.style_tags,
+                parent_clip_id=source.id,
+                generation_mode="sample",
+            )
+            try:
+                new_id = create_clip(new_clip)
+            except Exception as exc:
+                dest_path.unlink(missing_ok=True)
+                console.print(f"[red]Error saving clip record: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+            created_ids.append((new_id, dest_path))
+
+    for new_id, dest_path in created_ids:
+        console.print(f"  [green]\u2713[/green] Sampled clip {clip_id} \u2192 clip {new_id}")
+        console.print(f"    Path:     {dest_path}")
+        console.print(f"    Role:     {role}")
+        console.print(f"    Range:    {start_ms}\u2013{end_ms} ms")
+
+
+def _generate_sample_via_ace_step(
+    *,
+    ace_client: AceStepClient,
+    prompt: str,
+    num_clips: int,
+    workdir: Path,
+    ext: str,
+) -> list[Path]:
+    """Submit a single ACE-Step task and download up to ``num_clips`` audio files to ``workdir``."""
+    try:
+        task_id = ace_client.submit_task(
+            prompt=prompt,
+            num_clips=num_clips,
+            format=ext,
+        )
+    except AceStepError as exc:
+        console.print(f"[red]Error submitting generation task: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
+
+    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+    poll_interval = 2.0
+    start_time = time.monotonic()
+    result: dict = {}
+    with console.status("[bold green]Generating sample track\u2026[/bold green]", spinner="dots") as status_bar:
+        while True:
+            elapsed = time.monotonic() - start_time
+            if elapsed >= poll_timeout:
+                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+                raise typer.Exit(code=1)
+            try:
+                result = ace_client.query_result(task_id)
+            except AceStepError as exc:
+                console.print(f"[red]Error polling status: {exc}[/red]")
+                raise typer.Exit(code=1)
+            job_status = result.get("status", "unknown")
+            status_bar.update(
+                f"[bold green]Generating sample track\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]"
+            )
+            if job_status == "completed":
+                break
+            if job_status == "failed":
+                error_msg = result.get("error", "unknown error")
+                console.print(f"[red]Generation failed: {error_msg}[/red]")
+                raise typer.Exit(code=1)
+            time.sleep(poll_interval)
+
+    audio_urls: list[str] = result.get("audio_urls", [])
+    if not audio_urls:
+        console.print("[red]Error: ACE-Step returned no audio URLs.[/red]")
+        raise typer.Exit(code=1)
+
+    generated_paths: list[Path] = []
+    for i, url in enumerate(audio_urls[:num_clips], start=1):
+        try:
+            data = ace_client.download_audio(url)
+        except AceStepError as exc:
+            console.print(f"[red]Download failed for clip {i}: {exc}[/red]")
+            raise typer.Exit(code=1)
+        gen_path = workdir / f"generated-{i}.{ext}"
+        gen_path.write_bytes(data)
+        generated_paths.append(gen_path)
+    return generated_paths
+
+
+def _generate_sample_via_elevenlabs(
+    *,
+    el_client: ElevenLabsClient,
+    prompt: str,
+    num_clips: int,
+    workdir: Path,
+    output_format: str,
+) -> list[Path]:
+    """Generate ``num_clips`` audio files sequentially via ElevenLabs to ``workdir``."""
+    ext = _elevenlabs_ext(output_format)
+    generated_paths: list[Path] = []
+    for i in range(1, num_clips + 1):
+        with console.status(f"[bold green]Sample track {i}/{num_clips}\u2026[/bold green]", spinner="dots"):
+            try:
+                data = el_client.generate(prompt=prompt)
+            except ElevenLabsError as exc:
+                console.print(f"[red]ElevenLabs error: {exc}[/red]")
+                raise typer.Exit(code=1)
+        gen_path = workdir / f"generated-{i}.{ext}"
+        gen_path.write_bytes(data)
+        generated_paths.append(gen_path)
+    return generated_paths
+
+
+# ---------------------------------------------------------------------------
 # Preset commands (US-4.3)
 # ---------------------------------------------------------------------------
 
