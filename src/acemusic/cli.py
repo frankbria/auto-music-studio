@@ -2799,8 +2799,9 @@ def sample(
                 console.print(f"[red]Error combining sample with generated audio: {exc}[/red]")
                 raise typer.Exit(code=1)
 
+            sidecar_path: Path | None = None
             try:
-                write_sample_metadata(
+                sidecar_path = write_sample_metadata(
                     dest_path,
                     source_clip_id=source.id,
                     source_file=str(src_path),
@@ -2847,6 +2848,8 @@ def sample(
                 new_id = create_clip(new_clip)
             except Exception as exc:
                 dest_path.unlink(missing_ok=True)
+                if sidecar_path is not None:
+                    sidecar_path.unlink(missing_ok=True)
                 console.print(f"[red]Error saving clip record: {exc}[/red]")
                 raise typer.Exit(code=1)
 
