@@ -2647,7 +2647,7 @@ def _build_sample_prompt(base_prompt: str, role: str, sample_duration_sec: float
 @app.command()
 def sample(
     clip_id: int = typer.Argument(..., help="ID of the source clip to sample from."),
-    start: str = typer.Option(..., "--start", help="Sample start time (e.g. '4s', '500ms', '1m30s')."),
+    start: str = typer.Option(..., "--start", help="Sample start time (e.g. '4s', '0.5s', '1m30s')."),
     end: str = typer.Option(..., "--end", help="Sample end time (e.g. '8s')."),
     role: str = typer.Option(
         ...,
@@ -2807,7 +2807,11 @@ def sample(
                     backend=backend,
                 )
             except Exception as exc:
-                warnings.warn(f"failed to write sample metadata sidecar: {exc}", stacklevel=2)
+                # Provenance is an acceptance criterion: refuse to ship a sample
+                # output without its attribution sidecar.
+                dest_path.unlink(missing_ok=True)
+                console.print(f"[red]Error writing sample metadata sidecar: {exc}[/red]")
+                raise typer.Exit(code=1)
 
             try:
                 new_duration = get_duration(dest_path)
@@ -2902,6 +2906,9 @@ def _generate_sample_via_ace_step(
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
         console.print("[red]Error: ACE-Step returned no audio URLs.[/red]")
+        raise typer.Exit(code=1)
+    if len(audio_urls) < num_clips:
+        console.print(f"[red]Error: requested {num_clips} clip(s) but ACE-Step returned {len(audio_urls)}.[/red]")
         raise typer.Exit(code=1)
 
     generated_paths: list[Path] = []

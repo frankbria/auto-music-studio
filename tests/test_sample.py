@@ -264,11 +264,10 @@ class TestSampleValidation:
         assert result.exit_code != 0
         client.submit_task.assert_not_called()
 
-    def test_negative_start_exits_one(self, workspace_with_clip):
+    def test_invalid_time_format_exits_one(self, workspace_with_clip):
         ws, clip_id, _src = workspace_with_clip
         client = _make_client_mock()
         with patch("acemusic.cli.AceStepClient", return_value=client):
-            # parse_time_string rejects negative numbers — pass an invalid string
             result = runner.invoke(
                 app,
                 [
