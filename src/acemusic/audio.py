@@ -1,4 +1,4 @@
-"""Audio analysis and manipulation utilities for acemusic (US-4.4, US-5.1, US-5.5, US-6.3)."""
+"""Audio analysis and manipulation utilities for acemusic (US-4.4, US-5.1, US-5.5, US-6.3, US-6.5)."""
 
 from __future__ import annotations
 
@@ -343,3 +343,87 @@ def remaster_audio(input_path: Path, output_path: Path, target_lufs: float = -14
         "before_lufs": before_lufs,
         "after_lufs": after_lufs,
     }
+
+
+# ---------------------------------------------------------------------------
+# Sample combination (US-6.5)
+# ---------------------------------------------------------------------------
+
+
+SAMPLE_ROLES: frozenset[str] = frozenset({"loop-bed", "intro-outro", "rhythmic-element", "melodic-hook"})
+
+
+def _path_format(path: str | Path) -> str:
+    """Derive a pydub format= hint from a filename extension (e.g. 'wav', 'mp3').
+
+    pydub's ``AudioSegment.from_file`` invokes ffprobe to auto-detect format,
+    which fails in CI environments without ffmpeg. Passing format= avoids
+    the probe step.
+    """
+    suffix = Path(path).suffix.lower().lstrip(".")
+    return suffix or "wav"
+
+
+def combine_sample(
+    sample_path: str | Path,
+    generated_path: str | Path,
+    output_path: str | Path,
+    role: str,
+) -> Path:
+    """Combine an extracted sample with a generated track based on its musical role.
+
+    Role behaviors:
+        loop-bed         Loop the sample to match the generated duration, then
+                         overlay it at reduced volume as a background bed.
+        intro-outro      Prepend the sample as an intro and append it as an
+                         outro with short crossfades into the generated audio.
+        rhythmic-element Overlay the sample at regular intervals across the
+                         generated audio (default every 4 seconds).
+        melodic-hook     Prepend the sample as a hook and crossfade into the
+                         generated audio.
+
+    The output preserves the format of the generated track.
+    Raises ValueError if ``role`` is not one of ``SAMPLE_ROLES``.
+    """
+    from pydub import AudioSegment
+
+    if role not in SAMPLE_ROLES:
+        raise ValueError(f"Unknown sample role: {role!r}. Expected one of {sorted(SAMPLE_ROLES)}.")
+
+    sample_path = Path(sample_path)
+    generated_path = Path(generated_path)
+    output_path = Path(output_path)
+
+    sample = AudioSegment.from_file(str(sample_path), format=_path_format(sample_path))
+    generated = AudioSegment.from_file(str(generated_path), format=_path_format(generated_path))
+
+    if role == "loop-bed":
+        # Loop the sample to cover the full generated duration, then overlay
+        # at -10 dB so the generated track stays in the foreground.
+        if len(sample) == 0:
+            combined = generated
+        else:
+            loops_needed = max(1, len(generated) // len(sample) + 1)
+            looped = sample * loops_needed
+            looped = looped[: len(generated)]
+            combined = generated.overlay(looped - 10)
+    elif role == "intro-outro":
+        # Prepend + append with crossfades; clamp fade per pydub's constraint.
+        fade_ms = max(0, min(50, len(sample) - 1, len(generated) - 1))
+        combined = sample.append(generated, crossfade=fade_ms)
+        outro_fade = max(0, min(50, len(combined) - 1, len(sample) - 1))
+        combined = combined.append(sample, crossfade=outro_fade)
+    elif role == "rhythmic-element":
+        # Overlay the sample every 4 seconds across the generated track.
+        interval_ms = 4_000
+        combined = generated
+        if len(sample) > 0:
+            for offset in range(0, len(generated), interval_ms):
+                combined = combined.overlay(sample - 6, position=offset)
+    else:  # melodic-hook
+        # Prepend the sample with a crossfade into the generated audio.
+        fade_ms = max(0, min(100, len(sample) - 1, len(generated) - 1))
+        combined = sample.append(generated, crossfade=fade_ms)
+
+    combined.export(str(output_path), format=_path_format(output_path))
+    return output_path
