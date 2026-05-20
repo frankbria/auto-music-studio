@@ -72,7 +72,7 @@ tests/test_sample.py::TestSampleValidation::test_missing_clip_exits_one PASSED
 tests/test_sample.py::TestSampleValidation::test_invalid_role_exits_one PASSED
 tests/test_sample.py::TestSampleValidation::test_end_past_duration_exits_one PASSED
 tests/test_sample.py::TestSampleValidation::test_end_before_start_exits_one PASSED
-tests/test_sample.py::TestSampleValidation::test_negative_start_exits_one PASSED
+tests/test_sample.py::TestSampleValidation::test_invalid_time_format_exits_one PASSED
 tests/test_sample.py::TestSampleRoles::test_each_role_succeeds[loop-bed] PASSED
 tests/test_sample.py::TestSampleRoles::test_each_role_succeeds[intro-outro] PASSED
 tests/test_sample.py::TestSampleRoles::test_each_role_succeeds[rhythmic-element] PASSED

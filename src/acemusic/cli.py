@@ -2636,6 +2636,9 @@ _ROLE_PROMPT_PREFIX: dict[str, str] = {
 
 _VALID_SAMPLE_BACKENDS: frozenset[str] = frozenset({"ace-step", "elevenlabs"})
 
+# Guard against drift between the prompt prefixes and the canonical role set.
+assert set(_ROLE_PROMPT_PREFIX) == SAMPLE_ROLES, "Sample roles in cli.py and audio.py must stay in sync."
+
 
 def _build_sample_prompt(base_prompt: str, role: str, sample_duration_sec: float) -> str:
     """Prepend role-specific instructions and sample duration context to the prompt."""
@@ -2717,10 +2720,11 @@ def sample(
             raise typer.Exit(code=1)
 
     duration_ms = int(source_duration * 1000)
-    if start_ms < 0 or end_ms <= start_ms or end_ms > duration_ms:
+    # parse_time_string already rejects negatives, so we only check ordering and upper bound here.
+    if end_ms <= start_ms or end_ms > duration_ms:
         console.print(
             f"[red]Error: invalid time range [{start_ms}, {end_ms}] ms \u2014 "
-            f"must satisfy 0 <= start < end <= {duration_ms} ms (source duration).[/red]"
+            f"must satisfy start < end <= {duration_ms} ms (source duration).[/red]"
         )
         raise typer.Exit(code=1)
 

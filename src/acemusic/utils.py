@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -191,9 +193,6 @@ def write_sample_metadata(
     the new clip back to its source range and the user's intent (role, prompt).
     Returns the path to the written sidecar.
     """
-    import json
-    from datetime import datetime, timezone
-
     output_audio_path = Path(output_audio_path)
     metadata = {
         "source_clip_id": source_clip_id,
