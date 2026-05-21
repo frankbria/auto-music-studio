@@ -2710,7 +2710,10 @@ def replace(
             console.print(f"[red]Error decoding audio for stitching: {exc}[/red]")
             raise typer.Exit(code=1)
 
-        if len(replace_full) < end_ms - 10:
+        # Use a 1ms tolerance for both checks so the pre-slice and post-slice
+        # guards agree \u2014 anything that passes the first check produces a
+        # `middle` that won't trip the second.
+        if len(replace_full) < end_ms - 1:
             console.print(
                 f"[red]Error: ACE-Step output is {len(replace_full)}ms but the replace "
                 f"window ends at {end_ms}ms \u2014 the model returned a truncated clip.[/red]"
