@@ -134,6 +134,10 @@ class TestAddVocalCommand:
         assert kwargs["src_audio_path"] == str(src_wav.resolve())
         assert kwargs["lyrics"] == "[Verse]\nHello world"
         assert kwargs["style"] == "breathy, soulful"
+        # The prompt describes the instrumental backdrop (from source.style_tags),
+        # not the vocal style — those are separate concepts.
+        assert kwargs["prompt"] == "ambient"
+        assert kwargs["prompt"] != kwargs["style"]
 
     def test_lyrics_required(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
@@ -152,7 +156,8 @@ class TestAddVocalCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
-    def test_default_voice_is_default(self, workspace_with_clip):
+    def test_default_voice_suppresses_stage_25_warning(self, workspace_with_clip):
+        """When --voice is left at its default, the Stage 25 stub warning should not fire."""
         ws, clip_id, src_wav = workspace_with_clip
         client = _make_client_mock()
         with patch("acemusic.cli.AceStepClient", return_value=client):
@@ -161,7 +166,19 @@ class TestAddVocalCommand:
                 ["add-vocal", str(clip_id), "--lyrics", "[Verse]\nHi"],
             )
         assert result.exit_code == 0, result.output
-        # The voice flag should not crash when defaulted.
+        assert "Stage 25" not in result.output
+
+    def test_non_default_voice_emits_stage_25_warning(self, workspace_with_clip):
+        """When --voice is set to something other than default, the user should see the stub warning."""
+        ws, clip_id, src_wav = workspace_with_clip
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["add-vocal", str(clip_id), "--lyrics", "[Verse]\nHi", "--voice", "soulful"],
+            )
+        assert result.exit_code == 0, result.output
+        assert "Stage 25" in result.output
 
     def test_failed_task_exits(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
@@ -228,6 +245,44 @@ class TestAddVocalCommand:
         children = [c for c in list_clips(ws.id) if c.generation_mode == "add_vocal"]
         assert len(children) == 1
         assert "my-song" in children[0].file_path
+
+    def test_falls_back_to_probing_when_duration_missing(self, isolated_db, write_tone):
+        """When source.duration is None, add-vocal should probe the file via get_duration()."""
+        from acemusic.db import create_clip, list_clips
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        src_wav = clips_dir / "no-duration.wav"
+        write_tone(src_wav, duration_s=2.0, frequency=440.0)
+
+        clip = Clip(
+            workspace_id=ws.id,
+            file_path=str(src_wav),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            format="wav",
+            duration=None,
+            generation_mode="generate",
+        )
+        clip_id = create_clip(clip)
+
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["add-vocal", str(clip_id), "--lyrics", "hi"],
+            )
+        assert result.exit_code == 0, result.output
+
+        # The audio_duration kwarg should be ~2.0s — derived from the probed file.
+        kwargs = client.submit_task.call_args.kwargs
+        assert kwargs["audio_duration"] == pytest.approx(2.0, abs=0.1)
+
+        children = [c for c in list_clips(ws.id) if c.generation_mode == "add_vocal"]
+        assert len(children) == 1
 
     def test_records_lyrics_on_new_clip(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip

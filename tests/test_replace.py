@@ -245,6 +245,28 @@ class TestReplaceCommand:
         head_rms = np.sqrt(np.mean((head - src_head) ** 2))
         assert head_rms < 0.01, f"Head RMS drift {head_rms} too high — outside region not preserved"
 
+    def test_truncated_model_output_exits_when_locked(self, workspace_with_clip):
+        """If ACE-Step returns audio shorter than the replace window, exit cleanly with --lock-context."""
+        ws, clip_id, src_wav = workspace_with_clip
+        # Window is 1s–2s but model returns only 1.5s
+        client = _make_client_mock(audio_bytes=_wav_bytes(1.5, frequency=880.0))
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                [
+                    "replace",
+                    str(clip_id),
+                    "--start",
+                    "1s",
+                    "--end",
+                    "2s",
+                    "--prompt",
+                    "x",
+                ],
+            )
+        assert result.exit_code != 0
+        assert "truncated" in result.output.lower() or "shorter" in result.output.lower()
+
     def test_invalid_time_range_exits(self, workspace_with_clip):
         ws, clip_id, src_wav = workspace_with_clip
         client = _make_client_mock()

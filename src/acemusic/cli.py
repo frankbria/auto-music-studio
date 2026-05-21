@@ -2368,7 +2368,11 @@ def repaint(
 def add_vocal(
     clip_id: int = typer.Argument(..., help="ID of the source instrumental clip."),
     lyrics: str = typer.Option(..., "--lyrics", help="Lyrics to layer onto the instrumental."),
-    voice: str = typer.Option("default", "--voice", help="Voice identifier (Stage 25 feature)."),
+    voice: str = typer.Option(
+        "default",
+        "--voice",
+        help="Voice identifier (Stage 25 stub — value is currently accepted but not forwarded to the model).",
+    ),
     style: Optional[str] = typer.Option(None, "--style", help="Optional vocal style (e.g. 'breathy, soulful')."),
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the resulting clip."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix for the resulting clip."),
@@ -2426,9 +2430,13 @@ def add_vocal(
     dest_name = f"{title_slug}-vocal-{uuid.uuid4().hex[:8]}.{ext}"
     dest_path = clips_dir / dest_name
 
+    # Prompt describes the instrumental backdrop (so the model knows what it's
+    # singing over); --style separately controls the vocal performance style.
+    vocal_prompt = source.style_tags or source.title or "layer vocals over the instrumental"
+
     try:
         task_id = ace_client.submit_task(
-            prompt=style or "add vocals",
+            prompt=vocal_prompt,
             num_clips=1,
             audio_duration=source_duration,
             format=ext,
@@ -2713,6 +2721,19 @@ def replace(
             before = original[: int(start_ms)]
             middle = replace_full[int(start_ms) : int(end_ms)]
             after = original[int(end_ms) :]
+        except Exception as exc:
+            console.print(f"[red]Error slicing audio for stitching: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        expected_middle_ms = end_ms - start_ms
+        if len(middle) < expected_middle_ms - 1:
+            console.print(
+                f"[red]Error: replacement section is {len(middle)}ms but the window "
+                f"expects {expected_middle_ms}ms \u2014 model output was shorter than the window.[/red]"
+            )
+            raise typer.Exit(code=1)
+
+        try:
             stitched = crossfade_stitch(before, middle, after, fade_ms=crossfade_ms)
             stitched.export(str(dest_path), format=ext)
         except Exception as exc:
