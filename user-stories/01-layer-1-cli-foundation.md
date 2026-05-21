@@ -725,9 +725,9 @@ Add Vocal layers a vocal performance onto an instrumental. Replace Section regen
 - Both create new clips with lineage
 
 **Acceptance Criteria:**
-- [ ] Add-vocal produces a clip with vocals layered on the instrumental
-- [ ] Replace section changes only the target time range
-- [ ] Surrounding audio is preserved with smooth transitions
+- [x] Add-vocal produces a clip with vocals layered on the instrumental
+- [x] Replace section changes only the target time range
+- [x] Surrounding audio is preserved with smooth transitions
 
 ---
 
