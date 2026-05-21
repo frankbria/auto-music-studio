@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from pydub import AudioSegment
 from rich.console import Console
 from rich.table import Table
 
@@ -2289,8 +2290,6 @@ def repaint(
     # Splice the regenerated section into the original with crossfade at the seams.
     # Passing format= explicitly so pydub uses Python's wave module for WAVs and
     # avoids invoking ffprobe (which is not always available, e.g. in CI runners).
-    from pydub import AudioSegment
-
     try:
         original = AudioSegment.from_file(str(src_path), format=ext)
         repaint_full = AudioSegment.from_file(io.BytesIO(repaint_bytes), format=ext)
@@ -2701,8 +2700,6 @@ def replace(
         raise typer.Exit(code=1)
 
     if lock_context:
-        from pydub import AudioSegment
-
         try:
             original = AudioSegment.from_file(str(src_path), format=ext)
             replace_full = AudioSegment.from_file(io.BytesIO(replace_bytes), format=ext)
