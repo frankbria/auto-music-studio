@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, US-6.3 repaint, and US-6.4 mashup implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, section repaint with crossfade blending, and two-clip mashup with BPM alignment all implemented.
+**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, US-6.3 repaint, US-6.4 mashup, US-6.5 sample, and US-6.6 add-vocal/replace implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, section repaint with crossfade blending, two-clip mashup with BPM alignment, loop sampling, vocal layering, and section replacement all implemented.
 
 ## Commands
 
@@ -64,6 +64,14 @@ uv run acemusic mashup 42 43                                                    
 uv run acemusic mashup 42 43 --blend sequential                                 # section-by-section blend
 uv run acemusic mashup 42 43 --blend ai-guided --style "lo-fi hip hop"          # model chooses; unifying style applied
 
+# Add vocal (US-6.6) — layer vocals onto an instrumental clip
+uv run acemusic add-vocal 42 --lyrics "[Verse]\nSing this line"                                    # default voice
+uv run acemusic add-vocal 42 --lyrics "[Chorus]\nLouder now" --voice soulful --style "breathy"     # styled vocal
+
+# Replace section (US-6.6) — regenerate a specific time range with new instructions
+uv run acemusic replace 42 --start 30s --end 45s --prompt "make this section more energetic"      # locks context (default)
+uv run acemusic replace 42 --start 1m --end 1m30s --prompt "soft strings" --no-lock-context        # use model output as-is
+
 # Workspace management (US-4.1)
 uv run acemusic workspace list                        # list all workspaces (auto-creates Default)
 uv run acemusic workspace create "My Album"           # create a new workspace
@@ -107,7 +115,7 @@ docs/               # Additional documentation (placeholder)
 ### Key Modules
 
 - **`client.py`** — The core integration with ACE-Step-1.5. Understands the API envelope (`{"data": ..., "code": 200}`), integer status codes (0=pending, 1=completed, 2=failed), and the `/release_task` → `/query_result` → `/v1/audio` workflow.
-- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `models`, `extend`, `cover`, `repaint`, and the `workspace` subcommand group (`create`, `list`, `switch`, `rename`, `delete`). Uses `AceStepClient` for generation and `workspace.py` for workspace ops.
+- **`cli.py`** — Typer-based CLI. Commands: `health`, `generate`, `models`, `extend`, `cover`, `repaint`, `mashup`, `sample`, `add-vocal`, `replace`, and the `workspace` subcommand group (`create`, `list`, `switch`, `rename`, `delete`). Uses `AceStepClient` for generation and `workspace.py` for workspace ops.
 - **`config.py`** — Returns `AceConfig(api_url, api_key, output_dir)`. Priority: env vars > `.env` > `~/.acemusic/config.yaml`.
 - **`db.py`** — Opens (and schema-inits on first use) the SQLite metadata database at `~/.acemusic/metadata.db`. All workspace state is persisted here.
 - **`workspace.py`** — CRUD operations on workspaces. Audio clips are stored under `~/.acemusic/workspaces/{id}/clips/`. A "Default" workspace is auto-created on first access. `generate` falls back to the active workspace's clips directory when `--output` and `config.output_dir` are both unset.
