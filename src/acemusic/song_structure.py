@@ -68,13 +68,12 @@ def plan_sections(seed_duration: float, target_duration: int | float) -> list[Se
     total_weight = sum(weights)
     raw_durations = [remaining * (w / total_weight) for w in weights]
 
-    # Only enforce the audible-section floor when remaining is large enough to
-    # honor it for every section. Otherwise honoring the floor would overshoot
-    # the user's target_duration — fall back to raw proportional distribution.
-    if remaining >= len(weights) * MIN_SECTION_SECONDS:
-        durations = [max(d, MIN_SECTION_SECONDS) for d in raw_durations]
-    else:
-        durations = raw_durations
+    # Apply the audible-section floor only if doing so still fits inside the
+    # remaining budget. At moderate margins (e.g. seed=30, target=60) the floor
+    # would bump small sections up enough to overshoot remaining, so fall back
+    # to the raw proportional distribution in that case.
+    floored = [max(d, MIN_SECTION_SECONDS) for d in raw_durations]
+    durations = floored if sum(floored) <= remaining else raw_durations
 
     return [
         Section(name=name, duration_s=duration, style_hint=SECTION_CONFIG[name][1])

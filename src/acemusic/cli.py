@@ -2144,7 +2144,9 @@ def full_song(
     ),
     auto: bool = typer.Option(False, "--auto", help="Skip confirmation prompts and build the entire song unattended."),
     style: Optional[str] = typer.Option(
-        None, "--style", help="Base style override layered onto each section's style hint."
+        None,
+        "--style",
+        help="Base style override; replaces the seed's style tags as the anchor for every section.",
     ),
     lyrics: Optional[str] = typer.Option(None, "--lyrics", help="Optional lyrics applied to every generated section."),
 ) -> None:

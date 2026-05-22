@@ -70,7 +70,9 @@ class TestPlanSections:
         so a 58s seed + 60s target produced 7 × 4s = 28s of sections, growing
         the song to 86s instead of 60s.
         """
-        for seed, target in [(58.0, 60), (50.0, 55), (10.0, 11), (30.0, 33)]:
+        # Mix of cases where the proportional fallback kicks in (tight margins)
+        # and cases where the MIN_SECTION_SECONDS floor is active (more headroom).
+        for seed, target in [(58.0, 60), (50.0, 55), (10.0, 11), (30.0, 33), (30.0, 60), (60.0, 100)]:
             sections = plan_sections(seed_duration=seed, target_duration=target)
             total = sum(s.duration_s for s in sections)
             remaining = target - seed

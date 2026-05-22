@@ -158,6 +158,24 @@ class TestFullSongCommand:
                 section_name in style_arg.lower()
             ), f"Expected style for section {section_name!r} to mention the section, got {style_arg!r}"
 
+    def test_style_flag_overrides_seed_style_tags(self, workspace_with_seed):
+        """--style replaces the seed's style_tags as the anchor for every section."""
+        ws, clip_id, _src = workspace_with_seed
+        from acemusic.song_structure import plan_sections
+
+        plan = plan_sections(seed_duration=30.0, target_duration=210)
+        client = _make_full_song_client(30.0, [s.duration_s for s in plan])
+
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["full-song", str(clip_id), "--auto", "--style", "indie folk"])
+        assert result.exit_code == 0, result.output
+
+        # Every submit_task call should carry the override, not the seed's "ambient".
+        for call in client.submit_task.call_args_list:
+            style_arg = (call.kwargs.get("style") or "").lower()
+            assert "indie folk" in style_arg
+            assert "ambient" not in style_arg
+
     def test_style_anchors_to_seed_not_previous_section(self, workspace_with_seed):
         """Each section's style references the seed style + its own hint only.
 
