@@ -195,10 +195,10 @@ class TestFullSongCommand:
             result = runner.invoke(app, ["full-song", str(clip_id), "--auto"])
         assert result.exit_code == 0, result.output
 
-        # Section 4 is the second chorus; its style must not mention earlier sections.
+        # Section 4 is the second verse; its style must not mention earlier sections.
         section_4_style = (client.submit_task.call_args_list[3].kwargs.get("style") or "").lower()
-        for earlier in SONG_STRUCTURE[:3]:  # intro, verse, chorus(1)
-            # Allow the section's own name if it repeats (chorus appears twice).
+        for earlier in SONG_STRUCTURE[:3]:  # intro, verse(1), chorus(1)
+            # Skip "verse" — section 4 IS a verse, so its own name belongs in the style.
             if earlier == SONG_STRUCTURE[3]:
                 continue
             assert (
