@@ -49,6 +49,7 @@ from acemusic.db import (
 from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
+from acemusic.song_structure import Section, plan_sections
 from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import (
     generate_remaster_filename,
@@ -1964,6 +1965,276 @@ def extend(
     console.print(f"  [green]\u2713[/green] Extended clip {clip_id} \u2192 clip {new_id}")
     console.print(f"    Path:     {dest_path}")
     console.print(f"    Duration: {dur_str}")
+
+
+def _render_section_plan(seed: Clip, plan: list[Section], target_duration: int) -> None:
+    """Render the planned section breakdown as a Rich table."""
+    table = Table(title=f"Full-song plan (target {target_duration}s)", show_lines=False)
+    table.add_column("#", justify="right", style="cyan")
+    table.add_column("Section", style="bold")
+    table.add_column("Duration", justify="right")
+    table.add_column("Style hint", style="dim")
+    table.add_row("0", "seed", f"{seed.duration:.1f}s", seed.style_tags or "\u2014")
+    for i, section in enumerate(plan, start=1):
+        table.add_row(str(i), section.name, f"{section.duration_s:.1f}s", section.style_hint)
+    console.print(table)
+
+
+def _generate_section(
+    source: Clip,
+    section_index: int,
+    section_total: int,
+    section: Section,
+    base_style: Optional[str],
+    base_style_tags: Optional[str],
+    base_lyrics: Optional[str],
+    is_final: bool,
+    seed_title: Optional[str],
+    ace_client: AceStepClient,
+    clips_dir: Path,
+) -> Clip:
+    """Run one extend step for a full-song section and register the resulting clip.
+
+    Submits a `task_type=repaint` request that grows ``source`` by
+    ``section.duration_s`` seconds from its end, then writes the returned
+    audio as a child clip with ``generation_mode='full-song'`` and
+    ``parent_clip_id`` pointing at ``source``. Returns the new Clip.
+
+    ``base_style_tags`` is the seed clip's original style \u2014 held stable across
+    the whole chain so that section conditioning stays anchored. Without it,
+    pulling ``source.style_tags`` from each previous extended clip would
+    compound prior section hints into later prompts.
+
+    Raises ``typer.Exit(code=1)`` on submission, polling, or download errors \u2014
+    callers should not catch this; any successfully-committed earlier sections
+    remain in the clip store as partial progress.
+    """
+    if source.duration is None:
+        console.print("[red]Error: source clip lost duration metadata mid-pipeline.[/red]")
+        raise typer.Exit(code=1)
+
+    repaint_start = source.duration
+    repaint_end = source.duration + section.duration_s
+    target_audio_duration = repaint_end
+
+    base_style_resolved = base_style or base_style_tags
+    style_parts = [base_style_resolved, section.style_hint]
+    section_style = ", ".join(p for p in style_parts if p)
+    lyrics = base_lyrics if base_lyrics is not None else source.lyrics
+    prompt = base_style_tags or seed_title or source.title or "continue the song"
+    ext = source.format or "wav"
+
+    if is_final and seed_title:
+        section_title: Optional[str] = f"{seed_title} (full song)"
+    elif seed_title:
+        section_title = f"{seed_title} - {section.name}"
+    else:
+        section_title = None
+
+    dest_name = f"{make_slug(seed_title or 'clip')}-fullsong-{section.name}-{uuid.uuid4().hex[:8]}.{ext}"
+    dest_path = clips_dir / dest_name
+
+    console.print(
+        f"[bold]Section {section_index}/{section_total}[/bold]: "
+        f"[cyan]{section.name}[/cyan] (+{section.duration_s:.1f}s)"
+    )
+
+    try:
+        task_id = ace_client.submit_task(
+            prompt=prompt,
+            num_clips=1,
+            audio_duration=target_audio_duration,
+            format=ext,
+            style=section_style,
+            lyrics=lyrics,
+            bpm=source.bpm,
+            key=source.key,
+            seed=source.seed,
+            task_type="repaint",
+            src_audio_path=str(Path(source.file_path).resolve()),
+            repainting_start=repaint_start,
+            repainting_end=repaint_end,
+        )
+    except AceStepError as exc:
+        console.print(f"[red]Error submitting section {section.name!r}: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
+    poll_interval = 2.0
+    start = time.monotonic()
+    result: dict = {}
+    with console.status(f"[bold green]Generating {section.name}\u2026[/bold green]", spinner="dots") as status_bar:
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= poll_timeout:
+                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds on {section.name!r}.[/red]")
+                raise typer.Exit(code=1)
+            try:
+                result = ace_client.query_result(task_id)
+            except AceStepError as exc:
+                console.print(f"[red]Error polling status for {section.name!r}: {exc}[/red]")
+                raise typer.Exit(code=1)
+            job_status = result.get("status", "unknown")
+            status_bar.update(
+                f"[bold green]Generating {section.name}\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]"
+            )
+            if job_status == "completed":
+                break
+            if job_status == "failed":
+                error_msg = result.get("error", "unknown error")
+                console.print(f"[red]Generation failed on section {section.name!r}: {error_msg}[/red]")
+                raise typer.Exit(code=1)
+            time.sleep(poll_interval)
+
+    audio_urls: list[str] = result.get("audio_urls", [])
+    if not audio_urls:
+        console.print(f"[red]Error: ACE-Step returned no audio URLs for section {section.name!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        data = ace_client.download_audio(audio_urls[0])
+    except AceStepError as exc:
+        console.print(f"[red]Error downloading section {section.name!r}: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dest_path.write_bytes(data)
+
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"section duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
+
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        title=section_title,
+        format=ext,
+        duration=new_duration,
+        bpm=source.bpm,
+        key=source.key,
+        style_tags=section_style,
+        lyrics=lyrics,
+        vocal_language=source.vocal_language,
+        model=source.model,
+        seed=source.seed,
+        inference_steps=source.inference_steps,
+        parent_clip_id=source.id,
+        generation_mode="full-song",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record for {section.name!r}: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dur_str = f"{new_duration:.1f}s" if new_duration is not None else "unknown"
+    console.print(f"  [green]\u2713[/green] {section.name} \u2192 clip {new_id} ({dur_str})")
+    new_clip.id = new_id
+    return new_clip
+
+
+@app.command("full-song")
+def full_song(
+    clip_id: int = typer.Argument(..., help="ID of the seed clip to grow into a full song."),
+    target_duration: int = typer.Option(
+        210, "--target-duration", help="Target total length in seconds (default: 210, ~3.5 min)."
+    ),
+    auto: bool = typer.Option(False, "--auto", help="Skip confirmation prompts and build the entire song unattended."),
+    style: Optional[str] = typer.Option(
+        None,
+        "--style",
+        help="Base style override; replaces the seed's style tags as the anchor for every section.",
+    ),
+    lyrics: Optional[str] = typer.Option(None, "--lyrics", help="Optional lyrics applied to every generated section."),
+) -> None:
+    """Auto-extend a short seed clip into a full song (intro \u2192 verse \u2192 chorus \u2192 ... \u2192 outro).
+
+    Plans seven canonical sections sized to fit ``--target-duration``, then
+    chains seven ``extend`` calls \u2014 each generating one section with its own
+    style hint (intro is sparse, choruses are full, the outro fades). Every
+    intermediate section is registered as its own clip with
+    ``generation_mode='full-song'`` so the user can audit lineage or rewind to
+    any section.
+
+    Interactive mode (default) pauses for confirmation between sections so the
+    musician can stop early if a section goes off the rails; ``--auto`` runs
+    end-to-end without prompts.
+    """
+    if target_duration <= 0:
+        console.print(f"[red]Error: --target-duration must be positive, got {target_duration}.[/red]")
+        raise typer.Exit(code=1)
+
+    seed = get_clip(clip_id)
+    if seed is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    src_path = Path(seed.file_path)
+    if not src_path.exists():
+        console.print(f"[red]Error: seed file not found: {src_path}[/red]")
+        raise typer.Exit(code=1)
+
+    if seed.duration is None:
+        console.print(
+            f"[red]Error: clip {clip_id} has no duration metadata. Re-import the clip to detect duration.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        plan = plan_sections(seed_duration=seed.duration, target_duration=target_duration)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    _render_section_plan(seed, plan, target_duration)
+
+    config = load_config()
+    ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
+    clips_dir = get_workspace_path(seed.workspace_id)
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    current_source = seed
+    last_section_clip: Optional[Clip] = None
+    for i, section in enumerate(plan):
+        is_final = i == len(plan) - 1
+        new_clip = _generate_section(
+            source=current_source,
+            section_index=i + 1,
+            section_total=len(plan),
+            section=section,
+            base_style=style,
+            base_style_tags=seed.style_tags,
+            base_lyrics=lyrics,
+            is_final=is_final,
+            seed_title=seed.title,
+            ace_client=ace_client,
+            clips_dir=clips_dir,
+        )
+        last_section_clip = new_clip
+        current_source = new_clip
+
+        if not auto and not is_final:
+            next_section = plan[i + 1].name
+            cont = typer.confirm(
+                f"Section {section.name!r} complete. Continue to {next_section!r}?",
+                default=True,
+            )
+            if not cont:
+                console.print(f"[yellow]Stopped after section {i + 1}/{len(plan)} ({section.name!r}).[/yellow]")
+                console.print(f"[yellow]Partial song saved at: {new_clip.file_path}[/yellow]")
+                raise typer.Exit(code=0)
+
+    if last_section_clip is None:
+        console.print("[red]Error: no sections were generated.[/red]")
+        raise typer.Exit(code=1)
+    final_dur = f"{last_section_clip.duration:.1f}s" if last_section_clip.duration is not None else "unknown"
+    console.print("")
+    console.print(f"[bold green]\u2713 Full song complete[/bold green] \u2192 clip {last_section_clip.id}")
+    console.print(f"    Path:     {last_section_clip.file_path}")
+    console.print(f"    Duration: {final_dur} ({len(plan)} sections)")
 
 
 @app.command()

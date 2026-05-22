@@ -748,10 +748,12 @@ Automatically extends a short clip (~30-60s) into a complete song (~3-4 minutes)
 - Final output is a single assembled clip
 
 **Acceptance Criteria:**
-- [ ] Produces a clip of approximately the target duration
-- [ ] Song has audible structural variety (not just repetition)
-- [ ] Interactive mode pauses for confirmation between sections
-- [ ] `--auto` mode completes without user intervention
+- [x] Produces a clip of approximately the target duration
+- [x] Song has audible structural variety (not just repetition)
+- [x] Interactive mode pauses for confirmation between sections
+- [x] `--auto` mode completes without user intervention
+
+**Implementation note (US-6.7):** `acemusic full-song` is a thin orchestrator that chains seven `extend` (`task_type=repaint`) generations, one per canonical section (intro → verse → chorus → verse → chorus → bridge → outro). Section sizing lives in the pure-planning module `src/acemusic/song_structure.py` (`plan_sections`); each section is registered as its own clip with `generation_mode="full-song"` and `parent_clip_id` chained to the previous one, so users can audit the lineage or rewind. The style passed to each section is anchored to the seed's original `style_tags` (held stable across the chain) so prior section hints never compound into later prompts. `--auto` skips the per-section `typer.confirm`; interactive mode (default) lets the user stop early and keeps the partial chain. Mid-pipeline generation failures preserve all already-committed sections as partial progress.
 
 ---
 
