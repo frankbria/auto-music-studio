@@ -2227,7 +2227,9 @@ def full_song(
                 console.print(f"[yellow]Partial song saved at: {new_clip.file_path}[/yellow]")
                 raise typer.Exit(code=0)
 
-    assert last_section_clip is not None
+    if last_section_clip is None:
+        console.print("[red]Error: no sections were generated.[/red]")
+        raise typer.Exit(code=1)
     final_dur = f"{last_section_clip.duration:.1f}s" if last_section_clip.duration is not None else "unknown"
     console.print("")
     console.print(f"[bold green]\u2713 Full song complete[/bold green] \u2192 clip {last_section_clip.id}")
