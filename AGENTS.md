@@ -84,6 +84,13 @@ uv run acemusic workspace switch "My Album"           # set active workspace
 uv run acemusic workspace rename "My Album" "Debut"   # rename a workspace
 uv run acemusic workspace delete "Debut"              # delete (prompts if clips exist)
 uv run acemusic workspace delete "Debut" --force      # delete without confirmation
+
+# Export (US-7.1) — export a clip to disk in the chosen audio format
+uv run acemusic export 42                                              # default: WAV 48kHz/24-bit → ./<slug>.wav
+uv run acemusic export 42 --format wav32                               # 48kHz / 32-bit float WAV
+uv run acemusic export 42 --format flac                                # lossless FLAC
+uv run acemusic export 42 --format mp3                                 # 320 kbps MP3
+uv run acemusic export 42 --format flac --output /path/to/out.flac     # explicit destination path
 ```
 
 ## Architecture
