@@ -12,6 +12,10 @@ if TYPE_CHECKING:
 
 SUPPORTED_FORMATS: set[str] = {".wav", ".flac", ".mp3", ".ogg", ".aac", ".aiff"}
 
+# Output formats accepted by export_audio() (US-7.1). Distinct from SUPPORTED_FORMATS
+# above, which lists *input* file extensions accepted by `import`.
+EXPORT_FORMATS: tuple[str, ...] = ("wav", "wav32", "flac", "mp3")
+
 _PITCH_CLASSES: list[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
@@ -427,3 +431,49 @@ def combine_sample(
 
     combined.export(str(output_path), format=_path_format(output_path))
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Single-clip export (US-7.1)
+# ---------------------------------------------------------------------------
+
+
+def export_audio(source_path: str | Path, dest_path: str | Path, fmt: str) -> Path:
+    """Export a source audio file to ``dest_path`` in the requested format.
+
+    Format specs:
+        wav    48 kHz, 24-bit PCM (pcm_s24le)
+        wav32  48 kHz, 32-bit float PCM (pcm_f32le)
+        flac   Lossless FLAC at source sample rate
+        mp3    320 kbps CBR
+
+    Returns the destination path. Raises ValueError for unknown ``fmt``.
+    """
+    if fmt not in EXPORT_FORMATS:
+        raise ValueError(f"Unsupported export format: {fmt!r}. Expected one of {EXPORT_FORMATS}.")
+
+    from pydub import AudioSegment
+
+    source_path = Path(source_path)
+    dest_path = Path(dest_path)
+
+    audio = AudioSegment.from_file(str(source_path), format=_path_format(source_path))
+
+    if fmt == "wav":
+        audio.export(
+            str(dest_path),
+            format="wav",
+            parameters=["-acodec", "pcm_s24le", "-ar", "48000"],
+        )
+    elif fmt == "wav32":
+        audio.export(
+            str(dest_path),
+            format="wav",
+            parameters=["-acodec", "pcm_f32le", "-ar", "48000"],
+        )
+    elif fmt == "flac":
+        audio.export(str(dest_path), format="flac")
+    elif fmt == "mp3":
+        audio.export(str(dest_path), format="mp3", bitrate="320k")
+
+    return dest_path

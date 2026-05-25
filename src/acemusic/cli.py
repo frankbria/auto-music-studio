@@ -21,6 +21,7 @@ from rich.table import Table
 
 from acemusic import __version__
 from acemusic.audio import (
+    EXPORT_FORMATS,
     SAMPLE_ROLES,
     SUPPORTED_FORMATS,
     calculate_speed_multiplier,
@@ -29,6 +30,7 @@ from acemusic.audio import (
     crossfade_stitch,
     detect_bpm,
     detect_key,
+    export_audio,
     remaster_audio,
     time_stretch_audio,
 )
@@ -159,6 +161,7 @@ def main(
         "clips",
         "preset",
         "import",
+        "export",
         "crop",
         "speed",
         "stems",
@@ -1278,6 +1281,55 @@ def import_clip(
     console.print(f"    Duration: {duration_display}")
     console.print(f"    BPM:      {bpm_display}")
     console.print(f"    Key:      {key_display}")
+
+
+# ---------------------------------------------------------------------------
+# Export command (US-7.1)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="export")
+def export_cmd(
+    clip_id: int = typer.Argument(..., help="ID of the clip to export."),
+    format: str = typer.Option(
+        "wav",
+        "--format",
+        help=f"Output format: {', '.join(EXPORT_FORMATS)}.",
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", help="Output file path. Defaults to ./<slug>.<ext> in the current directory."
+    ),
+) -> None:
+    """Export a clip to a file in the chosen format (WAV/WAV32/FLAC/MP3)."""
+    if format not in EXPORT_FORMATS:
+        console.print(f"[red]Error: invalid --format {format!r}. Allowed values: {', '.join(EXPORT_FORMATS)}[/red]")
+        raise typer.Exit(code=1)
+
+    clip = get_clip(clip_id)
+    if clip is None:
+        console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    source = Path(clip.file_path)
+    if not source.exists():
+        console.print(f"[red]Error: source file not found: {source}[/red]")
+        raise typer.Exit(code=1)
+
+    if output is not None:
+        dest = output
+    else:
+        ext = "wav" if format in ("wav", "wav32") else format
+        slug = make_slug(clip.title) if clip.title else f"clip-{clip_id}"
+        dest = Path.cwd() / f"{slug}.{ext}"
+
+    try:
+        export_audio(source, dest, format)
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    size = dest.stat().st_size if dest.exists() else 0
+    console.print(f"  [green]✓[/green] Exported: {dest}  ({size} bytes)")
 
 
 # ---------------------------------------------------------------------------
