@@ -566,3 +566,140 @@ class TestWriteSampleMetadata:
         )
         data = json.loads(sidecar.read_text())
         assert data["source_clip_id"] is None
+
+
+class TestExportAudio:
+    """Tests for export_audio() — single-clip export with per-format quality specs (US-7.1)."""
+
+    def test_export_rejects_unknown_format(self, tmp_path):
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.xyz"
+        with pytest.raises(ValueError, match="Unsupported export format"):
+            export_audio(src, dest, "xyz")
+
+    def test_export_wav_real_roundtrip_is_48k_24bit(self, tmp_path, write_tone):
+        """Real pydub WAV export: source tone → exported WAV is 48kHz, 24-bit PCM.
+
+        Uses ffmpeg parameters for codec/rate control, so skip when ffmpeg is not
+        on PATH (CI runners without the system package).
+        """
+        import shutil
+        import wave
+
+        if shutil.which("ffmpeg") is None:
+            pytest.skip("ffmpeg not installed; required for codec parameter override")
+
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "tone.wav"
+        dest = tmp_path / "exported.wav"
+        write_tone(src, duration_s=0.5, sample_rate=44100)
+
+        export_audio(src, dest, "wav")
+
+        assert dest.exists()
+        with wave.open(str(dest), "rb") as wf:
+            assert wf.getframerate() == 48000
+            assert wf.getsampwidth() == 3  # 24-bit = 3 bytes
+
+    def test_export_flac_invokes_pydub_with_flac_format(self, tmp_path):
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.flac"
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            export_audio(src, dest, "flac")
+
+        mock_pydub.AudioSegment.from_file.assert_called_once_with(str(src), format="wav")
+        mock_seg.export.assert_called_once()
+        _, kwargs = mock_seg.export.call_args
+        assert kwargs["format"] == "flac"
+
+    def test_export_mp3_invokes_pydub_with_320k_bitrate(self, tmp_path):
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.mp3"
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            export_audio(src, dest, "mp3")
+
+        _, kwargs = mock_seg.export.call_args
+        assert kwargs["format"] == "mp3"
+        assert kwargs["bitrate"] == "320k"
+
+    def test_export_wav32_uses_float_codec_parameters(self, tmp_path):
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.wav"
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            export_audio(src, dest, "wav32")
+
+        _, kwargs = mock_seg.export.call_args
+        assert kwargs["format"] == "wav"
+        params = kwargs.get("parameters", [])
+        assert "pcm_f32le" in params
+        assert "48000" in params
+
+    def test_export_uses_source_extension_as_format_hint(self, tmp_path):
+        """The from_file format= hint is derived from the source file extension."""
+        from acemusic.audio import export_audio
+
+        src = tmp_path / "in.mp3"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.flac"
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            export_audio(src, dest, "flac")
+
+        mock_pydub.AudioSegment.from_file.assert_called_once_with(str(src), format="mp3")
+
+    def test_export_formats_constant_lists_all_four_formats(self):
+        from acemusic.audio import EXPORT_FORMATS
+
+        assert set(EXPORT_FORMATS) == {"wav", "wav32", "flac", "mp3"}
+
+    def test_export_unhandled_branch_raises_assertion(self, tmp_path, monkeypatch):
+        """If EXPORT_FORMATS is extended without a matching if/elif branch, the function
+        should fail loudly instead of silently returning the dest path."""
+        from acemusic import audio as _audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.xyz"
+
+        # Inject a phantom format that the if/elif chain doesn't handle.
+        monkeypatch.setattr(_audio, "EXPORT_FORMATS", _audio.EXPORT_FORMATS + ("opus",))
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            with pytest.raises(NotImplementedError, match="Unhandled export format"):
+                _audio.export_audio(src, dest, "opus")
