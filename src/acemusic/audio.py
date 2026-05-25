@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 SUPPORTED_FORMATS: set[str] = {".wav", ".flac", ".mp3", ".ogg", ".aac", ".aiff"}
 
-# US-7.1 export targets; distinct from input-side SUPPORTED_FORMATS above.
+# Export-side formats; distinct from input-side SUPPORTED_FORMATS above.
 EXPORT_FORMATS: tuple[str, ...] = ("wav", "wav32", "flac", "mp3")
 
 _PITCH_CLASSES: list[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
