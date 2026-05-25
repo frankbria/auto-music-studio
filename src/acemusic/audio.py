@@ -476,7 +476,6 @@ def export_audio(source_path: str | Path, dest_path: str | Path, fmt: str) -> Pa
     elif fmt == "mp3":
         audio.export(str(dest_path), format="mp3", bitrate="320k")
     else:
-        # Guard against EXPORT_FORMATS being extended without a matching branch.
         raise AssertionError(f"Unhandled export format: {fmt!r}")
 
     return dest_path
