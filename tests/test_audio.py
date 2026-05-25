@@ -701,5 +701,5 @@ class TestExportAudio:
         mock_pydub.AudioSegment.from_file.return_value = mock_seg
 
         with patch.dict("sys.modules", {"pydub": mock_pydub}):
-            with pytest.raises(AssertionError, match="Unhandled export format"):
+            with pytest.raises(NotImplementedError, match="Unhandled export format"):
                 _audio.export_audio(src, dest, "opus")

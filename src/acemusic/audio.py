@@ -12,8 +12,7 @@ if TYPE_CHECKING:
 
 SUPPORTED_FORMATS: set[str] = {".wav", ".flac", ".mp3", ".ogg", ".aac", ".aiff"}
 
-# Output formats accepted by export_audio() (US-7.1). Distinct from SUPPORTED_FORMATS
-# above, which lists *input* file extensions accepted by `import`.
+# US-7.1 export targets; distinct from input-side SUPPORTED_FORMATS above.
 EXPORT_FORMATS: tuple[str, ...] = ("wav", "wav32", "flac", "mp3")
 
 _PITCH_CLASSES: list[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -476,6 +475,6 @@ def export_audio(source_path: str | Path, dest_path: str | Path, fmt: str) -> Pa
     elif fmt == "mp3":
         audio.export(str(dest_path), format="mp3", bitrate="320k")
     else:
-        raise AssertionError(f"Unhandled export format: {fmt!r}")
+        raise NotImplementedError(f"Unhandled export format: {fmt!r}")
 
     return dest_path

@@ -80,6 +80,39 @@ class TestExportCommand:
         assert result.exit_code == 0, result.output
         assert captured["fmt"] == "wav"
 
+    def test_default_filename_falls_back_to_clip_id_when_title_is_none(
+        self, isolated_db, write_tone, tmp_path, monkeypatch
+    ):
+        """When the clip has no title, the default output filename uses `clip-<id>` instead."""
+        from acemusic.db import create_clip
+        from acemusic.models import Clip
+        from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+        ensure_default_workspace()
+        ws = get_active_workspace()
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        source = clips_dir / "untitled.wav"
+        write_tone(source, duration_s=0.5)
+
+        clip_id = create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(source),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                title=None,
+                format="wav",
+                duration=0.5,
+            )
+        )
+
+        monkeypatch.chdir(tmp_path)
+        with patch("acemusic.cli.export_audio", side_effect=lambda s, d, f: Path(d).write_bytes(b"x")):
+            result = runner.invoke(app, ["export", str(clip_id)])
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / f"clip-{clip_id}.wav").exists()
+
     def test_default_output_path_uses_slugified_clip_title(self, workspace_with_clip, tmp_path, monkeypatch):
         _, clip_id, _ = workspace_with_clip
         monkeypatch.chdir(tmp_path)
