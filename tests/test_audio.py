@@ -650,7 +650,6 @@ class TestExportAudio:
         dest = tmp_path / "out.wav"
 
         mock_seg = MagicMock()
-        mock_seg.set_frame_rate.return_value = mock_seg
         mock_pydub = MagicMock()
         mock_pydub.AudioSegment.from_file.return_value = mock_seg
 

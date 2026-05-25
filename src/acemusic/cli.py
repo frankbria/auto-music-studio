@@ -1331,7 +1331,7 @@ def export_cmd(
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    size = dest.stat().st_size if dest.exists() else 0
+    size = dest.stat().st_size
     console.print(f"  [green]✓[/green] Exported: {dest}  ({size} bytes)")
 
 
