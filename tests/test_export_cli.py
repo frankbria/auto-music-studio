@@ -154,6 +154,17 @@ class TestExportCommand:
         assert "my-cool-track.wav" in flattened
         assert "Exported" in flattened
 
+    def test_output_creates_missing_parent_directories(self, workspace_with_clip, tmp_path):
+        """When --output points into a non-existent directory, the parent is created."""
+        _, clip_id, _ = workspace_with_clip
+        dest = tmp_path / "new" / "nested" / "out.flac"
+
+        with patch("acemusic.cli.export_audio", side_effect=lambda s, d, f: Path(d).write_bytes(b"x")):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "flac", "--output", str(dest)])
+
+        assert result.exit_code == 0, result.output
+        assert dest.parent.is_dir()
+
     def test_export_audio_failure_exits_one(self, workspace_with_clip, tmp_path, monkeypatch):
         _, clip_id, _ = workspace_with_clip
         monkeypatch.chdir(tmp_path)

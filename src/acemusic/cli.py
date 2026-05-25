@@ -1322,6 +1322,9 @@ def export_cmd(
         slug = make_slug(clip.title) if clip.title else f"clip-{clip_id}"
         dest = Path.cwd() / f"{slug}.{ext}"
 
+    # Ensure the destination directory exists so pydub doesn't error opaquely.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     try:
         export_audio(source, dest, format)
     except Exception as exc:

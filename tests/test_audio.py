@@ -684,3 +684,23 @@ class TestExportAudio:
         from acemusic.audio import EXPORT_FORMATS
 
         assert set(EXPORT_FORMATS) == {"wav", "wav32", "flac", "mp3"}
+
+    def test_export_unhandled_branch_raises_assertion(self, tmp_path, monkeypatch):
+        """If EXPORT_FORMATS is extended without a matching if/elif branch, the function
+        should fail loudly instead of silently returning the dest path."""
+        from acemusic import audio as _audio
+
+        src = tmp_path / "in.wav"
+        src.write_bytes(b"fake")
+        dest = tmp_path / "out.xyz"
+
+        # Inject a phantom format that the if/elif chain doesn't handle.
+        monkeypatch.setattr(_audio, "EXPORT_FORMATS", _audio.EXPORT_FORMATS + ("opus",))
+
+        mock_seg = MagicMock()
+        mock_pydub = MagicMock()
+        mock_pydub.AudioSegment.from_file.return_value = mock_seg
+
+        with patch.dict("sys.modules", {"pydub": mock_pydub}):
+            with pytest.raises(AssertionError, match="Unhandled export format"):
+                _audio.export_audio(src, dest, "opus")
