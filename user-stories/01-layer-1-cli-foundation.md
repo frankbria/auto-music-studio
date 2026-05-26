@@ -825,11 +825,11 @@ Creates a ZIP archive containing audio stems, MIDI files, project metadata JSON,
 - MIDI is auto-extracted if not already done
 
 **Acceptance Criteria:**
-- [ ] ZIP contains all expected files in the correct directory structure
-- [ ] project.json is valid JSON with all metadata fields populated
-- [ ] MIDI files are Type 1 with correct channel assignments
-- [ ] Stems are time-aligned and equal length
-- [ ] Full mix is included alongside stems
+- [x] ZIP contains all expected files in the correct directory structure
+- [x] project.json is valid JSON with all metadata fields populated
+- [x] MIDI files are Type 1 with correct channel assignments
+- [x] Stems are time-aligned and equal length
+- [x] Full mix is included alongside stems
 
 ---
 
