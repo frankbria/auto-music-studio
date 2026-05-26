@@ -533,22 +533,17 @@ class TestBuildDawBundle:
             )
 
     def test_non_wav_source_is_transcoded_for_full_mix(self, workspace, tmp_path):
-        """A non-WAV source clip is transcoded (not byte-copied) into full_mix.wav."""
-        import wave
+        """A non-WAV source clip goes through export_audio (transcode), not a verbatim copy.
 
-        import numpy as np
-        import soundfile as sf
-
-        from acemusic.audio import export_audio
+        export_audio is mocked (it shells out to ffmpeg, which CI lacks) — the
+        point is to prove the non-WAV branch is taken with the right arguments.
+        """
         from acemusic.db import create_clip, get_clip
         from acemusic.workspace import get_workspace_path
 
         clips_dir = get_workspace_path(workspace.id)
-        wav_seed = clips_dir / "tone-src.wav"
-        sr = 44100
-        sf.write(str(wav_seed), np.zeros((sr, 2), dtype=np.float32), sr)
         flac_src = clips_dir / "song.flac"
-        export_audio(wav_seed, flac_src, "flac")
+        flac_src.write_bytes(b"not-a-real-flac")  # content irrelevant: export_audio is mocked
 
         clip_id = create_clip(
             Clip(
@@ -561,20 +556,28 @@ class TestBuildDawBundle:
             )
         )
         clip = get_clip(clip_id)
-        out = build_daw_bundle(
-            clip,
-            output_path=tmp_path / "flac.zip",
-            stems_client_factory=_make_stems_client_factory(),
-            midi_client_factory=_make_midi_client_factory(),
-        )
+
+        def fake_transcode(src, dest, fmt):
+            _write_real_wav(Path(dest))
+            return Path(dest)
+
+        with patch("acemusic.daw_export.export_audio", side_effect=fake_transcode) as mock_exp:
+            out = build_daw_bundle(
+                clip,
+                output_path=tmp_path / "flac.zip",
+                stems_client_factory=_make_stems_client_factory(),
+                midi_client_factory=_make_midi_client_factory(),
+            )
+
+        # Transcode branch taken for the FLAC source, targeting full_mix.wav.
+        assert mock_exp.call_count == 1
+        called_src, called_dest, called_fmt = mock_exp.call_args[0]
+        assert Path(called_src) == flac_src
+        assert Path(called_dest).name == "full_mix.wav"
+        assert called_fmt == "wav"
         with zipfile.ZipFile(out) as zf:
             root = zf.namelist()[0].split("/", 1)[0]
-            raw = zf.read(f"{root}/audio/full_mix.wav")
-        fm = tmp_path / "fm.wav"
-        fm.write_bytes(raw)
-        # A real WAV is readable by the stdlib wave module; a renamed FLAC is not.
-        with wave.open(str(fm)) as w:
-            assert w.getnframes() > 0
+            assert f"{root}/audio/full_mix.wav" in zf.namelist()
 
     def test_reuse_existing_false_forces_regeneration(self, full_mix_clip, tmp_path):
         """reuse_existing=False ignores existing child clips and re-invokes the clients."""
