@@ -504,7 +504,7 @@ class TestBuildDawBundle:
         """A stems factory returning only 3 of 4 stems must fail the export."""
         from acemusic.db import get_clip
 
-        ws, clip_id, _ = full_mix_clip
+        _, clip_id, _ = full_mix_clip
         clip = get_clip(clip_id)
 
         instance = MagicMock()

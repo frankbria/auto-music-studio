@@ -35,8 +35,6 @@ from acemusic.utils import get_duration, make_slug
 
 CANONICAL_STEMS: tuple[str, ...] = ("vocals", "drums", "bass", "other")
 
-# A minimal valid baseline 1x1 JPEG, so the bundle always ships an importable
-# artwork file without pulling in an image-encoding dependency.
 _PLACEHOLDER_JPEG: bytes = (
     b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
     b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14"
