@@ -36,6 +36,7 @@ from acemusic.audio import (
 )
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
+from acemusic.daw_export import build_daw_bundle, project_slug
 from acemusic.db import (
     create_clip,
     create_preset,
@@ -1294,15 +1295,16 @@ def export_cmd(
     format: str = typer.Option(
         "wav",
         "--format",
-        help=f"Output format: {', '.join(EXPORT_FORMATS)}.",
+        help=f"Output format: {', '.join(EXPORT_FORMATS)}, daw.",
     ),
     output: Optional[Path] = typer.Option(
         None, "--output", help="Output file path. Defaults to ./<slug>.<ext> in the current directory."
     ),
 ) -> None:
-    """Export a clip to a file in the chosen format (WAV/WAV32/FLAC/MP3)."""
-    if format not in EXPORT_FORMATS:
-        console.print(f"[red]Error: invalid --format {format!r}. Allowed values: {', '.join(EXPORT_FORMATS)}[/red]")
+    """Export a clip to a file (WAV/WAV32/FLAC/MP3) or a DAW bundle ZIP (daw)."""
+    allowed = (*EXPORT_FORMATS, "daw")
+    if format not in allowed:
+        console.print(f"[red]Error: invalid --format {format!r}. Allowed values: {', '.join(allowed)}[/red]")
         raise typer.Exit(code=1)
 
     clip = get_clip(clip_id)
@@ -1314,6 +1316,22 @@ def export_cmd(
     if not source.exists():
         console.print(f"[red]Error: source file not found: {source}[/red]")
         raise typer.Exit(code=1)
+
+    if format == "daw":
+        dest = output if output is not None else Path.cwd() / f"{project_slug(clip)}_Export.zip"
+        try:
+            build_daw_bundle(
+                clip,
+                output_path=dest,
+                stems_client_factory=StemsClient,
+                midi_client_factory=MidiClient,
+            )
+        except Exception as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(code=1)
+        size = dest.stat().st_size
+        console.print(f"  [green]✓[/green] Exported DAW bundle: {dest} ({size} bytes)")
+        return
 
     if output is not None:
         dest = output
