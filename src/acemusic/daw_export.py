@@ -22,6 +22,7 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -32,11 +33,10 @@ from acemusic.models import Clip
 from acemusic.stems_client import STEM_LABELS, StemsClient
 from acemusic.utils import get_duration, make_slug
 
-# Canonical stem slots in the bundle (file basenames under audio/).
 CANONICAL_STEMS: tuple[str, ...] = ("vocals", "drums", "bass", "other")
 
-# Minimal valid baseline 1x1 black JPEG. Used so the bundle always ships a
-# real, importable artwork file without adding an image-encoding dependency.
+# A minimal valid baseline 1x1 JPEG, so the bundle always ships an importable
+# artwork file without pulling in an image-encoding dependency.
 _PLACEHOLDER_JPEG: bytes = (
     b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
     b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14"
@@ -64,11 +64,6 @@ _PLACEHOLDER_JPEG: bytes = (
     b"\xe7\xe8\xe9\xea\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xff\xda\x00\x0c\x03\x01"
     b"\x00\x02\x11\x03\x11\x00?\x00\xf9\xfe\x8a(\xa0\x0f\xff\xd9"
 )
-
-
-# ---------------------------------------------------------------------------
-# Metadata dataclasses
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -142,11 +137,6 @@ class ProjectMetadata:
         return json.dumps(self.to_dict(), indent=2)
 
 
-# ---------------------------------------------------------------------------
-# Artwork
-# ---------------------------------------------------------------------------
-
-
 def make_placeholder_artwork(path: Path) -> Path:
     """Write a minimal valid JPEG to ``path`` and return it.
 
@@ -157,11 +147,6 @@ def make_placeholder_artwork(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_PLACEHOLDER_JPEG)
     return path
-
-
-# ---------------------------------------------------------------------------
-# Stem / MIDI resolution
-# ---------------------------------------------------------------------------
 
 
 def _existing_children(clip: Clip, generation_mode: str) -> dict[str, Clip]:
@@ -212,7 +197,6 @@ def _resolve_stems(
     sample_rate = getattr(client, "model_samplerate", 44100)
     stem_paths = client.save_stems(stem_data, out_dir, base_name, sample_rate=sample_rate, output_format="wav")
 
-    # Register each stem as a child clip so future exports can reuse them.
     if clip.id is not None:
         for label, stem_path in stem_paths.items():
             create_clip(
@@ -285,22 +269,28 @@ def _resolve_midi(
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
-
     return datetime.now(timezone.utc).isoformat()
 
 
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
-
-
-def _project_slug(clip: Clip) -> str:
+def project_slug(clip: Clip) -> str:
+    """Filename-safe slug for the bundle root and default output name."""
     if clip.title:
         slug = make_slug(clip.title)
         if slug:
             return slug
     return f"clip-{clip.id}"
+
+
+def _copy_as_wav(src: Path | str, dest: Path) -> None:
+    """Place ``src`` at ``dest`` as a real WAV.
+
+    Reused stems/clips may be FLAC or another format; copying those bytes into a
+    ``.wav`` path would mislabel them, so non-WAV sources are transcoded.
+    """
+    if Path(src).suffix.lower() == ".wav":
+        shutil.copyfile(src, dest)
+    else:
+        export_audio(src, dest, "wav")
 
 
 def build_daw_bundle(
@@ -317,11 +307,16 @@ def build_daw_bundle(
     four MIDI files, assembles the canonical directory tree, writes
     ``project.json`` and a placeholder ``artwork.jpg``, then packages everything
     into a ZIP rooted at ``<Slug>_Export/``.
+
+    Raises ``ValueError`` if resolution yields an incomplete set of stems or MIDI
+    files, rather than shipping a partial bundle. ``time_signature`` is always
+    null because clip records do not persist meter (deferred to US-4.2); bundled
+    MIDI therefore uses ``save_midi``'s default 4/4 map.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    slug = _project_slug(clip)
+    slug = project_slug(clip)
     root_name = f"{slug}_Export"
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -332,15 +327,9 @@ def build_daw_bundle(
         audio_dir.mkdir(parents=True, exist_ok=True)
         midi_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve stems and MIDI (reusing persisted child clips, else generating
-        # into the stems/ and midi/ dirs beside the source), then copy into the
-        # bundle under canonical names.
         stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
         midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
 
-        # The bundle advertises a complete set of stems and MIDI files. If
-        # resolution produced an incomplete set (e.g. MIDI extraction emitted no
-        # notes for a part), fail loudly rather than shipping a partial bundle.
         missing_stems = [s for s in CANONICAL_STEMS if not (stem_paths.get(s) and Path(stem_paths[s]).exists())]
         missing_midi = [m for m in MIDI_OUTPUT_LABELS if not (midi_paths.get(m) and Path(midi_paths[m]).exists())]
         if missing_stems or missing_midi:
@@ -354,25 +343,16 @@ def build_daw_bundle(
                 "Re-run stem separation / MIDI extraction or check the source clip."
             )
 
-        # Full mix: copy WAV sources verbatim; transcode anything else to WAV so
-        # the bundle's full_mix.wav is always a real WAV file.
-        full_mix_dest = audio_dir / "full_mix.wav"
-        if Path(clip.file_path).suffix.lower() == ".wav":
-            shutil.copyfile(clip.file_path, full_mix_dest)
-        else:
-            export_audio(clip.file_path, full_mix_dest, "wav")
+        _copy_as_wav(clip.file_path, audio_dir / "full_mix.wav")
 
-        # Stems → canonical names (vocals/drums/bass/other).
         stem_refs: list[StemReference] = []
         for label in CANONICAL_STEMS:
             src = stem_paths.get(label)
             if src is None or not Path(src).exists():
                 continue
-            dest = audio_dir / f"{label}.wav"
-            shutil.copyfile(src, dest)
+            _copy_as_wav(src, audio_dir / f"{label}.wav")
             stem_refs.append(StemReference(name=label, file=f"audio/{label}.wav"))
 
-        # MIDI → canonical names with channel assignments.
         midi_refs: list[MidiReference] = []
         for label in MIDI_OUTPUT_LABELS:
             src = midi_paths.get(label)
@@ -386,9 +366,6 @@ def build_daw_bundle(
             project_name=slug,
             bpm=clip.bpm,
             key=clip.key,
-            # Clip records do not persist a time signature (meter is captured on
-            # presets / future metadata storage, US-4.2), so this is always null
-            # for now and the bundled MIDI uses save_midi's default 4/4 map.
             time_signature=None,
             duration_seconds=clip.duration,
             stems=stem_refs,
@@ -403,7 +380,6 @@ def build_daw_bundle(
 
         make_placeholder_artwork(tree / "artwork.jpg")
 
-        # Package the tree into a ZIP rooted at <Slug>_Export/.
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for path in sorted(tree.rglob("*")):
                 if path.is_file():

@@ -36,7 +36,7 @@ from acemusic.audio import (
 )
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
-from acemusic.daw_export import build_daw_bundle
+from acemusic.daw_export import build_daw_bundle, project_slug
 from acemusic.db import (
     create_clip,
     create_preset,
@@ -1318,11 +1318,7 @@ def export_cmd(
         raise typer.Exit(code=1)
 
     if format == "daw":
-        slug = make_slug(clip.title) if clip.title else f"clip-{clip_id}"
-        if not slug:
-            slug = f"clip-{clip_id}"
-        dest = output if output is not None else Path.cwd() / f"{slug}_Export.zip"
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest = output if output is not None else Path.cwd() / f"{project_slug(clip)}_Export.zip"
         try:
             build_daw_bundle(
                 clip,
@@ -1334,7 +1330,7 @@ def export_cmd(
             console.print(f"[red]Error: {exc}[/red]")
             raise typer.Exit(code=1)
         size = dest.stat().st_size
-        console.print(f"  [green]✓[/green] Exported DAW bundle: {dest}  ({size} bytes)")
+        console.print(f"  [green]✓[/green] Exported DAW bundle: {dest} ({size} bytes)")
         return
 
     if output is not None:

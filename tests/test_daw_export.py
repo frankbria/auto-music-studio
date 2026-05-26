@@ -34,11 +34,6 @@ from acemusic.stems_client import STEM_LABELS
 runner = CliRunner()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
     import acemusic.db as _db
@@ -85,10 +80,6 @@ def full_mix_clip(workspace, write_tone):
     clip_id = create_clip(clip)
     return workspace, clip_id, src
 
-
-# ---------------------------------------------------------------------------
-# Client mock helpers
-# ---------------------------------------------------------------------------
 
 # Stem-label aliasing: build_daw_bundle maps the demucs labels onto the canonical
 # bundle slots, so the writer just needs to emit one wav per STEM_LABEL.
@@ -144,11 +135,6 @@ def _make_midi_client_factory():
     factory = MagicMock(return_value=instance)
     factory.instance = instance
     return factory
-
-
-# ---------------------------------------------------------------------------
-# Dataclass unit tests
-# ---------------------------------------------------------------------------
 
 
 class TestDataclasses:
@@ -222,10 +208,6 @@ class TestPlaceholderArtwork:
         assert data[:2] == b"\xff\xd8"  # JPEG SOI magic
         assert data[-2:] == b"\xff\xd9"  # JPEG EOI marker
 
-
-# ---------------------------------------------------------------------------
-# build_daw_bundle orchestration
-# ---------------------------------------------------------------------------
 
 EXPECTED_FILES = {
     "audio/full_mix.wav",
@@ -518,10 +500,132 @@ class TestBuildDawBundle:
                 midi_client_factory=midi_factory,
             )
 
+    def test_incomplete_stems_raises_instead_of_partial_bundle(self, full_mix_clip, tmp_path):
+        """A stems factory returning only 3 of 4 stems must fail the export."""
+        from acemusic.db import get_clip
 
-# ---------------------------------------------------------------------------
-# CLI integration
-# ---------------------------------------------------------------------------
+        ws, clip_id, _ = full_mix_clip
+        clip = get_clip(clip_id)
+
+        instance = MagicMock()
+        instance.model_samplerate = 44100
+        instance.separate.return_value = {label: MagicMock() for label in STEM_LABELS}
+
+        def _save_three(stems, out_dir, base, **kw):
+            out_dir = Path(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            paths = {}
+            for label in ("drums", "bass", "other"):  # 'vocals' omitted
+                p = out_dir / f"{base}-{label}.wav"
+                _write_real_wav(p)
+                paths[label] = p
+            return paths
+
+        instance.save_stems.side_effect = _save_three
+        stems_factory = MagicMock(return_value=instance)
+
+        with pytest.raises(ValueError, match="vocals"):
+            build_daw_bundle(
+                clip,
+                output_path=tmp_path / "partial.zip",
+                stems_client_factory=stems_factory,
+                midi_client_factory=_make_midi_client_factory(),
+            )
+
+    def test_non_wav_source_is_transcoded_for_full_mix(self, workspace, tmp_path):
+        """A non-WAV source clip is transcoded (not byte-copied) into full_mix.wav."""
+        import wave
+
+        import numpy as np
+        import soundfile as sf
+
+        from acemusic.audio import export_audio
+        from acemusic.db import create_clip, get_clip
+        from acemusic.workspace import get_workspace_path
+
+        clips_dir = get_workspace_path(workspace.id)
+        wav_seed = clips_dir / "tone-src.wav"
+        sr = 44100
+        sf.write(str(wav_seed), np.zeros((sr, 2), dtype=np.float32), sr)
+        flac_src = clips_dir / "song.flac"
+        export_audio(wav_seed, flac_src, "flac")
+
+        clip_id = create_clip(
+            Clip(
+                workspace_id=workspace.id,
+                file_path=str(flac_src),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                title="Flac Song",
+                format="flac",
+                duration=1.0,
+            )
+        )
+        clip = get_clip(clip_id)
+        out = build_daw_bundle(
+            clip,
+            output_path=tmp_path / "flac.zip",
+            stems_client_factory=_make_stems_client_factory(),
+            midi_client_factory=_make_midi_client_factory(),
+        )
+        with zipfile.ZipFile(out) as zf:
+            root = zf.namelist()[0].split("/", 1)[0]
+            raw = zf.read(f"{root}/audio/full_mix.wav")
+        fm = tmp_path / "fm.wav"
+        fm.write_bytes(raw)
+        # A real WAV is readable by the stdlib wave module; a renamed FLAC is not.
+        with wave.open(str(fm)) as w:
+            assert w.getnframes() > 0
+
+    def test_reuse_existing_false_forces_regeneration(self, full_mix_clip, tmp_path):
+        """reuse_existing=False ignores existing child clips and re-invokes the clients."""
+        from acemusic.db import create_clip, get_clip
+        from acemusic.midi_client import MidiClient
+        from acemusic.workspace import get_workspace_path
+
+        ws, clip_id, _ = full_mix_clip
+        clips_dir = get_workspace_path(ws.id)
+
+        for label in STEM_LABELS:
+            p = clips_dir / f"stem-{label}.wav"
+            _write_real_wav(p)
+            create_clip(
+                Clip(
+                    workspace_id=ws.id,
+                    file_path=str(p),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    title=label,
+                    format="wav",
+                    parent_clip_id=clip_id,
+                    generation_mode="stems",
+                )
+            )
+        real = MidiClient()
+        for label, p in real.save_midi(
+            {lbl: [(0.0, 1.0, 60, 80)] for lbl in MIDI_OUTPUT_LABELS}, clips_dir, "seed"
+        ).items():
+            create_clip(
+                Clip(
+                    workspace_id=ws.id,
+                    file_path=str(p),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    title=f"midi-{label}",
+                    format="mid",
+                    parent_clip_id=clip_id,
+                    generation_mode="midi",
+                )
+            )
+
+        stems_factory = _make_stems_client_factory()
+        midi_factory = _make_midi_client_factory()
+        build_daw_bundle(
+            get_clip(clip_id),
+            output_path=tmp_path / "regen.zip",
+            stems_client_factory=stems_factory,
+            midi_client_factory=midi_factory,
+            reuse_existing=False,
+        )
+        stems_factory.instance.separate.assert_called_once()
+        midi_factory.instance.extract.assert_called_once()
 
 
 class TestExportDawCli:
