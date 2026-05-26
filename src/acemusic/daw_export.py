@@ -345,19 +345,12 @@ def build_daw_bundle(
 
         stem_refs: list[StemReference] = []
         for label in CANONICAL_STEMS:
-            src = stem_paths.get(label)
-            if src is None or not Path(src).exists():
-                continue
-            _copy_as_wav(src, audio_dir / f"{label}.wav")
+            _copy_as_wav(stem_paths[label], audio_dir / f"{label}.wav")
             stem_refs.append(StemReference(name=label, file=f"audio/{label}.wav"))
 
         midi_refs: list[MidiReference] = []
         for label in MIDI_OUTPUT_LABELS:
-            src = midi_paths.get(label)
-            if src is None or not Path(src).exists():
-                continue
-            dest = midi_dir / f"{label}.mid"
-            shutil.copyfile(src, dest)
+            shutil.copyfile(midi_paths[label], midi_dir / f"{label}.mid")
             midi_refs.append(MidiReference(name=label, file=f"midi/{label}.mid", channel=CHANNEL_MAP[label]))
 
         metadata = ProjectMetadata(
