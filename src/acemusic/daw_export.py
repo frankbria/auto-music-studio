@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from acemusic.audio import export_audio
 from acemusic.db import create_clip, list_clips
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS, MidiClient
 from acemusic.models import Clip
@@ -177,13 +178,16 @@ def _existing_children(clip: Clip, generation_mode: str) -> dict[str, Clip]:
 
 def _resolve_stems(
     clip: Clip,
-    work_dir: Path,
     stems_client_factory: Callable[[], StemsClient],
     reuse_existing: bool,
 ) -> dict[str, Path]:
     """Resolve the four stem files, reusing existing child clips when possible.
 
     Returns a dict keyed by demucs stem label (``STEM_LABELS``) → file path.
+
+    When stems must be generated, they are written to a persistent ``stems/``
+    directory beside the source clip (matching the ``stems`` CLI command), so
+    the registered child clips remain valid for reuse by later exports.
     """
     if reuse_existing:
         existing = _existing_children(clip, "stems")
@@ -195,11 +199,13 @@ def _resolve_stems(
         if len(reused) == len(STEM_LABELS):
             return reused
 
+    out_dir = Path(clip.file_path).parent / "stems"
+    out_dir.mkdir(parents=True, exist_ok=True)
     client = stems_client_factory()
     stem_data = client.separate(clip.file_path)
     base_name = Path(clip.file_path).stem
     sample_rate = getattr(client, "model_samplerate", 44100)
-    stem_paths = client.save_stems(stem_data, work_dir, base_name, sample_rate=sample_rate, output_format="wav")
+    stem_paths = client.save_stems(stem_data, out_dir, base_name, sample_rate=sample_rate, output_format="wav")
 
     # Register each stem as a child clip so future exports can reuse them.
     if clip.id is not None:
@@ -223,13 +229,16 @@ def _resolve_stems(
 
 def _resolve_midi(
     clip: Clip,
-    work_dir: Path,
     midi_client_factory: Callable[[], MidiClient],
     reuse_existing: bool,
 ) -> dict[str, Path]:
     """Resolve the four MIDI files, reusing existing child clips when possible.
 
     Returns a dict keyed by MIDI label (``MIDI_OUTPUT_LABELS``) → file path.
+
+    When MIDI must be generated, it is written to a persistent ``midi/``
+    directory beside the source clip (matching the ``midi`` CLI command), so the
+    registered child clips remain valid for reuse by later exports.
     """
     if reuse_existing:
         existing = _existing_children(clip, "midi")
@@ -241,11 +250,13 @@ def _resolve_midi(
         if len(reused) == len(MIDI_OUTPUT_LABELS):
             return reused
 
+    out_dir = Path(clip.file_path).parent / "midi"
+    out_dir.mkdir(parents=True, exist_ok=True)
     client = midi_client_factory()
     extracted = client.extract(clip.file_path)
     base_name = Path(clip.file_path).stem
     tempo = float(clip.bpm) if clip.bpm else 120.0
-    midi_paths = client.save_midi(extracted, work_dir, base_name, bpm=tempo)
+    midi_paths = client.save_midi(extracted, out_dir, base_name, bpm=tempo)
 
     if clip.id is not None:
         for label, midi_path in midi_paths.items():
@@ -316,15 +327,19 @@ def build_daw_bundle(
         audio_dir.mkdir(parents=True, exist_ok=True)
         midi_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve stems and MIDI into a scratch dir, then copy to canonical names.
-        scratch = work / "_scratch"
-        scratch.mkdir(parents=True, exist_ok=True)
+        # Resolve stems and MIDI (reusing persisted child clips, else generating
+        # into the stems/ and midi/ dirs beside the source), then copy into the
+        # bundle under canonical names.
+        stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
+        midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
 
-        stem_paths = _resolve_stems(clip, scratch, stems_client_factory, reuse_existing)
-        midi_paths = _resolve_midi(clip, scratch, midi_client_factory, reuse_existing)
-
-        # Full mix
-        shutil.copyfile(clip.file_path, audio_dir / "full_mix.wav")
+        # Full mix: copy WAV sources verbatim; transcode anything else to WAV so
+        # the bundle's full_mix.wav is always a real WAV file.
+        full_mix_dest = audio_dir / "full_mix.wav"
+        if Path(clip.file_path).suffix.lower() == ".wav":
+            shutil.copyfile(clip.file_path, full_mix_dest)
+        else:
+            export_audio(clip.file_path, full_mix_dest, "wav")
 
         # Stems → canonical names (vocals/drums/bass/other).
         stem_refs: list[StemReference] = []

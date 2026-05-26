@@ -403,6 +403,54 @@ class TestBuildDawBundle:
         stems_factory.instance.separate.assert_called_once()
         midi_factory.instance.extract.assert_called_once()
 
+    def test_generated_children_persist_and_second_export_reuses(self, full_mix_clip, tmp_path):
+        """Generated stems/MIDI must persist on disk so a later export reuses them.
+
+        Regression: generating into an ephemeral temp dir left dangling child-clip
+        records and forced regeneration on every export.
+        """
+        from acemusic.db import get_clip, list_clips
+
+        ws, clip_id, _ = full_mix_clip
+        clip = get_clip(clip_id)
+
+        # First export generates stems + MIDI.
+        first_stems = _make_stems_client_factory()
+        first_midi = _make_midi_client_factory()
+        build_daw_bundle(
+            clip,
+            output_path=tmp_path / "first.zip",
+            stems_client_factory=first_stems,
+            midi_client_factory=first_midi,
+        )
+        first_stems.instance.separate.assert_called_once()
+        first_midi.instance.extract.assert_called_once()
+
+        # Registered child clips must point at files that still exist on disk.
+        children = [c for c in list_clips(ws.id) if c.parent_clip_id == clip_id]
+        stem_children = [c for c in children if c.generation_mode == "stems"]
+        midi_children = [c for c in children if c.generation_mode == "midi"]
+        assert len(stem_children) == len(STEM_LABELS)
+        assert len(midi_children) == len(MIDI_OUTPUT_LABELS)
+        for child in stem_children + midi_children:
+            assert Path(child.file_path).exists(), f"dangling child clip: {child.file_path}"
+
+        # Second export with fresh mocks must reuse, not regenerate.
+        second_stems = _make_stems_client_factory()
+        second_midi = _make_midi_client_factory()
+        out = build_daw_bundle(
+            clip,
+            output_path=tmp_path / "second.zip",
+            stems_client_factory=second_stems,
+            midi_client_factory=second_midi,
+        )
+        second_stems.instance.separate.assert_not_called()
+        second_midi.instance.extract.assert_not_called()
+        with zipfile.ZipFile(out) as zf:
+            root = zf.namelist()[0].split("/", 1)[0]
+            rel = {n[len(root) + 1 :] for n in zf.namelist() if not n.endswith("/")}
+        assert EXPECTED_FILES.issubset(rel)
+
 
 # ---------------------------------------------------------------------------
 # CLI integration
