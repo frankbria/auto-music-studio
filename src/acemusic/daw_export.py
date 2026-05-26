@@ -165,13 +165,18 @@ def make_placeholder_artwork(path: Path) -> Path:
 
 
 def _existing_children(clip: Clip, generation_mode: str) -> dict[str, Clip]:
-    """Return child clips of ``clip`` for a generation mode, keyed by title."""
+    """Return child clips of ``clip`` for a generation mode, keyed by title.
+
+    When several children share a title (e.g. ``stems`` was rerun), the newest
+    wins. ``list_clips`` returns rows newest-first, so the first one seen for a
+    given title is the newest and later (older) duplicates are ignored.
+    """
     if clip.id is None:
         return {}
-    children = {}
+    children: dict[str, Clip] = {}
     for child in list_clips(clip.workspace_id):
         if child.parent_clip_id == clip.id and child.generation_mode == generation_mode:
-            if child.title:
+            if child.title and child.title not in children:
                 children[child.title] = child
     return children
 
@@ -333,6 +338,22 @@ def build_daw_bundle(
         stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
         midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
 
+        # The bundle advertises a complete set of stems and MIDI files. If
+        # resolution produced an incomplete set (e.g. MIDI extraction emitted no
+        # notes for a part), fail loudly rather than shipping a partial bundle.
+        missing_stems = [s for s in CANONICAL_STEMS if not (stem_paths.get(s) and Path(stem_paths[s]).exists())]
+        missing_midi = [m for m in MIDI_OUTPUT_LABELS if not (midi_paths.get(m) and Path(midi_paths[m]).exists())]
+        if missing_stems or missing_midi:
+            parts = []
+            if missing_stems:
+                parts.append(f"stems ({', '.join(missing_stems)})")
+            if missing_midi:
+                parts.append(f"MIDI ({', '.join(missing_midi)})")
+            raise ValueError(
+                "Cannot build a complete DAW bundle — missing " + " and ".join(parts) + ". "
+                "Re-run stem separation / MIDI extraction or check the source clip."
+            )
+
         # Full mix: copy WAV sources verbatim; transcode anything else to WAV so
         # the bundle's full_mix.wav is always a real WAV file.
         full_mix_dest = audio_dir / "full_mix.wav"
@@ -365,7 +386,10 @@ def build_daw_bundle(
             project_name=slug,
             bpm=clip.bpm,
             key=clip.key,
-            time_signature=getattr(clip, "time_signature", None),
+            # Clip records do not persist a time signature (meter is captured on
+            # presets / future metadata storage, US-4.2), so this is always null
+            # for now and the bundled MIDI uses save_midi's default 4/4 map.
+            time_signature=None,
             duration_seconds=clip.duration,
             stems=stem_refs,
             midi_files=midi_refs,

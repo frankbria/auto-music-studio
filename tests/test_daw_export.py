@@ -23,6 +23,7 @@ from acemusic.daw_export import (
     MidiReference,
     ProjectMetadata,
     StemReference,
+    _existing_children,
     build_daw_bundle,
     make_placeholder_artwork,
 )
@@ -450,6 +451,72 @@ class TestBuildDawBundle:
             root = zf.namelist()[0].split("/", 1)[0]
             rel = {n[len(root) + 1 :] for n in zf.namelist() if not n.endswith("/")}
         assert EXPECTED_FILES.issubset(rel)
+
+    def test_existing_children_prefers_newest_duplicate(self, full_mix_clip):
+        """When duplicate-title children exist, _existing_children keeps the newest."""
+        from acemusic.db import create_clip, get_clip
+        from acemusic.workspace import get_workspace_path
+
+        ws, clip_id, _ = full_mix_clip
+        clips_dir = get_workspace_path(ws.id)
+        clip = get_clip(clip_id)
+
+        old = clips_dir / "old-vocals.wav"
+        new = clips_dir / "new-vocals.wav"
+        _write_real_wav(old)
+        _write_real_wav(new)
+        # Older record first, newer record second (created_at controls ordering).
+        create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(old),
+                created_at="2020-01-01T00:00:00+00:00",
+                title="vocals",
+                generation_mode="stems",
+                parent_clip_id=clip_id,
+            )
+        )
+        create_clip(
+            Clip(
+                workspace_id=ws.id,
+                file_path=str(new),
+                created_at="2026-01-01T00:00:00+00:00",
+                title="vocals",
+                generation_mode="stems",
+                parent_clip_id=clip_id,
+            )
+        )
+
+        children = _existing_children(clip, "stems")
+        assert Path(children["vocals"].file_path) == new
+
+    def test_incomplete_midi_raises_instead_of_partial_bundle(self, full_mix_clip, tmp_path):
+        """If MIDI extraction omits a part, the export fails rather than shipping a partial bundle."""
+        from acemusic.db import get_clip
+        from acemusic.midi_client import MidiClient
+
+        ws, clip_id, _ = full_mix_clip
+        clip = get_clip(clip_id)
+
+        # MIDI factory that emits no bass notes → save_midi writes only 3 files.
+        instance = MagicMock()
+        instance.extract.return_value = {
+            "melody": [(0.0, 0.5, 72, 100)],
+            "chords": [(0.0, 1.0, 60, 80)],
+            "drums": [(0.0, 0.1, 36, 127)],
+            "bass": [],
+        }
+        real = MidiClient()
+        instance.save_midi.side_effect = lambda data, out_dir, base, **kw: real.save_midi(data, out_dir, base, **kw)
+        midi_factory = MagicMock(return_value=instance)
+
+        with pytest.raises(ValueError, match="bass"):
+            build_daw_bundle(
+                clip,
+                output_path=tmp_path / "partial.zip",
+                stems_client_factory=_make_stems_client_factory(),
+                midi_client_factory=midi_factory,
+            )
 
 
 # ---------------------------------------------------------------------------
