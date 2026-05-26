@@ -477,7 +477,7 @@ class TestBuildDawBundle:
         from acemusic.db import get_clip
         from acemusic.midi_client import MidiClient
 
-        ws, clip_id, _ = full_mix_clip
+        _, clip_id, _ = full_mix_clip
         clip = get_clip(clip_id)
 
         # MIDI factory that emits no bass notes → save_midi writes only 3 files.
