@@ -1406,7 +1406,11 @@ def _batch_export(workspace: str, format: str, output: Optional[Path]) -> None:
         raise typer.Exit(code=1)
 
     out_dir = (output if output is not None else Path.cwd()).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        console.print(f"[red]Error: cannot use output directory {out_dir}: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     clips = list_clips(ws.id)
     used_names: set[str] = set()
@@ -1433,8 +1437,9 @@ def _batch_export(workspace: str, format: str, output: Optional[Path]) -> None:
             f"Exported {succeeded} of {succeeded + failed} clips "
             f"({failed} failed) → {out_dir} (total: {total_display})"
         )
-    else:
-        console.print(f"Exported {succeeded} clips → {out_dir} (total: {total_display})")
+        # Surface partial failure to callers (CI/scripts) via a non-zero exit code.
+        raise typer.Exit(code=1)
+    console.print(f"Exported {succeeded} clips → {out_dir} (total: {total_display})")
 
 
 # ---------------------------------------------------------------------------

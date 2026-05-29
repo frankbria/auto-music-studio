@@ -181,12 +181,20 @@ class TestSummaryAndFailures:
 
         with patch("acemusic.cli.export_audio", side_effect=flaky):
             result = runner.invoke(app, ["export", "--workspace", "My Album", "--output", str(out)])
-        # Individual failure must not abort the whole batch.
-        assert result.exit_code == 0, result.output
+        # Individual failures must not abort the batch — the other clips still export —
+        # but a partial failure surfaces as a non-zero exit code for scripts/CI.
+        assert result.exit_code == 1, result.output
         flat = result.output.replace("\n", "")
         assert "2 of 3" in flat
         assert "1 failed" in flat
         assert len(list(out.glob("*.wav"))) == 2
+
+    def test_output_pointing_at_existing_file_errors(self, workspace_with_clips, tmp_path):
+        existing_file = tmp_path / "not-a-dir"
+        existing_file.write_text("i am a file")
+        result = runner.invoke(app, ["export", "--workspace", "My Album", "--output", str(existing_file)])
+        assert result.exit_code == 1
+        assert "error" in result.output.lower()
 
     def test_empty_workspace_reports_zero(self, isolated_db):
         from acemusic.workspace import create_workspace, switch_workspace
