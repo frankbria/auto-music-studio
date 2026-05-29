@@ -5,12 +5,36 @@ import soundfile as sf
 
 from acemusic.utils import (
     concatenate_audio,
+    human_readable_size,
     make_filename,
     make_slug,
     parse_time_string,
     slice_audio,
     snap_to_beat,
 )
+
+
+class TestHumanReadableSize:
+    """Tests for the human_readable_size() byte-count formatter (US-7.3)."""
+
+    def test_zero_bytes(self):
+        assert human_readable_size(0) == "0 bytes"
+
+    def test_bytes_below_one_kib(self):
+        assert human_readable_size(512) == "512 bytes"
+
+    def test_one_kib_boundary(self):
+        assert human_readable_size(1024) == "1.0 KB"
+
+    def test_kilobytes(self):
+        assert human_readable_size(1536) == "1.5 KB"
+
+    def test_megabytes(self):
+        # 2.5 MiB
+        assert human_readable_size(int(2.5 * 1024 * 1024)) == "2.5 MB"
+
+    def test_gigabytes(self):
+        assert human_readable_size(3 * 1024**3) == "3.0 GB"
 
 
 class TestMakeSlug:

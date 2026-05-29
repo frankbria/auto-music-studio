@@ -26,6 +26,22 @@ def make_filename(slug: str, timestamp: str, index: int, ext: str = "wav") -> st
     return f"{slug}-{timestamp}-{index}.{ext}"
 
 
+def human_readable_size(num_bytes: int) -> str:
+    """Format a byte count as a human-readable string (bytes/KB/MB/GB).
+
+    Uses binary (1024) units. Sub-kilobyte values are shown as whole "bytes";
+    larger values use one decimal place, e.g. "1.5 KB", "23.7 MB", "1.2 GB".
+    """
+    if num_bytes < 1024:
+        return f"{num_bytes} bytes"
+    for unit in ("KB", "MB", "GB"):
+        num_bytes /= 1024
+        if num_bytes < 1024 or unit == "GB":
+            return f"{num_bytes:.1f} {unit}"
+    # Unreachable: the GB branch above always returns.
+    return f"{num_bytes:.1f} GB"
+
+
 def get_duration(path: Path | str) -> float | None:
     """Return the duration in seconds of an audio file using mutagen, or None on failure."""
     import mutagen
