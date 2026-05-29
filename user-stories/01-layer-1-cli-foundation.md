@@ -848,9 +848,9 @@ Export multiple clips in one command, with consistent naming and optional format
 - Summary output: number of clips exported, total size, output location
 
 **Acceptance Criteria:**
-- [ ] All clips in the workspace are exported
-- [ ] Each clip has a distinct, descriptively-named file
-- [ ] Summary shows count and total size
+- [x] All clips in the workspace are exported
+- [x] Each clip has a distinct, descriptively-named file
+- [x] Summary shows count and total size
 
 ---
 
