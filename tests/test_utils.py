@@ -30,7 +30,6 @@ class TestHumanReadableSize:
         assert human_readable_size(1536) == "1.5 KB"
 
     def test_megabytes(self):
-        # 2.5 MiB
         assert human_readable_size(int(2.5 * 1024 * 1024)) == "2.5 MB"
 
     def test_gigabytes(self):

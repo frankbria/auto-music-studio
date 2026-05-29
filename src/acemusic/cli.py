@@ -1332,7 +1332,13 @@ def _batch_dest_name(clip: Clip, format: str, used: set[str]) -> str:
     suffix = "_Export.zip" if format == "daw" else f".{'wav' if format in ('wav', 'wav32') else format}"
     name = f"{base}{suffix}"
     if name in used:
+        # Disambiguate with the (unique) clip id, then with a counter if even
+        # that base already collides with another clip's primary name.
         name = f"{base}-{clip.id}{suffix}"
+        counter = 2
+        while name in used:
+            name = f"{base}-{clip.id}-{counter}{suffix}"
+            counter += 1
     used.add(name)
     return name
 
@@ -1401,7 +1407,7 @@ def _batch_export(workspace: str, format: str, output: Optional[Path]) -> None:
     """Export every clip in ``workspace`` to ``output`` (a directory) and print a summary."""
     try:
         ws = get_workspace_by_name(workspace)
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error) as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 

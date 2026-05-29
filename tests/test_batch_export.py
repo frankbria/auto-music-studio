@@ -139,6 +139,40 @@ class TestDistinctFilenames:
         assert len(names) == 2
         assert len(set(names)) == 2  # distinct
 
+    def test_fallback_name_does_not_overwrite_another_clips_primary_name(self, isolated_db, write_tone, tmp_path):
+        """A disambiguated fallback must not collide with another clip's primary name.
+
+        Clip "Song" (taken) falls back to "song-<id>"; a sibling literally titled
+        "Song <id>" produces primary "song-<id>" — both must remain distinct.
+        """
+        from acemusic.workspace import create_workspace, get_workspace_path, switch_workspace
+
+        ws = create_workspace("Collide")
+        switch_workspace("Collide")
+        clips_dir = get_workspace_path(ws.id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        # First "Song" claims song.wav.
+        s0 = clips_dir / "s0.wav"
+        write_tone(s0, duration_s=0.5)
+        _make_clip(ws.id, s0, "Song")
+        # Second "Song" must fall back to song-<id1>.wav.
+        s1 = clips_dir / "s1.wav"
+        write_tone(s1, duration_s=0.5)
+        id1 = _make_clip(ws.id, s1, "Song")
+        # A clip literally titled "Song <id1>" would also slug to song-<id1>.
+        s2 = clips_dir / "s2.wav"
+        write_tone(s2, duration_s=0.5)
+        _make_clip(ws.id, s2, f"Song {id1}")
+
+        out = tmp_path / "out"
+        with patch("acemusic.cli.export_audio", side_effect=_fake_export):
+            result = runner.invoke(app, ["export", "--workspace", "Collide", "--output", str(out)])
+        assert result.exit_code == 0, result.output
+        names = [p.name for p in out.glob("*.wav")]
+        assert len(names) == 3
+        assert len(set(names)) == 3  # all distinct, no overwrites
+
     def test_untitled_clips_use_clip_id(self, isolated_db, write_tone, tmp_path):
         from acemusic.workspace import create_workspace, get_workspace_path, switch_workspace
 
