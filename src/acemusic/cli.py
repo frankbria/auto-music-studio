@@ -57,6 +57,7 @@ from acemusic.stems_client import StemsClient, StemsError
 from acemusic.utils import (
     generate_remaster_filename,
     get_duration,
+    human_readable_size,
     make_filename,
     make_slug,
     parse_time_string,
@@ -1289,23 +1290,90 @@ def import_clip(
 # ---------------------------------------------------------------------------
 
 
+def _clip_default_basename(clip: Clip) -> str:
+    """Filename-safe base name for a clip (slug of its title, else ``clip-<id>``)."""
+    if clip.title:
+        slug = make_slug(clip.title)
+        if slug:
+            return slug
+    return f"clip-{clip.id}"
+
+
+def _export_one_clip(clip: Clip, format: str, dest: Path) -> int:
+    """Export a single clip to ``dest`` and return the number of bytes written.
+
+    Handles both audio formats (via ``export_audio``) and the ``daw`` bundle
+    (via ``build_daw_bundle``). Raises on failure; callers decide whether a
+    failure aborts (single export) or is tracked and skipped (batch export).
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if format == "daw":
+        build_daw_bundle(
+            clip,
+            output_path=dest,
+            stems_client_factory=StemsClient,
+            midi_client_factory=MidiClient,
+        )
+    else:
+        source = Path(clip.file_path)
+        if not source.exists():
+            raise FileNotFoundError(f"source file not found: {source}")
+        export_audio(source, dest, format)
+    return dest.stat().st_size
+
+
+def _batch_dest_name(clip: Clip, format: str, used: set[str]) -> str:
+    """Pick a distinct, descriptive output filename for ``clip`` within a batch.
+
+    Names derive from the clip title (or ``clip-<id>``). When two clips would
+    collide (shared/empty titles), the clip id is appended to keep names unique.
+    """
+    base = _clip_default_basename(clip)
+    suffix = "_Export.zip" if format == "daw" else f".{'wav' if format in ('wav', 'wav32') else format}"
+    name = f"{base}{suffix}"
+    if name in used:
+        # Disambiguate with the (unique) clip id, then with a counter if even
+        # that base already collides with another clip's primary name.
+        name = f"{base}-{clip.id}{suffix}"
+        counter = 2
+        while name in used:
+            name = f"{base}-{clip.id}-{counter}{suffix}"
+            counter += 1
+    used.add(name)
+    return name
+
+
 @app.command(name="export")
 def export_cmd(
-    clip_id: int = typer.Argument(..., help="ID of the clip to export."),
+    clip_id: Optional[int] = typer.Argument(None, help="ID of the clip to export (single-clip mode)."),
+    workspace: Optional[str] = typer.Option(
+        None, "--workspace", help="Export every clip in the named workspace (batch mode)."
+    ),
     format: str = typer.Option(
         "wav",
         "--format",
         help=f"Output format: {', '.join(EXPORT_FORMATS)}, daw.",
     ),
     output: Optional[Path] = typer.Option(
-        None, "--output", help="Output file path. Defaults to ./<slug>.<ext> in the current directory."
+        None,
+        "--output",
+        help="Single mode: output file path (default ./<slug>.<ext>). "
+        "Batch mode: output directory (default current directory).",
     ),
 ) -> None:
-    """Export a clip to a file (WAV/WAV32/FLAC/MP3) or a DAW bundle ZIP (daw)."""
+    """Export a clip, or every clip in a workspace, to files (WAV/WAV32/FLAC/MP3) or DAW bundles."""
     allowed = (*EXPORT_FORMATS, "daw")
     if format not in allowed:
         console.print(f"[red]Error: invalid --format {format!r}. Allowed values: {', '.join(allowed)}[/red]")
         raise typer.Exit(code=1)
+
+    if (clip_id is None) == (workspace is None):
+        console.print("[red]Error: provide exactly one of CLIP_ID or --workspace.[/red]")
+        raise typer.Exit(code=1)
+
+    if workspace is not None:
+        _batch_export(workspace, format, output)
+        return
 
     clip = get_clip(clip_id)
     if clip is None:
@@ -1313,43 +1381,71 @@ def export_cmd(
         raise typer.Exit(code=1)
 
     source = Path(clip.file_path)
-    if not source.exists():
+    if format != "daw" and not source.exists():
         console.print(f"[red]Error: source file not found: {source}[/red]")
         raise typer.Exit(code=1)
 
-    if format == "daw":
-        dest = output if output is not None else Path.cwd() / f"{project_slug(clip)}_Export.zip"
-        try:
-            build_daw_bundle(
-                clip,
-                output_path=dest,
-                stems_client_factory=StemsClient,
-                midi_client_factory=MidiClient,
-            )
-        except Exception as exc:
-            console.print(f"[red]Error: {exc}[/red]")
-            raise typer.Exit(code=1)
-        size = dest.stat().st_size
-        console.print(f"  [green]✓[/green] Exported DAW bundle: {dest} ({size} bytes)")
-        return
-
     if output is not None:
         dest = output
+    elif format == "daw":
+        dest = Path.cwd() / f"{project_slug(clip)}_Export.zip"
     else:
         ext = "wav" if format in ("wav", "wav32") else format
-        slug = make_slug(clip.title) if clip.title else f"clip-{clip_id}"
-        dest = Path.cwd() / f"{slug}.{ext}"
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
+        dest = Path.cwd() / f"{_clip_default_basename(clip)}.{ext}"
 
     try:
-        export_audio(source, dest, format)
+        size = _export_one_clip(clip, format, dest)
     except Exception as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    size = dest.stat().st_size
-    console.print(f"  [green]✓[/green] Exported: {dest}  ({size} bytes)")
+    label = "DAW bundle" if format == "daw" else "clip"
+    console.print(f"  [green]✓[/green] Exported {label}: {dest}  ({size} bytes)")
+
+
+def _batch_export(workspace: str, format: str, output: Optional[Path]) -> None:
+    """Export every clip in ``workspace`` to ``output`` (a directory) and print a summary."""
+    try:
+        ws = get_workspace_by_name(workspace)
+    except (ValueError, sqlite3.Error) as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    out_dir = (output if output is not None else Path.cwd()).resolve()
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        console.print(f"[red]Error: cannot use output directory {out_dir}: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    clips = list_clips(ws.id)
+    used_names: set[str] = set()
+    total_bytes = 0
+    succeeded = 0
+    failed = 0
+
+    for clip in clips:
+        dest = out_dir / _batch_dest_name(clip, format, used_names)
+        label = clip.title or f"clip-{clip.id}"
+        try:
+            size = _export_one_clip(clip, format, dest)
+        except Exception as exc:
+            failed += 1
+            console.print(f"  [yellow]![/yellow] Failed: {label} — {exc}")
+            continue
+        succeeded += 1
+        total_bytes += size
+        console.print(f"  [green]✓[/green] {label} → {dest.name}")
+
+    total_display = human_readable_size(total_bytes)
+    if failed:
+        console.print(
+            f"Exported {succeeded} of {succeeded + failed} clips "
+            f"({failed} failed) → {out_dir} (total: {total_display})"
+        )
+        # Surface partial failure to callers (CI/scripts) via a non-zero exit code.
+        raise typer.Exit(code=1)
+    console.print(f"Exported {succeeded} clips → {out_dir} (total: {total_display})")
 
 
 # ---------------------------------------------------------------------------

@@ -151,7 +151,8 @@ class TestStemsCommand:
                 result = runner.invoke(app, ["stems", str(clip_id), "--output-format", "flac"])
 
         assert result.exit_code == 0, result.output
-        assert ".flac" in result.output
+        # Rich may soft-wrap the path on narrow terminals — flatten before the substring check.
+        assert ".flac" in result.output.replace("\n", "")
 
     def test_stems_custom_output_dir(self, workspace_with_clips_dir, tmp_path):
         """--output overrides the default stems/ directory."""
