@@ -36,7 +36,7 @@ from acemusic.audio import (
 )
 from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
-from acemusic.daw_export import build_daw_bundle, project_slug
+from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
 from acemusic.db import (
     create_clip,
     create_preset,
@@ -1302,10 +1302,19 @@ def _clip_default_basename(clip: Clip) -> str:
 def _export_one_clip(clip: Clip, format: str, dest: Path) -> int:
     """Export a single clip to ``dest`` and return the number of bytes written.
 
-    Handles both audio formats (via ``export_audio``) and the ``daw`` bundle
-    (via ``build_daw_bundle``). Raises on failure; callers decide whether a
-    failure aborts (single export) or is tracked and skipped (batch export).
+    Handles audio formats (via ``export_audio``), the ``daw`` bundle (via
+    ``build_daw_bundle``), and the ``stems``/``midi`` targeted exports (via
+    ``export_stems``/``export_midi``, where ``dest`` is a directory of files).
+    Raises on failure; callers decide whether a failure aborts (single export)
+    or is tracked and skipped (batch export).
     """
+    if format == "stems":
+        written = export_stems(clip, dest, stems_client_factory=StemsClient)
+        return sum(p.stat().st_size for p in written.values())
+    if format == "midi":
+        written = export_midi(clip, dest, midi_client_factory=MidiClient)
+        return sum(p.stat().st_size for p in written.values())
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     if format == "daw":
         build_daw_bundle(
@@ -1352,23 +1361,30 @@ def export_cmd(
     format: str = typer.Option(
         "wav",
         "--format",
-        help=f"Output format: {', '.join(EXPORT_FORMATS)}, daw.",
+        help=f"Output format: {', '.join(EXPORT_FORMATS)}, daw, stems, midi.",
     ),
     output: Optional[Path] = typer.Option(
         None,
         "--output",
-        help="Single mode: output file path (default ./<slug>.<ext>). "
+        help="Single mode: output file path for audio/daw (default ./<slug>.<ext>), "
+        "or output directory for stems/midi (default ./<slug>-stems|-midi). "
         "Batch mode: output directory (default current directory).",
     ),
 ) -> None:
-    """Export a clip, or every clip in a workspace, to files (WAV/WAV32/FLAC/MP3) or DAW bundles."""
-    allowed = (*EXPORT_FORMATS, "daw")
+    """Export a clip (or a whole workspace) to audio files, a DAW bundle, or just its stems/MIDI."""
+    allowed = (*EXPORT_FORMATS, "daw", "stems", "midi")
     if format not in allowed:
         console.print(f"[red]Error: invalid --format {format!r}. Allowed values: {', '.join(allowed)}[/red]")
         raise typer.Exit(code=1)
 
     if (clip_id is None) == (workspace is None):
         console.print("[red]Error: provide exactly one of CLIP_ID or --workspace.[/red]")
+        raise typer.Exit(code=1)
+
+    if workspace is not None and format in ("stems", "midi"):
+        console.print(
+            f"[red]Error: --format {format} is single-clip only; pass a CLIP_ID instead of --workspace.[/red]"
+        )
         raise typer.Exit(code=1)
 
     if workspace is not None:
@@ -1389,6 +1405,8 @@ def export_cmd(
         dest = output
     elif format == "daw":
         dest = Path.cwd() / f"{project_slug(clip)}_Export.zip"
+    elif format in ("stems", "midi"):
+        dest = Path.cwd() / f"{_clip_default_basename(clip)}-{format}"
     else:
         ext = "wav" if format in ("wav", "wav32") else format
         dest = Path.cwd() / f"{_clip_default_basename(clip)}.{ext}"
@@ -1399,7 +1417,7 @@ def export_cmd(
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    label = "DAW bundle" if format == "daw" else "clip"
+    label = {"daw": "DAW bundle", "stems": "stems", "midi": "MIDI files"}.get(format, "clip")
     console.print(f"  [green]✓[/green] Exported {label}: {dest}  ({size} bytes)")
 
 

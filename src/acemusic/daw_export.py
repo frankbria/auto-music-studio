@@ -291,6 +291,76 @@ def _copy_as_wav(src: Path | str, dest: Path) -> None:
         export_audio(src, dest, "wav")
 
 
+def export_stems(
+    clip: Clip,
+    output_dir: Path | str,
+    *,
+    stems_client_factory: Callable[[], StemsClient] = StemsClient,
+    reuse_existing: bool = True,
+) -> dict[str, Path]:
+    """Export only the four stems for ``clip`` into ``output_dir`` as WAV files (US-7.4).
+
+    Reuses existing stem child clips when present, otherwise runs separation on
+    demand (the same flow as the ``stems`` command and DAW bundle). Writes
+    ``vocals.wav``, ``drums.wav``, ``bass.wav`` and ``other.wav`` — no MIDI, no
+    ZIP. Returns the written paths keyed by stem name.
+
+    Raises ``ValueError`` if separation yields an incomplete set of stems, rather
+    than silently exporting a partial set.
+    """
+    output_dir = Path(output_dir)
+    stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
+
+    missing = [s for s in CANONICAL_STEMS if not (stem_paths.get(s) and Path(stem_paths[s]).exists())]
+    if missing:
+        raise ValueError(
+            "Cannot export stems — missing " + ", ".join(missing) + ". "
+            "Re-run stem separation or check the source clip."
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    for label in CANONICAL_STEMS:
+        dest = output_dir / f"{label}.wav"
+        _copy_as_wav(stem_paths[label], dest)
+        written[label] = dest
+    return written
+
+
+def export_midi(
+    clip: Clip,
+    output_dir: Path | str,
+    *,
+    midi_client_factory: Callable[[], MidiClient] = MidiClient,
+    reuse_existing: bool = True,
+) -> dict[str, Path]:
+    """Export only the four MIDI files for ``clip`` into ``output_dir`` (US-7.4).
+
+    Reuses existing MIDI child clips when present, otherwise runs extraction on
+    demand. Writes ``melody.mid``, ``chords.mid``, ``drums.mid`` and ``bass.mid``
+    — no audio, no ZIP. Returns the written paths keyed by name.
+
+    Raises ``ValueError`` if extraction yields an incomplete set of MIDI files.
+    """
+    output_dir = Path(output_dir)
+    midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
+
+    missing = [m for m in MIDI_OUTPUT_LABELS if not (midi_paths.get(m) and Path(midi_paths[m]).exists())]
+    if missing:
+        raise ValueError(
+            "Cannot export MIDI — missing " + ", ".join(missing) + ". "
+            "Re-run MIDI extraction or check the source clip."
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    for label in MIDI_OUTPUT_LABELS:
+        dest = output_dir / f"{label}.mid"
+        shutil.copyfile(midi_paths[label], dest)
+        written[label] = dest
+    return written
+
+
 def build_daw_bundle(
     clip: Clip,
     *,
