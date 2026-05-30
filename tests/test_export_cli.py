@@ -10,13 +10,11 @@ import pytest
 from typer.testing import CliRunner
 
 from acemusic.cli import app
+from acemusic.daw_export import CANONICAL_STEMS
 from acemusic.midi_client import MIDI_OUTPUT_LABELS
 from acemusic.stems_client import STEM_LABELS
 
 runner = CliRunner()
-
-# Canonical stem filenames produced by `export --format stems`.
-CANONICAL_STEMS = ("vocals", "drums", "bass", "other")
 
 
 def _write_real_wav(path: Path, frames: int = 44100, sample_rate: int = 44100) -> None:
@@ -430,3 +428,36 @@ class TestMidiExport:
         assert result.exit_code == 0, result.output
         factory.instance.extract.assert_not_called()
         assert sorted(p.name for p in out.glob("*.mid")) == sorted(f"{m}.mid" for m in MIDI_OUTPUT_LABELS)
+
+    def test_default_output_dir_next_to_cwd(self, workspace_with_clip, tmp_path, monkeypatch):
+        _, clip_id, _ = workspace_with_clip
+        monkeypatch.chdir(tmp_path)
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi"])
+
+        assert result.exit_code == 0, result.output
+        out = tmp_path / "my-cool-track-midi"
+        assert out.is_dir()
+        assert len(list(out.glob("*.mid"))) == 4
+
+    def test_reuse_works_when_source_deleted(self, workspace_with_clip, tmp_path):
+        """Cached MIDI children let export succeed even if the original mix is gone."""
+        ws, clip_id, source = workspace_with_clip
+        _register_midi_children(ws.id, clip_id, source)
+        source.unlink()  # archive/cleanup scenario: only derived assets remain
+        out = tmp_path / "midi_out"
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.extract.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.mid")) == sorted(f"{m}.mid" for m in MIDI_OUTPUT_LABELS)
+
+    def test_workspace_with_midi_rejected(self, workspace_with_clip):
+        result = runner.invoke(app, ["export", "--workspace", "default", "--format", "midi"])
+        assert result.exit_code == 1
+        assert "single-clip" in result.output.lower() or "clip_id" in result.output.lower()

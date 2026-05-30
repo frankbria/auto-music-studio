@@ -1308,6 +1308,8 @@ def _export_one_clip(clip: Clip, format: str, dest: Path) -> int:
     Raises on failure; callers decide whether a failure aborts (single export)
     or is tracked and skipped (batch export).
     """
+    # For stems/midi, ``dest`` is a directory of files (not a single file), so the
+    # byte count is summed across the written set rather than a single stat().
     if format == "stems":
         written = export_stems(clip, dest, stems_client_factory=StemsClient)
         return sum(p.stat().st_size for p in written.values())
