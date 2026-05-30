@@ -867,9 +867,9 @@ Targeted export options for when you only need audio stems or MIDI data.
 - Stems are auto-separated if needed; MIDI is auto-extracted if needed
 
 **Acceptance Criteria:**
-- [ ] `--format stems` produces 4 WAV files (no MIDI, no ZIP)
-- [ ] `--format midi` produces 4 MIDI files (no audio)
-- [ ] Auto-separation/extraction is triggered when needed
+- [x] `--format stems` produces 4 WAV files (no MIDI, no ZIP)
+- [x] `--format midi` produces 4 MIDI files (no audio)
+- [x] Auto-separation/extraction is triggered when needed
 
 ---
 
