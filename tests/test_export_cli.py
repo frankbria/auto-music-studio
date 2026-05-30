@@ -10,8 +10,17 @@ import pytest
 from typer.testing import CliRunner
 
 from acemusic.cli import app
+from acemusic.daw_export import CANONICAL_STEMS
+from acemusic.midi_client import MIDI_OUTPUT_LABELS
+from acemusic.stems_client import STEM_LABELS
+from tests._factories import make_midi_client_factory, make_stems_client_factory, write_real_wav
 
 runner = CliRunner()
+
+# Local aliases keep the existing call sites in this module short.
+_write_real_wav = write_real_wav
+_make_stems_client_factory = make_stems_client_factory
+_make_midi_client_factory = make_midi_client_factory
 
 
 @pytest.fixture
@@ -207,3 +216,205 @@ class TestExportCommand:
 
         assert result.exit_code == 1
         assert "ffmpeg blew up" in result.output or "error" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# US-7.4: stems-only and MIDI-only export
+# ---------------------------------------------------------------------------
+
+
+def _register_stem_children(ws_id, parent_id, source: Path):
+    """Create four on-disk stem child clips so reuse can short-circuit separation."""
+    from acemusic.db import create_clip
+    from acemusic.models import Clip
+
+    stems_dir = source.parent / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    for label in STEM_LABELS:
+        path = stems_dir / f"{source.stem}-{label}.wav"
+        _write_real_wav(path)
+        create_clip(
+            Clip(
+                workspace_id=ws_id,
+                file_path=str(path.resolve()),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="wav",
+                title=label,
+                parent_clip_id=parent_id,
+                generation_mode="stems",
+            )
+        )
+
+
+def _register_midi_children(ws_id, parent_id, source: Path):
+    """Create four on-disk MIDI child clips so reuse can short-circuit extraction."""
+    from acemusic.db import create_clip
+    from acemusic.midi_client import MidiClient
+    from acemusic.models import Clip
+
+    midi_dir = source.parent / "midi"
+    midi_dir.mkdir(parents=True, exist_ok=True)
+    real = MidiClient()
+    written = real.save_midi(
+        {label: [(0.0, 1.0, 60, 100)] for label in MIDI_OUTPUT_LABELS},
+        midi_dir,
+        source.stem,
+    )
+    for label in MIDI_OUTPUT_LABELS:
+        create_clip(
+            Clip(
+                workspace_id=ws_id,
+                file_path=str(Path(written[label]).resolve()),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                format="mid",
+                title=f"midi-{label}",
+                parent_clip_id=parent_id,
+                generation_mode="midi",
+            )
+        )
+
+
+class TestStemsExport:
+    def test_produces_four_wavs_no_midi_no_zip(self, workspace_with_clip, tmp_path):
+        _, clip_id, _ = workspace_with_clip
+        out = tmp_path / "stems_out"
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        wavs = sorted(p.name for p in out.glob("*.wav"))
+        assert wavs == sorted(f"{s}.wav" for s in CANONICAL_STEMS)
+        assert list(out.glob("*.mid")) == []
+        assert list(out.glob("*.zip")) == []
+
+    def test_auto_triggers_separation_when_no_children(self, workspace_with_clip, tmp_path):
+        _, clip_id, _ = workspace_with_clip
+        out = tmp_path / "stems_out"
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.separate.assert_called_once()
+
+    def test_reuses_existing_children_without_separating(self, workspace_with_clip, tmp_path):
+        ws, clip_id, source = workspace_with_clip
+        _register_stem_children(ws.id, clip_id, source)
+        out = tmp_path / "stems_out"
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.separate.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.wav")) == sorted(f"{s}.wav" for s in CANONICAL_STEMS)
+
+    def test_default_output_dir_next_to_cwd(self, workspace_with_clip, tmp_path, monkeypatch):
+        _, clip_id, _ = workspace_with_clip
+        monkeypatch.chdir(tmp_path)
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems"])
+
+        assert result.exit_code == 0, result.output
+        out = tmp_path / "my-cool-track-stems"
+        assert out.is_dir()
+        assert len(list(out.glob("*.wav"))) == 4
+
+    def test_reuse_works_when_source_deleted(self, workspace_with_clip, tmp_path):
+        """Cached stem children let export succeed even if the original mix is gone."""
+        ws, clip_id, source = workspace_with_clip
+        _register_stem_children(ws.id, clip_id, source)
+        source.unlink()  # archive/cleanup scenario: only derived assets remain
+        out = tmp_path / "stems_out"
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.separate.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.wav")) == sorted(f"{s}.wav" for s in CANONICAL_STEMS)
+
+    def test_workspace_with_stems_rejected(self, workspace_with_clip):
+        result = runner.invoke(app, ["export", "--workspace", "default", "--format", "stems"])
+        assert result.exit_code == 1
+        assert "single-clip" in result.output.lower() or "clip_id" in result.output.lower()
+
+
+class TestMidiExport:
+    def test_produces_four_midis_no_audio(self, workspace_with_clip, tmp_path):
+        _, clip_id, _ = workspace_with_clip
+        out = tmp_path / "midi_out"
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        mids = sorted(p.name for p in out.glob("*.mid"))
+        assert mids == sorted(f"{m}.mid" for m in MIDI_OUTPUT_LABELS)
+        assert list(out.glob("*.wav")) == []
+        assert list(out.glob("*.zip")) == []
+
+    def test_auto_triggers_extraction_when_no_children(self, workspace_with_clip, tmp_path):
+        _, clip_id, _ = workspace_with_clip
+        out = tmp_path / "midi_out"
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.extract.assert_called_once()
+
+    def test_reuses_existing_children_without_extracting(self, workspace_with_clip, tmp_path):
+        ws, clip_id, source = workspace_with_clip
+        _register_midi_children(ws.id, clip_id, source)
+        out = tmp_path / "midi_out"
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.extract.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.mid")) == sorted(f"{m}.mid" for m in MIDI_OUTPUT_LABELS)
+
+    def test_default_output_dir_next_to_cwd(self, workspace_with_clip, tmp_path, monkeypatch):
+        _, clip_id, _ = workspace_with_clip
+        monkeypatch.chdir(tmp_path)
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi"])
+
+        assert result.exit_code == 0, result.output
+        out = tmp_path / "my-cool-track-midi"
+        assert out.is_dir()
+        assert len(list(out.glob("*.mid"))) == 4
+
+    def test_reuse_works_when_source_deleted(self, workspace_with_clip, tmp_path):
+        """Cached MIDI children let export succeed even if the original mix is gone."""
+        ws, clip_id, source = workspace_with_clip
+        _register_midi_children(ws.id, clip_id, source)
+        source.unlink()  # archive/cleanup scenario: only derived assets remain
+        out = tmp_path / "midi_out"
+        factory = _make_midi_client_factory()
+
+        with patch("acemusic.cli.MidiClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "midi", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.extract.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.mid")) == sorted(f"{m}.mid" for m in MIDI_OUTPUT_LABELS)
+
+    def test_workspace_with_midi_rejected(self, workspace_with_clip):
+        result = runner.invoke(app, ["export", "--workspace", "default", "--format", "midi"])
+        assert result.exit_code == 1
+        assert "single-clip" in result.output.lower() or "clip_id" in result.output.lower()

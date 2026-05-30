@@ -30,6 +30,7 @@ from acemusic.daw_export import (
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS
 from acemusic.models import Clip
 from acemusic.stems_client import STEM_LABELS
+from tests._factories import make_midi_client_factory, make_stems_client_factory, write_real_wav
 
 runner = CliRunner()
 
@@ -81,60 +82,11 @@ def full_mix_clip(workspace, write_tone):
     return workspace, clip_id, src
 
 
-# Stem-label aliasing: build_daw_bundle maps the demucs labels onto the canonical
-# bundle slots, so the writer just needs to emit one wav per STEM_LABEL.
-_STEM_FRAMES = 44100  # equal-length stems
-
-
-def _write_real_wav(path: Path, frames: int = _STEM_FRAMES, sample_rate: int = 44100) -> None:
-    import numpy as np
-    import soundfile as sf
-
-    data = np.zeros((frames, 2), dtype=np.float32)
-    sf.write(str(path), data, sample_rate)
-
-
-def _make_stems_client_factory():
-    """Return a factory producing a mock StemsClient that writes real WAV stems."""
-    instance = MagicMock()
-    instance.model_samplerate = 44100
-    instance.separate.return_value = {label: MagicMock() for label in STEM_LABELS}
-
-    def _save(stems, out_dir, base, **kw):
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fmt = kw.get("output_format", "wav")
-        paths = {}
-        for label in STEM_LABELS:
-            p = out_dir / f"{base}-{label}.{fmt}"
-            _write_real_wav(p)
-            paths[label] = p
-        return paths
-
-    instance.save_stems.side_effect = _save
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
-
-
-def _make_midi_client_factory():
-    """Return a factory producing a mock MidiClient that writes real Type-1 MIDI."""
-    from acemusic.midi_client import MidiClient
-
-    instance = MagicMock()
-    midi_data = {
-        "melody": [(0.0, 0.5, 72, 100), (0.5, 1.0, 74, 90)],
-        "chords": [(0.0, 1.0, 60, 80)],
-        "drums": [(0.0, 0.1, 36, 127), (0.5, 0.6, 38, 100)],
-        "bass": [(0.0, 1.0, 40, 100)],
-    }
-    instance.extract.return_value = midi_data
-    # Use the real save_midi so the output is genuine Type-1 with channels.
-    real = MidiClient()
-    instance.save_midi.side_effect = lambda data, out_dir, base, **kw: real.save_midi(data, out_dir, base, **kw)
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
+# Shared mock-client factories live in tests/_factories.py. Alias to the
+# original local names so the many call sites in this module stay unchanged.
+_write_real_wav = write_real_wav
+_make_stems_client_factory = make_stems_client_factory
+_make_midi_client_factory = make_midi_client_factory
 
 
 class TestDataclasses:
@@ -667,3 +619,74 @@ class TestExportDawCli:
         result = runner.invoke(app, ["export", str(clip_id), "--format", "ogg"])
         assert result.exit_code == 1
         assert "format" in result.output.lower()
+
+
+class TestExportStemsAndMidiHelpers:
+    """Unit tests for the US-7.4 export_stems / export_midi functions."""
+
+    def _clip(self, workspace, write_tone):
+        from acemusic.db import create_clip, get_clip
+        from acemusic.workspace import get_workspace_path
+
+        src = get_workspace_path(workspace.id) / "fullmix.wav"
+        write_tone(src, duration_s=1.0)
+        clip_id = create_clip(
+            Clip(
+                workspace_id=workspace.id,
+                file_path=str(src),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                title="Track",
+                format="wav",
+                duration=1.0,
+                bpm=120,
+            )
+        )
+        return get_clip(clip_id)
+
+    def test_export_stems_writes_four_canonical_wavs(self, workspace, write_tone, tmp_path):
+        from acemusic.daw_export import CANONICAL_STEMS, export_stems
+
+        clip = self._clip(workspace, write_tone)
+        out = tmp_path / "out"
+        written = export_stems(clip, out, stems_client_factory=_make_stems_client_factory())
+
+        assert set(written) == set(CANONICAL_STEMS)
+        for label in CANONICAL_STEMS:
+            assert (out / f"{label}.wav").exists()
+        assert list(out.glob("*.mid")) == []
+
+    def test_export_midi_writes_four_named_midis(self, workspace, write_tone, tmp_path):
+        from acemusic.daw_export import export_midi
+
+        clip = self._clip(workspace, write_tone)
+        out = tmp_path / "out"
+        written = export_midi(clip, out, midi_client_factory=_make_midi_client_factory())
+
+        assert set(written) == set(MIDI_OUTPUT_LABELS)
+        for label in MIDI_OUTPUT_LABELS:
+            assert (out / f"{label}.mid").exists()
+        assert list(out.glob("*.wav")) == []
+
+    def test_export_stems_raises_on_incomplete_set(self, workspace, write_tone, tmp_path):
+        from acemusic import daw_export
+        from acemusic.daw_export import export_stems
+
+        clip = self._clip(workspace, write_tone)
+        partial = tmp_path / "partial"
+        partial.mkdir()
+        bogus = partial / "vocals.wav"
+        _write_real_wav(bogus)
+
+        with patch.object(daw_export, "_resolve_stems", return_value={"vocals": bogus}):
+            with pytest.raises(ValueError, match="missing"):
+                export_stems(clip, tmp_path / "out")
+
+    def test_export_midi_raises_on_incomplete_set(self, workspace, write_tone, tmp_path):
+        from acemusic import daw_export
+        from acemusic.daw_export import export_midi
+
+        clip = self._clip(workspace, write_tone)
+
+        with patch.object(daw_export, "_resolve_midi", return_value={}):
+            with pytest.raises(ValueError, match="missing"):
+                export_midi(clip, tmp_path / "out")
