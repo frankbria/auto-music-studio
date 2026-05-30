@@ -30,6 +30,7 @@ from acemusic.daw_export import (
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS
 from acemusic.models import Clip
 from acemusic.stems_client import STEM_LABELS
+from tests._factories import make_midi_client_factory, make_stems_client_factory, write_real_wav
 
 runner = CliRunner()
 
@@ -81,60 +82,11 @@ def full_mix_clip(workspace, write_tone):
     return workspace, clip_id, src
 
 
-# Stem-label aliasing: build_daw_bundle maps the demucs labels onto the canonical
-# bundle slots, so the writer just needs to emit one wav per STEM_LABEL.
-_STEM_FRAMES = 44100  # equal-length stems
-
-
-def _write_real_wav(path: Path, frames: int = _STEM_FRAMES, sample_rate: int = 44100) -> None:
-    import numpy as np
-    import soundfile as sf
-
-    data = np.zeros((frames, 2), dtype=np.float32)
-    sf.write(str(path), data, sample_rate)
-
-
-def _make_stems_client_factory():
-    """Return a factory producing a mock StemsClient that writes real WAV stems."""
-    instance = MagicMock()
-    instance.model_samplerate = 44100
-    instance.separate.return_value = {label: MagicMock() for label in STEM_LABELS}
-
-    def _save(stems, out_dir, base, **kw):
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fmt = kw.get("output_format", "wav")
-        paths = {}
-        for label in STEM_LABELS:
-            p = out_dir / f"{base}-{label}.{fmt}"
-            _write_real_wav(p)
-            paths[label] = p
-        return paths
-
-    instance.save_stems.side_effect = _save
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
-
-
-def _make_midi_client_factory():
-    """Return a factory producing a mock MidiClient that writes real Type-1 MIDI."""
-    from acemusic.midi_client import MidiClient
-
-    instance = MagicMock()
-    midi_data = {
-        "melody": [(0.0, 0.5, 72, 100), (0.5, 1.0, 74, 90)],
-        "chords": [(0.0, 1.0, 60, 80)],
-        "drums": [(0.0, 0.1, 36, 127), (0.5, 0.6, 38, 100)],
-        "bass": [(0.0, 1.0, 40, 100)],
-    }
-    instance.extract.return_value = midi_data
-    # Use the real save_midi so the output is genuine Type-1 with channels.
-    real = MidiClient()
-    instance.save_midi.side_effect = lambda data, out_dir, base, **kw: real.save_midi(data, out_dir, base, **kw)
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
+# Shared mock-client factories live in tests/_factories.py. Alias to the
+# original local names so the many call sites in this module stay unchanged.
+_write_real_wav = write_real_wav
+_make_stems_client_factory = make_stems_client_factory
+_make_midi_client_factory = make_midi_client_factory
 
 
 class TestDataclasses:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -13,57 +13,14 @@ from acemusic.cli import app
 from acemusic.daw_export import CANONICAL_STEMS
 from acemusic.midi_client import MIDI_OUTPUT_LABELS
 from acemusic.stems_client import STEM_LABELS
+from tests._factories import make_midi_client_factory, make_stems_client_factory, write_real_wav
 
 runner = CliRunner()
 
-
-def _write_real_wav(path: Path, frames: int = 44100, sample_rate: int = 44100) -> None:
-    import numpy as np
-    import soundfile as sf
-
-    data = np.zeros((frames, 2), dtype=np.float32)
-    sf.write(str(path), data, sample_rate)
-
-
-def _make_stems_client_factory():
-    """Factory producing a mock StemsClient that writes real WAV stems on disk."""
-    instance = MagicMock()
-    instance.model_samplerate = 44100
-    instance.separate.return_value = {label: MagicMock() for label in STEM_LABELS}
-
-    def _save(stems, out_dir, base, **kw):
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fmt = kw.get("output_format", "wav")
-        paths = {}
-        for label in STEM_LABELS:
-            p = out_dir / f"{base}-{label}.{fmt}"
-            _write_real_wav(p)
-            paths[label] = p
-        return paths
-
-    instance.save_stems.side_effect = _save
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
-
-
-def _make_midi_client_factory():
-    """Factory producing a mock MidiClient that writes real Type-1 MIDI on disk."""
-    from acemusic.midi_client import MidiClient
-
-    instance = MagicMock()
-    instance.extract.return_value = {
-        "melody": [(0.0, 0.5, 72, 100), (0.5, 1.0, 74, 90)],
-        "chords": [(0.0, 1.0, 60, 80)],
-        "drums": [(0.0, 0.1, 36, 127), (0.5, 0.6, 38, 100)],
-        "bass": [(0.0, 1.0, 40, 100)],
-    }
-    real = MidiClient()
-    instance.save_midi.side_effect = lambda data, out_dir, base, **kw: real.save_midi(data, out_dir, base, **kw)
-    factory = MagicMock(return_value=instance)
-    factory.instance = instance
-    return factory
+# Local aliases keep the existing call sites in this module short.
+_write_real_wav = write_real_wav
+_make_stems_client_factory = make_stems_client_factory
+_make_midi_client_factory = make_midi_client_factory
 
 
 @pytest.fixture
