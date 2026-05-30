@@ -47,7 +47,11 @@ def make_stems_client_factory():
 
 
 def make_midi_client_factory():
-    """Factory producing a mock MidiClient that writes real Type-1 MIDI on disk."""
+    """Factory producing a mock MidiClient that writes real Type-1 MIDI on disk.
+
+    ``extract`` is stubbed, but ``save_midi`` delegates to the real ``MidiClient``
+    so the files written are genuine Type-1 MIDI with correct channel assignments.
+    """
     from acemusic.midi_client import MidiClient
 
     instance = MagicMock()
@@ -57,7 +61,6 @@ def make_midi_client_factory():
         "drums": [(0.0, 0.1, 36, 127), (0.5, 0.6, 38, 100)],
         "bass": [(0.0, 1.0, 40, 100)],
     }
-    # Use the real save_midi so output is genuine Type-1 with channel assignments.
     real = MidiClient()
     instance.save_midi.side_effect = lambda data, out_dir, base, **kw: real.save_midi(data, out_dir, base, **kw)
     factory = MagicMock(return_value=instance)
