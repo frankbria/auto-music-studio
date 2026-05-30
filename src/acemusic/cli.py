@@ -1397,7 +1397,9 @@ def export_cmd(
         raise typer.Exit(code=1)
 
     source = Path(clip.file_path)
-    if format != "daw" and not source.exists():
+    # daw/stems/midi can reuse previously generated child assets without the
+    # original source on disk, so only the direct audio formats require it here.
+    if format not in ("daw", "stems", "midi") and not source.exists():
         console.print(f"[red]Error: source file not found: {source}[/red]")
         raise typer.Exit(code=1)
 

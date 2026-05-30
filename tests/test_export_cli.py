@@ -371,6 +371,21 @@ class TestStemsExport:
         assert out.is_dir()
         assert len(list(out.glob("*.wav"))) == 4
 
+    def test_reuse_works_when_source_deleted(self, workspace_with_clip, tmp_path):
+        """Cached stem children let export succeed even if the original mix is gone."""
+        ws, clip_id, source = workspace_with_clip
+        _register_stem_children(ws.id, clip_id, source)
+        source.unlink()  # archive/cleanup scenario: only derived assets remain
+        out = tmp_path / "stems_out"
+        factory = _make_stems_client_factory()
+
+        with patch("acemusic.cli.StemsClient", factory):
+            result = runner.invoke(app, ["export", str(clip_id), "--format", "stems", "--output", str(out)])
+
+        assert result.exit_code == 0, result.output
+        factory.instance.separate.assert_not_called()
+        assert sorted(p.name for p in out.glob("*.wav")) == sorted(f"{s}.wav" for s in CANONICAL_STEMS)
+
     def test_workspace_with_stems_rejected(self, workspace_with_clip):
         result = runner.invoke(app, ["export", "--workspace", "default", "--format", "stems"])
         assert result.exit_code == 1
