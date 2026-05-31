@@ -24,6 +24,18 @@ class TestAppFactory:
         """The OpenAPI/app version is sourced from the package version."""
         assert create_app().version == __version__
 
+    def test_app_logging_is_configured(self):
+        """create_app wires a handler on the 'acemusic' logger so connection
+        success/failure is visible under uvicorn (AC: 'logs success')."""
+        import logging
+
+        from acemusic.api.settings import ApiSettings
+
+        create_app(settings=ApiSettings(_env_file=None))
+        app_logger = logging.getLogger("acemusic")
+        assert app_logger.handlers
+        assert app_logger.getEffectiveLevel() <= logging.INFO
+
 
 class TestHealthEndpoint:
     def test_health_returns_ok(self, client):

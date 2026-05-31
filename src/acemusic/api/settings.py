@@ -7,7 +7,7 @@ not collide with CLI or ACE-Step server variables.
 
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:8000"]
@@ -30,6 +30,24 @@ class ApiSettings(BaseSettings):
     )
 
     cors_allow_origins: Annotated[list[str], NoDecode] = DEFAULT_CORS_ORIGINS
+
+    # MongoDB (US-8.2). Defaults target a local server; production/staging set
+    # mongodb_url to an Atlas mongodb+srv:// string via the environment.
+    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_db_name: str = "acemusic"
+    mongodb_min_pool_size: int = Field(default=10, ge=0)
+    mongodb_max_pool_size: int = Field(default=100, ge=1)
+    mongodb_server_selection_timeout_ms: int = Field(default=5000, ge=1)
+
+    @model_validator(mode="after")
+    def _check_pool_bounds(self) -> "ApiSettings":
+        """Catch misconfigured pool sizes at parse time, not during DB init."""
+        if self.mongodb_min_pool_size > self.mongodb_max_pool_size:
+            raise ValueError(
+                f"mongodb_min_pool_size ({self.mongodb_min_pool_size}) cannot exceed "
+                f"mongodb_max_pool_size ({self.mongodb_max_pool_size})"
+            )
+        return self
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

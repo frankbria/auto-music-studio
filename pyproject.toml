@@ -24,6 +24,13 @@ dependencies = [
     # suite imports acemusic.api. Only the server runner (uvicorn) is optional.
     "fastapi>=0.110",
     "pydantic-settings>=2.7",
+    # Beanie 2.x is the ODM; it uses pymongo's native async client
+    # (AsyncMongoClient) directly — Motor is deprecated and no longer used.
+    # dnspython is required for Atlas mongodb+srv:// connection strings.
+    "beanie>=2.1",
+    "pymongo>=4.9",
+    "dnspython>=2.6",
+    "email-validator>=2.0",
 ]
 
 [project.scripts]
@@ -38,6 +45,7 @@ audio-ml = [
 dev = [
     "pytest",
     "pytest-bdd",
+    "pytest-asyncio",
     "pytest-cov",
     "ruff",
     "black",
@@ -72,6 +80,7 @@ target-version = ["py311"]
 testpaths = ["tests"]
 addopts = "--cov=src/acemusic --cov-report=term-missing -m 'not integration'"
 bdd_features_base_dir = "tests/features"
+asyncio_mode = "auto"
 markers = [
     "integration: requires a live external service (deselect with -m 'not integration')",
 ]
