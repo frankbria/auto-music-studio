@@ -19,6 +19,11 @@ dependencies = [
     "mido>=1.3.0",
     "pyloudnorm>=0.1.0",
     "scipy>=1.10.0",
+    # fastapi + pydantic-settings are core (not an optional extra): from Layer 2
+    # onward the HTTP API is a required component of the package, and the test
+    # suite imports acemusic.api. Only the server runner (uvicorn) is optional.
+    "fastapi>=0.110",
+    "pydantic-settings>=2.7",
 ]
 
 [project.scripts]
@@ -36,9 +41,13 @@ dev = [
     "pytest-cov",
     "ruff",
     "black",
+    "uvicorn[standard]>=0.29",
 ]
 audio-ml-midi = [
     "basic-pitch>=0.3.0",
+]
+api = [
+    "uvicorn[standard]>=0.29",
 ]
 
 [tool.hatch.build.targets.wheel]

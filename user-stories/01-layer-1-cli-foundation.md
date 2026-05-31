@@ -788,9 +788,9 @@ Export a single clip as WAV, FLAC, or MP3 with optional format conversion.
 - Default output: current directory with clip title as filename
 
 **Acceptance Criteria:**
-- [ ] Each format produces a valid, playable file
-- [ ] WAV output is 48kHz/24-bit
-- [ ] File is named after the clip title by default
+- [x] Each format produces a valid, playable file
+- [x] WAV output is 48kHz/24-bit
+- [x] File is named after the clip title by default
 
 ---
 
