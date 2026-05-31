@@ -38,6 +38,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "black",
+    "uvicorn[standard]>=0.29",
 ]
 audio-ml-midi = [
     "basic-pitch>=0.3.0",

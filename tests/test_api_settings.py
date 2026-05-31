@@ -28,11 +28,16 @@ class TestApiSettings:
             "https://studio.example.com",
         ]
 
-    def test_cors_origins_empty_env_yields_empty_list(self, monkeypatch):
-        """An empty env value produces an empty list, not [''] ."""
-        monkeypatch.setenv("ACEMUSIC_API_CORS_ALLOW_ORIGINS", "")
+    def test_cors_origins_blank_env_falls_back_to_defaults(self, monkeypatch):
+        """A blank env value falls back to defaults (not []).
+
+        The shipped .env.example sets ACEMUSIC_API_CORS_ALLOW_ORIGINS= (empty),
+        so a blank value must behave like "unset" and keep the localhost
+        defaults; otherwise a copied .env would silently disable local CORS.
+        """
+        monkeypatch.setenv("ACEMUSIC_API_CORS_ALLOW_ORIGINS", "  ")
         settings = ApiSettings(_env_file=None)
-        assert settings.cors_allow_origins == []
+        assert any("localhost" in origin for origin in settings.cors_allow_origins)
 
     def test_env_prefix_is_namespaced(self, monkeypatch):
         """An unprefixed CORS var must NOT be picked up (avoids collisions)."""

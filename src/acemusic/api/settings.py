@@ -31,7 +31,14 @@ class ApiSettings(BaseSettings):
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
-        """Accept a comma-separated string or an already-parsed list."""
+        """Accept a comma-separated string or an already-parsed list.
+
+        A blank string falls back to the defaults, matching the CLI's
+        "empty env var == unset" convention (see acemusic.config) so the
+        shipped `.env.example` (ACEMUSIC_API_CORS_ALLOW_ORIGINS=) does not
+        silently disable local CORS.
+        """
         if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
+            origins = [origin.strip() for origin in value.split(",") if origin.strip()]
+            return origins or DEFAULT_CORS_ORIGINS
         return value
