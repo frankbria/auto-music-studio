@@ -70,7 +70,7 @@ requires-dist = [
     { name = "mido", specifier = ">=1.3.0" },
     { name = "mutagen", specifier = ">=1.47" },
     { name = "numpy", specifier = ">=1.24.0" },
-    { name = "pydantic-settings", specifier = ">=2.2" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "pyloudnorm", specifier = ">=0.1.0" },
     { name = "pytest", marker = "extra == 'dev'" },
