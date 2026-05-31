@@ -66,6 +66,15 @@ class TestOpenApiDocs:
         schema = client.get("/openapi.json").json()
         assert "/api/v1/health" in schema["paths"]
 
+    def test_openapi_health_has_typed_response_schema(self, client):
+        """The health 200 response references a typed body schema (not untyped dict)."""
+        schema = client.get("/openapi.json").json()
+        content = schema["paths"]["/api/v1/health"]["get"]["responses"]["200"]["content"]
+        ref = content["application/json"]["schema"]["$ref"]
+        model_name = ref.rsplit("/", 1)[-1]
+        properties = schema["components"]["schemas"][model_name]["properties"]
+        assert {"status", "version", "uptime_seconds"} <= set(properties)
+
 
 class TestCors:
     def test_cors_header_present_for_configured_origin(self):

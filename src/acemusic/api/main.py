@@ -38,6 +38,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.start_time = time.monotonic()
 
+    # allow_credentials=True is incompatible with a wildcard allow_origins=["*"]
+    # (browsers reject the combination). _split_origins in settings.py never
+    # produces "*", so explicit origins are always used here.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
