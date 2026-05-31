@@ -14,7 +14,13 @@ DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:8000"]
 
 
 class ApiSettings(BaseSettings):
-    """Runtime configuration for the FastAPI service."""
+    """Runtime configuration for the FastAPI service.
+
+    ``cors_allow_origins`` is annotated with :class:`~pydantic_settings.NoDecode`
+    to disable pydantic-settings' default JSON decoding, so its env value can be a
+    friendly comma-separated string (e.g. ``https://a.com,https://b.com``) rather
+    than a JSON array. :meth:`_split_origins` performs the splitting.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="ACEMUSIC_API_",
@@ -23,9 +29,6 @@ class ApiSettings(BaseSettings):
         extra="ignore",
     )
 
-    # NoDecode disables pydantic-settings' default JSON decoding so the env value
-    # can be a friendly comma-separated string (e.g. "https://a.com,https://b.com")
-    # rather than a JSON array. The validator below does the splitting.
     cors_allow_origins: Annotated[list[str], NoDecode] = DEFAULT_CORS_ORIGINS
 
     @field_validator("cors_allow_origins", mode="before")
