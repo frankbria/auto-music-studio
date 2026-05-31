@@ -101,8 +101,10 @@ uv run acemusic export 42 --format flac --output /path/to/out.flac     # explici
 src/acemusic/
   __init__.py       # Package metadata (__version__)
   api/              # FastAPI platform API (Layer 2)
-    main.py         # create_app() factory + ASGI app (uvicorn target)
+    main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
+    database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job
     routers/        # Versioned routers mounted under /api/v1 (health, ...)
   cli.py            # Typer CLI app (health, generate, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API

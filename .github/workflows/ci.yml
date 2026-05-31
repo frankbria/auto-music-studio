@@ -13,6 +13,17 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
 
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -36,5 +47,12 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
-      - name: Test with coverage
+      - name: Test with coverage (unit)
         run: uv run pytest --cov
+
+      - name: Integration tests (MongoDB)
+        # Runs against the mongo service above. ACE-Step integration tests skip
+        # gracefully when their server is absent (see tests/conftest.py).
+        run: uv run pytest -m integration
+        env:
+          ACEMUSIC_TEST_MONGODB_URL: mongodb://localhost:27017

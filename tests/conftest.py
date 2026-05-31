@@ -168,6 +168,104 @@ def app_config():
 
 
 # ---------------------------------------------------------------------------
+# MongoDB fixtures (US-8.2) — local-only, isolated throwaway database
+# ---------------------------------------------------------------------------
+
+LOCAL_MONGO_HOSTS = ("localhost", "127.0.0.1", "::1", "mongo", "mongodb")
+
+
+def _mongo_test_url() -> str:
+    """Local MongoDB URL for tests. Overridable only with another LOCAL url."""
+    return os.environ.get("ACEMUSIC_TEST_MONGODB_URL", "mongodb://localhost:27017")
+
+
+def mongodb_uri_hosts(url: str) -> list[str]:
+    """Return every host listed in a MongoDB URI (handles replica-set lists)."""
+    from pymongo.uri_parser import parse_uri
+
+    try:
+        nodelist = parse_uri(url, warn=True)["nodelist"]
+        return [host for host, _port in nodelist]
+    except Exception:
+        from urllib.parse import urlparse
+
+        return [urlparse(url).hostname]
+
+
+def _assert_local(url: str) -> None:
+    """Hard guard: tests must never run against a remote/Atlas cluster.
+
+    Rejects ``mongodb+srv://`` (SRV resolves to a remote cluster) and requires
+    *every* host in a multi-host/replica-set URI to be local — checking only the
+    first host would let ``mongodb://localhost,prod.example.com/`` slip through
+    and have teardown drop a remote database.
+    """
+    if url.startswith("mongodb+srv://"):
+        raise RuntimeError(
+            "Refusing to run integration tests against a mongodb+srv:// (SRV/Atlas) URL. "
+            "Set ACEMUSIC_TEST_MONGODB_URL to a local mongodb:// URL."
+        )
+    remote = [h for h in mongodb_uri_hosts(url) if h not in LOCAL_MONGO_HOSTS]
+    if remote:
+        raise RuntimeError(
+            f"Refusing to run integration tests against non-local MongoDB host(s) {remote!r}. "
+            "Tests only run against a local MongoDB; set ACEMUSIC_TEST_MONGODB_URL to a local URL."
+        )
+
+
+async def _mongo_available(url: str) -> bool:
+    from pymongo import AsyncMongoClient
+
+    try:
+        client = AsyncMongoClient(url, serverSelectionTimeoutMS=2000)
+        await client.admin.command("ping")
+        await client.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture
+async def mongo_settings():
+    """ApiSettings pointed at an isolated local test database.
+
+    ``_env_file=None`` ensures a real ``.env`` (which may hold an Atlas URL) is
+    never read here, so tests cannot touch the production cluster.
+    """
+    import uuid
+
+    from acemusic.api.settings import ApiSettings
+
+    url = _mongo_test_url()
+    _assert_local(url)
+    db_name = f"acemusic_test_{uuid.uuid4().hex[:8]}"
+    return ApiSettings(_env_file=None, mongodb_url=url, mongodb_db_name=db_name)
+
+
+@pytest.fixture
+async def mongo_db(mongo_settings):
+    """Initialize the DB/Beanie against the isolated test database.
+
+    Yields the ``acemusic.api.database`` module. Drops the test database and
+    closes the client on teardown. Skips if no local MongoDB is reachable.
+    """
+    from acemusic.api import database
+
+    if not await _mongo_available(mongo_settings.mongodb_url):
+        pytest.skip(f"local MongoDB not available at {mongo_settings.mongodb_url}")
+
+    client = await database.init_db(mongo_settings)
+    try:
+        yield database
+    finally:
+        # Always close the client, even if dropping the test DB fails.
+        try:
+            await client.drop_database(mongo_settings.mongodb_db_name)
+        finally:
+            await database.close_db(client)
+
+
+# ---------------------------------------------------------------------------
 # Audio test helpers (shared across audio-related test modules)
 # ---------------------------------------------------------------------------
 
