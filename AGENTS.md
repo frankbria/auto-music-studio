@@ -100,6 +100,10 @@ uv run acemusic export 42 --format flac --output /path/to/out.flac     # explici
 ```
 src/acemusic/
   __init__.py       # Package metadata (__version__)
+  api/              # FastAPI platform API (Layer 2)
+    main.py         # create_app() factory + ASGI app (uvicorn target)
+    settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
+    routers/        # Versioned routers mounted under /api/v1 (health, ...)
   cli.py            # Typer CLI app (health, generate, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
   config.py         # Config loading: env > .env > ~/.acemusic/config.yaml
