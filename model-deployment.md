@@ -87,9 +87,31 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 uv run acestep-api
 
 # Server listens on http://localhost:8001
-# Optional: set API key for security
-export ACESTEP_API_KEY=108030f6e31f4e8694b2d8d534854137
+# Optional: set API key for security (use your own; keep it out of version control)
+export ACESTEP_API_KEY=<your-api-key>
 ```
+
+#### 2.4.1 LLM (CoT) on low-VRAM GPUs — disable on < 16GB
+
+On GPUs below ~16GB VRAM (e.g. an RTX 4070 Laptop, 8GB), ACE-Step's GPU
+auto-detection still enables the LLM (chain-of-thought) path, but after loading
+the DiT + LLM models there is effectively **0 GB left for the LLM's KV cache**.
+Every generation then fails immediately with:
+
+```
+RuntimeError: Insufficient KV cache to schedule sequence. Free blocks: 1/1, blocks needed: 2 …
+[API Server] Job … FAILED: Music generation failed
+```
+
+**Fix:** force DiT-only generation by disabling the LLM. DiT-only on 8GB
+generates a 30s clip in ~5–7s; CoT caption/language features are auto-disabled.
+
+```bash
+ACESTEP_INIT_LLM=false uv run acestep-api   # or set ACESTEP_INIT_LLM=false in .env
+```
+
+This is also documented in the acemusic `.env.example`. Note that LLM-enabled
+generation (CoT) requires a larger GPU; on 8GB it is not viable.
 
 ### 2.5 Multi-Model Configuration
 
@@ -392,7 +414,7 @@ Request arrives at Platform API
 
 ```bash
 # .env additions for hybrid mode
-ACEMUSIC_API_KEY=108030f6e31f4e8694b2d8d534854137
+ACEMUSIC_API_KEY=<your-api-key>
 ACEMUSIC_BASE_URL=https://api.acemusic.ai
 
 # Local ACE-Step server

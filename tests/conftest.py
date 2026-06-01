@@ -103,6 +103,11 @@ def ace_server():
     # (before main() runs), so the --api-key flag has no effect on _api_key.
     # Instead, set ACESTEP_API_KEY in the subprocess env directly.
     # If api_key is empty we strip it entirely so _api_key stays None (auth disabled).
+    #
+    # The server inherits the full environment (including ACESTEP_INIT_LLM) via the
+    # copy below. On < 16GB GPUs set ACESTEP_INIT_LLM=false in .env.local so the
+    # auto-started server runs DiT-only; otherwise the LLM auto-enables and every
+    # generation fails with "Insufficient KV cache" (see model-deployment.md 2.4.1).
     server_env = os.environ.copy()
     if api_key:
         server_env["ACESTEP_API_KEY"] = api_key
