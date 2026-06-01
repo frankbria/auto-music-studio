@@ -29,9 +29,10 @@ class AceStepConnectionError(AceStepError):
 
     Distinct from API/HTTP-status errors so callers can retry transient network
     issues without masking a real server-side error (e.g. a 500 whose body
-    happens to mention "connection"). ``is_timeout`` is True when the underlying
-    failure was an httpx timeout — the server is reachable but slow (e.g. loading
-    models on a cold start) rather than down.
+    happens to mention "connection"). ``is_timeout`` is True only for a *read*
+    timeout — the connection was established but the server was slow to respond
+    (e.g. loading models on a cold start). Connect timeouts and refused/DNS
+    failures leave it False so an unreachable host still fast-fails.
     """
 
     def __init__(self, message: str, *, is_timeout: bool = False) -> None:
@@ -201,7 +202,7 @@ class AceStepClient:
             raise AceStepError(f"Submit failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
             raise AceStepConnectionError(
-                f"Submit failed: {exc}", is_timeout=isinstance(exc, httpx.TimeoutException)
+                f"Submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
             ) from exc
 
     def query_result(self, task_id: str, timeout: float = 10.0) -> dict:
@@ -253,9 +254,7 @@ class AceStepClient:
         except httpx.HTTPStatusError as exc:
             raise AceStepError(f"Query failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise AceStepConnectionError(
-                f"Query failed: {exc}", is_timeout=isinstance(exc, httpx.TimeoutException)
-            ) from exc
+            raise AceStepConnectionError(f"Query failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)) from exc
 
     def download_audio(self, url: str, timeout: float = 120.0) -> bytes:
         """Download raw audio bytes from a URL.
@@ -271,5 +270,5 @@ class AceStepClient:
             raise AceStepError(f"Download failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise AceStepConnectionError(
-                f"Download failed: {exc}", is_timeout=isinstance(exc, httpx.TimeoutException)
+                f"Download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
             ) from exc
