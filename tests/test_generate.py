@@ -148,11 +148,33 @@ class TestGenerateCommand:
         assert client_mock.query_result.call_count == 3
         assert len(list(tmp_path.glob("*.wav"))) == 2
 
-    def test_generate_aborts_after_persistent_poll_errors(self, monkeypatch, tmp_path):
-        """Persistent connection failures abort (don't hang for the whole budget)."""
+    def test_generate_keeps_polling_through_timeouts(self, monkeypatch, tmp_path):
+        """Repeated timeouts (slow cold start) are retried past the fast-fail cap.
+
+        Timeouts mean the server is reachable but warming up, so they must not
+        trip the consecutive-connection-failure cap — they retry for the full
+        ACEMUSIC_POLL_TIMEOUT budget.
+        """
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
 
-        client_mock = _make_client_mock([AceStepError("Query failed: timed out")] * 12)
+        # 7 timeouts (> the 5 fast-fail cap) then success → must still complete.
+        client_mock = _make_client_mock([AceStepError("Query failed: timed out")] * 7 + [COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "lofi", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert client_mock.query_result.call_count == 8
+
+    def test_generate_fails_fast_on_persistent_connection_failure(self, monkeypatch, tmp_path):
+        """Persistent hard connection failures (server down) abort quickly."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        client_mock = _make_client_mock([AceStepError("Submit failed: Connection refused")] * 20)
 
         with (
             patch("acemusic.cli.AceStepClient", return_value=client_mock),
@@ -162,17 +184,15 @@ class TestGenerateCommand:
             result = runner.invoke(app, ["generate", "lofi", "--output", str(tmp_path)])
 
         assert result.exit_code == 1
-        assert "polling" in result.output.lower()
-        # Gives up after a bounded number of consecutive failures, not all 12.
-        assert client_mock.query_result.call_count < 12
+        assert "connection failures" in result.output.lower()
+        # Fails fast after a bounded number of consecutive failures, not all 20.
+        assert client_mock.query_result.call_count <= 5
 
     def test_generate_aborts_immediately_on_api_poll_error(self, monkeypatch, tmp_path):
         """A genuine API error (not connection/timeout) aborts immediately, no retry."""
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
 
-        client_mock = _make_client_mock(
-            [AceStepError("Query failed: 500 Internal Server Error")]
-        )
+        client_mock = _make_client_mock([AceStepError("Query failed: 500 Internal Server Error")])
 
         with (
             patch("acemusic.cli.AceStepClient", return_value=client_mock),

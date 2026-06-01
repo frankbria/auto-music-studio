@@ -269,17 +269,21 @@ def _poll_until_complete(
 ) -> dict:
     """Poll ``query_result`` until the task completes; return the result dict.
 
-    Transient connection/timeout errors (e.g. the server briefly blocking while it
-    loads models on a cold start) are tolerated and retried within the overall
-    ``poll_timeout`` budget, rather than aborting the whole job on a single blip.
-    A genuine API error aborts immediately, and a run of consecutive connection
-    failures (``_MAX_CONSECUTIVE_POLL_ERRORS``) aborts so a truly-down server fails
-    fast instead of waiting out the full budget.
+    Retry policy for transient poll failures:
+
+    - **Timeouts** mean the server is reachable but slow (e.g. blocking while it
+      loads models on a cold start). These are retried for the *full*
+      ``poll_timeout`` budget — they must not abort a legitimately long warmup.
+    - **Hard connection failures** (refused/unreachable) mean the server is
+      likely down, so after ``_MAX_CONSECUTIVE_POLL_ERRORS`` consecutive ones we
+      fail fast instead of waiting out the whole budget. A single successful poll
+      (or a timeout) resets the counter.
+    - A **genuine API error** aborts immediately.
 
     Raises ``typer.Exit(code=1)`` on timeout, reported failure, or abort.
     """
     start = time.monotonic()
-    consecutive_errors = 0
+    consecutive_conn_failures = 0
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= poll_timeout:
@@ -288,20 +292,22 @@ def _poll_until_complete(
 
         try:
             result = ace_client.query_result(task_id)
-            consecutive_errors = 0
+            consecutive_conn_failures = 0
         except AceStepError as exc:
             if _is_connection_error(exc):
-                consecutive_errors += 1
-                if consecutive_errors >= _MAX_CONSECUTIVE_POLL_ERRORS:
-                    console.print(
-                        f"[red]Error polling status after {consecutive_errors} consecutive "
-                        f"connection failures: {exc}[/red]"
-                    )
-                    raise typer.Exit(code=1)
-                status_bar.update(
-                    f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server "
-                    f"(retry {consecutive_errors}/{_MAX_CONSECUTIVE_POLL_ERRORS})[/bold green]"
-                )
+                msg = str(exc).lower()
+                if "timed out" in msg or "timeout" in msg:
+                    # Server is reachable but slow — keep polling within the budget.
+                    consecutive_conn_failures = 0
+                else:
+                    consecutive_conn_failures += 1
+                    if consecutive_conn_failures >= _MAX_CONSECUTIVE_POLL_ERRORS:
+                        console.print(
+                            f"[red]Error polling status after {consecutive_conn_failures} consecutive "
+                            f"connection failures: {exc}[/red]"
+                        )
+                        raise typer.Exit(code=1)
+                status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server…[/bold green]")
                 time.sleep(poll_interval)
                 continue
             console.print(f"[red]Error polling status: {exc}[/red]")
