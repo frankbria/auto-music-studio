@@ -34,7 +34,7 @@ from acemusic.audio import (
     remaster_audio,
     time_stretch_audio,
 )
-from acemusic.client import AceStepClient, AceStepError
+from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
 from acemusic.config import load_config
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
 from acemusic.db import (
@@ -293,23 +293,25 @@ def _poll_until_complete(
         try:
             result = ace_client.query_result(task_id)
             consecutive_conn_failures = 0
+        except AceStepConnectionError as exc:
+            # Transport failure (classified by exception type, not message text, so a
+            # 500 whose body mentions "connection" is never mistaken for one).
+            if exc.is_timeout:
+                # Server is reachable but slow — keep polling within the budget.
+                consecutive_conn_failures = 0
+            else:
+                consecutive_conn_failures += 1
+                if consecutive_conn_failures >= _MAX_CONSECUTIVE_POLL_ERRORS:
+                    console.print(
+                        f"[red]Error polling status after {consecutive_conn_failures} consecutive "
+                        f"connection failures: {exc}[/red]"
+                    )
+                    raise typer.Exit(code=1)
+            status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server…[/bold green]")
+            time.sleep(poll_interval)
+            continue
         except AceStepError as exc:
-            if _is_connection_error(exc):
-                msg = str(exc).lower()
-                if "timed out" in msg or "timeout" in msg:
-                    # Server is reachable but slow — keep polling within the budget.
-                    consecutive_conn_failures = 0
-                else:
-                    consecutive_conn_failures += 1
-                    if consecutive_conn_failures >= _MAX_CONSECUTIVE_POLL_ERRORS:
-                        console.print(
-                            f"[red]Error polling status after {consecutive_conn_failures} consecutive "
-                            f"connection failures: {exc}[/red]"
-                        )
-                        raise typer.Exit(code=1)
-                status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server…[/bold green]")
-                time.sleep(poll_interval)
-                continue
+            # Genuine API/HTTP error — surface it immediately.
             console.print(f"[red]Error polling status: {exc}[/red]")
             raise typer.Exit(code=1)
 
