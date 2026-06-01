@@ -249,8 +249,75 @@ def _is_connection_error(exc: AceStepError) -> bool:
     """Return True if the AceStepError is a connection/timeout failure (not an API error)."""
     msg = str(exc).lower()
     return any(
-        keyword in msg for keyword in ("connection refused", "connect", "timeout", "unreachable", "name or service")
+        keyword in msg
+        # "timed out" and "timeout" are distinct substrings: httpx renders read/
+        # connect timeouts as "timed out", so both must be matched.
+        for keyword in ("connection refused", "connect", "timeout", "timed out", "unreachable", "name or service")
     )
+
+
+_MAX_CONSECUTIVE_POLL_ERRORS = 5
+
+
+def _poll_until_complete(
+    ace_client: AceStepClient,
+    task_id: str,
+    status_bar,
+    label: str,
+    poll_timeout: float,
+    poll_interval: float = 2.0,
+) -> dict:
+    """Poll ``query_result`` until the task completes; return the result dict.
+
+    Transient connection/timeout errors (e.g. the server briefly blocking while it
+    loads models on a cold start) are tolerated and retried within the overall
+    ``poll_timeout`` budget, rather than aborting the whole job on a single blip.
+    A genuine API error aborts immediately, and a run of consecutive connection
+    failures (``_MAX_CONSECUTIVE_POLL_ERRORS``) aborts so a truly-down server fails
+    fast instead of waiting out the full budget.
+
+    Raises ``typer.Exit(code=1)`` on timeout, reported failure, or abort.
+    """
+    start = time.monotonic()
+    consecutive_errors = 0
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= poll_timeout:
+            console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
+            raise typer.Exit(code=1)
+
+        try:
+            result = ace_client.query_result(task_id)
+            consecutive_errors = 0
+        except AceStepError as exc:
+            if _is_connection_error(exc):
+                consecutive_errors += 1
+                if consecutive_errors >= _MAX_CONSECUTIVE_POLL_ERRORS:
+                    console.print(
+                        f"[red]Error polling status after {consecutive_errors} consecutive "
+                        f"connection failures: {exc}[/red]"
+                    )
+                    raise typer.Exit(code=1)
+                status_bar.update(
+                    f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server "
+                    f"(retry {consecutive_errors}/{_MAX_CONSECUTIVE_POLL_ERRORS})[/bold green]"
+                )
+                time.sleep(poll_interval)
+                continue
+            console.print(f"[red]Error polling status: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        job_status = result.get("status", "unknown")
+        status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — {job_status}[/bold green]")
+
+        if job_status == "completed":
+            return result
+        if job_status == "failed":
+            error_msg = result.get("error", "unknown error")
+            console.print(f"[red]Generation failed: {error_msg}[/red]")
+            raise typer.Exit(code=1)
+
+        time.sleep(poll_interval)
 
 
 _VALID_TIME_SIGNATURES = {"4/4", "3/4", "6/8", "5/4", "7/8"}
@@ -631,32 +698,8 @@ def _generate_via_ace_step(
     )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
-    start = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Generating…[/bold green]", spinner="dots") as status:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-
-            job_status = result.get("status", "unknown")
-            status.update(f"[bold green]Generating… ({elapsed:.0f}s) — {job_status}[/bold green]")
-
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Generation failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status, "Generating", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     for i, url in enumerate(audio_urls, start=1):
@@ -904,32 +947,8 @@ def _sounds_via_ace_step(
     )
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
-    start = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Generating…[/bold green]", spinner="dots") as status:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-
-            job_status = result.get("status", "unknown")
-            status.update(f"[bold green]Generating… ({elapsed:.0f}s) — {job_status}[/bold green]")
-
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Generation failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status, "Generating", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     for i, url in enumerate(audio_urls, start=1):
@@ -2080,28 +2099,8 @@ def extend(
 
         poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
         poll_interval = 2.0
-        start = time.monotonic()
-        result: dict = {}
         with console.status("[bold green]Extending\u2026[/bold green]", spinner="dots") as status_bar:
-            while True:
-                elapsed = time.monotonic() - start
-                if elapsed >= poll_timeout:
-                    console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                    raise typer.Exit(code=1)
-                try:
-                    result = ace_client.query_result(task_id)
-                except AceStepError as exc:
-                    console.print(f"[red]Error polling status: {exc}[/red]")
-                    raise typer.Exit(code=1)
-                job_status = result.get("status", "unknown")
-                status_bar.update(f"[bold green]Extending\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-                if job_status == "completed":
-                    break
-                if job_status == "failed":
-                    error_msg = result.get("error", "unknown error")
-                    console.print(f"[red]Generation failed: {error_msg}[/red]")
-                    raise typer.Exit(code=1)
-                time.sleep(poll_interval)
+            result = _poll_until_complete(ace_client, task_id, status_bar, "Extending", poll_timeout, poll_interval)
 
         audio_urls: list[str] = result.get("audio_urls", [])
         if not audio_urls:
@@ -2251,30 +2250,10 @@ def _generate_section(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    start = time.monotonic()
-    result: dict = {}
     with console.status(f"[bold green]Generating {section.name}\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds on {section.name!r}.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status for {section.name!r}: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(
-                f"[bold green]Generating {section.name}\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]"
-            )
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Generation failed on section {section.name!r}: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(
+            ace_client, task_id, status_bar, f"Generating {section.name}", poll_timeout, poll_interval
+        )
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
@@ -2513,28 +2492,8 @@ def cover(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    start = time.monotonic()
-    result: dict = {}  # set below by the polling loop; initialized to satisfy mypy/lint on the post-loop read
     with console.status("[bold green]Covering\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(f"[bold green]Covering\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Cover failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status_bar, "Covering", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
@@ -2714,28 +2673,8 @@ def repaint(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    poll_start = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Repainting\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - poll_start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(f"[bold green]Repainting\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Repaint failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status_bar, "Repainting", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
@@ -2917,28 +2856,8 @@ def add_vocal(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    poll_start = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Adding vocal\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - poll_start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(f"[bold green]Adding vocal\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Add-vocal failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status_bar, "Adding vocal", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
@@ -3126,28 +3045,8 @@ def replace(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    poll_start = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Replacing section\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - poll_start
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(f"[bold green]Replacing section\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Replace failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(ace_client, task_id, status_bar, "Replacing section", poll_timeout, poll_interval)
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
@@ -3421,28 +3320,8 @@ def mashup(
 
         poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
         poll_interval = 2.0
-        poll_start = time.monotonic()
-        result: dict = {}
         with console.status("[bold green]Mashing up\u2026[/bold green]", spinner="dots") as status_bar:
-            while True:
-                elapsed = time.monotonic() - poll_start
-                if elapsed >= poll_timeout:
-                    console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                    raise typer.Exit(code=1)
-                try:
-                    result = ace_client.query_result(task_id)
-                except AceStepError as exc:
-                    console.print(f"[red]Error polling status: {exc}[/red]")
-                    raise typer.Exit(code=1)
-                job_status = result.get("status", "unknown")
-                status_bar.update(f"[bold green]Mashing up\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]")
-                if job_status == "completed":
-                    break
-                if job_status == "failed":
-                    error_msg = result.get("error", "unknown error")
-                    console.print(f"[red]Mashup failed: {error_msg}[/red]")
-                    raise typer.Exit(code=1)
-                time.sleep(poll_interval)
+            result = _poll_until_complete(ace_client, task_id, status_bar, "Mashing up", poll_timeout, poll_interval)
 
         audio_urls: list[str] = result.get("audio_urls", [])
         if not audio_urls:
@@ -3777,30 +3656,10 @@ def _generate_sample_via_ace_step(
 
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
-    start_time = time.monotonic()
-    result: dict = {}
     with console.status("[bold green]Generating sample track\u2026[/bold green]", spinner="dots") as status_bar:
-        while True:
-            elapsed = time.monotonic() - start_time
-            if elapsed >= poll_timeout:
-                console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
-                raise typer.Exit(code=1)
-            try:
-                result = ace_client.query_result(task_id)
-            except AceStepError as exc:
-                console.print(f"[red]Error polling status: {exc}[/red]")
-                raise typer.Exit(code=1)
-            job_status = result.get("status", "unknown")
-            status_bar.update(
-                f"[bold green]Generating sample track\u2026 ({elapsed:.0f}s) \u2014 {job_status}[/bold green]"
-            )
-            if job_status == "completed":
-                break
-            if job_status == "failed":
-                error_msg = result.get("error", "unknown error")
-                console.print(f"[red]Generation failed: {error_msg}[/red]")
-                raise typer.Exit(code=1)
-            time.sleep(poll_interval)
+        result = _poll_until_complete(
+            ace_client, task_id, status_bar, "Generating sample track", poll_timeout, poll_interval
+        )
 
     audio_urls: list[str] = result.get("audio_urls", [])
     if not audio_urls:
