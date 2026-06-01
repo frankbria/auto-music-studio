@@ -188,7 +188,7 @@ class TestGenerateCommand:
         """Integration: generate against a real ACE-Step server (prefers ACESTEP_LOCAL_URL)."""
         result = runner.invoke(
             app,
-            ["generate", "upbeat pop", "--output", str(tmp_path), "--num-clips", "1", "--duration", "15"],
+            ["generate", "upbeat pop", "--output", str(tmp_path), "--num-clips", "1", "--duration", "30"],
             env={"ACEMUSIC_BASE_URL": integration_url},
         )
         assert result.exit_code == 0, result.output
@@ -212,7 +212,7 @@ class TestGenerateCommand:
                 "--num-clips",
                 "1",
                 "--duration",
-                "15",
+                "30",
             ],
             env={"ACEMUSIC_BASE_URL": integration_url},
         )
@@ -227,7 +227,7 @@ class TestGenerateCommand:
         new_dir = tmp_path / "auto-created"
         result = runner.invoke(
             app,
-            ["generate", "upbeat pop", "--output", str(new_dir), "--num-clips", "1", "--duration", "15"],
+            ["generate", "upbeat pop", "--output", str(new_dir), "--num-clips", "1", "--duration", "30"],
             env={"ACEMUSIC_BASE_URL": integration_url},
         )
         assert result.exit_code == 0, result.output
