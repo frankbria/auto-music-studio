@@ -5,8 +5,10 @@ routing and validation stay consistent. The CLI translates a ``BackendError``
 into a friendly message + exit code.
 
 Backends:
-- ``auto``       — pick a capable engine; ACE-Step first, fall back to ElevenLabs
-                   on a transport failure (the historical default behavior).
+- ``auto``       — prefer ACE-Step. Commands that implement fallback (currently
+                   ``generate``) drop to ElevenLabs on a transport failure; other
+                   commands run on ACE-Step. ``auto`` never fails just because one
+                   engine is unavailable when another can do the job.
 - ``ace-step``   — ACE-Step only; never silently switches engines.
 - ``elevenlabs`` — ElevenLabs only.
 """

@@ -3452,7 +3452,8 @@ def sample(
     backend: Optional[str] = typer.Option(
         None,
         "--backend",
-        help="Engine: 'auto' (default), 'ace-step', or 'elevenlabs'. Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+        help="Engine: 'auto'/'ace-step' (ACE-Step) or 'elevenlabs'. Defaults to ACEMUSIC_BACKEND, then 'auto'. "
+        "(Automatic ElevenLabs fallback currently applies to `generate`, not `sample`.)",
     ),
     num_clips: int = typer.Option(1, "--num-clips", help="Number of variations to generate."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and title for the new clip."),
