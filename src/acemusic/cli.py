@@ -257,6 +257,27 @@ def _is_connection_error(exc: AceStepError) -> bool:
     )
 
 
+def _is_timeout_error(exc: AceStepError) -> bool:
+    """Return True if the failure is a timeout (server slow-but-reachable)."""
+    if isinstance(exc, AceStepConnectionError):
+        return exc.is_timeout
+    msg = str(exc).lower()
+    return "timed out" in msg or "timeout" in msg
+
+
+def _should_fall_back(exc: AceStepError) -> bool:
+    """Whether an ACE-Step failure warrants switching to ElevenLabs.
+
+    Only a **hard connection failure** (server unreachable) qualifies. Timeouts
+    mean ACE-Step is slow-but-reachable (the job may still finish, and ACE-Step
+    flags were requested), and API/HTTP errors mean the server responded — neither
+    should switch backends.
+    """
+    if isinstance(exc, AceStepConnectionError):
+        return not exc.is_timeout
+    return _is_connection_error(exc) and not _is_timeout_error(exc)
+
+
 _MAX_CONSECUTIVE_POLL_ERRORS = 5
 
 
@@ -592,10 +613,10 @@ def generate(
             )
             return
         except AceStepError as exc:
-            # Transport failures (submit- or poll-time) are connection errors;
-            # AceStepConnectionError is always one, regardless of message text.
-            if not (isinstance(exc, AceStepConnectionError) or _is_connection_error(exc)):
-                # API-level error — do not fall back
+            # Fall back only on a hard connection failure (server unreachable),
+            # submit- or poll-time. Timeouts (slow-but-reachable) and API errors
+            # exit without switching backends.
+            if not _should_fall_back(exc):
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(code=1)
             # Connection failure. Only 'auto' falls back; explicit 'ace-step' does not.

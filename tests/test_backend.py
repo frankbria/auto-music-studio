@@ -636,3 +636,33 @@ class TestPollTimeFallback:
             result = runner.invoke(app, ["generate", "test", "--backend", "ace-step", "--output", str(tmp_path)])
         assert result.exit_code == 1
         el.generate.assert_not_called()
+
+
+class TestTimeoutNeverFallsBack:
+    """Timeouts (slow-but-reachable ACE-Step) must NOT fall back — only hard
+    connection failures do (#93 / codex P2 / CodeRabbit)."""
+
+    def test_submit_timeout_does_not_fall_back(self, monkeypatch, tmp_path):
+        from acemusic.client import AceStepConnectionError
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",  # key set, but a timeout must NOT use it
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+        ace = MagicMock()
+        ace.submit_task.side_effect = AceStepConnectionError("Submit failed: timed out", is_timeout=True)
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        el.generate.assert_not_called()  # timeout → exit, not fallback
