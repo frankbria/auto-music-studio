@@ -529,8 +529,6 @@ class TestPollTimeFallback:
     @staticmethod
     def _ace_mock_submit_ok_then_poll(side_effect):
         """ACE-Step client: submit succeeds, query_result raises/returns per side_effect."""
-        from acemusic.client import AceStepError  # noqa: F401
-
         ace = MagicMock()
         ace.submit_task.return_value = "task-123"
         ace.query_result.side_effect = side_effect

@@ -6,7 +6,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from acemusic.client import AceStepClient, AceStepError
+from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
+
+
+def test_connection_error_is_an_acestep_error():
+    """generate's poll-time fallback relies on this: a raised
+    AceStepConnectionError must be caught by ``except AceStepError``."""
+    assert issubclass(AceStepConnectionError, AceStepError)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
