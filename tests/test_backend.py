@@ -421,6 +421,31 @@ class TestBackendSelector:
         assert result.exit_code == 1
         el_mock.generate.assert_not_called()  # did NOT fall back
         assert "falling back" not in result.output.lower()
+        # Positively confirm the explicit-no-fallback path (not some other exit)
+        assert "use --backend auto" in result.output.lower()
+
+    def test_default_no_flag_no_config_uses_ace_step(self, monkeypatch, tmp_path):
+        """The common path — no --backend, no ACEMUSIC_BACKEND — generates via ACE-Step."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, backend=None),
+        )
+
+        ace_mock = _make_ace_client_mock()  # succeeds
+        el_mock = _elevenlabs_client_mock(FAKE_MP3)
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace_mock),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        ace_mock.submit_task.assert_called()
+        el_mock.generate.assert_not_called()
 
     def test_auto_falls_back(self, monkeypatch, tmp_path):
         """--backend auto falls back to ElevenLabs on connection failure."""
