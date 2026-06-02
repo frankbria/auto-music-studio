@@ -34,6 +34,7 @@ from acemusic.audio import (
     remaster_audio,
     time_stretch_audio,
 )
+from acemusic.backends import BackendError, resolve_backend
 from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
 from acemusic.config import load_config
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
@@ -368,7 +369,12 @@ def generate(
     format: str = typer.Option("wav", "--format", help="Output audio format."),
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save generated files."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix (e.g. 'demo' → demo-1.wav)."),
-    backend: str = typer.Option("ace-step", "--backend", help="AI backend: 'ace-step' (default) or 'elevenlabs'."),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto' (default — ACE-Step, fall back to ElevenLabs), 'ace-step', or 'elevenlabs'. "
+        "Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+    ),
     preset: Optional[str] = typer.Option(None, "--preset", help="Apply a saved preset (flags override preset values)."),
     style: Optional[str] = typer.Option(
         None, "--style", help="Comma-separated style descriptors (e.g. 'dark electro, punchy drums')."
@@ -529,10 +535,15 @@ def generate(
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_name = make_slug(name) if name else None
 
-    # Determine effective backend (may change on auto-fallback)
-    effective_backend = backend.lower()
+    # Resolve the backend (CLI flag > config default > auto). May change to
+    # "elevenlabs" below only when resolved to "auto" (auto-fallback).
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
-    if effective_backend == "ace-step":
+    if effective_backend in ("auto", "ace-step"):
         ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
         try:
             _generate_via_ace_step(
@@ -565,7 +576,12 @@ def generate(
                 # API-level error — do not fall back
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(code=1)
-            # Connection failure — attempt auto-fallback
+            # Connection failure. Only 'auto' falls back; explicit 'ace-step' does not.
+            if effective_backend == "ace-step":
+                console.print(
+                    f"[red]ACE-Step unavailable ({exc}). Use --backend auto to allow ElevenLabs fallback.[/red]"
+                )
+                raise typer.Exit(code=1)
             if not config.elevenlabs_api_key:
                 console.print(
                     f"[red]ACE-Step unavailable ({exc}). Set ELEVENLABS_API_KEY to enable automatic fallback.[/red]"
@@ -651,9 +667,6 @@ def generate(
             instrumental=instrumental,
         )
         return
-
-    console.print(f"[red]Unknown backend: {backend!r}. Use 'ace-step' or 'elevenlabs'.[/red]")
-    raise typer.Exit(code=1)
 
 
 def _generate_via_ace_step(
@@ -3413,8 +3426,6 @@ _ROLE_PROMPT_PREFIX: dict[str, str] = {
     "melodic-hook": "Create a track that follows and develops from a melodic hook.",
 }
 
-_VALID_SAMPLE_BACKENDS: frozenset[str] = frozenset({"ace-step", "elevenlabs"})
-
 # Guard against drift between the prompt prefixes and the canonical role set.
 assert set(_ROLE_PROMPT_PREFIX) == SAMPLE_ROLES, "Sample roles in cli.py and audio.py must stay in sync."
 
@@ -3438,7 +3449,11 @@ def sample(
     ),
     prompt: str = typer.Option(..., "--prompt", help="Text prompt describing the new song to generate."),
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the sampled clip."),
-    backend: str = typer.Option("ace-step", "--backend", help="Generation backend: ace-step or elevenlabs."),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto' (default), 'ace-step', or 'elevenlabs'. Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+    ),
     num_clips: int = typer.Option(1, "--num-clips", help="Number of variations to generate."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and title for the new clip."),
 ) -> None:
@@ -3452,10 +3467,6 @@ def sample(
     """
     if role not in SAMPLE_ROLES:
         console.print(f"[red]Error: --role must be one of {sorted(SAMPLE_ROLES)}, got {role!r}.[/red]")
-        raise typer.Exit(code=1)
-
-    if backend not in _VALID_SAMPLE_BACKENDS:
-        console.print(f"[red]Error: --backend must be one of {sorted(_VALID_SAMPLE_BACKENDS)}, got {backend!r}.[/red]")
         raise typer.Exit(code=1)
 
     if num_clips < 1:
@@ -3517,6 +3528,11 @@ def sample(
 
     ext = source.format or "wav"
     config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
     title_slug = make_slug(name or source.title or "clip")
     enhanced_prompt = _build_sample_prompt(prompt, role, sample_duration_sec)
 
@@ -3535,7 +3551,8 @@ def sample(
             console.print(f"[red]Error extracting sample range: {exc}[/red]")
             raise typer.Exit(code=1)
 
-        if backend == "ace-step":
+        if effective_backend in ("auto", "ace-step"):
+            engine_used = "ace-step"
             ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
             generated_paths = _generate_sample_via_ace_step(
                 ace_client=ace_client,
@@ -3545,6 +3562,7 @@ def sample(
                 ext=ext,
             )
         else:
+            engine_used = "elevenlabs"
             if not config.elevenlabs_api_key:
                 console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
                 raise typer.Exit(code=1)
@@ -3588,7 +3606,7 @@ def sample(
                     end_ms=end_ms,
                     role=role,
                     prompt=prompt,
-                    backend=backend,
+                    backend=engine_used,
                 )
             except Exception as exc:
                 # Provenance is an acceptance criterion: refuse to ship a sample
