@@ -267,6 +267,7 @@ def _poll_until_complete(
     label: str,
     poll_timeout: float,
     poll_interval: float = 2.0,
+    raise_on_transport_error: bool = False,
 ) -> dict:
     """Poll ``query_result`` until the task completes; return the result dict.
 
@@ -281,13 +282,27 @@ def _poll_until_complete(
       (or a timeout) resets the counter.
     - A **genuine API error** aborts immediately.
 
-    Raises ``typer.Exit(code=1)`` on timeout, reported failure, or abort.
+    Transport outages (the consecutive-failure abort and timeout-budget
+    exhaustion) normally print and ``typer.Exit(code=1)``. When
+    ``raise_on_transport_error`` is True, they instead re-raise
+    ``AceStepConnectionError`` so the caller can decide whether to fall back to
+    another backend (used by ``generate``). Reported ``failed`` status and
+    genuine API errors always exit — they are never a transport problem and must
+    not trigger a fallback.
+
+    Raises:
+        AceStepConnectionError: transport failure when ``raise_on_transport_error``.
+        typer.Exit: otherwise on timeout/failure/abort.
     """
     start = time.monotonic()
     consecutive_conn_failures = 0
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= poll_timeout:
+            if raise_on_transport_error:
+                raise AceStepConnectionError(
+                    f"ACE-Step timed out after {poll_timeout:.0f}s while polling", is_timeout=True
+                )
             console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
             raise typer.Exit(code=1)
 
@@ -303,6 +318,8 @@ def _poll_until_complete(
             else:
                 consecutive_conn_failures += 1
                 if consecutive_conn_failures >= _MAX_CONSECUTIVE_POLL_ERRORS:
+                    if raise_on_transport_error:
+                        raise
                     console.print(
                         f"[red]Error polling status after {consecutive_conn_failures} consecutive "
                         f"connection failures: {exc}[/red]"
@@ -312,7 +329,7 @@ def _poll_until_complete(
             time.sleep(poll_interval)
             continue
         except AceStepError as exc:
-            # Genuine API/HTTP error — surface it immediately.
+            # Genuine API/HTTP error — surface it immediately (never a fallback case).
             console.print(f"[red]Error polling status: {exc}[/red]")
             raise typer.Exit(code=1)
 
@@ -569,10 +586,15 @@ def generate(
                 style_influence=style_influence,
                 thinking=thinking,
                 model=resolved_model,
+                # Let poll-time transport outages propagate (not exit) so they
+                # reach the fallback logic below, like submit-time failures do.
+                raise_on_transport_error=True,
             )
             return
         except AceStepError as exc:
-            if not _is_connection_error(exc):
+            # Transport failures (submit- or poll-time) are connection errors;
+            # AceStepConnectionError is always one, regardless of message text.
+            if not (isinstance(exc, AceStepConnectionError) or _is_connection_error(exc)):
                 # API-level error — do not fall back
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(code=1)
@@ -693,8 +715,14 @@ def _generate_via_ace_step(
     style_influence: int = 50,
     thinking: bool = False,
     model: Optional[str] = None,
+    raise_on_transport_error: bool = False,
 ) -> None:
-    """Submit, poll, and download audio via the ACE-Step backend."""
+    """Submit, poll, and download audio via the ACE-Step backend.
+
+    When ``raise_on_transport_error`` is set, a poll-time transport outage
+    re-raises ``AceStepConnectionError`` (rather than exiting) so ``generate``
+    can fall back to ElevenLabs just as it does for submit-time failures.
+    """
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0
 
@@ -720,7 +748,15 @@ def _generate_via_ace_step(
     console.print(f"Task submitted: [cyan]{task_id}[/cyan]")
 
     with console.status("[bold green]Generating…[/bold green]", spinner="dots") as status:
-        result = _poll_until_complete(ace_client, task_id, status, "Generating", poll_timeout, poll_interval)
+        result = _poll_until_complete(
+            ace_client,
+            task_id,
+            status,
+            "Generating",
+            poll_timeout,
+            poll_interval,
+            raise_on_transport_error=raise_on_transport_error,
+        )
 
     audio_urls: list[str] = result.get("audio_urls", [])
     for i, url in enumerate(audio_urls, start=1):
