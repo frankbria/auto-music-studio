@@ -106,6 +106,7 @@ src/acemusic/
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
     models/         # Beanie ODM documents: User, Workspace, Clip, Job
     routers/        # Versioned routers mounted under /api/v1 (health, ...)
+  backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
   config.py         # Config loading: env > .env > ~/.acemusic/config.yaml
