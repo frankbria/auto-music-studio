@@ -516,3 +516,153 @@ class TestBackendSelector:
         result = runner.invoke(app, ["generate", "test", "--backend", "suno", "--output", str(tmp_path)])
         assert result.exit_code == 1
         assert "backend" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# #93: ElevenLabs fallback on POLL-TIME ACE-Step outages
+# ---------------------------------------------------------------------------
+
+
+class TestPollTimeFallback:
+    """generate falls back when ACE-Step drops during polling (not just at submit)."""
+
+    @staticmethod
+    def _ace_mock_submit_ok_then_poll(side_effect):
+        """ACE-Step client: submit succeeds, query_result raises/returns per side_effect."""
+        ace = MagicMock()
+        ace.submit_task.return_value = "task-123"
+        ace.query_result.side_effect = side_effect
+        ace.download_audio.return_value = b""
+        return ace
+
+    def _config_with_el(self, monkeypatch, el_key="test-key"):
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key=el_key,
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+    def test_poll_connection_failure_falls_back_to_elevenlabs(self, monkeypatch, tmp_path):
+        """Persistent poll-time connection failure (auto) → fall back to ElevenLabs (exit 0)."""
+        from acemusic.client import AceStepConnectionError
+
+        self._config_with_el(monkeypatch)
+        # submit ok, then query_result keeps failing with a hard connection error
+        ace = self._ace_mock_submit_ok_then_poll(
+            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+        )
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        el.generate.assert_called()  # fell back after submit succeeded but polling failed
+
+    def test_poll_failed_status_does_not_fall_back(self, monkeypatch, tmp_path):
+        """A reported job 'failed' status exits 1 — no fallback (server worked, request was bad)."""
+        self._config_with_el(monkeypatch)
+        ace = self._ace_mock_submit_ok_then_poll([{"status": "failed", "error": "bad prompt"}])
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        el.generate.assert_not_called()
+
+    def test_poll_api_error_does_not_fall_back(self, monkeypatch, tmp_path):
+        """A genuine API error during polling exits 1 — no fallback."""
+        from acemusic.client import AceStepError
+
+        self._config_with_el(monkeypatch)
+        ace = self._ace_mock_submit_ok_then_poll([AceStepError("Query failed: 500 Internal Server Error")])
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        el.generate.assert_not_called()
+
+    def test_poll_connection_failure_no_key_exits_with_message(self, monkeypatch, tmp_path):
+        """Poll-time connection failure without ELEVENLABS_API_KEY exits 1 with actionable message."""
+        from acemusic.client import AceStepConnectionError
+
+        self._config_with_el(monkeypatch, el_key=None)
+        ace = self._ace_mock_submit_ok_then_poll(
+            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+        )
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert "elevenlabs_api_key" in result.output.lower() or "elevenlabs" in result.output.lower()
+
+    def test_explicit_ace_step_poll_failure_no_fallback(self, monkeypatch, tmp_path):
+        """Explicit --backend ace-step + poll-time connection failure → exit 1, no fallback."""
+        from acemusic.client import AceStepConnectionError
+
+        self._config_with_el(monkeypatch)  # key IS set but explicit ace-step must not use it
+        ace = self._ace_mock_submit_ok_then_poll(
+            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+        )
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+            patch("acemusic.cli.time.sleep"),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "ace-step", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        el.generate.assert_not_called()
+
+
+class TestTimeoutNeverFallsBack:
+    """Timeouts (slow-but-reachable ACE-Step) must NOT fall back — only hard
+    connection failures do (#93 / codex P2 / CodeRabbit)."""
+
+    def test_submit_timeout_does_not_fall_back(self, monkeypatch, tmp_path):
+        from acemusic.client import AceStepConnectionError
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",  # key set, but a timeout must NOT use it
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+        ace = MagicMock()
+        ace.submit_task.side_effect = AceStepConnectionError("Submit failed: timed out", is_timeout=True)
+        el = _elevenlabs_client_mock(FAKE_MP3)
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        el.generate.assert_not_called()  # timeout → exit, not fallback

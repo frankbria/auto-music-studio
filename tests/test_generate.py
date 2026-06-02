@@ -173,8 +173,20 @@ class TestGenerateCommand:
         assert client_mock.query_result.call_count == 8
 
     def test_generate_fails_fast_on_persistent_connection_failure(self, monkeypatch, tmp_path):
-        """Persistent hard connection failures (server down) abort quickly."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        """Persistent hard connection failures abort quickly (bounded retries).
+
+        With no ElevenLabs key, the poll-time transport failure has nowhere to
+        fall back (#93), so it exits 1 — but still after a bounded number of
+        consecutive failures, not the whole budget.
+        """
+        # Patch load_config (not just env) so the test is independent of any
+        # ~/.acemusic/config.yaml ElevenLabs key on the host.
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, elevenlabs_api_key=None),
+        )
 
         client_mock = _make_client_mock(
             [AceStepConnectionError("Query failed: Connection refused", is_timeout=False)] * 20
@@ -188,8 +200,8 @@ class TestGenerateCommand:
             result = runner.invoke(app, ["generate", "lofi", "--output", str(tmp_path)])
 
         assert result.exit_code == 1
-        assert "connection failures" in result.output.lower()
-        # Fails fast after a bounded number of consecutive failures, not all 20.
+        assert "elevenlabs_api_key" in result.output.lower()  # "Set ELEVENLABS_API_KEY ..."
+        # Bounded: gave up after the consecutive-failure cap, not all 20 polls.
         assert client_mock.query_result.call_count <= 5
 
     def test_generate_aborts_immediately_on_api_poll_error(self, monkeypatch, tmp_path):
@@ -242,7 +254,11 @@ class TestGenerateCommand:
         assert "Traceback" not in result.output
 
     def test_generate_timeout_exits_one(self, monkeypatch, tmp_path):
-        """Polling timeout exits 1 with a clear message."""
+        """Polling timeout exits 1 with a clear message.
+
+        A timeout means ACE-Step is slow (not down), so it never falls back to
+        ElevenLabs (#93) — this holds regardless of any configured key.
+        """
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
 
         client_mock = _make_client_mock([PENDING_RESULT] * 1000)
