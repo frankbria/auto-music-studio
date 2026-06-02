@@ -382,3 +382,137 @@ class TestHealthElevenLabsStatus:
 
         assert result.exit_code == 0, result.output
         assert "invalid" in result.output.lower() or "error" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# #95: auto vs explicit backends + config default
+# ---------------------------------------------------------------------------
+
+
+class TestBackendSelector:
+    """Tests for the auto/ace-step/elevenlabs selector and ACEMUSIC_BACKEND default."""
+
+    def test_explicit_ace_step_does_not_fall_back(self, monkeypatch, tmp_path):
+        """Explicit --backend ace-step fails on connection error — no silent ElevenLabs fallback."""
+        from acemusic.client import AceStepError
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",  # key IS set, but explicit ace-step must not use it
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        ace_mock = MagicMock()
+        ace_mock.submit_task.side_effect = AceStepError("connection refused")
+        el_mock = _elevenlabs_client_mock(FAKE_MP3)
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace_mock),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "ace-step", "--output", str(tmp_path)])
+
+        assert result.exit_code == 1
+        el_mock.generate.assert_not_called()  # did NOT fall back
+        assert "falling back" not in result.output.lower()
+        # Positively confirm the explicit-no-fallback path (not some other exit)
+        assert "use --backend auto" in result.output.lower()
+
+    def test_default_no_flag_no_config_uses_ace_step(self, monkeypatch, tmp_path):
+        """The common path — no --backend, no ACEMUSIC_BACKEND — generates via ACE-Step."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, backend=None),
+        )
+
+        ace_mock = _make_ace_client_mock()  # succeeds
+        el_mock = _elevenlabs_client_mock(FAKE_MP3)
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace_mock),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        ace_mock.submit_task.assert_called()
+        el_mock.generate.assert_not_called()
+
+    def test_auto_falls_back(self, monkeypatch, tmp_path):
+        """--backend auto falls back to ElevenLabs on connection failure."""
+        from acemusic.client import AceStepError
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        ace_mock = MagicMock()
+        ace_mock.submit_task.side_effect = AceStepError("connection refused")
+        el_mock = _elevenlabs_client_mock(FAKE_MP3)
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace_mock),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--backend", "auto", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        el_mock.generate.assert_called()  # fell back
+
+    def test_config_default_backend_routes_to_elevenlabs(self, monkeypatch, tmp_path):
+        """With no --backend flag, config.backend='elevenlabs' routes to ElevenLabs."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+                backend="elevenlabs",
+            ),
+        )
+
+        ace_mock = _make_ace_client_mock()
+        el_mock = _elevenlabs_client_mock(FAKE_MP3)
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=ace_mock),
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=2.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        el_mock.generate.assert_called()
+        ace_mock.submit_task.assert_not_called()
+
+    def test_invalid_backend_exits_one(self, monkeypatch, tmp_path):
+        """An invalid --backend value exits 1 with an actionable message."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None),
+        )
+        result = runner.invoke(app, ["generate", "test", "--backend", "suno", "--output", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "backend" in result.output.lower()

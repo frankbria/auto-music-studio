@@ -25,6 +25,10 @@ class AceConfig:
     # Loaded from ACEMUSIC_DEFAULT_MODEL env var or `default_model` in config.yaml.
     # Not validated at load time; invalid values are caught by generate() at runtime.
     default_model: str | None = None
+    # Default backend (auto|ace-step|elevenlabs) from ACEMUSIC_BACKEND env or
+    # `backend` in config.yaml. None means "unset" → resolver falls back to auto.
+    # Not validated here; resolve_backend() validates and reports bad values.
+    backend: str | None = None
 
 
 def load_config() -> AceConfig:
@@ -51,12 +55,17 @@ def load_config() -> AceConfig:
                 api_key = data.get("api_key") or data.get("ACEMUSIC_API_KEY") or None
             output_dir = data.get("output_dir") or None
             yaml_default_model = data.get("default_model") or None
+            yaml_backend = data.get("backend") or None
         except Exception as exc:
             logger.warning("Failed to read config file %s: %s", yaml_path, exc)
+            yaml_backend = None
+    else:
+        yaml_backend = None
 
     elevenlabs_api_key = os.environ.get("ELEVENLABS_API_KEY") or None
     elevenlabs_output_format = os.environ.get("ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
     default_model: str | None = os.environ.get("ACEMUSIC_DEFAULT_MODEL") or yaml_default_model or None
+    backend: str | None = os.environ.get("ACEMUSIC_BACKEND") or yaml_backend or None
 
     return AceConfig(
         api_url=api_url,
@@ -65,4 +74,5 @@ def load_config() -> AceConfig:
         elevenlabs_api_key=elevenlabs_api_key,
         elevenlabs_output_format=elevenlabs_output_format,
         default_model=default_model,
+        backend=backend,
     )
