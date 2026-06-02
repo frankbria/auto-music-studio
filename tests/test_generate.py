@@ -179,8 +179,14 @@ class TestGenerateCommand:
         fall back (#93), so it exits 1 — but still after a bounded number of
         consecutive failures, not the whole budget.
         """
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)  # no fallback available
+        # Patch load_config (not just env) so the test is independent of any
+        # ~/.acemusic/config.yaml ElevenLabs key on the host.
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, elevenlabs_api_key=None),
+        )
 
         client_mock = _make_client_mock(
             [AceStepConnectionError("Query failed: Connection refused", is_timeout=False)] * 20
@@ -248,9 +254,12 @@ class TestGenerateCommand:
         assert "Traceback" not in result.output
 
     def test_generate_timeout_exits_one(self, monkeypatch, tmp_path):
-        """Polling timeout exits 1 with a clear message (no ElevenLabs fallback available)."""
+        """Polling timeout exits 1 with a clear message.
+
+        A timeout means ACE-Step is slow (not down), so it never falls back to
+        ElevenLabs (#93) — this holds regardless of any configured key.
+        """
         monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
-        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)  # no fallback → deterministic exit
 
         client_mock = _make_client_mock([PENDING_RESULT] * 1000)
 

@@ -282,16 +282,17 @@ def _poll_until_complete(
       (or a timeout) resets the counter.
     - A **genuine API error** aborts immediately.
 
-    Transport outages (the consecutive-failure abort and timeout-budget
-    exhaustion) normally print and ``typer.Exit(code=1)``. When
-    ``raise_on_transport_error`` is True, they instead re-raise
-    ``AceStepConnectionError`` so the caller can decide whether to fall back to
-    another backend (used by ``generate``). Reported ``failed`` status and
-    genuine API errors always exit — they are never a transport problem and must
-    not trigger a fallback.
+    When ``raise_on_transport_error`` is True, a **persistent connection failure**
+    (the consecutive-failure abort — ACE-Step is unreachable) re-raises
+    ``AceStepConnectionError`` so the caller can fall back to another backend
+    (used by ``generate``). A **timeout** does NOT trigger fallback: it means
+    ACE-Step is reachable but slow, the job may still finish, and ACE-Step flags
+    were requested — so timeouts always ``typer.Exit``. Reported ``failed`` status
+    and genuine API errors also always exit (never a transport problem).
 
     Raises:
-        AceStepConnectionError: transport failure when ``raise_on_transport_error``.
+        AceStepConnectionError: persistent connection failure when
+            ``raise_on_transport_error`` is set.
         typer.Exit: otherwise on timeout/failure/abort.
     """
     start = time.monotonic()
@@ -299,10 +300,9 @@ def _poll_until_complete(
     while True:
         elapsed = time.monotonic() - start
         if elapsed >= poll_timeout:
-            if raise_on_transport_error:
-                raise AceStepConnectionError(
-                    f"ACE-Step timed out after {poll_timeout:.0f}s while polling", is_timeout=True
-                )
+            # A timeout means ACE-Step is reachable but slow (cold start / long job),
+            # not down — do NOT fall back (the job may still finish, and ACE-Step
+            # flags like --model/--thinking were requested). Always exit here.
             console.print(f"[red]Timed out after {poll_timeout:.0f} seconds.[/red]")
             raise typer.Exit(code=1)
 
