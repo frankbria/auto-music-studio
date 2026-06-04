@@ -1199,6 +1199,149 @@ def _sounds_via_elevenlabs(
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
 
+@app.command()
+def compose(
+    prompt: str = typer.Argument(..., help="Text description of the song to compose."),
+    duration: Optional[float] = typer.Option(
+        None,
+        "--duration",
+        help=f"Target total length in seconds ({int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}).",
+    ),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the composed track."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and clip title."),
+    instrumental: bool = typer.Option(False, "--instrumental", help="Compose without vocals."),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for more consistent results (plan mode only)."
+    ),
+) -> None:
+    """Compose a structured multi-section track via an ElevenLabs composition plan.
+
+    Creates a sectioned plan (intro/verse/chorus/…) from the prompt, displays it,
+    then generates the full track in one shot. ElevenLabs only; output is MP3.
+    """
+    if duration is not None and not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+        console.print(
+            f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+            f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    config = load_config()
+    if not config.elevenlabs_api_key:
+        console.print(
+            "[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the compose command.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    if output is not None:
+        output_path = output
+    elif config.output_dir:
+        output_path = Path(config.output_dir).expanduser()
+    else:
+        active_ws = get_active_workspace()
+        output_path = get_workspace_path(active_ws.id)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    plan_prompt = prompt
+    if instrumental:
+        plan_prompt = f"{prompt}, instrumental, no vocals"
+
+    el_client = ElevenLabsClient(
+        api_key=config.elevenlabs_api_key,
+        output_format=config.elevenlabs_output_format,
+    )
+    _compose_via_elevenlabs(
+        el_client=el_client,
+        prompt=prompt,
+        plan_prompt=plan_prompt,
+        duration=duration,
+        output_path=output_path,
+        name=name,
+        seed=seed,
+        output_format=config.elevenlabs_output_format,
+    )
+
+
+def _compose_via_elevenlabs(
+    *,
+    el_client: ElevenLabsClient,
+    prompt: str,
+    plan_prompt: str,
+    duration: Optional[float],
+    output_path: Path,
+    name: Optional[str],
+    seed: Optional[int],
+    output_format: str,
+) -> None:
+    """Create a composition plan, display it, generate the track, and save it."""
+    with console.status("[bold green]Creating composition plan…[/bold green]", spinner="dots"):
+        try:
+            plan = el_client.create_plan(prompt=plan_prompt, duration=duration)
+        except ElevenLabsError as exc:
+            console.print(f"[red]ElevenLabs error: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    sections = plan.get("sections", [])
+    table = Table(title="Composition Plan")
+    table.add_column("Section", style="cyan")
+    table.add_column("Duration", justify="right")
+    table.add_column("Styles")
+    table.add_column("Lyric lines", justify="right")
+    for section in sections:
+        table.add_row(
+            section.get("section_name", "-"),
+            f"{section.get('duration_ms', 0) / 1000:.1f}s",
+            ", ".join(section.get("positive_local_styles", [])),
+            str(len(section.get("lines", []))),
+        )
+    console.print(table)
+
+    total_s = sum(s.get("duration_ms", 0) for s in sections) / 1000
+    console.print(f"[cyan]Generating {len(sections)} sections ({total_s:.0f}s total) via ElevenLabs…[/cyan]")
+
+    with console.status("[bold green]Composing…[/bold green]", spinner="dots"):
+        try:
+            data = el_client.generate_from_plan(composition_plan=plan, seed=seed)
+        except ElevenLabsError as exc:
+            console.print(f"[red]ElevenLabs error: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    ext = _elevenlabs_ext(output_format)
+    slug = make_slug(prompt)
+    if name:
+        filename = f"{make_slug(name)}.{ext}"
+    else:
+        filename = make_filename(slug, datetime.now().strftime("%Y%m%d%H%M%S"), 1, ext=ext)
+    dest = output_path / filename
+    dest.write_bytes(data)
+
+    clip_duration: Optional[float] = None
+    try:
+        clip_duration = get_duration(dest)
+        dur_str = f"{clip_duration:.1f}s"
+    except Exception:
+        dur_str = "unknown"
+
+    try:
+        ws = get_active_workspace()
+        clip = Clip(
+            title=make_slug(name) if name else slug,
+            workspace_id=ws.id,
+            file_path=str(dest.resolve()),
+            format=ext,
+            duration=clip_duration,
+            seed=seed,
+            model="elevenlabs",
+            generation_mode="compose",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        create_clip(clip)
+    except Exception as exc:
+        warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
+
+    console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
 @workspace_app.command("create")
 def workspace_create(name: str = typer.Argument(..., help="Workspace name.")) -> None:
     """Create a new workspace."""
