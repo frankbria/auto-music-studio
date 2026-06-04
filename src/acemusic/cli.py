@@ -50,7 +50,16 @@ from acemusic.db import (
     search_clips,
     update_clip_title,
 )
-from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
+from acemusic.elevenlabs_client import (
+    DURATION_MAX_S as EL_DURATION_MAX_S,
+)
+from acemusic.elevenlabs_client import (
+    DURATION_MIN_S as EL_DURATION_MIN_S,
+)
+from acemusic.elevenlabs_client import (
+    ElevenLabsClient,
+    ElevenLabsError,
+)
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
 from acemusic.song_structure import Section, plan_sections
@@ -422,7 +431,9 @@ def generate(
     ),
     lyrics_file: Optional[Path] = typer.Option(None, "--lyrics-file", help="Path to a text file containing lyrics."),
     vocal_language: Optional[str] = typer.Option(
-        None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."
+        None,
+        "--vocal-language",
+        help="ISO 639-1 vocal language code (e.g. 'en', 'ja'). ACE-Step native; injected into prompt for ElevenLabs.",
     ),
     instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals entirely."),
     bpm: Optional[str] = typer.Option(
@@ -500,20 +511,38 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    if duration is not None and not (_DURATION_MIN <= duration <= _DURATION_MAX):
-        if duration == 15.0:
-            console.print(
-                f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
-                f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
-            )
-            duration = _DURATION_MIN
-        else:
-            console.print(
-                f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
-            )
-            raise typer.Exit(code=1)
-
     config = load_config()
+
+    # Resolve the backend early (CLI flag > config default > auto) so duration
+    # limits can be backend-aware. May change to "elevenlabs" below only when
+    # resolved to "auto" (auto-fallback).
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if duration is not None:
+        if effective_backend == "elevenlabs":
+            # Explicit ElevenLabs backend: use the wider ElevenLabs API limits.
+            if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+                console.print(
+                    f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
+                )
+                raise typer.Exit(code=1)
+        elif not (_DURATION_MIN <= duration <= _DURATION_MAX):
+            if duration == 15.0:
+                console.print(
+                    f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
+                    f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
+                )
+                duration = _DURATION_MIN
+            else:
+                console.print(
+                    f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
+                )
+                raise typer.Exit(code=1)
 
     # Load and apply preset if provided
     if preset is not None:
@@ -573,14 +602,6 @@ def generate(
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_name = make_slug(name) if name else None
 
-    # Resolve the backend (CLI flag > config default > auto). May change to
-    # "elevenlabs" below only when resolved to "auto" (auto-fallback).
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
-
     if effective_backend in ("auto", "ace-step"):
         ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
         try:
@@ -639,10 +660,6 @@ def generate(
                 "[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the ElevenLabs backend.[/red]"
             )
             raise typer.Exit(code=1)
-        if vocal_language is not None:
-            console.print(
-                "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
-            )
         if inference_steps is not None:
             console.print(
                 "[yellow]Warning: --inference-steps is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
@@ -682,6 +699,12 @@ def generate(
                 f"[yellow]Warning: --time-signature is ACE-Step-specific; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"
             )
             prompt_additions.append(f"{time_signature} time signature")
+        if vocal_language is not None and vocal_language.lower() != "auto":
+            language_name = _LANGUAGE_NAMES.get(vocal_language.lower(), vocal_language)
+            console.print(
+                f"[yellow]Note: ElevenLabs has no language field; injecting '{language_name} vocals' into prompt.[/yellow]"
+            )
+            prompt_additions.append(f"{language_name} vocals")
         if seed is not None:
             console.print(
                 "[yellow]Warning: --seed requires ElevenLabs composition_plan mode, which is not yet implemented. Seed is ignored.[/yellow]"
@@ -825,6 +848,28 @@ def _generate_via_ace_step(
             warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
+# ISO 639-1 codes → English names for ElevenLabs prompt injection (the API has
+# no language field; vocal language is steered through the prompt text).
+_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "de": "German",
+    "fr": "French",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "ru": "Russian",
+    "sv": "Swedish",
+    "tr": "Turkish",
+    "ar": "Arabic",
+    "hi": "Hindi",
+}
 
 
 def _elevenlabs_ext(output_format: str) -> str:

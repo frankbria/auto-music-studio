@@ -1,5 +1,6 @@
 """Unit tests for acemusic generate command (US-2.3, US-2.4, US-3.2)."""
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,11 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes from text (Rich emits these in CI environments)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 TASK_ID = "task-abc-123"
 AUDIO_URL_1 = "http://localhost:8001/audio/clip1.wav"
@@ -757,8 +763,8 @@ class TestStyleLyricsElevenLabs:
         assert el_mock.generate.call_args is not None
         assert el_mock.generate.call_args.kwargs["instrumental"] is True
 
-    def test_vocal_language_elevenlabs_prints_warning(self, monkeypatch, tmp_path):
-        """--vocal-language with ElevenLabs backend prints a warning and is ignored."""
+    def test_vocal_language_injected_into_elevenlabs_prompt(self, monkeypatch, tmp_path):
+        """--vocal-language is injected into the ElevenLabs prompt (no body field exists)."""
         from acemusic.config import AceConfig
 
         monkeypatch.setattr(
@@ -793,7 +799,168 @@ class TestStyleLyricsElevenLabs:
             )
 
         assert result.exit_code == 0, result.output
-        assert "warning" in result.output.lower() or "ignored" in result.output.lower()
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "Japanese vocals" in prompt_sent
+        assert "ignored" not in result.output.lower()
+
+    def test_vocal_language_auto_not_injected_for_elevenlabs(self, monkeypatch, tmp_path):
+        """--vocal-language auto (the ACE-Step sentinel) is not injected into the prompt."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--vocal-language",
+                    "auto",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "vocals" not in prompt_sent
+        assert "auto" not in prompt_sent
+
+    def test_unknown_language_code_injected_verbatim(self, monkeypatch, tmp_path):
+        """An unmapped ISO code is still injected (verbatim) rather than dropped."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=3.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "pop song",
+                    "--backend",
+                    "elevenlabs",
+                    "--vocal-language",
+                    "xx",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "xx vocals" in prompt_sent
+
+
+class TestElevenLabsDurationLimits:
+    """Tests for ElevenLabs-specific duration validation in generate (issue #96)."""
+
+    def _el_config(self, monkeypatch):
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url="http://localhost:8001",
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+
+    def test_elevenlabs_backend_accepts_duration_above_ace_step_max(self, monkeypatch, tmp_path):
+        """--backend elevenlabs allows durations beyond the ACE-Step cap (e.g. 300s)."""
+        self._el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = b"ID3" + b"\x00" * 100
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=300.0),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", "epic ballad", "--backend", "elevenlabs", "--duration", "300", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el_mock.generate.call_args.kwargs["duration"] == 300.0
+
+    def test_elevenlabs_backend_rejects_duration_below_min(self, monkeypatch, tmp_path):
+        """--backend elevenlabs rejects durations below 3s with a clear range message."""
+        self._el_config(monkeypatch)
+        el_mock = MagicMock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el_mock):
+            result = runner.invoke(
+                app,
+                ["generate", "stinger", "--backend", "elevenlabs", "--duration", "2", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "3" in plain and "600" in plain
+        el_mock.generate.assert_not_called()
+
+    def test_elevenlabs_backend_rejects_duration_above_max(self, monkeypatch, tmp_path):
+        """--backend elevenlabs rejects durations above 600s with a clear range message."""
+        self._el_config(monkeypatch)
+        el_mock = MagicMock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el_mock):
+            result = runner.invoke(
+                app,
+                ["generate", "epic", "--backend", "elevenlabs", "--duration", "601", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "3" in plain and "600" in plain
+        el_mock.generate.assert_not_called()
+
+    def test_default_backend_keeps_ace_step_duration_limits(self, monkeypatch, tmp_path):
+        """Without --backend elevenlabs, the ACE-Step 30–240s validation still applies."""
+        self._el_config(monkeypatch)
+
+        result = runner.invoke(
+            app,
+            ["generate", "epic ballad", "--duration", "300", "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "30" in plain and "240" in plain
 
 
 class TestMusicalParametersAceStep:
