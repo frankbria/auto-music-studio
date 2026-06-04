@@ -973,8 +973,14 @@ def sounds(
         "--key",
         help="Tonal center (e.g. 'A minor'). Applies to loops.",
     ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto'/'ace-step' (ACE-Step) or 'elevenlabs'. Defaults to ACEMUSIC_BACKEND, then 'auto'. "
+        "(Automatic ElevenLabs fallback currently applies to `generate`, not `sounds`.)",
+    ),
 ) -> None:
-    """Generate short audio samples (loops or one-shots) using the ACE-Step model."""
+    """Generate short audio samples (loops or one-shots) via ACE-Step or ElevenLabs."""
     _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
     if format not in _VALID_FORMATS:
         console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
@@ -1006,6 +1012,23 @@ def sounds(
 
     config = load_config()
 
+    # Resolve the backend (CLI flag > config default > auto). No auto-fallback
+    # for sounds (matches `sample`): 'auto' routes to ACE-Step.
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs" and duration is not None:
+        if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+            console.print(
+                f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+                f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max). "
+                f"Use --backend ace-step for shorter samples.[/red]"
+            )
+            raise typer.Exit(code=1)
+
     if output is not None:
         output_path = output
     elif config.output_dir:
@@ -1017,6 +1040,46 @@ def sounds(
     slug = make_slug(prompt)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_name = make_slug(name) if name else None
+
+    if effective_backend == "elevenlabs":
+        if not config.elevenlabs_api_key:
+            console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+            raise typer.Exit(code=1)
+        if format != "mp3":
+            console.print(
+                f"[yellow]Warning: ElevenLabs output is MP3-only; --format {format} is ignored.[/yellow]"
+            )
+
+        # ElevenLabs has no sound mode or native bpm/key controls — steer them
+        # through the prompt, mirroring the `generate` command's injections.
+        prompt_additions: list[str] = [f"{sound_type} sample"]
+        if parsed_bpm is not None and parsed_bpm != "auto":
+            console.print(
+                f"[yellow]Warning: --bpm is ACE-Step-native; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(f"{parsed_bpm} BPM")
+        if key is not None and key.lower() != "any":
+            console.print(
+                f"[yellow]Warning: --key is ACE-Step-native; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(key)
+
+        el_client = ElevenLabsClient(
+            api_key=config.elevenlabs_api_key,
+            output_format=config.elevenlabs_output_format,
+        )
+        _sounds_via_elevenlabs(
+            el_client=el_client,
+            prompt=f"{prompt}, {', '.join(prompt_additions)}",
+            num_clips=num_clips,
+            duration=duration,
+            output_path=output_path,
+            slug=slug,
+            timestamp=timestamp,
+            safe_name=safe_name,
+            output_format=config.elevenlabs_output_format,
+        )
+        return
 
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
     try:
@@ -1090,6 +1153,46 @@ def _sounds_via_ace_step(
         try:
             dur = get_duration(dest)
             dur_str = f"{dur:.1f}s"
+        except Exception:
+            dur_str = "unknown"
+
+        console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
+def _sounds_via_elevenlabs(
+    *,
+    el_client: ElevenLabsClient,
+    prompt: str,
+    num_clips: int,
+    duration: Optional[float],
+    output_path: Path,
+    slug: str,
+    timestamp: str,
+    safe_name: Optional[str],
+    output_format: str,
+) -> None:
+    """Generate N short samples sequentially via ElevenLabs and save them to disk.
+
+    Mirrors the ACE-Step sounds path: files only, no Clip records.
+    """
+    ext = _elevenlabs_ext(output_format)
+    console.print(f"[cyan]Generating via ElevenLabs ({output_format})…[/cyan]")
+    for i in range(1, num_clips + 1):
+        with console.status(f"[bold green]Clip {i}/{num_clips}…[/bold green]", spinner="dots"):
+            try:
+                data = el_client.generate(prompt=prompt, duration=duration)
+            except ElevenLabsError as exc:
+                console.print(f"[red]ElevenLabs error: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+        if safe_name:
+            filename = f"{safe_name}-{i}.{ext}"
+        else:
+            filename = make_filename(slug, timestamp, i, ext=ext)
+        dest = output_path / filename
+        dest.write_bytes(data)
+        try:
+            dur_str = f"{get_duration(dest):.1f}s"
         except Exception:
             dur_str = "unknown"
 

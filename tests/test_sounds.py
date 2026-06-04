@@ -362,3 +362,191 @@ class TestSoundsCommand:
         call_kwargs = client_mock.submit_task.call_args
         assert call_kwargs is not None
         assert call_kwargs.kwargs["num_clips"] == 1
+
+
+FAKE_MP3 = b"ID3" + b"\x00" * 100
+
+
+def _el_config(monkeypatch, api_key="test-key"):
+    """Point load_config at an ElevenLabs-enabled (ACE-Step-less) config."""
+    from acemusic.config import AceConfig
+
+    monkeypatch.setattr(
+        "acemusic.cli.load_config",
+        lambda: AceConfig(
+            api_url="http://localhost:8001",
+            api_key=None,
+            elevenlabs_api_key=api_key,
+            elevenlabs_output_format="mp3_44100_128",
+        ),
+    )
+
+
+class TestSoundsElevenLabsBackend:
+    """Tests for sounds --backend elevenlabs (issue #96)."""
+
+    def test_sounds_elevenlabs_writes_mp3_file(self, monkeypatch, tmp_path):
+        """--backend elevenlabs generates via ElevenLabs and writes an MP3 file."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=1.5),
+        ):
+            result = runner.invoke(
+                app,
+                ["sounds", "deep kick", "--type", "one-shot", "--backend", "elevenlabs", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        mp3_files = list(tmp_path.glob("*.mp3"))
+        assert len(mp3_files) == 1
+        assert mp3_files[0].read_bytes() == FAKE_MP3
+
+    def test_sounds_elevenlabs_injects_type_into_prompt(self, monkeypatch, tmp_path):
+        """The sound type is injected into the ElevenLabs prompt as a hint."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=1.5),
+        ):
+            result = runner.invoke(
+                app,
+                ["sounds", "deep kick", "--type", "one-shot", "--backend", "elevenlabs", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "one-shot" in prompt_sent
+        assert "deep kick" in prompt_sent
+
+    def test_sounds_elevenlabs_injects_bpm_and_key_for_loops(self, monkeypatch, tmp_path):
+        """--bpm/--key are injected into the prompt with a warning for ElevenLabs loops."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=4.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "sounds", "funky groove", "--type", "loop",
+                    "--bpm", "120", "--key", "A minor",
+                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        prompt_sent = el_mock.generate.call_args.kwargs["prompt"]
+        assert "120 BPM" in prompt_sent
+        assert "A minor" in prompt_sent
+        assert "warning" in _plain(result.output).lower()
+
+    def test_sounds_elevenlabs_warns_on_non_mp3_format(self, monkeypatch, tmp_path):
+        """--format wav with ElevenLabs warns that output is MP3-only."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=1.5),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "sounds", "deep kick", "--type", "one-shot", "--format", "wav",
+                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        plain = _plain(result.output).lower()
+        assert "mp3" in plain
+        assert list(tmp_path.glob("*.mp3")), "output should be MP3 regardless of --format"
+
+    def test_sounds_elevenlabs_requires_api_key(self, monkeypatch, tmp_path):
+        """--backend elevenlabs without ELEVENLABS_API_KEY exits 1 with a clear message."""
+        _el_config(monkeypatch, api_key=None)
+
+        result = runner.invoke(
+            app,
+            ["sounds", "deep kick", "--type", "one-shot", "--backend", "elevenlabs", "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == 1
+        assert "elevenlabs_api_key" in _plain(result.output).lower()
+
+    def test_sounds_elevenlabs_rejects_out_of_range_duration(self, monkeypatch, tmp_path):
+        """Durations outside 3–600s exit 1 with the ElevenLabs range in the message."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el_mock):
+            result = runner.invoke(
+                app,
+                [
+                    "sounds", "deep kick", "--type", "one-shot", "--duration", "1",
+                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 1
+        plain = _plain(result.output)
+        assert "3" in plain and "600" in plain
+        el_mock.generate.assert_not_called()
+
+    def test_sounds_elevenlabs_duration_forwarded(self, monkeypatch, tmp_path):
+        """--duration is forwarded to ElevenLabsClient.generate()."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", return_value=5.0),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "sounds", "riser", "--type", "one-shot", "--duration", "5",
+                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el_mock.generate.call_args.kwargs["duration"] == 5.0
+
+    def test_sounds_invalid_backend_exits_one(self, monkeypatch, tmp_path):
+        """An unknown --backend value exits 1 with the valid choices."""
+        _el_config(monkeypatch)
+
+        result = runner.invoke(
+            app,
+            ["sounds", "deep kick", "--type", "one-shot", "--backend", "bogus", "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == 1
+        assert "invalid backend" in _plain(result.output).lower()
+
+    def test_sounds_default_backend_still_uses_ace_step(self, monkeypatch, tmp_path):
+        """Without --backend, sounds keeps using ACE-Step (auto routes to ACE-Step)."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock()
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=1.5),
+        ):
+            result = runner.invoke(app, ["sounds", "kick", "--type", "one-shot", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        client_mock.submit_task.assert_called_once()

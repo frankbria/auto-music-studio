@@ -58,3 +58,17 @@ class TestCapabilities:
         # message names the engine that does support it
         with pytest.raises(BackendError, match="ace-step"):
             ensure_supports("elevenlabs", "midi")
+
+
+class TestIssue96Capabilities:
+    """Capability entries added by #96 (ElevenLabs first-class generate/compose)."""
+
+    def test_sounds_supported_by_both_engines(self):
+        assert supports("ace-step", "sounds")
+        assert supports("elevenlabs", "sounds")
+        assert supports("auto", "sounds")
+
+    def test_compose_is_elevenlabs_only(self):
+        assert supports("elevenlabs", "compose")
+        assert not supports("ace-step", "compose")
+        assert supports("auto", "compose")
