@@ -152,6 +152,20 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _require_ace_step_url(config) -> None:
+    """Exit with a friendly error if the ACE-Step server URL is not configured.
+
+    Called by backend-capable commands on their ACE-Step path only, so explicit
+    `--backend elevenlabs` invocations never require an ACE-Step server (#96).
+    """
+    if not config.api_url:
+        message = "ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml"
+        if config.elevenlabs_api_key:
+            message += " (or use --backend elevenlabs)"
+        typer.echo(message)
+        raise typer.Exit(1)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -179,12 +193,16 @@ def main(
         "stems",
         "midi",
         "remaster",
-        "compose",  # ElevenLabs-only; never touches ACE-Step (#96)
+        # Backend-capable commands check the URL on their ACE-Step path via
+        # _require_ace_step_url(), so `--backend elevenlabs` works without an
+        # ACE-Step server; `compose` is ElevenLabs-only (#96).
+        "compose",
+        "generate",
+        "sounds",
+        "sample",
     ):
         config = load_config()
-        # When the configured default backend is ElevenLabs, ACE-Step is not
-        # required for backend-capable commands (#96).
-        if not config.api_url and (config.backend or "").strip().lower() != "elevenlabs":
+        if not config.api_url:
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
             raise typer.Exit(1)
 
@@ -629,6 +647,7 @@ def generate(
     safe_name = make_slug(name) if name else None
 
     if effective_backend in ("auto", "ace-step"):
+        _require_ace_step_url(config)
         ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
         try:
             _generate_via_ace_step(
@@ -1106,6 +1125,7 @@ def sounds(
         )
         return
 
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
     try:
         _sounds_via_ace_step(
@@ -3925,6 +3945,7 @@ def sample(
 
         if effective_backend in ("auto", "ace-step"):
             engine_used = "ace-step"
+            _require_ace_step_url(config)
             ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
             generated_paths = _generate_sample_via_ace_step(
                 ace_client=ace_client,
