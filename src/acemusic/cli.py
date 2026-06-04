@@ -2234,7 +2234,7 @@ def stems(
     # Derive base name from source file
     base_name = Path(source.file_path).stem
 
-    # Separate stems via the selected backend
+    # Separate stems
     start_time = time.time()
     if effective_backend == "elevenlabs":
         stem_path_map = _separate_stems_via_elevenlabs(config, source, stems_dir, base_name)
