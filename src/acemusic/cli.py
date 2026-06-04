@@ -2129,17 +2129,100 @@ def speed(
 # ---------------------------------------------------------------------------
 
 
+def _separate_stems_via_demucs(source: Clip, stems_dir: Path, base_name: str, output_format: str) -> dict[str, Path]:
+    """Separate stems locally with demucs and return a label → path mapping."""
+    client = StemsClient()
+    try:
+        with console.status("[bold green]Loading model and separating stems...") as status:
+
+            def _progress(msg: str) -> None:
+                status.update(f"[bold green]{msg}")
+
+            stem_data = client.separate(source.file_path, progress_callback=_progress)
+            status.update("[bold green]Saving stems...")
+            return client.save_stems(
+                stem_data,
+                stems_dir,
+                base_name,
+                sample_rate=client.model_samplerate,
+                output_format=output_format,
+            )
+    except StemsError as exc:
+        console.print(f"[red]Error during separation: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _separate_stems_via_elevenlabs(config, source: Clip, stems_dir: Path, base_name: str) -> dict[str, Path]:
+    """Separate stems via the ElevenLabs cloud API and return a label → path mapping.
+
+    Stem files take their extension from the configured ELEVENLABS_OUTPUT_FORMAT
+    (mp3 by default), matching the other ElevenLabs code paths.
+    """
+    if not config.elevenlabs_api_key:
+        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+        raise typer.Exit(code=1)
+
+    el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
+    try:
+        with console.status("[bold green]Uploading clip and separating stems via ElevenLabs..."):
+            stem_bytes = el_client.separate_stems(source.file_path)
+    except ElevenLabsError as exc:
+        console.print(f"[red]Error during separation: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    ext = _elevenlabs_ext(config.elevenlabs_output_format)
+    stem_path_map: dict[str, Path] = {}
+    for label, data in stem_bytes.items():
+        stem_path = stems_dir / f"{base_name}-{label}.{ext}"
+        stem_path.write_bytes(data)
+        stem_path_map[label] = stem_path
+    return stem_path_map
+
+
 @app.command()
 def stems(
     clip_id: int = typer.Argument(..., help="ID of the source clip to separate into stems."),
-    output_format: str = typer.Option("wav", "--output-format", help="Stem output format: wav or flac."),
+    output_format: Optional[str] = typer.Option(
+        None,
+        "--output-format",
+        help="Stem output format: wav or flac (default: wav). Demucs backend only — "
+        "ElevenLabs stems use ELEVENLABS_OUTPUT_FORMAT (MP3 by default).",
+    ),
     output: Optional[Path] = typer.Option(None, "--output", help="Output directory (default: stems/ next to source)."),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto' (default — local demucs), 'ace-step' (local demucs, 4 stems), or "
+        "'elevenlabs' (cloud, 6 stems: adds guitar and piano). Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+    ),
 ) -> None:
-    """Separate a clip into individual stems (vocals, drums, bass, other) using AI source separation."""
-    # Validate output format
-    if output_format not in ("wav", "flac"):
-        console.print(f"[red]Error: --output-format must be wav or flac, got {output_format!r}.[/red]")
+    """Separate a clip into individual stems using AI source separation.
+
+    The local demucs backend (auto/ace-step) produces four stems: vocals,
+    drums, bass, other. The elevenlabs backend uploads the clip to the
+    ElevenLabs cloud API and produces six stems: vocals, drums, bass,
+    guitar, piano, other (format from ELEVENLABS_OUTPUT_FORMAT, MP3 default).
+    """
+    config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs":
+        if output_format is not None:
+            console.print(
+                "[yellow]Warning: --output-format is ignored with the elevenlabs backend "
+                "(stems use the configured ELEVENLABS_OUTPUT_FORMAT, MP3 by default).[/yellow]"
+            )
+    else:
+        # Validate output format (demucs path; None means the wav default)
+        if output_format is None:
+            output_format = "wav"
+        if output_format not in ("wav", "flac"):
+            console.print(f"[red]Error: --output-format must be wav or flac, got {output_format!r}.[/red]")
+            raise typer.Exit(code=1)
 
     # Get source clip
     source = get_clip(clip_id)
@@ -2158,26 +2241,13 @@ def stems(
     base_name = Path(source.file_path).stem
 
     # Separate stems
-    client = StemsClient()
     start_time = time.time()
-    try:
-        with console.status("[bold green]Loading model and separating stems...") as status:
-
-            def _progress(msg: str) -> None:
-                status.update(f"[bold green]{msg}")
-
-            stem_data = client.separate(source.file_path, progress_callback=_progress)
-            status.update("[bold green]Saving stems...")
-            stem_path_map = client.save_stems(
-                stem_data,
-                stems_dir,
-                base_name,
-                sample_rate=client.model_samplerate,
-                output_format=output_format,
-            )
-    except StemsError as exc:
-        console.print(f"[red]Error during separation: {exc}[/red]")
-        raise typer.Exit(code=1)
+    if effective_backend == "elevenlabs":
+        stem_path_map = _separate_stems_via_elevenlabs(config, source, stems_dir, base_name)
+        clip_format = _elevenlabs_ext(config.elevenlabs_output_format)
+    else:
+        stem_path_map = _separate_stems_via_demucs(source, stems_dir, base_name, output_format)
+        clip_format = output_format
 
     elapsed = time.time() - start_time
 
@@ -2189,7 +2259,7 @@ def stems(
             workspace_id=source.workspace_id,
             file_path=str(stem_path.resolve()),
             created_at=datetime.now(timezone.utc).isoformat(),
-            format=output_format,
+            format=clip_format,
             duration=dur,
             bpm=source.bpm,
             key=source.key,

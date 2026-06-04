@@ -1,4 +1,4 @@
-"""Tests for the stems CLI command (US-5.3)."""
+"""Tests for the stems CLI command (US-5.3, #97 elevenlabs backend)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from acemusic.cli import app
+from acemusic.elevenlabs_client import ELEVENLABS_STEM_LABELS, ElevenLabsError
 from acemusic.models import Clip
 from acemusic.stems_client import STEM_LABELS
 
@@ -75,6 +76,43 @@ def _write_stub_stem(out_dir: Path, base: str, label: str, fmt: str) -> Path:
     path = out_dir / f"{base}-{label}.{fmt}"
     path.write_bytes(b"fake stem audio")
     return path
+
+
+def _el_config(monkeypatch, api_key="test-key", output_format="mp3_44100_128"):
+    """Point load_config at an ElevenLabs-enabled config."""
+    from acemusic.config import AceConfig
+
+    monkeypatch.setattr(
+        "acemusic.cli.load_config",
+        lambda: AceConfig(
+            api_url="http://localhost:8001",
+            api_key=None,
+            elevenlabs_api_key=api_key,
+            elevenlabs_output_format=output_format,
+        ),
+    )
+
+
+def _el_stems_mock():
+    """Mock ElevenLabsClient whose separate_stems() returns six fake stems."""
+    el = MagicMock()
+    el.separate_stems.return_value = {label: b"fake stem audio " + label.encode() for label in ELEVENLABS_STEM_LABELS}
+    return el
+
+
+def _make_source_clip():
+    """Create a source clip on disk + in the DB; returns (workspace, clip_id, src_path)."""
+    from acemusic.db import create_clip
+    from acemusic.workspace import get_active_workspace, get_workspace_path
+
+    ws = get_active_workspace()
+    clips_dir = get_workspace_path(ws.id)
+    src_wav = clips_dir / "fullmix.wav"
+    src_wav.write_bytes(b"fake audio data")
+
+    src_clip = _make_clip(ws.id, str(src_wav), duration=180.0, bpm=120)
+    clip_id = create_clip(src_clip)
+    return ws, clip_id, src_wav
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +235,161 @@ class TestStemsCommand:
         assert original is not None
         assert original.generation_mode != "stems"
         assert original.parent_clip_id is None
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs backend (#97)
+# ---------------------------------------------------------------------------
+
+
+class TestStemsElevenLabsBackend:
+    def test_elevenlabs_produces_six_output_files(self, workspace_with_clips_dir, monkeypatch):
+        """--backend elevenlabs writes six MP3 stem files."""
+        ws, clip_id, src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 0, result.output
+        stems_dir = src_wav.parent / "stems"
+        mp3_files = list(stems_dir.glob("*.mp3"))
+        assert len(mp3_files) == 6
+        for label in ELEVENLABS_STEM_LABELS:
+            assert label in result.output.lower()
+
+    def test_elevenlabs_uploads_source_clip(self, workspace_with_clips_dir, monkeypatch):
+        """--backend elevenlabs passes the source file path to separate_stems()."""
+        ws, clip_id, src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 0, result.output
+        el.separate_stems.assert_called_once()
+        uploaded = el.separate_stems.call_args.args[0]
+        assert str(uploaded) == str(src_wav)
+
+    def test_elevenlabs_registers_six_child_clips(self, workspace_with_clips_dir, monkeypatch):
+        """Six child clips are registered with lineage, mp3 format, and inherited bpm."""
+        from acemusic.db import list_clips
+
+        ws, clip_id, _src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 0, result.output
+        stem_clips = [c for c in list_clips(ws.id) if c.generation_mode == "stems"]
+        assert len(stem_clips) == 6
+        assert {c.title for c in stem_clips} == set(ELEVENLABS_STEM_LABELS)
+        for sc in stem_clips:
+            assert sc.parent_clip_id == clip_id
+            assert sc.format == "mp3"
+            assert sc.bpm == 120
+
+    def test_elevenlabs_missing_api_key_errors(self, workspace_with_clips_dir, monkeypatch):
+        """--backend elevenlabs without ELEVENLABS_API_KEY exits 1 with a clear message."""
+        ws, clip_id, _src_wav = _make_source_clip()
+        _el_config(monkeypatch, api_key=None)
+
+        result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 1
+        assert "elevenlabs_api_key" in result.output.lower()
+
+    def test_elevenlabs_error_surfaces_as_friendly_message(self, workspace_with_clips_dir, monkeypatch):
+        """ElevenLabsError from the client surfaces as a user-facing error, exit 1."""
+        ws, clip_id, _src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        el = MagicMock()
+        el.separate_stems.side_effect = ElevenLabsError("ElevenLabs stem separation failed: 401")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 1
+        assert "401" in result.output
+
+    def test_elevenlabs_warns_when_output_format_specified(self, workspace_with_clips_dir, monkeypatch):
+        """--output-format with elevenlabs backend warns it is ignored; stems are MP3."""
+        ws, clip_id, src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs", "--output-format", "wav"])
+
+        assert result.exit_code == 0, result.output
+        assert "ignored" in result.output.lower()
+        stems_dir = src_wav.parent / "stems"
+        assert len(list(stems_dir.glob("*.mp3"))) == 6
+        assert list(stems_dir.glob("*.wav")) == []
+
+    def test_elevenlabs_non_mp3_output_format_reflected_in_files_and_metadata(
+        self, workspace_with_clips_dir, monkeypatch
+    ):
+        """A non-MP3 ELEVENLABS_OUTPUT_FORMAT (pcm → wav) drives stem extensions and clip format."""
+        from acemusic.db import list_clips
+
+        ws, clip_id, src_wav = _make_source_clip()
+        _el_config(monkeypatch, output_format="pcm_44100")
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 0, result.output
+        stems_dir = src_wav.parent / "stems"
+        assert len(list(stems_dir.glob("*.wav"))) == 6
+        assert list(stems_dir.glob("*.mp3")) == []
+        stem_clips = [c for c in list_clips(ws.id) if c.generation_mode == "stems"]
+        assert {c.format for c in stem_clips} == {"wav"}
+
+    def test_invalid_backend_value_errors(self, workspace_with_clips_dir, monkeypatch):
+        """An unknown --backend value exits 1 with the resolver's message."""
+        ws, clip_id, _src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+
+        result = runner.invoke(app, ["stems", str(clip_id), "--backend", "suno"])
+
+        assert result.exit_code == 1
+        assert "invalid backend" in result.output.lower()
+
+    def test_ace_step_backend_uses_demucs_path(self, workspace_with_clips_dir, monkeypatch):
+        """--backend ace-step routes to the local demucs separation path."""
+        ws, clip_id, _src_wav = _make_source_clip()
+        _el_config(monkeypatch)
+        stems_client_mock = _make_stems_client_mock()
+
+        with (
+            patch("acemusic.cli.StemsClient", stems_client_mock),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "ace-step"])
+
+        assert result.exit_code == 0, result.output
+        stems_client_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

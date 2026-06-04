@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from acemusic.elevenlabs_client import DURATION_MAX_S, DURATION_MIN_S, ElevenLabsClient, ElevenLabsError
+from acemusic.elevenlabs_client import (
+    DURATION_MAX_S,
+    DURATION_MIN_S,
+    ELEVENLABS_STEM_LABELS,
+    ElevenLabsClient,
+    ElevenLabsError,
+)
 
 FAKE_MP3 = b"ID3" + b"\x00" * 100  # minimal fake MP3 bytes
 
@@ -409,6 +417,193 @@ class TestElevenLabsClientValidateKey:
 
         headers = mock_get.call_args.kwargs.get("headers", {})
         assert headers.get("xi-api-key") == "my-key"
+
+
+def _make_stem_zip(labels: list[str], ext: str = "mp3") -> bytes:
+    """Build an in-memory ZIP archive containing one fake audio file per label."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for label in labels:
+            zf.writestr(f"{label}.{ext}", FAKE_MP3)
+    return buf.getvalue()
+
+
+class TestElevenLabsClientSeparateStems:
+    """Tests for ElevenLabsClient.separate_stems() (issue #97)."""
+
+    @pytest.fixture
+    def audio_file(self, tmp_path):
+        path = tmp_path / "fullmix.wav"
+        path.write_bytes(b"fake audio data")
+        return path
+
+    def test_separate_stems_returns_all_six_labels(self, audio_file):
+        """separate_stems() returns a dict with all six stem labels mapped to bytes."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.separate_stems(audio_file)
+
+        assert set(result.keys()) == set(ELEVENLABS_STEM_LABELS)
+        for label, data in result.items():
+            assert isinstance(data, bytes), label
+            assert len(data) > 0, label
+
+    def test_separate_stems_sends_api_key_header(self, audio_file):
+        """separate_stems() sends xi-api-key in request headers."""
+        client = ElevenLabsClient(api_key="secret-key-123")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.separate_stems(audio_file)
+
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("xi-api-key") == "secret-key-123"
+
+    def test_separate_stems_sends_stem_variation_id_as_form_field(self, audio_file):
+        """separate_stems() passes stem_variation_id as multipart form data."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.separate_stems(audio_file, stem_variation_id="two_stems_v1")
+
+        data = mock_post.call_args.kwargs.get("data", {})
+        assert data.get("stem_variation_id") == "two_stems_v1"
+
+    def test_separate_stems_defaults_to_six_stems_variation(self, audio_file):
+        """separate_stems() defaults stem_variation_id to six_stems_v1."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.separate_stems(audio_file)
+
+        data = mock_post.call_args.kwargs.get("data", {})
+        assert data.get("stem_variation_id") == "six_stems_v1"
+
+    def test_separate_stems_uploads_file_as_multipart(self, audio_file):
+        """separate_stems() uploads the audio under the 'file' multipart field."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.separate_stems(audio_file)
+
+        files = mock_post.call_args.kwargs.get("files", {})
+        assert "file" in files
+
+    def test_separate_stems_sends_output_format_as_query_param(self, audio_file):
+        """separate_stems() sends the client output_format as a query parameter."""
+        client = ElevenLabsClient(api_key="test-key", output_format="mp3_44100_128")
+        resp = _mock_response(200, _make_stem_zip(ELEVENLABS_STEM_LABELS))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.separate_stems(audio_file)
+
+        params = mock_post.call_args.kwargs.get("params", {})
+        assert params.get("output_format") == "mp3_44100_128"
+
+    def test_separate_stems_maps_unknown_filenames_to_filename_stem(self, audio_file):
+        """ZIP entries with unrecognised names fall back to the filename stem as label."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(["mystery_track"]))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.separate_stems(audio_file)
+
+        assert set(result.keys()) == {"mystery_track"}
+
+    def test_separate_stems_matches_labels_within_longer_filenames(self, audio_file):
+        """ZIP entries like 'track_01_vocals.mp3' map to the known 'vocals' label."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(["track_01_vocals", "track_02_drums"]))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.separate_stems(audio_file)
+
+        assert set(result.keys()) == {"vocals", "drums"}
+
+    def test_separate_stems_does_not_collapse_duplicate_label_matches(self, audio_file):
+        """Two entries matching the same known label keep distinct keys (no silent overwrite)."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(["lead_vocals", "harmony_vocals"]))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.separate_stems(audio_file)
+
+        # First match claims the known label; the collision falls back to its filename stem.
+        assert set(result.keys()) == {"vocals", "harmony_vocals"}
+
+    def test_separate_stems_raises_elevenlabs_error_on_401(self, audio_file):
+        """separate_stems() raises ElevenLabsError on 401 Unauthorized."""
+        client = ElevenLabsClient(api_key="bad-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=_error_response(401)):
+            with pytest.raises(ElevenLabsError, match="401"):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_surfaces_422_response_detail(self, audio_file):
+        """separate_stems() includes the API's error body (e.g. file too large) in the message."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _error_response(422)
+        resp.text = '{"detail": "file too large"}'
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="file too large"):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_raises_elevenlabs_error_on_connection_failure(self, audio_file):
+        """separate_stems() raises ElevenLabsError when the request fails."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch(
+            "acemusic.elevenlabs_client.httpx.post",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            with pytest.raises(ElevenLabsError):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_raises_elevenlabs_error_on_malformed_zip(self, audio_file):
+        """separate_stems() raises ElevenLabsError when the response is not a valid ZIP."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"this is not a zip archive")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)zip"):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_raises_elevenlabs_error_on_corrupted_zip_entry(self, audio_file):
+        """A ZIP that opens but whose entry data is corrupted raises ElevenLabsError, not BadZipFile."""
+        client = ElevenLabsClient(api_key="test-key")
+        # Build a valid archive, then corrupt the stored entry bytes so the
+        # central directory parses but reading the entry fails its CRC check.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("vocals.mp3", b"A" * 100)
+        corrupted = buf.getvalue().replace(b"A" * 100, b"B" * 100)
+        resp = _mock_response(200, corrupted)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)zip"):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_raises_elevenlabs_error_on_empty_zip(self, audio_file):
+        """separate_stems() raises ElevenLabsError when the ZIP contains no stems."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip([]))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)no stems"):
+                client.separate_stems(audio_file)
+
+    def test_separate_stems_raises_elevenlabs_error_on_missing_file(self, tmp_path):
+        """separate_stems() raises ElevenLabsError when the audio file does not exist."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with pytest.raises(ElevenLabsError):
+            client.separate_stems(tmp_path / "does-not-exist.wav")
 
 
 @pytest.mark.integration
