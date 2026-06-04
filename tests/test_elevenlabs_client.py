@@ -657,3 +657,31 @@ class TestElevenLabsIntegration:
 
         segment = AudioSegment.from_file(io.BytesIO(audio), format="mp3")
         assert segment.duration_seconds > 1.0
+
+    def test_separate_stems_returns_six_playable_stems(self, tmp_path):
+        """Integration: separate_stems() on a real clip yields the six documented labels as decodable MP3s.
+
+        Also pins the undocumented ZIP-entry-naming assumption (#97): the real
+        API's archive filenames must keep mapping onto ELEVENLABS_STEM_LABELS.
+        """
+        import io
+        import os
+
+        key = os.environ.get("ELEVENLABS_API_KEY")
+        if not key:
+            pytest.skip("ELEVENLABS_API_KEY not set")
+
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+
+        src = tmp_path / "fullmix.wav"
+        mix = Sine(220).to_audio_segment(duration=4000).overlay(Sine(330).to_audio_segment(duration=4000))
+        mix.export(src, format="wav")
+
+        client = ElevenLabsClient(api_key=key, output_format="mp3_44100_128")
+        stems = client.separate_stems(src)
+
+        assert set(stems.keys()) == set(ELEVENLABS_STEM_LABELS)
+        for label, data in stems.items():
+            segment = AudioSegment.from_file(io.BytesIO(data), format="mp3")
+            assert segment.duration_seconds > 1.0, label
