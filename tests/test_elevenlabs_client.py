@@ -533,6 +533,16 @@ class TestElevenLabsClientSeparateStems:
             with pytest.raises(ElevenLabsError, match="401"):
                 client.separate_stems(audio_file)
 
+    def test_separate_stems_surfaces_422_response_detail(self, audio_file):
+        """separate_stems() includes the API's error body (e.g. file too large) in the message."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _error_response(422)
+        resp.text = '{"detail": "file too large"}'
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="file too large"):
+                client.separate_stems(audio_file)
+
     def test_separate_stems_raises_elevenlabs_error_on_connection_failure(self, audio_file):
         """separate_stems() raises ElevenLabsError when the request fails."""
         client = ElevenLabsClient(api_key="test-key")

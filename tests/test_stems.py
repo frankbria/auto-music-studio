@@ -78,7 +78,7 @@ def _write_stub_stem(out_dir: Path, base: str, label: str, fmt: str) -> Path:
     return path
 
 
-def _el_config(monkeypatch, api_key="test-key"):
+def _el_config(monkeypatch, api_key="test-key", output_format="mp3_44100_128"):
     """Point load_config at an ElevenLabs-enabled config."""
     from acemusic.config import AceConfig
 
@@ -88,7 +88,7 @@ def _el_config(monkeypatch, api_key="test-key"):
             api_url="http://localhost:8001",
             api_key=None,
             elevenlabs_api_key=api_key,
-            elevenlabs_output_format="mp3_44100_128",
+            elevenlabs_output_format=output_format,
         ),
     )
 
@@ -342,6 +342,29 @@ class TestStemsElevenLabsBackend:
         stems_dir = src_wav.parent / "stems"
         assert len(list(stems_dir.glob("*.mp3"))) == 6
         assert list(stems_dir.glob("*.wav")) == []
+
+    def test_elevenlabs_non_mp3_output_format_reflected_in_files_and_metadata(
+        self, workspace_with_clips_dir, monkeypatch
+    ):
+        """A non-MP3 ELEVENLABS_OUTPUT_FORMAT (pcm → wav) drives stem extensions and clip format."""
+        from acemusic.db import list_clips
+
+        ws, clip_id, src_wav = _make_source_clip()
+        _el_config(monkeypatch, output_format="pcm_44100")
+        el = _el_stems_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=180.0),
+        ):
+            result = runner.invoke(app, ["stems", str(clip_id), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 0, result.output
+        stems_dir = src_wav.parent / "stems"
+        assert len(list(stems_dir.glob("*.wav"))) == 6
+        assert list(stems_dir.glob("*.mp3")) == []
+        stem_clips = [c for c in list_clips(ws.id) if c.generation_mode == "stems"]
+        assert {c.format for c in stem_clips} == {"wav"}
 
     def test_invalid_backend_value_errors(self, workspace_with_clips_dir, monkeypatch):
         """An unknown --backend value exits 1 with the resolver's message."""

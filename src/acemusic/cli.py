@@ -2153,7 +2153,11 @@ def _separate_stems_via_demucs(source: Clip, stems_dir: Path, base_name: str, ou
 
 
 def _separate_stems_via_elevenlabs(config, source: Clip, stems_dir: Path, base_name: str) -> dict[str, Path]:
-    """Separate stems via the ElevenLabs cloud API and return a label → path mapping."""
+    """Separate stems via the ElevenLabs cloud API and return a label → path mapping.
+
+    Stem files take their extension from the configured ELEVENLABS_OUTPUT_FORMAT
+    (mp3 by default), matching the other ElevenLabs code paths.
+    """
     if not config.elevenlabs_api_key:
         console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
         raise typer.Exit(code=1)
@@ -2166,9 +2170,10 @@ def _separate_stems_via_elevenlabs(config, source: Clip, stems_dir: Path, base_n
         console.print(f"[red]Error during separation: {exc}[/red]")
         raise typer.Exit(code=1)
 
+    ext = _elevenlabs_ext(config.elevenlabs_output_format)
     stem_path_map: dict[str, Path] = {}
     for label, data in stem_bytes.items():
-        stem_path = stems_dir / f"{base_name}-{label}.mp3"
+        stem_path = stems_dir / f"{base_name}-{label}.{ext}"
         stem_path.write_bytes(data)
         stem_path_map[label] = stem_path
     return stem_path_map
@@ -2208,7 +2213,7 @@ def stems(
         if output_format is not None:
             console.print(
                 "[yellow]Warning: --output-format is ignored with the elevenlabs backend "
-                "(stems are returned as MP3).[/yellow]"
+                "(stems use the configured ELEVENLABS_OUTPUT_FORMAT, MP3 by default).[/yellow]"
             )
     else:
         # Validate output format (demucs path; None means the wav default)
@@ -2238,7 +2243,7 @@ def stems(
     start_time = time.time()
     if effective_backend == "elevenlabs":
         stem_path_map = _separate_stems_via_elevenlabs(config, source, stems_dir, base_name)
-        clip_format = "mp3"
+        clip_format = _elevenlabs_ext(config.elevenlabs_output_format)
     else:
         stem_path_map = _separate_stems_via_demucs(source, stems_dir, base_name, output_format)
         clip_format = output_format

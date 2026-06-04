@@ -238,7 +238,13 @@ class ElevenLabsClient:
         except OSError as exc:
             raise ElevenLabsError(f"ElevenLabs stem separation failed: cannot read {audio_path}: {exc}") from exc
         except httpx.HTTPStatusError as exc:
-            raise ElevenLabsError(f"ElevenLabs stem separation failed: {exc.response.status_code}") from exc
+            # Include the response body (truncated) — 422 carries the reason
+            # (e.g. file too large), which the bare status code would hide.
+            detail = (exc.response.text or "").strip()[:200]
+            message = f"ElevenLabs stem separation failed: {exc.response.status_code}"
+            if detail:
+                message = f"{message} — {detail}"
+            raise ElevenLabsError(message) from exc
         except httpx.RequestError as exc:
             raise ElevenLabsError(f"ElevenLabs stem separation failed: {exc}") from exc
         return _parse_stem_zip(response.content)
