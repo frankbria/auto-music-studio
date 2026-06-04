@@ -50,7 +50,12 @@ from acemusic.db import (
     search_clips,
     update_clip_title,
 )
-from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
+from acemusic.elevenlabs_client import (
+    DURATION_MAX_S as EL_DURATION_MAX_S,
+    DURATION_MIN_S as EL_DURATION_MIN_S,
+    ElevenLabsClient,
+    ElevenLabsError,
+)
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
 from acemusic.song_structure import Section, plan_sections
@@ -143,6 +148,20 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _require_ace_step_url(config) -> None:
+    """Exit with a friendly error if the ACE-Step server URL is not configured.
+
+    Called by backend-capable commands on their ACE-Step path only, so explicit
+    `--backend elevenlabs` invocations never require an ACE-Step server (#96).
+    """
+    if not config.api_url:
+        message = "ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml"
+        if config.elevenlabs_api_key:
+            message += " (or use --backend elevenlabs)"
+        typer.echo(message)
+        raise typer.Exit(1)
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -170,6 +189,13 @@ def main(
         "stems",
         "midi",
         "remaster",
+        # Backend-capable commands check the URL on their ACE-Step path via
+        # _require_ace_step_url(), so `--backend elevenlabs` works without an
+        # ACE-Step server; `compose` is ElevenLabs-only (#96).
+        "compose",
+        "generate",
+        "sounds",
+        "sample",
     ):
         config = load_config()
         if not config.api_url:
@@ -373,6 +399,27 @@ _BPM_MAX = 180
 _DURATION_MIN = 30.0
 _DURATION_MAX = 240.0
 
+# ISO 639-1 codes → English names for ElevenLabs prompt injection (the API has
+# no language field; vocal language is steered through the prompt text).
+_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "de": "German",
+    "fr": "French",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "ru": "Russian",
+    "sv": "Swedish",
+    "tr": "Turkish",
+    "ar": "Arabic",
+    "hi": "Hindi",
+}
+
 
 def _parse_bpm(value: str) -> int | str:
     """Parse --bpm value: 'auto' is returned as-is; otherwise validate integer 60–180."""
@@ -422,7 +469,9 @@ def generate(
     ),
     lyrics_file: Optional[Path] = typer.Option(None, "--lyrics-file", help="Path to a text file containing lyrics."),
     vocal_language: Optional[str] = typer.Option(
-        None, "--vocal-language", help="ISO 639-1 vocal language code (ACE-Step only, e.g. 'en', 'ja')."
+        None,
+        "--vocal-language",
+        help="ISO 639-1 vocal language code (e.g. 'en', 'ja'). ACE-Step native; injected into prompt for ElevenLabs.",
     ),
     instrumental: bool = typer.Option(False, "--instrumental", help="Suppress vocals entirely."),
     bpm: Optional[str] = typer.Option(
@@ -500,20 +549,16 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    if duration is not None and not (_DURATION_MIN <= duration <= _DURATION_MAX):
-        if duration == 15.0:
-            console.print(
-                f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
-                f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
-            )
-            duration = _DURATION_MIN
-        else:
-            console.print(
-                f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
-            )
-            raise typer.Exit(code=1)
-
     config = load_config()
+
+    # Resolve the backend early (CLI flag > config default > auto) so duration
+    # limits can be backend-aware. May change to "elevenlabs" below only when
+    # resolved to "auto" (auto-fallback).
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
     # Load and apply preset if provided
     if preset is not None:
@@ -540,6 +585,50 @@ def generate(
         except sqlite3.Error as exc:
             console.print(f"[red]Error loading preset: {exc}[/red]")
             raise typer.Exit(code=1)
+
+    # Validate duration AFTER preset application so preset-supplied values are
+    # checked too, with backend-aware limits.
+    if duration is not None:
+        if effective_backend == "elevenlabs":
+            # Explicit ElevenLabs backend: use the wider ElevenLabs API limits.
+            if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+                console.print(
+                    f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
+                )
+                raise typer.Exit(code=1)
+        elif not (_DURATION_MIN <= duration <= _DURATION_MAX):
+            # Legacy compatibility shim: older integrations defaulted to
+            # --duration 15, so exactly 15.0 clamps (with a warning) instead of
+            # erroring. Removable once those integrations are updated.
+            if duration == 15.0:
+                console.print(
+                    f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
+                    f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
+                )
+                duration = _DURATION_MIN
+            elif effective_backend == "auto" and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S:
+                # 'auto' never fails just because one engine can't do the job:
+                # ACE-Step can't serve this duration, but ElevenLabs can.
+                if config.elevenlabs_api_key:
+                    console.print(
+                        f"[yellow]--duration {duration} is outside the ACE-Step range "
+                        f"({int(_DURATION_MIN)}–{int(_DURATION_MAX)}s); routing to ElevenLabs.[/yellow]"
+                    )
+                    effective_backend = "elevenlabs"
+                else:
+                    console.print(
+                        f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and "
+                        f"{int(_DURATION_MAX)} seconds. Set ELEVENLABS_API_KEY to generate "
+                        f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}s tracks via ElevenLabs.[/red]"
+                    )
+                    raise typer.Exit(code=1)
+            else:
+                console.print(
+                    f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and "
+                    f"{int(_DURATION_MAX)} seconds.[/red]"
+                )
+                raise typer.Exit(code=1)
 
     # Resolve model: --model flag > config.default_model > None (server default)
     resolved_model = model or config.default_model or None
@@ -573,15 +662,8 @@ def generate(
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_name = make_slug(name) if name else None
 
-    # Resolve the backend (CLI flag > config default > auto). May change to
-    # "elevenlabs" below only when resolved to "auto" (auto-fallback).
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
-
     if effective_backend in ("auto", "ace-step"):
+        _require_ace_step_url(config)
         ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
         try:
             _generate_via_ace_step(
@@ -639,10 +721,6 @@ def generate(
                 "[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the ElevenLabs backend.[/red]"
             )
             raise typer.Exit(code=1)
-        if vocal_language is not None:
-            console.print(
-                "[yellow]Warning: --vocal-language is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
-            )
         if inference_steps is not None:
             console.print(
                 "[yellow]Warning: --inference-steps is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]"
@@ -682,9 +760,16 @@ def generate(
                 f"[yellow]Warning: --time-signature is ACE-Step-specific; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"
             )
             prompt_additions.append(f"{time_signature} time signature")
+        if vocal_language is not None and vocal_language.lower() != "auto":
+            language_name = _LANGUAGE_NAMES.get(vocal_language.lower(), vocal_language)
+            console.print(
+                f"[yellow]Note: ElevenLabs has no language field; injecting '{language_name} vocals' into prompt.[/yellow]"
+            )
+            prompt_additions.append(f"{language_name} vocals")
         if seed is not None:
             console.print(
-                "[yellow]Warning: --seed requires ElevenLabs composition_plan mode, which is not yet implemented. Seed is ignored.[/yellow]"
+                "[yellow]Warning: ElevenLabs only honors --seed in composition-plan mode — "
+                "use `acemusic compose --seed`. Seed is ignored for generate.[/yellow]"
             )
 
         augmented_prompt = prompt
@@ -928,8 +1013,14 @@ def sounds(
         "--key",
         help="Tonal center (e.g. 'A minor'). Applies to loops.",
     ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto'/'ace-step' (ACE-Step) or 'elevenlabs'. Defaults to ACEMUSIC_BACKEND, then 'auto'. "
+        "(Automatic ElevenLabs fallback currently applies to `generate`, not `sounds`.)",
+    ),
 ) -> None:
-    """Generate short audio samples (loops or one-shots) using the ACE-Step model."""
+    """Generate short audio samples (loops or one-shots) via ACE-Step or ElevenLabs."""
     _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
     if format not in _VALID_FORMATS:
         console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
@@ -961,6 +1052,23 @@ def sounds(
 
     config = load_config()
 
+    # Resolve the backend (CLI flag > config default > auto). No auto-fallback
+    # for sounds (matches `sample`): 'auto' routes to ACE-Step.
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs" and duration is not None:
+        if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+            console.print(
+                f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+                f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max). "
+                f"Use --backend ace-step for shorter samples.[/red]"
+            )
+            raise typer.Exit(code=1)
+
     if output is not None:
         output_path = output
     elif config.output_dir:
@@ -973,6 +1081,45 @@ def sounds(
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_name = make_slug(name) if name else None
 
+    if effective_backend == "elevenlabs":
+        if not config.elevenlabs_api_key:
+            console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+            raise typer.Exit(code=1)
+        if format != "mp3":
+            console.print(f"[yellow]Warning: ElevenLabs output is MP3-only; --format {format} is ignored.[/yellow]")
+
+        # ElevenLabs has no sound mode or native bpm/key controls — steer them
+        # through the prompt, mirroring the `generate` command's injections.
+        prompt_additions: list[str] = [f"{sound_type} sample"]
+        if parsed_bpm is not None and parsed_bpm != "auto":
+            console.print(
+                f"[yellow]Warning: --bpm is ACE-Step-native; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(f"{parsed_bpm} BPM")
+        if key is not None and key.lower() != "any":
+            console.print(
+                f"[yellow]Warning: --key is ACE-Step-native; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
+            )
+            prompt_additions.append(key)
+
+        el_client = ElevenLabsClient(
+            api_key=config.elevenlabs_api_key,
+            output_format=config.elevenlabs_output_format,
+        )
+        _sounds_via_elevenlabs(
+            el_client=el_client,
+            prompt=f"{prompt}, {', '.join(prompt_additions)}",
+            num_clips=num_clips,
+            duration=duration,
+            output_path=output_path,
+            slug=slug,
+            timestamp=timestamp,
+            safe_name=safe_name,
+            output_format=config.elevenlabs_output_format,
+        )
+        return
+
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
     try:
         _sounds_via_ace_step(
@@ -1049,6 +1196,188 @@ def _sounds_via_ace_step(
             dur_str = "unknown"
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
+def _sounds_via_elevenlabs(
+    *,
+    el_client: ElevenLabsClient,
+    prompt: str,
+    num_clips: int,
+    duration: Optional[float],
+    output_path: Path,
+    slug: str,
+    timestamp: str,
+    safe_name: Optional[str],
+    output_format: str,
+) -> None:
+    """Generate N short samples sequentially via ElevenLabs and save them to disk.
+
+    Mirrors the ACE-Step sounds path: files only, no Clip records.
+    """
+    ext = _elevenlabs_ext(output_format)
+    console.print(f"[cyan]Generating via ElevenLabs ({output_format})…[/cyan]")
+    for i in range(1, num_clips + 1):
+        with console.status(f"[bold green]Clip {i}/{num_clips}…[/bold green]", spinner="dots"):
+            try:
+                data = el_client.generate(prompt=prompt, duration=duration)
+            except ElevenLabsError as exc:
+                console.print(f"[red]ElevenLabs error: {exc}[/red]")
+                raise typer.Exit(code=1)
+
+        if safe_name:
+            filename = f"{safe_name}-{i}.{ext}"
+        else:
+            filename = make_filename(slug, timestamp, i, ext=ext)
+        dest = output_path / filename
+        dest.write_bytes(data)
+        try:
+            dur_str = f"{get_duration(dest):.1f}s"
+        except Exception:
+            dur_str = "unknown"
+
+        console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
+
+
+@app.command()
+def compose(
+    prompt: str = typer.Argument(..., help="Text description of the song to compose."),
+    duration: Optional[float] = typer.Option(
+        None,
+        "--duration",
+        help=f"Target total length in seconds ({int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}).",
+    ),
+    output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the composed track."),
+    name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and clip title."),
+    instrumental: bool = typer.Option(False, "--instrumental", help="Compose without vocals."),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for more consistent results (plan mode only)."
+    ),
+) -> None:
+    """Compose a structured multi-section track via an ElevenLabs composition plan.
+
+    Creates a sectioned plan (intro/verse/chorus/…) from the prompt, displays it,
+    then generates the full track in one shot. ElevenLabs only; output format
+    follows ELEVENLABS_OUTPUT_FORMAT (default: MP3).
+    """
+    if duration is not None and not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+        console.print(
+            f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+            f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    config = load_config()
+    if not config.elevenlabs_api_key:
+        console.print("[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the compose command.[/red]")
+        raise typer.Exit(code=1)
+
+    if output is not None:
+        output_path = output
+    elif config.output_dir:
+        output_path = Path(config.output_dir).expanduser()
+    else:
+        active_ws = get_active_workspace()
+        output_path = get_workspace_path(active_ws.id)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    plan_prompt = prompt
+    if instrumental:
+        plan_prompt = f"{prompt}, instrumental, no vocals"
+
+    el_client = ElevenLabsClient(
+        api_key=config.elevenlabs_api_key,
+        output_format=config.elevenlabs_output_format,
+    )
+    _compose_via_elevenlabs(
+        el_client=el_client,
+        prompt=prompt,
+        plan_prompt=plan_prompt,
+        duration=duration,
+        output_path=output_path,
+        name=name,
+        seed=seed,
+        output_format=config.elevenlabs_output_format,
+    )
+
+
+def _compose_via_elevenlabs(
+    *,
+    el_client: ElevenLabsClient,
+    prompt: str,
+    plan_prompt: str,
+    duration: Optional[float],
+    output_path: Path,
+    name: Optional[str],
+    seed: Optional[int],
+    output_format: str,
+) -> None:
+    """Create a composition plan, display it, generate the track, and save it."""
+    with console.status("[bold green]Creating composition plan…[/bold green]", spinner="dots"):
+        try:
+            plan = el_client.create_plan(prompt=plan_prompt, duration=duration)
+        except ElevenLabsError as exc:
+            console.print(f"[red]ElevenLabs error: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    sections = plan.get("sections", [])
+    table = Table(title="Composition Plan")
+    table.add_column("Section", style="cyan")
+    table.add_column("Duration", justify="right")
+    table.add_column("Styles")
+    table.add_column("Lyric lines", justify="right")
+    for section in sections:
+        table.add_row(
+            section.get("section_name", "-"),
+            f"{section.get('duration_ms', 0) / 1000:.1f}s",
+            ", ".join(section.get("positive_local_styles", [])),
+            str(len(section.get("lines", []))),
+        )
+    console.print(table)
+
+    total_s = sum(s.get("duration_ms", 0) for s in sections) / 1000
+    console.print(f"[cyan]Generating {len(sections)} sections ({total_s:.0f}s total) via ElevenLabs…[/cyan]")
+
+    with console.status("[bold green]Composing…[/bold green]", spinner="dots"):
+        try:
+            data = el_client.generate_from_plan(composition_plan=plan, seed=seed)
+        except ElevenLabsError as exc:
+            console.print(f"[red]ElevenLabs error: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+    ext = _elevenlabs_ext(output_format)
+    slug = make_slug(prompt)
+    if name:
+        filename = f"{make_slug(name)}.{ext}"
+    else:
+        filename = make_filename(slug, datetime.now().strftime("%Y%m%d%H%M%S"), 1, ext=ext)
+    dest = output_path / filename
+    dest.write_bytes(data)
+
+    clip_duration: Optional[float] = None
+    try:
+        clip_duration = get_duration(dest)
+        dur_str = f"{clip_duration:.1f}s"
+    except Exception:
+        dur_str = "unknown"
+
+    try:
+        ws = get_active_workspace()
+        clip = Clip(
+            title=make_slug(name) if name else slug,
+            workspace_id=ws.id,
+            file_path=str(dest.resolve()),
+            format=ext,
+            duration=clip_duration,
+            seed=seed,
+            model="elevenlabs",
+            generation_mode="compose",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        create_clip(clip)
+    except Exception as exc:
+        warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
+
+    console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
 
 @workspace_app.command("create")
@@ -3611,6 +3940,7 @@ def sample(
 
         if effective_backend in ("auto", "ace-step"):
             engine_used = "ace-step"
+            _require_ace_step_url(config)
             ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
             generated_paths = _generate_sample_via_ace_step(
                 ace_client=ace_client,

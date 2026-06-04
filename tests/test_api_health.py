@@ -5,8 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from acemusic import __version__
-from acemusic.api.main import app as module_app
-from acemusic.api.main import create_app
+from acemusic.api.main import app as module_app, create_app
 from acemusic.api.settings import ApiSettings
 
 
