@@ -33,6 +33,21 @@ Set `ACEMUSIC_API_MONGODB_URL` (defaults to `mongodb://localhost:27017`); use an
 Atlas `mongodb+srv://…` string for staging/production. Local integration tests
 run only against a local MongoDB (`uv run pytest -m integration`).
 
+## Stem separation backends
+
+`acemusic stems <clip_id>` separates a clip into stems. Two engines are available
+via `--backend` (or the `ACEMUSIC_BACKEND` default):
+
+- `auto` / `ace-step` — local demucs separation (default). Produces **four** stems:
+  vocals, drums, bass, other, in `wav` or `flac` (`--output-format`).
+- `elevenlabs` — cloud separation via the ElevenLabs API (requires
+  `ELEVENLABS_API_KEY`; no local GPU needed). Produces **six** MP3 stems:
+  vocals, drums, bass, **guitar**, **piano**, other. `--output-format` is
+  ignored — ElevenLabs returns MP3-quality stems, not lossless.
+
+Either way, each stem is registered as a child clip of the source, so downstream
+commands (DAW export, etc.) work the same.
+
 ## Environment
 
 Copy `.env.example` to `.env` and fill in the required values before running.
