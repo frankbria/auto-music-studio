@@ -1806,7 +1806,7 @@ class TestReviewFixes96:
             Preset(
                 workspace_id=ws.id,
                 name="toolong",
-                duration=300.0,
+                duration=300,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
         )

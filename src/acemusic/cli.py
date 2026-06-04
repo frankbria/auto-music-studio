@@ -581,6 +581,9 @@ def generate(
                 )
                 raise typer.Exit(code=1)
         elif not (_DURATION_MIN <= duration <= _DURATION_MAX):
+            # Legacy compatibility shim: older integrations defaulted to
+            # --duration 15, so exactly 15.0 clamps (with a warning) instead of
+            # erroring. Removable once those integrations are updated.
             if duration == 15.0:
                 console.print(
                     f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
