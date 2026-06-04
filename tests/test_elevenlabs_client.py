@@ -157,6 +157,199 @@ class TestElevenLabsClientDurationValidation:
             client.generate(prompt="pop", duration=1.0)
 
 
+FAKE_PLAN = {
+    "positive_global_styles": ["upbeat pop", "120 BPM"],
+    "negative_global_styles": ["metal"],
+    "sections": [
+        {
+            "section_name": "Intro",
+            "positive_local_styles": ["atmospheric build"],
+            "negative_local_styles": ["vocals"],
+            "duration_ms": 8000,
+            "lines": [],
+        },
+        {
+            "section_name": "Chorus",
+            "positive_local_styles": ["hook", "energetic"],
+            "negative_local_styles": [],
+            "duration_ms": 16000,
+            "lines": ["Breaking through", "Nothing stops me now"],
+        },
+    ],
+}
+
+
+class TestElevenLabsClientCreatePlan:
+    """Tests for ElevenLabsClient.create_plan() (issue #96)."""
+
+    def test_create_plan_returns_parsed_json(self):
+        """create_plan() returns the parsed composition plan dict."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data=FAKE_PLAN)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            plan = client.create_plan(prompt="an upbeat pop anthem")
+
+        assert plan == FAKE_PLAN
+
+    def test_create_plan_posts_to_plan_endpoint_with_prompt(self):
+        """create_plan() POSTs the prompt to /v1/music/plan."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data=FAKE_PLAN)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.create_plan(prompt="an upbeat pop anthem")
+
+        url = mock_post.call_args.args[0] if mock_post.call_args.args else mock_post.call_args.kwargs.get("url")
+        assert url.endswith("/v1/music/plan")
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("prompt") == "an upbeat pop anthem"
+        assert "music_length_ms" not in body
+
+    def test_create_plan_converts_duration_to_music_length_ms(self):
+        """create_plan() converts duration seconds to music_length_ms."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data=FAKE_PLAN)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.create_plan(prompt="anthem", duration=120.0)
+
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("music_length_ms") == 120000
+
+    def test_create_plan_sends_model_id_when_provided(self):
+        """create_plan() includes model_id in the body when given."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data=FAKE_PLAN)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.create_plan(prompt="anthem", model_id="music_v1")
+
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("model_id") == "music_v1"
+
+    def test_create_plan_sends_api_key_header(self):
+        """create_plan() sends the xi-api-key header."""
+        client = ElevenLabsClient(api_key="plan-key")
+        resp = _mock_response(200, b"", json_data=FAKE_PLAN)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.create_plan(prompt="anthem")
+
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("xi-api-key") == "plan-key"
+
+    def test_create_plan_rejects_out_of_range_duration(self):
+        """create_plan() validates duration against the API limits."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post") as mock_post:
+            with pytest.raises(ElevenLabsError, match=r"3.*600"):
+                client.create_plan(prompt="anthem", duration=601.0)
+
+        mock_post.assert_not_called()
+
+    def test_create_plan_raises_elevenlabs_error_on_http_error(self):
+        """create_plan() raises ElevenLabsError on API errors."""
+        client = ElevenLabsClient(api_key="bad-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=_error_response(422)):
+            with pytest.raises(ElevenLabsError, match="422"):
+                client.create_plan(prompt="anthem")
+
+    def test_create_plan_raises_elevenlabs_error_on_connection_failure(self):
+        """create_plan() raises ElevenLabsError when the request fails."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch(
+            "acemusic.elevenlabs_client.httpx.post",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            with pytest.raises(ElevenLabsError):
+                client.create_plan(prompt="anthem")
+
+
+class TestElevenLabsClientGenerateFromPlan:
+    """Tests for ElevenLabsClient.generate_from_plan() (issue #96)."""
+
+    def test_generate_from_plan_returns_audio_bytes(self):
+        """generate_from_plan() returns raw audio bytes on success."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.generate_from_plan(FAKE_PLAN)
+
+        assert result == FAKE_MP3
+
+    def test_generate_from_plan_sends_plan_in_body(self):
+        """generate_from_plan() sends composition_plan (and no prompt) in the body."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.generate_from_plan(FAKE_PLAN)
+
+        url = mock_post.call_args.args[0] if mock_post.call_args.args else mock_post.call_args.kwargs.get("url")
+        assert url.endswith("/v1/music")
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("composition_plan") == FAKE_PLAN
+        assert "prompt" not in body
+        assert "force_instrumental" not in body
+
+    def test_generate_from_plan_sends_respect_sections_durations(self):
+        """generate_from_plan() includes respect_sections_durations in the body."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.generate_from_plan(FAKE_PLAN, respect_durations=False)
+
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("respect_sections_durations") is False
+
+    def test_generate_from_plan_sends_seed_when_provided(self):
+        """generate_from_plan() forwards the seed (valid only in plan mode)."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.generate_from_plan(FAKE_PLAN, seed=42)
+
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("seed") == 42
+
+    def test_generate_from_plan_sends_output_format_as_query_param(self):
+        """generate_from_plan() sends output_format as a query parameter."""
+        client = ElevenLabsClient(api_key="test-key", output_format="mp3_44100_192")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.generate_from_plan(FAKE_PLAN)
+
+        params = mock_post.call_args.kwargs.get("params", {})
+        assert params.get("output_format") == "mp3_44100_192"
+
+    def test_generate_from_plan_raises_elevenlabs_error_on_http_error(self):
+        """generate_from_plan() raises ElevenLabsError on API errors."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=_error_response(422)):
+            with pytest.raises(ElevenLabsError, match="422"):
+                client.generate_from_plan(FAKE_PLAN)
+
+    def test_generate_from_plan_raises_elevenlabs_error_on_connection_failure(self):
+        """generate_from_plan() raises ElevenLabsError when the request fails."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch(
+            "acemusic.elevenlabs_client.httpx.post",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            with pytest.raises(ElevenLabsError):
+                client.generate_from_plan(FAKE_PLAN)
+
+
 class TestElevenLabsClientValidateKey:
     """Tests for ElevenLabsClient.validate_key()."""
 

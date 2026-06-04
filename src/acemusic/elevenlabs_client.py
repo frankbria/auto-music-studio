@@ -79,6 +79,84 @@ class ElevenLabsClient:
         except httpx.RequestError as exc:
             raise ElevenLabsError(f"ElevenLabs generate failed: {exc}") from exc
 
+    def create_plan(
+        self,
+        prompt: str,
+        duration: float | None = None,
+        model_id: str | None = None,
+    ) -> dict:
+        """Create a composition plan via POST /v1/music/plan and return the parsed JSON.
+
+        Args:
+            prompt: Text description to compose a plan from.
+            duration: Target plan length in seconds (converted to music_length_ms).
+            model_id: Optional model override (e.g. 'music_v1').
+
+        Raises:
+            ElevenLabsError: On out-of-range duration, HTTP error, or connection failure.
+        """
+        _validate_duration(duration)
+        body: dict = {"prompt": prompt}
+        if duration is not None:
+            body["music_length_ms"] = int(duration * 1000)
+        if model_id is not None:
+            body["model_id"] = model_id
+
+        try:
+            response = httpx.post(
+                f"{_BASE_URL}/v1/music/plan",
+                json=body,
+                headers=self._headers,
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ElevenLabsError(f"ElevenLabs plan creation failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ElevenLabsError(f"ElevenLabs plan creation failed: {exc}") from exc
+
+    def generate_from_plan(
+        self,
+        composition_plan: dict,
+        respect_durations: bool = True,
+        seed: int | None = None,
+    ) -> bytes:
+        """Generate music from a composition plan via POST /v1/music and return audio bytes.
+
+        The API forbids combining ``composition_plan`` with ``prompt`` or
+        ``force_instrumental``, so only plan-mode fields are sent.
+
+        Args:
+            composition_plan: Plan dict as returned by :meth:`create_plan`.
+            respect_durations: If True, sections strictly honor their duration_ms.
+            seed: Optional random seed (only valid in plan mode).
+
+        Raises:
+            ElevenLabsError: On HTTP error or connection failure.
+        """
+        body: dict = {
+            "composition_plan": composition_plan,
+            "respect_sections_durations": respect_durations,
+        }
+        if seed is not None:
+            body["seed"] = seed
+
+        try:
+            response = httpx.post(
+                f"{_BASE_URL}/v1/music",
+                json=body,
+                headers=self._headers,
+                params={"output_format": self.output_format},
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPStatusError as exc:
+            raise ElevenLabsError(f"ElevenLabs plan generation failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ElevenLabsError(f"ElevenLabs plan generation failed: {exc}") from exc
+
     def validate_key(self, timeout: float = 5.0) -> bool:
         """Validate the API key via GET /v1/user. Returns True if valid, False otherwise."""
         try:
