@@ -46,6 +46,13 @@ uv run acemusic generate "upbeat pop" --output ./output --name demo
 uv run acemusic generate "dark electro" --bpm 128 --key "C minor" --time-signature "4/4" --seed 42 --duration 60
 uv run acemusic generate "ambient pad" --backend elevenlabs --instrumental
 
+# Composition plans (#96) — structured multi-section generation via ElevenLabs
+uv run acemusic compose "uplifting indie-pop song" --duration 120 --seed 42   # plan (intro/verse/chorus/…) → one-shot MP3
+uv run acemusic compose "cinematic theme" --instrumental --name main-theme
+
+# Short samples via ElevenLabs (#96) — sounds also accepts --backend
+uv run acemusic sounds "deep kick drum" --type one-shot --backend elevenlabs
+
 # Iterative generation (US-6.1) — extend an existing clip with AI-generated continuation
 uv run acemusic extend 42 --duration 60s                          # extend clip 42 by 60s from its end
 uv run acemusic extend 42 --duration 30s --from 45s               # extend from a mid-clip timestamp
@@ -107,7 +114,7 @@ src/acemusic/
     models/         # Beanie ODM documents: User, Workspace, Clip, Job
     routers/        # Versioned routers mounted under /api/v1 (health, ...)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
-  cli.py            # Typer CLI app (health, generate, models, workspace commands)
+  cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
   config.py         # Config loading: env > .env > ~/.acemusic/config.yaml
   db.py             # SQLite connection and schema init (~/.acemusic/metadata.db)
