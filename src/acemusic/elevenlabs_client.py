@@ -58,6 +58,10 @@ def _parse_stem_zip(content: bytes) -> dict[str, bytes]:
                 continue
             name = Path(info.filename).stem.lower()
             label = next((known for known in ELEVENLABS_STEM_LABELS if known in name), name)
+            if label in stems:
+                # Two entries matched the same known label — keep both by
+                # falling back to the filename stem instead of overwriting.
+                label = name
             stems[label] = archive.read(info)
 
     if not stems:

@@ -41,9 +41,10 @@ via `--backend` (or the `ACEMUSIC_BACKEND` default):
 - `auto` / `ace-step` — local demucs separation (default). Produces **four** stems:
   vocals, drums, bass, other, in `wav` or `flac` (`--output-format`).
 - `elevenlabs` — cloud separation via the ElevenLabs API (requires
-  `ELEVENLABS_API_KEY`; no local GPU needed). Produces **six** MP3 stems:
-  vocals, drums, bass, **guitar**, **piano**, other. `--output-format` is
-  ignored — ElevenLabs returns MP3-quality stems, not lossless.
+  `ELEVENLABS_API_KEY`; no local GPU needed). Produces **six** stems:
+  vocals, drums, bass, **guitar**, **piano**, other, in the format configured
+  by `ELEVENLABS_OUTPUT_FORMAT` (MP3 by default). `--output-format` is
+  ignored — use `ELEVENLABS_OUTPUT_FORMAT` to control the stem format.
 
 Either way, each stem is registered as a child clip of the source, so downstream
 commands (DAW export, etc.) work the same.

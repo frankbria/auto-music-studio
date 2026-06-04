@@ -525,6 +525,17 @@ class TestElevenLabsClientSeparateStems:
 
         assert set(result.keys()) == {"vocals", "drums"}
 
+    def test_separate_stems_does_not_collapse_duplicate_label_matches(self, audio_file):
+        """Two entries matching the same known label keep distinct keys (no silent overwrite)."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, _make_stem_zip(["lead_vocals", "harmony_vocals"]))
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.separate_stems(audio_file)
+
+        # First match claims the known label; the collision falls back to its filename stem.
+        assert set(result.keys()) == {"vocals", "harmony_vocals"}
+
     def test_separate_stems_raises_elevenlabs_error_on_401(self, audio_file):
         """separate_stems() raises ElevenLabsError on 401 Unauthorized."""
         client = ElevenLabsClient(api_key="bad-key")
