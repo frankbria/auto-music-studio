@@ -19,14 +19,14 @@ VALID_BACKENDS: tuple[str, ...] = ("auto", "ace-step", "elevenlabs")
 DEFAULT_BACKEND = "auto"
 
 # Which concrete engines support each operation. ElevenLabs entries expand as
-# the sibling issues land (#97 stems, #98 inpainting, #99 mashup). #96 added
-# first-class generate/sounds and composition plans ("compose").
+# the sibling issues land (#98 inpainting, #99 mashup). #96 added first-class
+# generate/sounds and composition plans ("compose"); #97 added stem separation.
 _CAPABILITIES: dict[str, set[str]] = {
     "generate": {"ace-step", "elevenlabs"},
     "sample": {"ace-step", "elevenlabs"},
     "sounds": {"ace-step", "elevenlabs"},
     "compose": {"elevenlabs"},
-    "stems": {"ace-step"},
+    "stems": {"ace-step", "elevenlabs"},
     "midi": {"ace-step"},
     "remaster": {"ace-step"},
     "extend": {"ace-step"},

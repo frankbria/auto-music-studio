@@ -72,3 +72,15 @@ class TestIssue96Capabilities:
         assert supports("elevenlabs", "compose")
         assert not supports("ace-step", "compose")
         assert supports("auto", "compose")
+
+
+class TestIssue97Capabilities:
+    """Capability entries added by #97 (ElevenLabs stem separation)."""
+
+    def test_stems_supported_by_both_engines(self):
+        assert supports("ace-step", "stems")
+        assert supports("elevenlabs", "stems")
+        assert supports("auto", "stems")
+
+    def test_ensure_supports_passes_for_elevenlabs_stems(self):
+        ensure_supports("elevenlabs", "stems")  # must not raise
