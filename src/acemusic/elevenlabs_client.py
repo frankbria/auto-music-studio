@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+import zlib
 from pathlib import Path
 
 import httpx
@@ -52,17 +53,22 @@ def _parse_stem_zip(content: bytes) -> dict[str, bytes]:
         raise ElevenLabsError("ElevenLabs stem separation failed: response is not a valid ZIP archive") from exc
 
     stems: dict[str, bytes] = {}
-    with archive:
-        for info in archive.infolist():
-            if info.is_dir():
-                continue
-            name = Path(info.filename).stem.lower()
-            label = next((known for known in ELEVENLABS_STEM_LABELS if known in name), name)
-            if label in stems:
-                # Two entries matched the same known label — keep both by
-                # falling back to the filename stem instead of overwriting.
-                label = name
-            stems[label] = archive.read(info)
+    try:
+        with archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                name = Path(info.filename).stem.lower()
+                label = next((known for known in ELEVENLABS_STEM_LABELS if known in name), name)
+                if label in stems:
+                    # Two entries matched the same known label — keep both by
+                    # falling back to the filename stem instead of overwriting.
+                    label = name
+                stems[label] = archive.read(info)
+    except (zipfile.BadZipFile, zlib.error, OSError, ValueError) as exc:
+        # Corruption can also surface mid-read (bad CRC, truncated entry) —
+        # normalize to the documented ElevenLabsError contract.
+        raise ElevenLabsError("ElevenLabs stem separation failed: ZIP archive entry is corrupted") from exc
 
     if not stems:
         raise ElevenLabsError("ElevenLabs stem separation failed: ZIP archive contains no stems")

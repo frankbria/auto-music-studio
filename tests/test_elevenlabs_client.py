@@ -574,6 +574,21 @@ class TestElevenLabsClientSeparateStems:
             with pytest.raises(ElevenLabsError, match="(?i)zip"):
                 client.separate_stems(audio_file)
 
+    def test_separate_stems_raises_elevenlabs_error_on_corrupted_zip_entry(self, audio_file):
+        """A ZIP that opens but whose entry data is corrupted raises ElevenLabsError, not BadZipFile."""
+        client = ElevenLabsClient(api_key="test-key")
+        # Build a valid archive, then corrupt the stored entry bytes so the
+        # central directory parses but reading the entry fails its CRC check.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("vocals.mp3", b"A" * 100)
+        corrupted = buf.getvalue().replace(b"A" * 100, b"B" * 100)
+        resp = _mock_response(200, corrupted)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)zip"):
+                client.separate_stems(audio_file)
+
     def test_separate_stems_raises_elevenlabs_error_on_empty_zip(self, audio_file):
         """separate_stems() raises ElevenLabsError when the ZIP contains no stems."""
         client = ElevenLabsClient(api_key="test-key")
