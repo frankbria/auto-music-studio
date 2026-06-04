@@ -6,9 +6,22 @@ import httpx
 
 _BASE_URL = "https://api.elevenlabs.io"
 
+# ElevenLabs music API duration limits (music_length_ms: 3000–600000).
+DURATION_MIN_S = 3.0
+DURATION_MAX_S = 600.0
+
 
 class ElevenLabsError(Exception):
     """Raised when the ElevenLabs API returns an error or is unreachable."""
+
+
+def _validate_duration(duration: float | None) -> None:
+    """Raise ElevenLabsError if duration is outside the API limits (3s–600s)."""
+    if duration is not None and not (DURATION_MIN_S <= duration <= DURATION_MAX_S):
+        raise ElevenLabsError(
+            f"Invalid duration {duration}s: ElevenLabs requires between "
+            f"{int(DURATION_MIN_S)}s and {int(DURATION_MAX_S)}s (10 min)."
+        )
 
 
 class ElevenLabsClient:
@@ -38,8 +51,9 @@ class ElevenLabsClient:
             lyrics: Inline lyrics text forwarded to the API.
 
         Raises:
-            ElevenLabsError: On HTTP error or connection failure.
+            ElevenLabsError: On out-of-range duration, HTTP error, or connection failure.
         """
+        _validate_duration(duration)
         body: dict = {"prompt": prompt}
         if duration is not None:
             body["music_length_ms"] = int(duration * 1000)

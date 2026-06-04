@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from acemusic.elevenlabs_client import ElevenLabsClient, ElevenLabsError
+from acemusic.elevenlabs_client import DURATION_MAX_S, DURATION_MIN_S, ElevenLabsClient, ElevenLabsError
 
 FAKE_MP3 = b"ID3" + b"\x00" * 100  # minimal fake MP3 bytes
 
@@ -121,6 +121,40 @@ class TestElevenLabsClientGenerate:
         ):
             with pytest.raises(ElevenLabsError):
                 client.generate(prompt="test")
+
+
+class TestElevenLabsClientDurationValidation:
+    """Tests for duration validation in ElevenLabsClient.generate() (issue #96)."""
+
+    @pytest.mark.parametrize("duration", [DURATION_MIN_S, DURATION_MAX_S, 30.0])
+    def test_generate_accepts_durations_within_limits(self, duration):
+        """generate() accepts durations at and within the API limits."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, FAKE_MP3)
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.generate(prompt="pop", duration=duration)
+
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert body.get("music_length_ms") == int(duration * 1000)
+
+    @pytest.mark.parametrize("duration", [2.9, 0.0, -1.0, 600.1, 9999.0])
+    def test_generate_rejects_durations_outside_limits(self, duration):
+        """generate() raises ElevenLabsError without calling the API for out-of-range durations."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post") as mock_post:
+            with pytest.raises(ElevenLabsError):
+                client.generate(prompt="pop", duration=duration)
+
+        mock_post.assert_not_called()
+
+    def test_duration_error_message_states_valid_range(self):
+        """The validation error message includes the valid range."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with pytest.raises(ElevenLabsError, match=r"3.*600"):
+            client.generate(prompt="pop", duration=1.0)
 
 
 class TestElevenLabsClientValidateKey:
