@@ -286,3 +286,34 @@ class TestComposeDurationProbe:
         clips = list_clips(get_active_workspace().id)
         assert len(clips) == 1
         assert clips[0].duration is None
+
+
+class TestComposeWithoutAceStep:
+    """compose is ElevenLabs-only and must not require an ACE-Step server (C1)."""
+
+    def test_compose_works_without_ace_step_url(self, monkeypatch, tmp_path):
+        """compose succeeds with only an ElevenLabs key configured (api_url=None)."""
+        import acemusic.db as _db
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(_db, "DB_DIR", tmp_path / ".acemusic")
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(
+                api_url=None,
+                api_key=None,
+                elevenlabs_api_key="test-key",
+                elevenlabs_output_format="mp3_44100_128",
+            ),
+        )
+        el = _el_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", return_value=24.0),
+        ):
+            result = runner.invoke(app, ["compose", "anthem", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert "ACE-Step server URL" not in result.output
+        assert list(tmp_path.glob("*.mp3"))

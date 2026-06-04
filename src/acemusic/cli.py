@@ -179,9 +179,12 @@ def main(
         "stems",
         "midi",
         "remaster",
+        "compose",  # ElevenLabs-only; never touches ACE-Step (#96)
     ):
         config = load_config()
-        if not config.api_url:
+        # When the configured default backend is ElevenLabs, ACE-Step is not
+        # required for backend-capable commands (#96).
+        if not config.api_url and (config.backend or "").strip().lower() != "elevenlabs":
             typer.echo("ACE-Step server URL not configured. Set ACEMUSIC_BASE_URL in .env or config.yaml")
             raise typer.Exit(1)
 
@@ -522,28 +525,6 @@ def generate(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
-    if duration is not None:
-        if effective_backend == "elevenlabs":
-            # Explicit ElevenLabs backend: use the wider ElevenLabs API limits.
-            if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
-                console.print(
-                    f"[red]Invalid --duration: {duration}. ElevenLabs supports "
-                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
-                )
-                raise typer.Exit(code=1)
-        elif not (_DURATION_MIN <= duration <= _DURATION_MAX):
-            if duration == 15.0:
-                console.print(
-                    f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
-                    f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
-                )
-                duration = _DURATION_MIN
-            else:
-                console.print(
-                    f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and {int(_DURATION_MAX)} seconds.[/red]"
-                )
-                raise typer.Exit(code=1)
-
     # Load and apply preset if provided
     if preset is not None:
         try:
@@ -569,6 +550,51 @@ def generate(
         except sqlite3.Error as exc:
             console.print(f"[red]Error loading preset: {exc}[/red]")
             raise typer.Exit(code=1)
+
+    # Validate duration AFTER preset application so preset-supplied values are
+    # checked too, with backend-aware limits.
+    if duration is not None:
+        if effective_backend == "elevenlabs":
+            # Explicit ElevenLabs backend: use the wider ElevenLabs API limits.
+            if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
+                console.print(
+                    f"[red]Invalid --duration: {duration}. ElevenLabs supports "
+                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)} seconds (10 min max).[/red]"
+                )
+                raise typer.Exit(code=1)
+        elif not (_DURATION_MIN <= duration <= _DURATION_MAX):
+            if duration == 15.0:
+                console.print(
+                    f"[yellow]Warning: --duration 15 is below the minimum ({int(_DURATION_MIN)}s). "
+                    f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
+                )
+                duration = _DURATION_MIN
+            elif (
+                effective_backend == "auto"
+                and config.elevenlabs_api_key
+                and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S
+            ):
+                # 'auto' never fails just because one engine can't do the job:
+                # ACE-Step can't serve this duration, but ElevenLabs can.
+                console.print(
+                    f"[yellow]--duration {duration} is outside the ACE-Step range "
+                    f"({int(_DURATION_MIN)}–{int(_DURATION_MAX)}s); routing to ElevenLabs.[/yellow]"
+                )
+                effective_backend = "elevenlabs"
+            else:
+                hint = (
+                    " Set ELEVENLABS_API_KEY to generate "
+                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}s tracks via ElevenLabs."
+                    if effective_backend == "auto"
+                    and not config.elevenlabs_api_key
+                    and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S
+                    else ""
+                )
+                console.print(
+                    f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and "
+                    f"{int(_DURATION_MAX)} seconds.{hint}[/red]"
+                )
+                raise typer.Exit(code=1)
 
     # Resolve model: --model flag > config.default_model > None (server default)
     resolved_model = model or config.default_model or None
@@ -707,7 +733,8 @@ def generate(
             prompt_additions.append(f"{language_name} vocals")
         if seed is not None:
             console.print(
-                "[yellow]Warning: --seed requires ElevenLabs composition_plan mode, which is not yet implemented. Seed is ignored.[/yellow]"
+                "[yellow]Warning: ElevenLabs only honors --seed in composition-plan mode — "
+                "use `acemusic compose --seed`. Seed is ignored for generate.[/yellow]"
             )
 
         augmented_prompt = prompt

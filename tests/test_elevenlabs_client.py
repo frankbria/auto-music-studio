@@ -420,3 +420,25 @@ class TestElevenLabsIntegration:
 
         client = ElevenLabsClient(api_key=key)
         assert client.validate_key() is True
+
+    def test_compose_plan_roundtrip_returns_playable_audio(self):
+        """Integration: create_plan() → generate_from_plan() yields decodable MP3 audio."""
+        import io
+        import os
+
+        key = os.environ.get("ELEVENLABS_API_KEY")
+        if not key:
+            pytest.skip("ELEVENLABS_API_KEY not set")
+
+        client = ElevenLabsClient(api_key=key, output_format="mp3_44100_128")
+        plan = client.create_plan(prompt="short upbeat jingle", duration=10.0)
+        assert plan.get("sections"), "plan should contain sections"
+
+        audio = client.generate_from_plan(plan)
+        assert isinstance(audio, bytes)
+        assert len(audio) > 1000
+
+        from pydub import AudioSegment
+
+        segment = AudioSegment.from_file(io.BytesIO(audio), format="mp3")
+        assert segment.duration_seconds > 1.0
