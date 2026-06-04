@@ -2185,7 +2185,8 @@ def stems(
     output_format: Optional[str] = typer.Option(
         None,
         "--output-format",
-        help="Stem output format: wav or flac (default: wav). Demucs backend only — ElevenLabs stems are MP3.",
+        help="Stem output format: wav or flac (default: wav). Demucs backend only — "
+        "ElevenLabs stems use ELEVENLABS_OUTPUT_FORMAT (MP3 by default).",
     ),
     output: Optional[Path] = typer.Option(None, "--output", help="Output directory (default: stems/ next to source)."),
     backend: Optional[str] = typer.Option(
@@ -2199,8 +2200,8 @@ def stems(
 
     The local demucs backend (auto/ace-step) produces four stems: vocals,
     drums, bass, other. The elevenlabs backend uploads the clip to the
-    ElevenLabs cloud API and produces six MP3 stems: vocals, drums, bass,
-    guitar, piano, other.
+    ElevenLabs cloud API and produces six stems: vocals, drums, bass,
+    guitar, piano, other (format from ELEVENLABS_OUTPUT_FORMAT, MP3 default).
     """
     config = load_config()
     try:
