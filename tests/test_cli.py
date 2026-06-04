@@ -157,3 +157,27 @@ class TestElevenLabsBackendSkipsAceStepUrlCheck:
 
         assert result.exit_code == 1
         assert "ACE-Step server URL" in result.output
+
+    def test_url_error_hints_at_elevenlabs_when_key_present(self, monkeypatch, tmp_path):
+        """The missing-URL error suggests --backend elevenlabs when a key is configured."""
+        self._no_ace_config(monkeypatch)
+
+        result = runner.invoke(app, ["generate", "pop", "--output", str(tmp_path)])
+
+        assert result.exit_code == 1
+        assert "--backend elevenlabs" in result.output
+
+    def test_url_error_has_no_hint_without_key(self, monkeypatch, tmp_path):
+        """No ElevenLabs hint when no key is configured."""
+        from acemusic.config import AceConfig
+
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url=None, api_key=None, elevenlabs_api_key=None),
+        )
+
+        result = runner.invoke(app, ["generate", "pop", "--output", str(tmp_path)])
+
+        assert result.exit_code == 1
+        assert "ACE-Step server URL" in result.output
+        assert "--backend elevenlabs" not in result.output

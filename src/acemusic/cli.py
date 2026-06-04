@@ -399,6 +399,27 @@ _BPM_MAX = 180
 _DURATION_MIN = 30.0
 _DURATION_MAX = 240.0
 
+# ISO 639-1 codes → English names for ElevenLabs prompt injection (the API has
+# no language field; vocal language is steered through the prompt text).
+_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "de": "German",
+    "fr": "French",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "ru": "Russian",
+    "sv": "Swedish",
+    "tr": "Turkish",
+    "ar": "Arabic",
+    "hi": "Hindi",
+}
+
 
 def _parse_bpm(value: str) -> int | str:
     """Parse --bpm value: 'auto' is returned as-is; otherwise validate integer 60–180."""
@@ -889,28 +910,6 @@ def _generate_via_ace_step(
             warnings.warn(f"clip metadata not saved: {exc}", stacklevel=2)
 
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
-
-
-# ISO 639-1 codes → English names for ElevenLabs prompt injection (the API has
-# no language field; vocal language is steered through the prompt text).
-_LANGUAGE_NAMES: dict[str, str] = {
-    "en": "English",
-    "es": "Spanish",
-    "de": "German",
-    "fr": "French",
-    "it": "Italian",
-    "pt": "Portuguese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "zh": "Chinese",
-    "nl": "Dutch",
-    "pl": "Polish",
-    "ru": "Russian",
-    "sv": "Swedish",
-    "tr": "Turkish",
-    "ar": "Arabic",
-    "hi": "Hindi",
-}
 
 
 def _elevenlabs_ext(output_format: str) -> str:

@@ -12,7 +12,9 @@ DURATION_MAX_S = 600.0
 
 # Generating a track can take well over two minutes for long durations (up to
 # 10 min of audio), so music generation calls get a generous read timeout.
+# Plan creation is a fast, credit-free endpoint and keeps a tighter budget.
 _GENERATION_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
+_PLAN_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
 
 
 class ElevenLabsError(Exception):
@@ -111,7 +113,7 @@ class ElevenLabsClient:
                 f"{_BASE_URL}/v1/music/plan",
                 json=body,
                 headers=self._headers,
-                timeout=120.0,
+                timeout=_PLAN_TIMEOUT,
             )
             response.raise_for_status()
             plan = response.json()
