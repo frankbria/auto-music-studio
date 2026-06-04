@@ -20,6 +20,7 @@ def _plain(text: str) -> str:
     """Strip ANSI escape codes from text (Rich emits these in CI environments)."""
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
+
 TASK_ID = "task-abc-123"
 AUDIO_URL_1 = "http://localhost:8001/audio/clip1.wav"
 AUDIO_URL_2 = "http://localhost:8001/audio/clip2.wav"
@@ -1709,3 +1710,22 @@ class TestModelSelection:
         assert result.exit_code == 0, result.output
         assert "model" in result.output.lower()
         assert "ignored" in result.output.lower() or "warning" in result.output.lower()
+
+
+class TestDuration15Clamp:
+    """Legacy --duration 15 clamp (moved by #96's backend-aware validation)."""
+
+    def test_duration_15_clamps_to_minimum_with_warning(self, monkeypatch, tmp_path):
+        """--duration 15 on the ACE-Step path clamps to 30s with a warning."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        client_mock = _make_client_mock([COMPLETED_RESULT])
+
+        with (
+            patch("acemusic.cli.AceStepClient", return_value=client_mock),
+            patch("acemusic.cli.get_duration", return_value=30.0),
+        ):
+            result = runner.invoke(app, ["generate", "test", "--duration", "15", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert "Clamping" in _plain(result.output)
+        assert client_mock.submit_task.call_args.kwargs["audio_duration"] == 30.0

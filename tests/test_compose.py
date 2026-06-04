@@ -257,3 +257,32 @@ class TestComposeValidation:
         """compose is registered on the root app."""
         result = runner.invoke(app, ["--help"])
         assert "compose" in _plain(result.output)
+
+
+class TestComposeDurationProbe:
+    """Duration probing failures degrade gracefully."""
+
+    def test_compose_duration_probe_failure_still_succeeds(self, monkeypatch, tmp_path):
+        """If get_duration fails, compose still saves the file and reports 'unknown'."""
+        import acemusic.db as _db
+
+        monkeypatch.setattr(_db, "DB_DIR", tmp_path / ".acemusic")
+        _el_config(monkeypatch)
+        el = _el_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.get_duration", side_effect=RuntimeError("no ffprobe")),
+        ):
+            result = runner.invoke(app, ["compose", "anthem", "--output", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert list(tmp_path.glob("*.mp3"))
+        assert "unknown" in _plain(result.output)
+
+        from acemusic.db import list_clips
+        from acemusic.workspace import get_active_workspace
+
+        clips = list_clips(get_active_workspace().id)
+        assert len(clips) == 1
+        assert clips[0].duration is None

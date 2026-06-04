@@ -438,9 +438,18 @@ class TestSoundsElevenLabsBackend:
             result = runner.invoke(
                 app,
                 [
-                    "sounds", "funky groove", "--type", "loop",
-                    "--bpm", "120", "--key", "A minor",
-                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                    "sounds",
+                    "funky groove",
+                    "--type",
+                    "loop",
+                    "--bpm",
+                    "120",
+                    "--key",
+                    "A minor",
+                    "--backend",
+                    "elevenlabs",
+                    "--output",
+                    str(tmp_path),
                 ],
             )
 
@@ -463,8 +472,16 @@ class TestSoundsElevenLabsBackend:
             result = runner.invoke(
                 app,
                 [
-                    "sounds", "deep kick", "--type", "one-shot", "--format", "wav",
-                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                    "sounds",
+                    "deep kick",
+                    "--type",
+                    "one-shot",
+                    "--format",
+                    "wav",
+                    "--backend",
+                    "elevenlabs",
+                    "--output",
+                    str(tmp_path),
                 ],
             )
 
@@ -494,8 +511,16 @@ class TestSoundsElevenLabsBackend:
             result = runner.invoke(
                 app,
                 [
-                    "sounds", "deep kick", "--type", "one-shot", "--duration", "1",
-                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                    "sounds",
+                    "deep kick",
+                    "--type",
+                    "one-shot",
+                    "--duration",
+                    "1",
+                    "--backend",
+                    "elevenlabs",
+                    "--output",
+                    str(tmp_path),
                 ],
             )
 
@@ -517,8 +542,16 @@ class TestSoundsElevenLabsBackend:
             result = runner.invoke(
                 app,
                 [
-                    "sounds", "riser", "--type", "one-shot", "--duration", "5",
-                    "--backend", "elevenlabs", "--output", str(tmp_path),
+                    "sounds",
+                    "riser",
+                    "--type",
+                    "one-shot",
+                    "--duration",
+                    "5",
+                    "--backend",
+                    "elevenlabs",
+                    "--output",
+                    str(tmp_path),
                 ],
             )
 
@@ -550,3 +583,50 @@ class TestSoundsElevenLabsBackend:
 
         assert result.exit_code == 0, result.output
         client_mock.submit_task.assert_called_once()
+
+    def test_sounds_elevenlabs_error_exits_one(self, monkeypatch, tmp_path):
+        """An ElevenLabsError during generation exits 1 with the error shown."""
+        from acemusic.elevenlabs_client import ElevenLabsError
+
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.side_effect = ElevenLabsError("ElevenLabs generate failed: 500")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el_mock):
+            result = runner.invoke(
+                app,
+                ["sounds", "deep kick", "--type", "one-shot", "--backend", "elevenlabs", "--output", str(tmp_path)],
+            )
+
+        assert result.exit_code == 1
+        assert "500" in _plain(result.output)
+
+    def test_sounds_elevenlabs_name_flag_produces_prefixed_filename(self, monkeypatch, tmp_path):
+        """--name produces a prefixed filename on the ElevenLabs path."""
+        _el_config(monkeypatch)
+        el_mock = MagicMock()
+        el_mock.generate.return_value = FAKE_MP3
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el_mock),
+            patch("acemusic.cli.get_duration", side_effect=RuntimeError("no ffprobe")),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "sounds",
+                    "deep kick",
+                    "--type",
+                    "one-shot",
+                    "--name",
+                    "Kick One",
+                    "--backend",
+                    "elevenlabs",
+                    "--output",
+                    str(tmp_path),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "kick-one-1.mp3").exists()
+        assert "unknown" in _plain(result.output)

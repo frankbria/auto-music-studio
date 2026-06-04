@@ -1046,9 +1046,7 @@ def sounds(
             console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
             raise typer.Exit(code=1)
         if format != "mp3":
-            console.print(
-                f"[yellow]Warning: ElevenLabs output is MP3-only; --format {format} is ignored.[/yellow]"
-            )
+            console.print(f"[yellow]Warning: ElevenLabs output is MP3-only; --format {format} is ignored.[/yellow]")
 
         # ElevenLabs has no sound mode or native bpm/key controls — steer them
         # through the prompt, mirroring the `generate` command's injections.
@@ -1228,9 +1226,7 @@ def compose(
 
     config = load_config()
     if not config.elevenlabs_api_key:
-        console.print(
-            "[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the compose command.[/red]"
-        )
+        console.print("[red]ELEVENLABS_API_KEY is not configured. Set it in .env to use the compose command.[/red]")
         raise typer.Exit(code=1)
 
     if output is not None:
