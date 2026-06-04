@@ -10,6 +10,10 @@ _BASE_URL = "https://api.elevenlabs.io"
 DURATION_MIN_S = 3.0
 DURATION_MAX_S = 600.0
 
+# Generating a track can take well over two minutes for long durations (up to
+# 10 min of audio), so music generation calls get a generous read timeout.
+_GENERATION_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
+
 
 class ElevenLabsError(Exception):
     """Raised when the ElevenLabs API returns an error or is unreachable."""
@@ -70,7 +74,7 @@ class ElevenLabsClient:
                 json=body,
                 headers=self._headers,
                 params={"output_format": self.output_format},
-                timeout=120.0,
+                timeout=_GENERATION_TIMEOUT,
             )
             response.raise_for_status()
             return response.content
@@ -110,11 +114,16 @@ class ElevenLabsClient:
                 timeout=120.0,
             )
             response.raise_for_status()
-            return response.json()
+            plan = response.json()
         except httpx.HTTPStatusError as exc:
             raise ElevenLabsError(f"ElevenLabs plan creation failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise ElevenLabsError(f"ElevenLabs plan creation failed: {exc}") from exc
+        except ValueError as exc:
+            raise ElevenLabsError("ElevenLabs plan creation failed: invalid JSON response") from exc
+        if not isinstance(plan, dict):
+            raise ElevenLabsError("ElevenLabs plan creation failed: invalid plan payload type")
+        return plan
 
     def generate_from_plan(
         self,
@@ -148,7 +157,7 @@ class ElevenLabsClient:
                 json=body,
                 headers=self._headers,
                 params={"output_format": self.output_format},
-                timeout=120.0,
+                timeout=_GENERATION_TIMEOUT,
             )
             response.raise_for_status()
             return response.content

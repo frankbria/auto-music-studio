@@ -52,11 +52,7 @@ from acemusic.db import (
 )
 from acemusic.elevenlabs_client import (
     DURATION_MAX_S as EL_DURATION_MAX_S,
-)
-from acemusic.elevenlabs_client import (
     DURATION_MIN_S as EL_DURATION_MIN_S,
-)
-from acemusic.elevenlabs_client import (
     ElevenLabsClient,
     ElevenLabsError,
 )
@@ -590,30 +586,26 @@ def generate(
                     f"Clamping to {int(_DURATION_MIN)}s. Update your integration to use --duration {int(_DURATION_MIN)} or higher.[/yellow]"
                 )
                 duration = _DURATION_MIN
-            elif (
-                effective_backend == "auto"
-                and config.elevenlabs_api_key
-                and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S
-            ):
+            elif effective_backend == "auto" and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S:
                 # 'auto' never fails just because one engine can't do the job:
                 # ACE-Step can't serve this duration, but ElevenLabs can.
-                console.print(
-                    f"[yellow]--duration {duration} is outside the ACE-Step range "
-                    f"({int(_DURATION_MIN)}–{int(_DURATION_MAX)}s); routing to ElevenLabs.[/yellow]"
-                )
-                effective_backend = "elevenlabs"
+                if config.elevenlabs_api_key:
+                    console.print(
+                        f"[yellow]--duration {duration} is outside the ACE-Step range "
+                        f"({int(_DURATION_MIN)}–{int(_DURATION_MAX)}s); routing to ElevenLabs.[/yellow]"
+                    )
+                    effective_backend = "elevenlabs"
+                else:
+                    console.print(
+                        f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and "
+                        f"{int(_DURATION_MAX)} seconds. Set ELEVENLABS_API_KEY to generate "
+                        f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}s tracks via ElevenLabs.[/red]"
+                    )
+                    raise typer.Exit(code=1)
             else:
-                hint = (
-                    " Set ELEVENLABS_API_KEY to generate "
-                    f"{int(EL_DURATION_MIN_S)}–{int(EL_DURATION_MAX_S)}s tracks via ElevenLabs."
-                    if effective_backend == "auto"
-                    and not config.elevenlabs_api_key
-                    and EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S
-                    else ""
-                )
                 console.print(
                     f"[red]Invalid --duration: {duration}. Must be between {int(_DURATION_MIN)} and "
-                    f"{int(_DURATION_MAX)} seconds.{hint}[/red]"
+                    f"{int(_DURATION_MAX)} seconds.[/red]"
                 )
                 raise typer.Exit(code=1)
 
@@ -1265,7 +1257,8 @@ def compose(
     """Compose a structured multi-section track via an ElevenLabs composition plan.
 
     Creates a sectioned plan (intro/verse/chorus/…) from the prompt, displays it,
-    then generates the full track in one shot. ElevenLabs only; output is MP3.
+    then generates the full track in one shot. ElevenLabs only; output format
+    follows ELEVENLABS_OUTPUT_FORMAT (default: MP3).
     """
     if duration is not None and not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
         console.print(

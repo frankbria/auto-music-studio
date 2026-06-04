@@ -268,6 +268,26 @@ class TestElevenLabsClientCreatePlan:
             with pytest.raises(ElevenLabsError):
                 client.create_plan(prompt="anthem")
 
+    def test_create_plan_raises_elevenlabs_error_on_malformed_json(self):
+        """A 2xx response with unparseable JSON raises ElevenLabsError, not ValueError."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"not json")
+        resp.json.side_effect = ValueError("Expecting value")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="invalid"):
+                client.create_plan(prompt="anthem")
+
+    def test_create_plan_raises_elevenlabs_error_on_non_dict_payload(self):
+        """A 2xx response whose JSON is not an object raises ElevenLabsError."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"[]")
+        resp.json.return_value = ["not", "a", "plan"]
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="invalid"):
+                client.create_plan(prompt="anthem")
+
 
 class TestElevenLabsClientGenerateFromPlan:
     """Tests for ElevenLabsClient.generate_from_plan() (issue #96)."""

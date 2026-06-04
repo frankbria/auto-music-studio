@@ -368,13 +368,13 @@ FAKE_MP3 = b"ID3" + b"\x00" * 100
 
 
 def _el_config(monkeypatch, api_key="test-key"):
-    """Point load_config at an ElevenLabs-enabled (ACE-Step-less) config."""
+    """Point load_config at an ElevenLabs-only config (no ACE-Step server)."""
     from acemusic.config import AceConfig
 
     monkeypatch.setattr(
         "acemusic.cli.load_config",
         lambda: AceConfig(
-            api_url="http://localhost:8001",
+            api_url=None,
             api_key=None,
             elevenlabs_api_key=api_key,
             elevenlabs_output_format="mp3_44100_128",

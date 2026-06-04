@@ -75,6 +75,7 @@ select = ["E7", "E9", "F", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["acemusic"]
+combine-as-imports = true
 
 [tool.black]
 line-length = 120

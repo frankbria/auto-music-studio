@@ -1717,7 +1717,14 @@ class TestDuration15Clamp:
 
     def test_duration_15_clamps_to_minimum_with_warning(self, monkeypatch, tmp_path):
         """--duration 15 on the ACE-Step path clamps to 30s with a warning."""
-        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        from acemusic.config import AceConfig
+
+        # Hermetic: a host config with backend=elevenlabs or a real key would
+        # otherwise skip the ACE-Step clamp path.
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url="http://localhost:8001", api_key=None, elevenlabs_api_key=None),
+        )
         client_mock = _make_client_mock([COMPLETED_RESULT])
 
         with (
