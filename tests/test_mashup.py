@@ -710,7 +710,7 @@ def workspace_with_three_long_clips(isolated_db, write_tone):
 class TestMashupElevenLabsBackend:
     """Tests for `mashup --backend elevenlabs` (#99)."""
 
-    def test_two_clips_create_mp3_with_full_lineage(self, workspace_with_three_long_clips, monkeypatch):
+    def test_two_of_three_clips_create_mp3_with_full_lineage(self, workspace_with_three_long_clips, monkeypatch):
         """Happy path: one combined MP3 child clip recording all sources."""
         import json
 
@@ -960,6 +960,26 @@ class TestMashupElevenLabsBackend:
 
         assert result.exit_code == 1
         assert "read-only file system" in result.output
+
+    def test_name_sets_title_and_filename(self, workspace_with_three_long_clips, monkeypatch):
+        """--name flows through to the clip title and the output filename slug."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                ["mashup", str(ids[0]), str(ids[1]), "--name", "My Hybrid Track", "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 0, result.output
+
+        from acemusic.db import list_clips
+
+        child = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"][0]
+        assert child.title == "My Hybrid Track"
+        assert "my-hybrid-track" in child.file_path.lower()
 
     def test_duration_probed_when_metadata_missing(self, workspace_with_three_long_clips, monkeypatch):
         """A source without duration metadata is probed from the file."""
