@@ -2024,7 +2024,6 @@ def speed(
     ),
 ) -> None:
     """Adjust playback speed of a clip without changing pitch (time-stretch). Original is preserved."""
-    # Validate that exactly one of --target-bpm or --rate is provided
     if target_bpm is not None and rate is not None:
         console.print("[red]Error: provide either --target-bpm or --rate, not both.[/red]")
         raise typer.Exit(code=1)
@@ -2033,13 +2032,11 @@ def speed(
         console.print("[red]Error: must provide either --target-bpm or --rate.[/red]")
         raise typer.Exit(code=1)
 
-    # Get source clip
     source = get_clip(clip_id)
     if source is None:
         console.print(f"[red]Error: clip {clip_id} not found.[/red]")
         raise typer.Exit(code=1)
 
-    # Determine the rate to use
     if target_bpm is not None:
         if source.bpm is None:
             console.print(f"[red]Error: --target-bpm requires BPM metadata on clip {clip_id}, but none is set.[/red]")
@@ -2052,7 +2049,6 @@ def speed(
     else:
         final_rate = rate
 
-    # Validate rate
     if final_rate <= 0:
         console.print(f"[red]Error: rate must be positive, got {final_rate}.[/red]")
         raise typer.Exit(code=1)
@@ -2067,7 +2063,6 @@ def speed(
             console.print(f"[red]Error: rate must be between 0.5 and 2.0, got {final_rate}.[/red]")
         raise typer.Exit(code=1)
 
-    # Validate source has duration
     if source.duration is None:
         console.print(
             f"[red]Error: clip {clip_id} has no duration metadata — cannot calculate new duration. "
@@ -2075,7 +2070,6 @@ def speed(
         )
         raise typer.Exit(code=1)
 
-    # Get workspace and create output path
     try:
         clips_dir = get_workspace_path(source.workspace_id)
         clips_dir.mkdir(parents=True, exist_ok=True)
@@ -2087,7 +2081,6 @@ def speed(
     dest_name = f"{uuid.uuid4().hex}{src_ext}"
     dest_path = clips_dir / dest_name
 
-    # Perform time-stretch
     try:
         time_stretch_audio(
             input_path=source.file_path,
@@ -2098,13 +2091,11 @@ def speed(
         console.print(f"[red]Error during time-stretch: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    # Calculate new duration and BPM
     new_duration_s = source.duration / final_rate
     new_bpm = None
     if source.bpm is not None:
         new_bpm = source.bpm * final_rate
 
-    # Create new clip record
     new_clip = Clip(
         workspace_id=source.workspace_id,
         file_path=str(dest_path.resolve()),
@@ -2123,7 +2114,6 @@ def speed(
         console.print(f"[red]Error saving clip record: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    # Format output message
     rate_pct = final_rate * 100
     bpm_str = f" (→ {new_bpm:.1f} BPM)" if new_bpm is not None else ""
     console.print(f"  [green]✓[/green] Speed adjusted on clip {clip_id} → clip {new_id}")
@@ -2230,23 +2220,19 @@ def stems(
             console.print(f"[red]Error: --output-format must be wav or flac, got {output_format!r}.[/red]")
             raise typer.Exit(code=1)
 
-    # Get source clip
     source = get_clip(clip_id)
     if source is None:
         console.print(f"[red]Error: clip {clip_id} not found.[/red]")
         raise typer.Exit(code=1)
 
-    # Resolve output directory
     if output is not None:
         stems_dir = output
     else:
         stems_dir = Path(source.file_path).parent / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derive base name from source file
     base_name = Path(source.file_path).stem
 
-    # Separate stems
     start_time = time.time()
     if effective_backend == "elevenlabs":
         stem_path_map = _separate_stems_via_elevenlabs(config, source, stems_dir, base_name)
@@ -2257,7 +2243,6 @@ def stems(
 
     elapsed = time.time() - start_time
 
-    # Register each stem as a child clip
     new_ids = []
     for label, stem_path in stem_path_map.items():
         dur = get_duration(stem_path)
@@ -2280,7 +2265,6 @@ def stems(
             console.print(f"[red]Error saving {label} clip record: {exc}[/red]")
             raise typer.Exit(code=1)
 
-    # Print summary
     console.print(f"\n  [green]✓[/green] Separated clip {clip_id} into {len(new_ids)} stems ({elapsed:.1f}s)")
     for label, nid, spath, dur in new_ids:
         dur_str = _fmt_duration(dur)
@@ -2308,7 +2292,6 @@ def midi(
         console.print("[red]Error: --bpm must be between 20 and 300.[/red]")
         raise typer.Exit(code=1)
 
-    # Resolve output directory
     if output is not None:
         midi_dir = output
     else:
@@ -2317,7 +2300,6 @@ def midi(
 
     base_name = Path(source.file_path).stem
 
-    # Load stem paths if requested
     stem_paths = None
     if from_stems:
         clips = list_clips(source.workspace_id)
@@ -4674,8 +4656,6 @@ def preset_save(
         ensure_default_workspace()
         ws = get_active_workspace()
 
-        # TODO: If from_last, load last generation parameters from config or state file
-        # For now, just require explicit parameters
         if from_last:
             console.print("[red]Error: --from-last not yet implemented (requires tracking last generation).[/red]")
             raise typer.Exit(code=1)
