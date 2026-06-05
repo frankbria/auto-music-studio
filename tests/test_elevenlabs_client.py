@@ -16,6 +16,7 @@ from acemusic.elevenlabs_client import (
     ElevenLabsClient,
     ElevenLabsError,
     build_inpaint_plan,
+    build_mashup_plan,
 )
 
 FAKE_MP3 = b"ID3" + b"\x00" * 100  # minimal fake MP3 bytes
@@ -932,6 +933,91 @@ class TestBuildInpaintPlan:
             prompt="outro",
         )
         assert sum(s["duration_ms"] for s in plan["sections"]) == 600_000
+
+
+class TestBuildMashupPlan:
+    """Tests for build_mashup_plan() (issue #99)."""
+
+    def test_two_sources_become_two_sections_in_order(self):
+        """Each source contributes one source_from section, in CLI order."""
+        plan = build_mashup_plan(
+            sources=[("song-a", 10_000), ("song-b", 8_000)],
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert sections[0]["source_from"] == {
+            "song_id": "song-a",
+            "range": {"start_ms": 0, "end_ms": 10_000},
+        }
+        assert sections[0]["duration_ms"] == 10_000
+        assert sections[1]["source_from"] == {
+            "song_id": "song-b",
+            "range": {"start_ms": 0, "end_ms": 8_000},
+        }
+
+    def test_three_sources_supported(self):
+        """More than two sources are combined in order."""
+        plan = build_mashup_plan(
+            sources=[("song-a", 5_000), ("song-b", 5_000), ("song-c", 5_000)],
+        )
+
+        song_ids = [s["source_from"]["song_id"] for s in plan["sections"]]
+        assert song_ids == ["song-a", "song-b", "song-c"]
+
+    def test_sections_have_required_fields(self):
+        """Every section carries the fields required by the MusicPrompt schema."""
+        plan = build_mashup_plan(sources=[("song-a", 10_000), ("song-b", 8_000)])
+
+        for section in plan["sections"]:
+            for field in (
+                "section_name",
+                "positive_local_styles",
+                "negative_local_styles",
+                "duration_ms",
+                "lines",
+            ):
+                assert field in section, field
+
+    def test_style_lands_in_global_styles(self):
+        """A unifying style descriptor becomes positive_global_styles."""
+        plan = build_mashup_plan(
+            sources=[("song-a", 10_000), ("song-b", 8_000)],
+            style="lo-fi hip hop, mellow",
+        )
+
+        assert "lo-fi hip hop" in plan["positive_global_styles"]
+        assert "mellow" in plan["positive_global_styles"]
+
+    def test_no_style_means_empty_global_styles(self):
+        plan = build_mashup_plan(sources=[("song-a", 10_000), ("song-b", 8_000)])
+        assert plan["positive_global_styles"] == []
+        assert plan["negative_global_styles"] == []
+
+    def test_long_source_is_split_into_chunks(self):
+        """A source longer than 120s is split into <=120s contiguous sections."""
+        plan = build_mashup_plan(sources=[("song-a", 250_000), ("song-b", 10_000)])
+
+        a_sections = [s for s in plan["sections"] if s["source_from"]["song_id"] == "song-a"]
+        assert len(a_sections) == 3
+        assert a_sections[0]["source_from"]["range"]["start_ms"] == 0
+        assert a_sections[-1]["source_from"]["range"]["end_ms"] == 250_000
+        for section in a_sections:
+            assert 3_000 <= section["duration_ms"] <= 120_000
+
+    def test_fewer_than_two_sources_raises(self):
+        with pytest.raises(ElevenLabsError, match="(?i)at least two"):
+            build_mashup_plan(sources=[("song-a", 10_000)])
+
+    def test_too_short_source_raises_naming_the_source(self):
+        """A source under 3s raises ElevenLabsError naming the offending source."""
+        with pytest.raises(ElevenLabsError, match="song-b"):
+            build_mashup_plan(sources=[("song-a", 10_000), ("song-b", 1_000)])
+
+    def test_combined_duration_over_track_limit_raises(self):
+        """Sources totalling more than 600s raise ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="600"):
+            build_mashup_plan(sources=[("song-a", 500_000), ("song-b", 150_000)])
 
 
 @pytest.mark.integration
