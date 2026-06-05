@@ -4163,9 +4163,7 @@ def mashup(
     # auto never fails just because one engine can't do a job another can.
     if effective_backend == "auto" and len(clips) > 2:
         if config.elevenlabs_api_key:
-            console.print(
-                "[cyan]Using the elevenlabs backend (ACE-Step mashup supports exactly two clips).[/cyan]"
-            )
+            console.print("[cyan]Using the elevenlabs backend (ACE-Step mashup supports exactly two clips).[/cyan]")
             effective_backend = "elevenlabs"
         else:
             console.print(
