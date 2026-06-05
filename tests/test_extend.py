@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -418,9 +419,7 @@ class TestExtendElevenLabsBackend:
         assert child.parent_clip_id == clip_id
         assert child.model == "elevenlabs"
         assert child.format == "mp3"
-        from pathlib import Path as _P
-
-        assert _P(child.file_path).read_bytes() == FAKE_EL_MP3
+        assert Path(child.file_path).read_bytes() == FAKE_EL_MP3
 
     def test_from_midpoint_keeps_only_audio_before_splice(self, workspace_with_long_clip, monkeypatch):
         """--from 6s keeps [0,6s] and generates [6s,11s]; audio past 6s is replaced."""

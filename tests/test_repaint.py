@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -440,9 +441,7 @@ class TestRepaintElevenLabsBackend:
         assert child.model == "elevenlabs"
         assert child.format == "mp3"
         assert child.file_path.endswith(".mp3")
-        from pathlib import Path as _P
-
-        assert _P(child.file_path).read_bytes() == FAKE_EL_MP3
+        assert Path(child.file_path).read_bytes() == FAKE_EL_MP3
 
     def test_uploads_source_clip_for_inpainting(self, workspace_with_long_clip, monkeypatch):
         """The source file is uploaded to obtain a song_id."""

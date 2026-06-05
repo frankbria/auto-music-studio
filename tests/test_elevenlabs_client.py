@@ -634,7 +634,7 @@ class TestElevenLabsClientUploadForInpainting:
         with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
             client.upload_for_inpainting(audio_file)
 
-        url = mock_post.call_args.args[0] if mock_post.call_args.args else mock_post.call_args.kwargs.get("url")
+        url = mock_post.call_args.args[0]
         assert url.endswith("/v1/music/upload")
 
     def test_upload_sends_file_as_multipart(self, audio_file):
