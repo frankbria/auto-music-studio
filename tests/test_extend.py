@@ -375,6 +375,7 @@ def workspace_with_long_clip(isolated_db, write_tone):
         style_tags="ambient",
         lyrics="og lyric",
         model="acestep-v1",
+        seed=4242,
         generation_mode="generate",
     )
     clip_id = create_clip(clip)
@@ -487,6 +488,44 @@ class TestExtendElevenLabsBackend:
         assert result.exit_code == 0, result.output
         new_section = el.generate_from_plan.call_args.args[0]["sections"][-1]
         assert "ambient" in new_section["positive_local_styles"]
+
+    def test_seed_is_threaded_through_and_persisted(self, workspace_with_long_clip, monkeypatch):
+        """The source's seed is passed to generate_from_plan and kept on the child clip."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                ["extend", str(clip_id), "--duration", "5s", "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert el.generate_from_plan.call_args.kwargs.get("seed") == 4242
+
+        from acemusic.db import list_clips
+
+        child = [c for c in list_clips(ws.id) if c.generation_mode == "extend"][0]
+        assert child.seed == 4242
+
+    def test_write_failure_exits_cleanly(self, workspace_with_long_clip, monkeypatch):
+        """A disk write failure exits 1 without a traceback."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.Path.write_bytes", side_effect=OSError("read-only file system")),
+        ):
+            result = runner.invoke(
+                app,
+                ["extend", str(clip_id), "--duration", "5s", "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 1
+        assert "read-only file system" in result.output
 
     def test_too_short_extension_fails_before_upload(self, workspace_with_long_clip, monkeypatch):
         """--duration under 3s exits with guidance without spending an upload."""

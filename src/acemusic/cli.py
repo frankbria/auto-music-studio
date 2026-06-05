@@ -2512,16 +2512,20 @@ def _extend_via_elevenlabs(
             song_id = el_client.upload_for_inpainting(source.file_path)
         plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, section_style, lyrics)
         with console.status("[bold green]Extending via ElevenLabs…[/bold green]", spinner="dots"):
-            data = el_client.generate_from_plan(plan)
+            data = el_client.generate_from_plan(plan, seed=source.seed)
     except ElevenLabsError as exc:
         console.print(f"[red]ElevenLabs error: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    clips_dir = get_workspace_path(source.workspace_id)
-    clips_dir.mkdir(parents=True, exist_ok=True)
     ext = _elevenlabs_ext(config.elevenlabs_output_format)
-    dest_path = clips_dir / f"{make_slug(source.title or 'clip')}-extend-{uuid.uuid4().hex[:8]}.{ext}"
-    dest_path.write_bytes(data)
+    try:
+        clips_dir = get_workspace_path(source.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = clips_dir / f"{make_slug(source.title or 'clip')}-extend-{uuid.uuid4().hex[:8]}.{ext}"
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing extended clip: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     try:
         new_duration = get_duration(dest_path)
@@ -2543,6 +2547,7 @@ def _extend_via_elevenlabs(
         lyrics=lyrics or source.lyrics,
         vocal_language=source.vocal_language,
         model="elevenlabs",
+        seed=source.seed,
         parent_clip_id=source.id,
         generation_mode="extend",
     )
@@ -2712,7 +2717,11 @@ def extend(
             console.print(f"[red]Error downloading extended clip: {exc}[/red]")
             raise typer.Exit(code=1)
 
-        dest_path.write_bytes(data)
+        try:
+            dest_path.write_bytes(data)
+        except OSError as exc:
+            console.print(f"[red]Error writing extended clip: {exc}[/red]")
+            raise typer.Exit(code=1)
     finally:
         if trimmed is not None:
             trimmed.unlink(missing_ok=True)
@@ -3206,17 +3215,21 @@ def _repaint_via_elevenlabs(
             song_id = el_client.upload_for_inpainting(source.file_path)
         plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, style)
         with console.status("[bold green]Repainting via ElevenLabs…[/bold green]", spinner="dots"):
-            data = el_client.generate_from_plan(plan)
+            data = el_client.generate_from_plan(plan, seed=source.seed)
     except ElevenLabsError as exc:
         console.print(f"[red]ElevenLabs error: {exc}[/red]")
         raise typer.Exit(code=1)
 
-    clips_dir = output if output is not None else get_workspace_path(source.workspace_id)
-    clips_dir.mkdir(parents=True, exist_ok=True)
     ext = _elevenlabs_ext(config.elevenlabs_output_format)
     title_slug = make_slug(name or source.title or "clip")
-    dest_path = clips_dir / f"{title_slug}-repaint-{uuid.uuid4().hex[:8]}.{ext}"
-    dest_path.write_bytes(data)
+    try:
+        clips_dir = output if output is not None else get_workspace_path(source.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = clips_dir / f"{title_slug}-repaint-{uuid.uuid4().hex[:8]}.{ext}"
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing repainted clip: {exc}[/red]")
+        raise typer.Exit(code=1)
 
     try:
         new_duration = get_duration(dest_path)
@@ -3244,6 +3257,7 @@ def _repaint_via_elevenlabs(
         lyrics=source.lyrics,
         vocal_language=source.vocal_language,
         model="elevenlabs",
+        seed=source.seed,
         parent_clip_id=source.id,
         generation_mode="repaint",
     )
