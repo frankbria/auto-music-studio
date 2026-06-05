@@ -51,11 +51,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             seed             INTEGER,
             inference_steps  INTEGER,
             parent_clip_id   INTEGER REFERENCES clips(id),
+            parent_clip_ids  TEXT,
             generation_mode  TEXT,
             created_at       TEXT NOT NULL
         )
         """)
     conn.commit()
+    # Migration: databases created before #99 lack parent_clip_ids. ALTER is
+    # cheap and idempotent thanks to the PRAGMA check.
+    clip_columns = [row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()]
+    if "parent_clip_ids" not in clip_columns:
+        conn.execute("ALTER TABLE clips ADD COLUMN parent_clip_ids TEXT")
+        conn.commit()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS presets (
             id               INTEGER PRIMARY KEY,
@@ -105,6 +112,7 @@ def _row_to_clip(row: sqlite3.Row) -> Clip:
         seed=row["seed"],
         inference_steps=row["inference_steps"],
         parent_clip_id=row["parent_clip_id"],
+        parent_clip_ids=row["parent_clip_ids"],
         generation_mode=row["generation_mode"],
         created_at=row["created_at"],
     )
@@ -118,8 +126,8 @@ def create_clip(clip: Clip) -> int:
             """INSERT INTO clips
                (title, workspace_id, file_path, format, duration, bpm, key,
                 style_tags, lyrics, vocal_language, model, seed, inference_steps,
-                parent_clip_id, generation_mode, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                parent_clip_id, parent_clip_ids, generation_mode, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 clip.title,
                 clip.workspace_id,
@@ -135,6 +143,7 @@ def create_clip(clip: Clip) -> int:
                 clip.seed,
                 clip.inference_steps,
                 clip.parent_clip_id,
+                clip.parent_clip_ids,
                 clip.generation_mode,
                 clip.created_at,
             ),

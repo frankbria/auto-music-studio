@@ -26,6 +26,9 @@ class Clip:
     seed: Optional[int] = None
     inference_steps: Optional[int] = None
     parent_clip_id: Optional[int] = None
+    # JSON-encoded list of source clip ids (e.g. "[1, 2]") for multi-parent
+    # operations like mashup (#99); mirrors the MongoDB model's parent_clip_ids.
+    parent_clip_ids: Optional[str] = None
     generation_mode: Optional[str] = None
 
 
