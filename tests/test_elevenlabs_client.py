@@ -836,6 +836,19 @@ class TestBuildInpaintPlan:
         assert "source_from" not in sections[0]
         assert sections[1]["source_from"]["range"] == {"start_ms": 10_000, "end_ms": 20_000}
 
+    def test_keep_range_at_exactly_section_max_stays_one_chunk(self):
+        """A keep range of exactly 120s produces a single section, not two."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 120_000)],
+            regenerate_range=(120_000, 130_000),
+            prompt="outro",
+        )
+
+        keep_sections = [s for s in plan["sections"] if "source_from" in s]
+        assert len(keep_sections) == 1
+        assert keep_sections[0]["duration_ms"] == 120_000
+
     def test_long_keep_range_is_split_into_chunks(self):
         """Keep ranges longer than 120s are split into <=120s chunks (all >=3s)."""
         plan = build_inpaint_plan(
