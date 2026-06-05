@@ -900,6 +900,26 @@ class TestBuildInpaintPlan:
                 prompt="nothing",
             )
 
+    def test_total_duration_over_track_limit_raises(self):
+        """A plan totalling more than 600s (the track limit) raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="600"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 590_000), (605_000, 660_000)],
+                regenerate_range=(590_000, 605_000),
+                prompt="midsection",
+            )
+
+    def test_total_duration_at_track_limit_is_allowed(self):
+        """A plan totalling exactly 600s passes validation."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 590_000)],
+            regenerate_range=(590_000, 600_000),
+            prompt="outro",
+        )
+        assert sum(s["duration_ms"] for s in plan["sections"]) == 600_000
+
 
 @pytest.mark.integration
 class TestElevenLabsIntegration:

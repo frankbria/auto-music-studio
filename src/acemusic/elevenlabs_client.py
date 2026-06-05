@@ -36,9 +36,11 @@ class ElevenLabsError(Exception):
     """Raised when the ElevenLabs API returns an error or is unreachable."""
 
 
-# Composition plan sections must be 3s–120s each (SongSection.duration_ms).
+# Composition plan sections must be 3s–120s each (SongSection.duration_ms),
+# and the whole track is capped at 600s (music_length_ms limit).
 SECTION_MIN_MS = 3_000
 SECTION_MAX_MS = 120_000
+TRACK_MAX_MS = int(DURATION_MAX_S * 1000)
 
 
 def _split_keep_range(start_ms: int, end_ms: int) -> list[tuple[int, int]]:
@@ -116,6 +118,15 @@ def build_inpaint_plan(
         for chunk_start, chunk_end in _split_keep_range(start_ms, end_ms):
             entries.append((chunk_start, chunk_end, False))
     entries.sort(key=lambda entry: entry[0])
+
+    # The whole composed track is capped at 600s — fail here so callers can
+    # validate before paying for an upload that could never compose.
+    total_ms = sum(end_ms - start_ms for start_ms, end_ms, _ in entries)
+    if total_ms > TRACK_MAX_MS:
+        raise ElevenLabsError(
+            f"Inpainting plan totals {total_ms}ms but ElevenLabs tracks are capped at "
+            f"{TRACK_MAX_MS // 1000}s (10 min). Use a shorter source clip or a smaller extension."
+        )
 
     positive_styles = [prompt]
     if style:

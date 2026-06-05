@@ -628,3 +628,73 @@ class TestRepaintElevenLabsBackend:
             )
         assert result.exit_code == 0, result.output
         client.submit_task.assert_called_once()
+
+    def test_works_without_ace_step_url(self, workspace_with_long_clip, monkeypatch):
+        """--backend elevenlabs works in an ElevenLabs-only setup (no ACEMUSIC_BASE_URL)."""
+        from acemusic.config import AceConfig
+
+        ws, clip_id, src_wav = workspace_with_long_clip
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url=None, api_key=None, elevenlabs_api_key="test-key"),
+        )
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 0, result.output
+        el.generate_from_plan.assert_called_once()
+
+    def test_ace_step_path_without_url_suggests_elevenlabs(self, workspace_with_long_clip, monkeypatch):
+        """The ACE-Step path still requires a URL and hints at --backend elevenlabs."""
+        from acemusic.config import AceConfig
+
+        ws, clip_id, src_wav = workspace_with_long_clip
+        monkeypatch.setattr(
+            "acemusic.cli.load_config",
+            lambda: AceConfig(api_url=None, api_key=None, elevenlabs_api_key="test-key"),
+        )
+
+        result = runner.invoke(
+            app,
+            ["repaint", str(clip_id), "--start", "3s", "--end", "6s", "--prompt", "solo"],
+        )
+
+        assert result.exit_code == 1
+        assert "not configured" in result.output
+        assert "--backend elevenlabs" in result.output
+
+    def test_oversized_total_duration_fails_before_upload(self, workspace_with_long_clip, monkeypatch):
+        """A source clip over the 600s track limit exits with guidance, never uploading."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        # Fake an 11-minute source via metadata (file content is irrelevant here:
+        # validation must trip before any upload happens).
+        from acemusic.db import get_db
+
+        with get_db() as conn:
+            conn.execute("UPDATE clips SET duration = 660.0 WHERE id = ?", (clip_id,))
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                [
+                    "repaint",
+                    str(clip_id),
+                    "--start",
+                    "60s",
+                    "--end",
+                    "70s",
+                    "--prompt",
+                    "new bridge",
+                    "--backend",
+                    "elevenlabs",
+                ],
+            )
+
+        assert result.exit_code == 1
+        assert "600" in result.output
+        el.upload_for_inpainting.assert_not_called()

@@ -197,6 +197,8 @@ def main(
         "generate",
         "sounds",
         "sample",
+        "repaint",
+        "extend",
     ):
         config = load_config()
         if not config.api_url:
@@ -2639,6 +2641,7 @@ def extend(
         )
         return
 
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
 
     clips_dir = get_workspace_path(source.workspace_id)
@@ -3367,6 +3370,7 @@ def repaint(
         )
         return
 
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
 
     clips_dir = output if output is not None else get_workspace_path(source.workspace_id)
