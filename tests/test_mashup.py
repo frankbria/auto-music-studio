@@ -621,15 +621,47 @@ class TestMashupCommand:
         mashups = [c for c in list_clips(ws.id) if c.generation_mode == "mashup"]
         assert json.loads(mashups[0].parent_clip_ids) == [clip1, clip2]
 
-    def test_ace_step_three_clips_errors(self, workspace_with_three_long_clips):
-        """The ACE-Step path supports exactly two clips and says so."""
+    def test_explicit_ace_step_three_clips_errors(self, workspace_with_three_long_clips, monkeypatch):
+        """--backend ace-step with three clips errors: that engine takes exactly two."""
         ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(app, ["mashup", *[str(i) for i in ids], "--backend", "ace-step"])
+        assert result.exit_code == 1
+        assert "exactly two" in result.output.lower()
+        assert "--backend elevenlabs" in result.output
+        client.submit_task.assert_not_called()
+
+    def test_auto_routes_three_clips_to_elevenlabs(self, workspace_with_three_long_clips, monkeypatch):
+        """auto + 3 clips routes to ElevenLabs (the only engine that can do the job)."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+        el.upload_for_inpainting.side_effect = ["song-1", "song-2", "song-3"]
+        ace = _make_client_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.AceStepClient", return_value=ace),
+        ):
+            result = runner.invoke(app, ["mashup", *[str(i) for i in ids]])
+
+        assert result.exit_code == 0, result.output
+        el.generate_from_plan.assert_called_once()
+        ace.submit_task.assert_not_called()
+        assert "elevenlabs" in result.output.lower()
+
+    def test_auto_three_clips_without_key_errors_actionably(self, workspace_with_three_long_clips, monkeypatch):
+        """auto + 3 clips with no ElevenLabs key explains both ways forward."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch, api_key=None)
         client = _make_client_mock()
         with patch("acemusic.cli.AceStepClient", return_value=client):
             result = runner.invoke(app, ["mashup", *[str(i) for i in ids]])
         assert result.exit_code == 1
         assert "exactly two" in result.output.lower()
-        assert "--backend elevenlabs" in result.output
+        assert "ELEVENLABS_API_KEY" in result.output
         client.submit_task.assert_not_called()
 
 

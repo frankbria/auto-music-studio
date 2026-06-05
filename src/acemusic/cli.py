@@ -4159,6 +4159,21 @@ def mashup(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
+    # auto prefers ACE-Step, but 3+ sources are an ElevenLabs-only capability —
+    # auto never fails just because one engine can't do a job another can.
+    if effective_backend == "auto" and len(clips) > 2:
+        if config.elevenlabs_api_key:
+            console.print(
+                "[cyan]Using the elevenlabs backend (ACE-Step mashup supports exactly two clips).[/cyan]"
+            )
+            effective_backend = "elevenlabs"
+        else:
+            console.print(
+                "[red]Error: the ACE-Step backend supports exactly two clips. "
+                "Set ELEVENLABS_API_KEY (or pass --backend elevenlabs) to combine more sources.[/red]"
+            )
+            raise typer.Exit(code=1)
+
     if effective_backend == "elevenlabs":
         if blend != "layered":
             console.print(
