@@ -337,3 +337,295 @@ class TestCrossfadeStitchHelper:
         # Should not raise even though fade_ms > segment durations
         out = crossfade_stitch(before, middle, after, fade_ms=100)
         assert len(out) > 0
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs backend (#98)
+# ---------------------------------------------------------------------------
+
+FAKE_EL_MP3 = b"ID3" + b"\x00" * 200
+
+
+def _el_config(monkeypatch, api_key="test-key", output_format="mp3_44100_128"):
+    """Point load_config at an ElevenLabs-enabled config."""
+    from acemusic.config import AceConfig
+
+    monkeypatch.setattr(
+        "acemusic.cli.load_config",
+        lambda: AceConfig(
+            api_url="http://localhost:8001",
+            api_key=None,
+            elevenlabs_api_key=api_key,
+            elevenlabs_output_format=output_format,
+        ),
+    )
+
+
+def _make_elevenlabs_client_mock(audio_bytes: bytes = FAKE_EL_MP3, song_id: str = "song-123"):
+    """MagicMock ElevenLabsClient with a happy-path upload→plan→compose default."""
+    el = MagicMock()
+    el.upload_for_inpainting.return_value = song_id
+    el.generate_from_plan.return_value = audio_bytes
+    return el
+
+
+@pytest.fixture
+def workspace_with_long_clip(isolated_db, write_tone):
+    """Workspace + 12-second ACE-Step-style source WAV (long enough for >=3s sections)."""
+    from acemusic.db import create_clip
+    from acemusic.workspace import ensure_default_workspace, get_active_workspace, get_workspace_path
+
+    ensure_default_workspace()
+    ws = get_active_workspace()
+    clips_dir = get_workspace_path(ws.id)
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    src_wav = clips_dir / "source-long.wav"
+    write_tone(src_wav, duration_s=12.0, frequency=440.0)
+
+    clip = Clip(
+        workspace_id=ws.id,
+        file_path=str(src_wav),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        format="wav",
+        duration=12.0,
+        bpm=120,
+        key="C major",
+        style_tags="ambient",
+        model="acestep-v1",
+        generation_mode="generate",
+    )
+    clip_id = create_clip(clip)
+    return ws, clip_id, src_wav
+
+
+class TestRepaintElevenLabsBackend:
+    """Tests for `repaint --backend elevenlabs` (#98)."""
+
+    def _invoke(self, clip_id, *extra):
+        return runner.invoke(
+            app,
+            [
+                "repaint",
+                str(clip_id),
+                "--start",
+                "3s",
+                "--end",
+                "6s",
+                "--prompt",
+                "add a guitar solo",
+                "--backend",
+                "elevenlabs",
+                *extra,
+            ],
+        )
+
+    def test_succeeds_and_creates_mp3_child_clip_with_lineage(self, workspace_with_long_clip, monkeypatch):
+        """An ACE-Step WAV source yields an MP3 child clip with full lineage."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 0, result.output
+
+        from acemusic.db import list_clips
+
+        repainted = [c for c in list_clips(ws.id) if c.generation_mode == "repaint"]
+        assert len(repainted) == 1
+        child = repainted[0]
+        assert child.parent_clip_id == clip_id
+        assert child.model == "elevenlabs"
+        assert child.format == "mp3"
+        assert child.file_path.endswith(".mp3")
+        from pathlib import Path as _P
+
+        assert _P(child.file_path).read_bytes() == FAKE_EL_MP3
+
+    def test_uploads_source_clip_for_inpainting(self, workspace_with_long_clip, monkeypatch):
+        """The source file is uploaded to obtain a song_id."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 0, result.output
+        el.upload_for_inpainting.assert_called_once()
+        uploaded = str(el.upload_for_inpainting.call_args.args[0])
+        assert uploaded == str(src_wav)
+
+    def test_plan_keeps_surrounding_audio_and_regenerates_target(self, workspace_with_long_clip, monkeypatch):
+        """The composition plan keeps [0,start] + [end,duration] and regenerates [start,end]."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock(song_id="song-xyz")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 0, result.output
+        el.generate_from_plan.assert_called_once()
+        plan = el.generate_from_plan.call_args.args[0]
+        sections = plan["sections"]
+        assert len(sections) == 3
+        assert sections[0]["source_from"] == {
+            "song_id": "song-xyz",
+            "range": {"start_ms": 0, "end_ms": 3000},
+        }
+        assert "source_from" not in sections[1]
+        assert sections[1]["duration_ms"] == 3000
+        assert "add a guitar solo" in sections[1]["positive_local_styles"]
+        assert sections[2]["source_from"] == {
+            "song_id": "song-xyz",
+            "range": {"start_ms": 6000, "end_ms": 12000},
+        }
+
+    def test_repaint_from_zero_omits_leading_keep_section(self, workspace_with_long_clip, monkeypatch):
+        """--start 0s produces a plan with no keep section before the regenerated one."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                [
+                    "repaint",
+                    str(clip_id),
+                    "--start",
+                    "0s",
+                    "--end",
+                    "4s",
+                    "--prompt",
+                    "new intro",
+                    "--backend",
+                    "elevenlabs",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        plan = el.generate_from_plan.call_args.args[0]
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert "source_from" not in sections[0]
+        assert sections[1]["source_from"]["range"] == {"start_ms": 4000, "end_ms": 12000}
+
+    def test_too_narrow_keep_margin_fails_before_upload(self, workspace_with_long_clip, monkeypatch):
+        """A keep range under 3s exits with guidance without spending an upload."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                [
+                    "repaint",
+                    str(clip_id),
+                    "--start",
+                    "1s",
+                    "--end",
+                    "5s",
+                    "--prompt",
+                    "solo",
+                    "--backend",
+                    "elevenlabs",
+                ],
+            )
+
+        assert result.exit_code == 1
+        assert "3s" in result.output
+        el.upload_for_inpainting.assert_not_called()
+
+    def test_missing_api_key_errors(self, workspace_with_long_clip, monkeypatch):
+        """--backend elevenlabs without ELEVENLABS_API_KEY exits 1 with a clear message."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch, api_key=None)
+
+        result = self._invoke(clip_id)
+
+        assert result.exit_code == 1
+        assert "elevenlabs_api_key" in result.output.lower()
+
+    def test_upload_error_surfaces_as_friendly_message(self, workspace_with_long_clip, monkeypatch):
+        """An ElevenLabsError during upload exits 1 with the error message."""
+        from acemusic.elevenlabs_client import ElevenLabsError
+
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+        el.upload_for_inpainting.side_effect = ElevenLabsError("ElevenLabs upload failed: 403 — enterprise plan")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 1
+        assert "enterprise plan" in result.output
+
+    def test_generation_error_surfaces_as_friendly_message(self, workspace_with_long_clip, monkeypatch):
+        """An ElevenLabsError during plan generation exits 1 with the error message."""
+        from acemusic.elevenlabs_client import ElevenLabsError
+
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+        el.generate_from_plan.side_effect = ElevenLabsError("ElevenLabs plan generation failed: 500")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id)
+
+        assert result.exit_code == 1
+        assert "500" in result.output
+
+    def test_warns_crossfade_is_ignored(self, workspace_with_long_clip, monkeypatch):
+        """A non-default --crossfade-ms triggers an 'ignored' warning on the elevenlabs path."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = self._invoke(clip_id, "--crossfade-ms", "100")
+
+        assert result.exit_code == 0, result.output
+        assert "crossfade" in result.output.lower()
+        assert "ignor" in result.output.lower()
+
+    def test_invalid_backend_errors(self, workspace_with_long_clip, monkeypatch):
+        """An unknown --backend value exits 1 with the valid choices."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+
+        result = runner.invoke(
+            app,
+            [
+                "repaint",
+                str(clip_id),
+                "--start",
+                "3s",
+                "--end",
+                "6s",
+                "--prompt",
+                "solo",
+                "--backend",
+                "suno",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid backend" in result.output
+
+    def test_ace_step_path_unchanged_by_default(self, workspace_with_clip):
+        """Without --backend, repaint still uses the ACE-Step path."""
+        ws, clip_id, src_wav = workspace_with_clip
+        client = _make_client_mock()
+        with patch("acemusic.cli.AceStepClient", return_value=client):
+            result = runner.invoke(
+                app,
+                ["repaint", str(clip_id), "--start", "1s", "--end", "2s", "--prompt", "guitar solo"],
+            )
+        assert result.exit_code == 0, result.output
+        client.submit_task.assert_called_once()
