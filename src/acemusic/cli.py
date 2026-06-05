@@ -3998,15 +3998,25 @@ def _mashup_via_elevenlabs(
                 song_id = el_client.upload_for_inpainting(clip.file_path)
         except ElevenLabsError as exc:
             console.print(f"[red]Error uploading clip {clip.id}: {exc}[/red]")
+            if song_sources:
+                # ElevenLabs has no upload-delete API; set cost expectations.
+                console.print(
+                    f"[yellow]Note: {len(song_sources)} earlier upload(s) succeeded and may "
+                    "already have been billed (uploads are priced like a generation).[/yellow]"
+                )
             raise typer.Exit(code=1)
         song_sources.append((song_id, duration_ms))
 
-    plan = build_mashup_plan(song_sources, style)
     try:
+        plan = build_mashup_plan(song_sources, style)
         with console.status("[bold green]Composing mashup via ElevenLabs…[/bold green]", spinner="dots"):
             data = el_client.generate_from_plan(plan)
     except ElevenLabsError as exc:
         console.print(f"[red]ElevenLabs error: {exc}[/red]")
+        console.print(
+            f"[yellow]Note: {len(song_sources)} upload(s) succeeded and may already have "
+            "been billed (uploads are priced like a generation).[/yellow]"
+        )
         raise typer.Exit(code=1)
 
     primary = sources[0]
