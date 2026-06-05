@@ -49,6 +49,27 @@ via `--backend` (or the `ACEMUSIC_BACKEND` default):
 Either way, each stem is registered as a child clip of the source, so downstream
 commands (DAW export, etc.) work the same.
 
+## Repaint & extend backends
+
+`acemusic repaint <clip_id>` regenerates a section of a clip and
+`acemusic extend <clip_id>` lengthens one. Both accept `--backend`
+(or the `ACEMUSIC_BACKEND` default):
+
+- `auto` / `ace-step` — ACE-Step repaint task with local crossfade stitching
+  (default; requires `ACEMUSIC_BASE_URL`).
+- `elevenlabs` — cloud inpainting via ElevenLabs composition plans (requires
+  `ELEVENLABS_API_KEY` and an account with the **enterprise inpainting
+  feature**). The source clip — including ACE-Step-generated WAVs — is uploaded
+  (priced like a generation), kept ranges are referenced server-side, and the
+  result is saved in the `ELEVENLABS_OUTPUT_FORMAT` (MP3 by default).
+  ElevenLabs limits: each plan section must be 3s–120s (so repaint boundaries
+  must leave ≥3s of kept audio on each non-edge side) and the total track is
+  capped at 600s. Range validation runs before the upload, so invalid requests
+  never spend credits.
+
+Either way, results are saved as child clips of the source
+(`parent_clip_id` + `generation_mode`), so lineage-aware commands work the same.
+
 ## Environment
 
 Copy `.env.example` to `.env` and fill in the required values before running.
