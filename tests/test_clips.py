@@ -95,6 +95,139 @@ class TestSchemaInit:
 
 
 # ---------------------------------------------------------------------------
+# DB layer: multi-parent lineage (#99)
+# ---------------------------------------------------------------------------
+
+
+class TestParentClipIds:
+    """parent_clip_ids JSON-text lineage field (#99)."""
+
+    def test_create_and_get_round_trips_parent_clip_ids(self, isolated_db):
+        from acemusic.db import create_clip, get_clip
+        from acemusic.models import Clip
+
+        clip = Clip(
+            workspace_id="ws-1",
+            file_path="/tmp/mashup.mp3",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            parent_clip_id=1,
+            parent_clip_ids="[1, 2, 3]",
+            generation_mode="mashup",
+        )
+        clip_id = create_clip(clip)
+
+        retrieved = get_clip(clip_id)
+        assert retrieved is not None
+        assert retrieved.parent_clip_ids == "[1, 2, 3]"
+        assert retrieved.parent_clip_id == 1
+
+    def test_parent_clip_ids_defaults_to_none(self, isolated_db):
+        from acemusic.db import create_clip, get_clip
+        from acemusic.models import Clip
+
+        clip = Clip(
+            workspace_id="ws-1",
+            file_path="/tmp/plain.wav",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        clip_id = create_clip(clip)
+
+        retrieved = get_clip(clip_id)
+        assert retrieved.parent_clip_ids is None
+
+    def test_list_clips_includes_parent_clip_ids(self, isolated_db):
+        from acemusic.db import create_clip, list_clips
+        from acemusic.models import Clip
+
+        clip = Clip(
+            workspace_id="ws-1",
+            file_path="/tmp/mashup.mp3",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            parent_clip_ids="[4, 5]",
+        )
+        create_clip(clip)
+
+        clips = list_clips("ws-1")
+        assert clips[0].parent_clip_ids == "[4, 5]"
+
+    def test_pre_existing_db_without_column_is_migrated(self, isolated_db):
+        """A DB created with the old schema gains parent_clip_ids transparently."""
+
+        # Build an old-schema DB by hand (no parent_clip_ids column).
+        db_path = _get_db_path(isolated_db)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE clips (
+                id               INTEGER PRIMARY KEY,
+                title            TEXT,
+                workspace_id     TEXT NOT NULL,
+                file_path        TEXT NOT NULL,
+                format           TEXT,
+                duration         REAL,
+                bpm              INTEGER,
+                key              TEXT,
+                style_tags       TEXT,
+                lyrics           TEXT,
+                vocal_language   TEXT,
+                model            TEXT,
+                seed             INTEGER,
+                inference_steps  INTEGER,
+                parent_clip_id   INTEGER REFERENCES clips(id),
+                generation_mode  TEXT,
+                created_at       TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+        old_id = _insert_test_clip(db_path)
+
+        # Opening through the normal path must migrate and keep old rows readable.
+        from acemusic.db import create_clip, get_clip
+        from acemusic.models import Clip
+
+        old_clip = get_clip(old_id)
+        assert old_clip is not None
+        assert old_clip.parent_clip_ids is None
+
+        new_id = create_clip(
+            Clip(
+                workspace_id="ws-test",
+                file_path="/tmp/new.mp3",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                parent_clip_ids="[1, 2]",
+            )
+        )
+        assert get_clip(new_id).parent_clip_ids == "[1, 2]"
+
+    def test_migration_is_idempotent(self, isolated_db):
+        """Re-initialising an already-migrated DB does not error."""
+        import acemusic.db as _db
+
+        for _ in range(2):
+            conn = _db.get_db()
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(clips)").fetchall()]
+            conn.close()
+            assert "parent_clip_ids" in cols
+
+    def test_migration_tolerates_concurrent_duplicate_column(self, isolated_db):
+        """A racing process adding the column between check and ALTER is tolerated.
+
+        Simulates the TOCTOU window by handing the migration a stale column
+        list that misses parent_clip_ids even though the DB already has it.
+        """
+        import acemusic.db as _db
+
+        conn = _db.get_db()  # fully migrated: column exists
+        try:
+            _db._migrate_clips_schema(conn, existing_columns=[])  # stale view → duplicate ALTER
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(clips)").fetchall()]
+            assert "parent_clip_ids" in cols
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
 # DB layer: CRUD
 # ---------------------------------------------------------------------------
 

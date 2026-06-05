@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -34,7 +35,7 @@ from acemusic.audio import (
     remaster_audio,
     time_stretch_audio,
 )
-from acemusic.backends import BackendError, resolve_backend
+from acemusic.backends import BackendError, ensure_supports, resolve_backend
 from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
 from acemusic.config import load_config
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
@@ -56,6 +57,7 @@ from acemusic.elevenlabs_client import (
     ElevenLabsClient,
     ElevenLabsError,
     build_inpaint_plan,
+    build_mashup_plan,
 )
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
@@ -199,6 +201,7 @@ def main(
         "sample",
         "repaint",
         "extend",
+        "mashup",
     ):
         config = load_config()
         if not config.api_url:
@@ -3943,66 +3946,254 @@ def _align_clips_bpm(
     return aligned_path
 
 
+def _mashup_via_elevenlabs(
+    *,
+    config,
+    sources: list[Clip],
+    style: Optional[str],
+    output: Optional[Path],
+    name: Optional[str],
+) -> None:
+    """Mash up clips via ElevenLabs composition plans (upload each → combine).
+
+    Every source clip is uploaded to obtain a ``song_id``; a composition plan
+    then references each source's full range via ``source_from`` in CLI order
+    and ElevenLabs composes one combined track. Unlike ACE-Step's audio-level
+    blend, recombination happens at the section/composition level, so
+    ``--blend`` strategies do not apply.
+    """
+    if not config.elevenlabs_api_key:
+        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+        raise typer.Exit(code=1)
+
+    durations_ms: list[int] = []
+    for clip in sources:
+        duration = clip.duration
+        if duration is None or duration <= 0:
+            try:
+                duration = get_duration(Path(clip.file_path))
+            except Exception as exc:
+                console.print(f"[red]Error: unable to determine duration for clip {clip.id}: {exc}[/red]")
+                raise typer.Exit(code=1)
+            if duration is None or duration <= 0:
+                console.print(f"[red]Error: clip {clip.id} has no valid duration metadata.[/red]")
+                raise typer.Exit(code=1)
+        durations_ms.append(int(round(duration * 1000)))
+
+    # Validate the plan shape before uploading — every upload is priced like a
+    # generation, so size errors must fail before the first credit is spent.
+    # Sentinel ids name the actual clips so validation errors stay actionable.
+    sentinel_sources = [(f"clip {clip.id}", duration_ms) for clip, duration_ms in zip(sources, durations_ms)]
+    try:
+        build_mashup_plan(sentinel_sources, style)
+    except ElevenLabsError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
+    song_sources: list[tuple[str, int]] = []
+    for clip, duration_ms in zip(sources, durations_ms):
+        try:
+            with console.status(f"[bold green]Uploading clip {clip.id} to ElevenLabs…[/bold green]", spinner="dots"):
+                song_id = el_client.upload_for_inpainting(clip.file_path)
+        except ElevenLabsError as exc:
+            console.print(f"[red]Error uploading clip {clip.id}: {exc}[/red]")
+            if song_sources:
+                # ElevenLabs has no upload-delete API; set cost expectations.
+                console.print(
+                    f"[yellow]Note: {len(song_sources)} earlier upload(s) succeeded and may "
+                    "already have been billed (uploads are priced like a generation).[/yellow]"
+                )
+            raise typer.Exit(code=1)
+        song_sources.append((song_id, duration_ms))
+
+    try:
+        plan = build_mashup_plan(song_sources, style)
+        with console.status("[bold green]Composing mashup via ElevenLabs…[/bold green]", spinner="dots"):
+            data = el_client.generate_from_plan(plan)
+    except ElevenLabsError as exc:
+        console.print(f"[red]ElevenLabs error: {exc}[/red]")
+        console.print(
+            f"[yellow]Note: {len(song_sources)} upload(s) succeeded and may already have "
+            "been billed (uploads are priced like a generation).[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    primary = sources[0]
+    ext = _elevenlabs_ext(config.elevenlabs_output_format)
+    titles = [clip.title for clip in sources if clip.title]
+    default_title = f"{' + '.join(titles)} (mashup)" if titles else None
+    title_slug = make_slug(name or (f"{'-'.join(titles)}-mashup" if titles else "mashup"))
+    try:
+        clips_dir = output if output is not None else get_workspace_path(primary.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = clips_dir / f"{title_slug}-{uuid.uuid4().hex[:8]}.{ext}"
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing mashup clip: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"mashup clip duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
+
+    new_clip = Clip(
+        workspace_id=primary.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        title=name or default_title,
+        format=ext,
+        duration=new_duration,
+        style_tags=_merge_style_tags(*(clip.style_tags for clip in sources), style),
+        model="elevenlabs",
+        parent_clip_id=primary.id,
+        parent_clip_ids=json.dumps([clip.id for clip in sources]),
+        generation_mode="mashup",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dur_str = f"{new_duration:.1f}s" if new_duration is not None else "unknown"
+    ids_str = " + ".join(str(clip.id) for clip in sources)
+    console.print(f"  [green]✓[/green] Mashed up clips {ids_str} → clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {dur_str}")
+
+
+def _merge_style_tags(*sources: Optional[str]) -> Optional[str]:
+    """Merge comma-separated style tags from several sources, deduplicated case-insensitively."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for source in sources:
+        if not source:
+            continue
+        for tag in (t.strip() for t in source.split(",")):
+            if tag and tag.lower() not in seen:
+                seen.add(tag.lower())
+                merged.append(tag)
+    return ", ".join(merged) or None
+
+
 @app.command()
 def mashup(
-    clip_id_1: int = typer.Argument(..., help="ID of the primary source clip."),
-    clip_id_2: int = typer.Argument(..., help="ID of the secondary source clip to blend with."),
+    clip_ids: list[int] = typer.Argument(
+        ...,
+        help="IDs of the source clips to combine (two or more; the ACE-Step backend supports exactly two).",
+    ),
     blend: str = typer.Option(
         "layered",
         "--blend",
-        help="Blend strategy: 'layered' (concurrent), 'sequential' (section-by-section), or 'ai-guided'.",
+        help="Blend strategy: 'layered' (concurrent), 'sequential' (section-by-section), or 'ai-guided'. "
+        "ACE-Step backend only.",
     ),
     style: Optional[str] = typer.Option(
         None, "--style", help="Optional unifying style descriptor (e.g. 'lo-fi hip hop')."
     ),
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the mashup file."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix and title for the mashup."),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto'/'ace-step' (audio-level blend of exactly two clips) or 'elevenlabs' "
+        "(section-level composition of two or more uploaded clips; sections 3s–120s, total ≤600s). "
+        "Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+    ),
 ) -> None:
-    """Combine elements from two clips into a single hybrid clip.
+    """Combine elements from multiple clips into a single hybrid clip.
 
-    Submits a ``task_type=mashup`` request to ACE-Step with both source clips and
-    a blend strategy. When the two clips have known but differing BPMs, the
-    secondary clip is time-stretched to match the primary clip's tempo before
-    submission (US-5.2 alignment). The result is saved as a new clip with
-    ``parent_clip_id`` pointing to the primary source and ``generation_mode='mashup'``.
+    With the ACE-Step backend (default), submits a ``task_type=mashup`` request
+    with exactly two source clips and a blend strategy; differing BPMs are
+    aligned by time-stretching the secondary clip (US-5.2). With the
+    ElevenLabs backend, two or more source clips are uploaded and recombined
+    at the section/composition level — ``--blend`` does not apply there.
 
-    Note: Requires ACE-Step to run on the same host (or with shared filesystem
-    access), since source audio is passed via absolute server-side paths.
+    The result is saved as a new clip with ``parent_clip_ids`` recording all
+    sources (and ``parent_clip_id`` the first) and ``generation_mode='mashup'``.
+
+    Note: The ACE-Step backend requires ACE-Step on the same host (or shared
+    filesystem), since source audio is passed via absolute server-side paths.
     """
     if blend not in VALID_BLEND_MODES:
         console.print(f"[red]Error: --blend must be one of {sorted(VALID_BLEND_MODES)}, got {blend!r}.[/red]")
         raise typer.Exit(code=1)
 
-    if clip_id_1 == clip_id_2:
-        console.print("[red]Error: clip_id_1 and clip_id_2 must be different clips.[/red]")
+    if len(clip_ids) < 2:
+        console.print("[red]Error: mashup needs at least two clip IDs.[/red]")
         raise typer.Exit(code=1)
 
-    primary = get_clip(clip_id_1)
-    if primary is None:
-        console.print(f"[red]Error: clip {clip_id_1} not found.[/red]")
-        raise typer.Exit(code=1)
-    secondary = get_clip(clip_id_2)
-    if secondary is None:
-        console.print(f"[red]Error: clip {clip_id_2} not found.[/red]")
+    if len(set(clip_ids)) != len(clip_ids):
+        console.print("[red]Error: clip IDs must be different clips.[/red]")
         raise typer.Exit(code=1)
 
-    primary_path = Path(primary.file_path)
-    secondary_path = Path(secondary.file_path)
-    if not primary_path.exists():
-        console.print(f"[red]Error: source file not found: {primary_path}[/red]")
-        raise typer.Exit(code=1)
-    if not secondary_path.exists():
-        console.print(f"[red]Error: source file not found: {secondary_path}[/red]")
-        raise typer.Exit(code=1)
+    clips: list[Clip] = []
+    for clip_id in clip_ids:
+        clip = get_clip(clip_id)
+        if clip is None:
+            console.print(f"[red]Error: clip {clip_id} not found.[/red]")
+            raise typer.Exit(code=1)
+        clips.append(clip)
 
-    for label, path in (("clip_id_1", primary_path), ("clip_id_2", secondary_path)):
+    for clip in clips:
+        path = Path(clip.file_path)
+        if not path.exists():
+            console.print(f"[red]Error: source file not found: {path}[/red]")
+            raise typer.Exit(code=1)
         if path.suffix.lower() not in SUPPORTED_FORMATS:
             console.print(
-                f"[red]Error: {label} is not a supported audio file "
+                f"[red]Error: clip {clip.id} is not a supported audio file "
                 f"({path.suffix or 'no extension'}). Mashup requires one of: "
                 f"{', '.join(sorted(SUPPORTED_FORMATS))}.[/red]"
             )
             raise typer.Exit(code=1)
+
+    config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+        ensure_supports(effective_backend, "mashup")
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # auto prefers ACE-Step, but 3+ sources are an ElevenLabs-only capability —
+    # auto never fails just because one engine can't do a job another can.
+    if effective_backend == "auto" and len(clips) > 2:
+        if config.elevenlabs_api_key:
+            console.print("[cyan]Using the elevenlabs backend (ACE-Step mashup supports exactly two clips).[/cyan]")
+            effective_backend = "elevenlabs"
+        else:
+            console.print(
+                "[red]Error: the ACE-Step backend supports exactly two clips. "
+                "Set ELEVENLABS_API_KEY (or pass --backend elevenlabs) to combine more sources.[/red]"
+            )
+            raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs":
+        if blend != "layered":
+            console.print(
+                "[yellow]Warning: --blend is ignored with the elevenlabs backend "
+                "(sources are recombined at the section/composition level).[/yellow]"
+            )
+        _mashup_via_elevenlabs(config=config, sources=clips, style=style, output=output, name=name)
+        return
+
+    if len(clips) != 2:
+        console.print(
+            "[red]Error: the ACE-Step backend supports exactly two clips. "
+            "Use --backend elevenlabs to combine more sources.[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    _require_ace_step_url(config)
+    primary, secondary = clips
+    clip_id_1, clip_id_2 = clip_ids
+    primary_path = Path(primary.file_path)
+    secondary_path = Path(secondary.file_path)
 
     duration = primary.duration
     if duration is None or duration <= 0:
@@ -4015,7 +4206,6 @@ def mashup(
             console.print(f"[red]Error: clip {clip_id_1} has no valid duration metadata.[/red]")
             raise typer.Exit(code=1)
 
-    config = load_config()
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
 
     clips_dir = output if output is not None else get_workspace_path(primary.workspace_id)
@@ -4106,17 +4296,6 @@ def mashup(
     else:
         new_title = None
 
-    seen: set[str] = set()
-    merged_tags: list[str] = []
-    for source in (primary.style_tags, secondary.style_tags, style):
-        if not source:
-            continue
-        for tag in (t.strip() for t in source.split(",")):
-            if tag and tag.lower() not in seen:
-                seen.add(tag.lower())
-                merged_tags.append(tag)
-    style_tags = ", ".join(merged_tags) or None
-
     new_clip = Clip(
         workspace_id=primary.workspace_id,
         file_path=str(dest_path.resolve()),
@@ -4126,8 +4305,9 @@ def mashup(
         duration=new_duration,
         bpm=primary.bpm,
         key=submitted_key,
-        style_tags=style_tags,
+        style_tags=_merge_style_tags(primary.style_tags, secondary.style_tags, style),
         parent_clip_id=primary.id,
+        parent_clip_ids=json.dumps([primary.id, secondary.id]),
         generation_mode="mashup",
     )
     try:

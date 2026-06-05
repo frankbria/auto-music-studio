@@ -18,10 +18,9 @@ from __future__ import annotations
 VALID_BACKENDS: tuple[str, ...] = ("auto", "ace-step", "elevenlabs")
 DEFAULT_BACKEND = "auto"
 
-# Which concrete engines support each operation. ElevenLabs entries expand as
-# the sibling issues land (#99 mashup). #96 added first-class generate/sounds
-# and composition plans ("compose"); #97 added stem separation; #98 added
-# inpainting (repaint/extend).
+# Which concrete engines support each operation. #96 added first-class
+# generate/sounds and composition plans ("compose"); #97 added stem
+# separation; #98 added inpainting (repaint/extend); #99 added mashup.
 _CAPABILITIES: dict[str, set[str]] = {
     "generate": {"ace-step", "elevenlabs"},
     "sample": {"ace-step", "elevenlabs"},
@@ -33,7 +32,7 @@ _CAPABILITIES: dict[str, set[str]] = {
     "extend": {"ace-step", "elevenlabs"},
     "cover": {"ace-step"},
     "repaint": {"ace-step", "elevenlabs"},
-    "mashup": {"ace-step"},
+    "mashup": {"ace-step", "elevenlabs"},
     "export": {"ace-step"},
 }
 

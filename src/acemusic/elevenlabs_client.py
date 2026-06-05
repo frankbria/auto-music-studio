@@ -169,6 +169,70 @@ def build_inpaint_plan(
     }
 
 
+def build_mashup_plan(
+    sources: list[tuple[str, int]],
+    style: str | None = None,
+) -> dict:
+    """Build a composition plan that combines whole sections from stored songs.
+
+    Each source becomes one (or more, when longer than 120s) ``source_from``
+    sections covering its full [0, duration] range, emitted in the given
+    order. Unlike ACE-Step's audio-level mashup, ElevenLabs recombines at the
+    section/composition level — sources play in sequence with the optional
+    ``style`` applied globally to unify the result.
+
+    Args:
+        sources: ``(song_id, duration_ms)`` pairs in playback order. The
+            song_ids come from :meth:`ElevenLabsClient.upload_for_inpainting`.
+        style: Optional comma-separated style descriptors applied globally.
+
+    Raises:
+        ElevenLabsError: With fewer than two sources, a source shorter than
+            3s (named in the message), or a combined duration over 600s.
+    """
+    if len(sources) < 2:
+        raise ElevenLabsError("Mashup needs at least two source clips.")
+
+    total_ms = 0
+    for song_id, duration_ms in sources:
+        if duration_ms < SECTION_MIN_MS:
+            raise ElevenLabsError(
+                f"Source {song_id} is {duration_ms}ms but ElevenLabs sections must be at "
+                f"least {SECTION_MIN_MS // 1000}s. Use a longer clip."
+            )
+        total_ms += duration_ms
+    if total_ms > TRACK_MAX_MS:
+        raise ElevenLabsError(
+            f"Combined sources total {total_ms}ms but ElevenLabs tracks are capped at "
+            f"{TRACK_MAX_MS // 1000}s (10 min). Use fewer or shorter clips."
+        )
+
+    sections: list[dict] = []
+    for index, (song_id, duration_ms) in enumerate(sources, start=1):
+        for chunk_index, (chunk_start, chunk_end) in enumerate(_split_keep_range(0, duration_ms), start=1):
+            suffix = f".{chunk_index}" if chunk_end - chunk_start != duration_ms else ""
+            sections.append(
+                {
+                    "section_name": f"Source {index}{suffix}",
+                    "positive_local_styles": [],
+                    "negative_local_styles": [],
+                    "duration_ms": chunk_end - chunk_start,
+                    "lines": [],
+                    "source_from": {
+                        "song_id": song_id,
+                        "range": {"start_ms": chunk_start, "end_ms": chunk_end},
+                    },
+                }
+            )
+
+    global_styles = [part.strip() for part in style.split(",") if part.strip()] if style else []
+    return {
+        "positive_global_styles": global_styles,
+        "negative_global_styles": [],
+        "sections": sections,
+    }
+
+
 def _validate_duration(duration: float | None) -> None:
     """Raise ElevenLabsError if duration is outside the API limits (3s–600s)."""
     if duration is not None and not (DURATION_MIN_S <= duration <= DURATION_MAX_S):

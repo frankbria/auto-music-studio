@@ -70,6 +70,23 @@ commands (DAW export, etc.) work the same.
 Either way, results are saved as child clips of the source
 (`parent_clip_id` + `generation_mode`), so lineage-aware commands work the same.
 
+## Mashup backends
+
+`acemusic mashup <clip_id> <clip_id> [...]` combines source clips. The two
+engines blend differently:
+
+- `auto` / `ace-step` — audio-level blend of **exactly two** clips
+  (`--blend layered|sequential|ai-guided`, BPM alignment, local stitching).
+- `elevenlabs` — **two or more** clips are uploaded and recombined at the
+  **section/composition level**: each source plays in sequence under an
+  optional unifying `--style`, composed server-side (same enterprise gating,
+  per-upload pricing, and 3s/120s/600s limits as repaint/extend; `--blend`
+  does not apply). With `auto`, three or more clips route here automatically
+  when `ELEVENLABS_API_KEY` is set, since only ElevenLabs can combine them.
+
+Mashup results record **all** sources in `parent_clip_ids` (JSON list; existing
+databases are migrated automatically) plus `parent_clip_id` for the primary.
+
 ## Environment
 
 Copy `.env.example` to `.env` and fill in the required values before running.
