@@ -2494,7 +2494,7 @@ def _extend_via_elevenlabs(
     if style:
         prompt, section_style = "continue the song", style
     else:
-        prompt, section_style = source.style_tags or source.title or "continue the song", None
+        prompt, section_style = (source.style_tags or source.title or "continue the song"), None
     keep_ranges = [(0, from_ms)]
     regenerate_range = (from_ms, from_ms + duration_ms)
 

@@ -419,6 +419,9 @@ class ElevenLabsClient:
             with open(audio_path, "rb") as fh:
                 response = httpx.post(
                     f"{_BASE_URL}/v1/music/upload",
+                    # No explicit content-type: httpx infers it from the
+                    # filename (e.g. audio/x-wav, audio/mpeg) — same pattern
+                    # proven against the live API by separate_stems (#97).
                     files={"file": (audio_path.name, fh)},
                     headers=self._headers,
                     timeout=_UPLOAD_TIMEOUT,
