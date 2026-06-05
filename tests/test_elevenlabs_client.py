@@ -606,6 +606,114 @@ class TestElevenLabsClientSeparateStems:
             client.separate_stems(tmp_path / "does-not-exist.wav")
 
 
+class TestElevenLabsClientUploadForInpainting:
+    """Tests for ElevenLabsClient.upload_for_inpainting() (issue #98)."""
+
+    @pytest.fixture
+    def audio_file(self, tmp_path):
+        path = tmp_path / "source.wav"
+        path.write_bytes(b"fake audio data")
+        return path
+
+    def test_upload_returns_song_id(self, audio_file):
+        """upload_for_inpainting() returns the song_id from the JSON response."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.upload_for_inpainting(audio_file)
+
+        assert result == "song-abc123"
+
+    def test_upload_posts_to_upload_endpoint(self, audio_file):
+        """upload_for_inpainting() POSTs to /v1/music/upload."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        url = mock_post.call_args.args[0] if mock_post.call_args.args else mock_post.call_args.kwargs.get("url")
+        assert url.endswith("/v1/music/upload")
+
+    def test_upload_sends_file_as_multipart(self, audio_file):
+        """upload_for_inpainting() uploads the audio under the 'file' multipart field."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        files = mock_post.call_args.kwargs.get("files", {})
+        assert "file" in files
+
+    def test_upload_sends_api_key_header(self, audio_file):
+        """upload_for_inpainting() sends xi-api-key in request headers."""
+        client = ElevenLabsClient(api_key="secret-key-123")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("xi-api-key") == "secret-key-123"
+
+    def test_upload_raises_elevenlabs_error_on_403(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError on 403 (enterprise gate)."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=_error_response(403)):
+            with pytest.raises(ElevenLabsError, match="403"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_surfaces_error_response_detail(self, audio_file):
+        """upload_for_inpainting() includes the API's error body in the message."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _error_response(403)
+        resp.text = '{"detail": "inpainting requires an enterprise plan"}'
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="enterprise plan"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_connection_failure(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the request fails."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch(
+            "acemusic.elevenlabs_client.httpx.post",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            with pytest.raises(ElevenLabsError):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_missing_song_id(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the response has no song_id."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"unexpected": "shape"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)song_id"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_invalid_json(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the response is not JSON."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"")
+        resp.json.side_effect = ValueError("not json")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)json"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_missing_file(self, tmp_path):
+        """upload_for_inpainting() raises ElevenLabsError when the audio file does not exist."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with pytest.raises(ElevenLabsError):
+            client.upload_for_inpainting(tmp_path / "does-not-exist.wav")
+
+
 @pytest.mark.integration
 class TestElevenLabsIntegration:
     """Integration tests requiring a real ELEVENLABS_API_KEY."""

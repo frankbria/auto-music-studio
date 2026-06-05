@@ -27,6 +27,9 @@ ELEVENLABS_STEM_LABELS: list[str] = ["vocals", "drums", "bass", "guitar", "piano
 _GENERATION_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
 _PLAN_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
 _STEMS_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+# Uploading for inpainting (#98) is priced like a generation and the server
+# inspects the audio (copyright check), so give it the same headroom as stems.
+_UPLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 
 
 class ElevenLabsError(Exception):
@@ -258,6 +261,57 @@ class ElevenLabsClient:
         except httpx.RequestError as exc:
             raise ElevenLabsError(f"ElevenLabs stem separation failed: {exc}") from exc
         return _parse_stem_zip(response.content)
+
+    def upload_for_inpainting(self, audio_path: str | Path) -> str:
+        """Upload an audio file for inpainting via POST /v1/music/upload.
+
+        The uploaded song can then be referenced by ``song_id`` from a
+        composition plan section's ``source_from`` to keep ranges of the
+        original audio while regenerating others. Only available to accounts
+        with access to the ElevenLabs inpainting feature; uploading is priced
+        the same as a generation.
+
+        Args:
+            audio_path: Path to the audio file to upload.
+
+        Returns:
+            The ``song_id`` assigned to the uploaded song.
+
+        Raises:
+            ElevenLabsError: On unreadable input file, HTTP error, connection
+                failure, or a response without a ``song_id``.
+        """
+        audio_path = Path(audio_path)
+        try:
+            with open(audio_path, "rb") as fh:
+                response = httpx.post(
+                    f"{_BASE_URL}/v1/music/upload",
+                    files={"file": (audio_path.name, fh)},
+                    headers=self._headers,
+                    timeout=_UPLOAD_TIMEOUT,
+                )
+            response.raise_for_status()
+        except OSError as exc:
+            raise ElevenLabsError(f"ElevenLabs upload failed: cannot read {audio_path}: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            # Include the response body (truncated) — 403 carries the
+            # enterprise-gating reason and 422 the validation detail.
+            detail = (exc.response.text or "").strip()[:200]
+            message = f"ElevenLabs upload failed: {exc.response.status_code}"
+            if detail:
+                message = f"{message} — {detail}"
+            raise ElevenLabsError(message) from exc
+        except httpx.RequestError as exc:
+            raise ElevenLabsError(f"ElevenLabs upload failed: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ElevenLabsError("ElevenLabs upload failed: invalid JSON response") from exc
+        song_id = payload.get("song_id") if isinstance(payload, dict) else None
+        if not song_id:
+            raise ElevenLabsError("ElevenLabs upload failed: response contains no song_id")
+        return str(song_id)
 
     def validate_key(self, timeout: float = 5.0) -> bool:
         """Validate the API key via GET /v1/user. Returns True if valid, False otherwise."""
