@@ -880,3 +880,71 @@ class TestMashupElevenLabsBackend:
 
         assert result.exit_code == 1
         assert "Invalid backend" in result.output
+
+    def test_single_clip_id_errors(self, workspace_with_three_long_clips, monkeypatch):
+        """Fewer than two clip IDs is rejected up front."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+
+        result = runner.invoke(app, ["mashup", str(ids[0]), "--backend", "elevenlabs"])
+
+        assert result.exit_code == 1
+        assert "at least two" in result.output.lower()
+
+    def test_compose_error_surfaces_as_friendly_message(self, workspace_with_three_long_clips, monkeypatch):
+        """An ElevenLabsError during composition exits 1 with the error message."""
+        from acemusic.elevenlabs_client import ElevenLabsError
+
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+        el.generate_from_plan.side_effect = ElevenLabsError("ElevenLabs plan generation failed: 500")
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                ["mashup", str(ids[0]), str(ids[1]), "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 1
+        assert "500" in result.output
+
+    def test_write_failure_exits_cleanly(self, workspace_with_three_long_clips, monkeypatch):
+        """A disk write failure exits 1 without a traceback."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with (
+            patch("acemusic.cli.ElevenLabsClient", return_value=el),
+            patch("acemusic.cli.Path.write_bytes", side_effect=OSError("read-only file system")),
+        ):
+            result = runner.invoke(
+                app,
+                ["mashup", str(ids[0]), str(ids[1]), "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 1
+        assert "read-only file system" in result.output
+
+    def test_duration_probed_when_metadata_missing(self, workspace_with_three_long_clips, monkeypatch):
+        """A source without duration metadata is probed from the file."""
+        ws, ids, _paths = workspace_with_three_long_clips
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        from acemusic.db import get_db
+
+        with get_db() as conn:
+            conn.execute("UPDATE clips SET duration = NULL WHERE id = ?", (ids[0],))
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                ["mashup", str(ids[0]), str(ids[1]), "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 0, result.output
+        plan = el.generate_from_plan.call_args.args[0]
+        # Probed from the real 12s WAV on disk.
+        assert plan["sections"][0]["duration_ms"] == pytest.approx(12_000, abs=100)
