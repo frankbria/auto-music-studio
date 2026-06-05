@@ -1464,8 +1464,8 @@ def workspace_delete(
 
 @app.command()
 def status() -> None:
-    """Check the status of the ACE-Step server."""
-    typer.echo("Not yet implemented")
+    """Check ACE-Step server and ElevenLabs key status (alias for `health`)."""
+    health()
 
 
 # ---------------------------------------------------------------------------

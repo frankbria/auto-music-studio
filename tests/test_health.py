@@ -106,3 +106,50 @@ class TestHealthCommand:
         result = runner.invoke(app, ["health"], env={"ACEMUSIC_BASE_URL": integration_url})
         assert result.exit_code == 0, result.output
         assert "healthy" in result.output.lower()
+
+
+class TestStatusCommand:
+    """`status` is an alias for `health` (#106 — previously an unimplemented stub)."""
+
+    def test_status_no_longer_a_stub(self, monkeypatch):
+        """status never prints the old 'Not yet implemented' placeholder."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        mock_resp = _mock_response(200, HEALTHY_STATS)
+
+        with patch("acemusic.client.httpx.get", return_value=mock_resp):
+            result = runner.invoke(app, ["status"])
+
+        assert "not yet implemented" not in result.output.lower()
+
+    def test_status_reports_health_on_success(self, monkeypatch):
+        """status reports the server as healthy, exactly like health."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+        mock_resp = _mock_response(200, HEALTHY_STATS)
+
+        with patch("acemusic.client.httpx.get", return_value=mock_resp):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0, result.output
+        assert "healthy" in result.output.lower()
+
+    def test_status_matches_health_output(self, monkeypatch):
+        """status and health produce identical reports for the same server state."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        outputs = {}
+        for command in ("health", "status"):
+            mock_resp = _mock_response(200, HEALTHY_STATS)
+            with patch("acemusic.client.httpx.get", return_value=mock_resp):
+                outputs[command] = runner.invoke(app, [command]).output
+
+        assert outputs["status"] == outputs["health"]
+
+    def test_status_unreachable_exits_one(self, monkeypatch):
+        """status reports 'unreachable' and exits 1 when the server is down."""
+        monkeypatch.setenv("ACEMUSIC_BASE_URL", "http://localhost:8001")
+
+        with patch("acemusic.client.httpx.get", side_effect=httpx.ConnectError("Connection refused")):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 1
+        assert "unreachable" in result.output.lower()
