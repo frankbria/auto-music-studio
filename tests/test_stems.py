@@ -13,6 +13,7 @@ from acemusic.cli import app
 from acemusic.elevenlabs_client import ELEVENLABS_STEM_LABELS, ElevenLabsError
 from acemusic.models import Clip
 from acemusic.stems_client import STEM_LABELS
+from tests.helpers_elevenlabs import _el_config
 
 runner = CliRunner()
 
@@ -76,21 +77,6 @@ def _write_stub_stem(out_dir: Path, base: str, label: str, fmt: str) -> Path:
     path = out_dir / f"{base}-{label}.{fmt}"
     path.write_bytes(b"fake stem audio")
     return path
-
-
-def _el_config(monkeypatch, api_key="test-key", output_format="mp3_44100_128"):
-    """Point load_config at an ElevenLabs-enabled config."""
-    from acemusic.config import AceConfig
-
-    monkeypatch.setattr(
-        "acemusic.cli.load_config",
-        lambda: AceConfig(
-            api_url="http://localhost:8001",
-            api_key=None,
-            elevenlabs_api_key=api_key,
-            elevenlabs_output_format=output_format,
-        ),
-    )
 
 
 def _el_stems_mock():

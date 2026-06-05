@@ -27,10 +27,146 @@ ELEVENLABS_STEM_LABELS: list[str] = ["vocals", "drums", "bass", "guitar", "piano
 _GENERATION_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
 _PLAN_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
 _STEMS_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+# Uploading for inpainting (#98) is priced like a generation and the server
+# inspects the audio (copyright check), so give it the same headroom as stems.
+_UPLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 
 
 class ElevenLabsError(Exception):
     """Raised when the ElevenLabs API returns an error or is unreachable."""
+
+
+# Composition plan sections must be 3s–120s each (SongSection.duration_ms),
+# and the whole track is capped at 600s (music_length_ms limit).
+SECTION_MIN_MS = 3_000
+SECTION_MAX_MS = 120_000
+TRACK_MAX_MS = int(DURATION_MAX_S * 1000)
+
+
+def _split_keep_range(start_ms: int, end_ms: int) -> list[tuple[int, int]]:
+    """Split a keep range into contiguous chunks no longer than SECTION_MAX_MS.
+
+    Uses the minimal number of equal-sized chunks so every chunk stays well
+    above SECTION_MIN_MS (a range needing a split is >120s, so halves are >60s).
+    """
+    total = end_ms - start_ms
+    chunks = -(-total // SECTION_MAX_MS)  # ceil division
+    ranges: list[tuple[int, int]] = []
+    chunk_start = start_ms
+    for i in range(1, chunks + 1):
+        chunk_end = start_ms + (total * i) // chunks
+        ranges.append((chunk_start, chunk_end))
+        chunk_start = chunk_end
+    return ranges
+
+
+def build_inpaint_plan(
+    song_id: str,
+    keep_ranges: list[tuple[int, int]],
+    regenerate_range: tuple[int, int],
+    prompt: str,
+    style: str | None = None,
+    lyrics: str | None = None,
+) -> dict:
+    """Build a composition plan that regenerates one section of a stored song.
+
+    Keep ranges become sections referencing the uploaded song via
+    ``source_from`` so their audio is preserved; the regenerate range becomes
+    a plain section described by ``prompt``/``style``/``lyrics`` that the
+    model fills in. Sections are emitted in chronological order.
+
+    Args:
+        song_id: ID returned by :meth:`ElevenLabsClient.upload_for_inpainting`.
+        keep_ranges: ``(start_ms, end_ms)`` ranges of the source to keep.
+            Empty ranges are skipped; ranges longer than 120s are split into
+            multiple sections (the API caps sections at 120s).
+        regenerate_range: The single ``(start_ms, end_ms)`` range to regenerate.
+        prompt: Description of the regenerated section.
+        style: Optional comma-separated style descriptors for the section.
+        lyrics: Optional lyrics for the section (one line per text line).
+
+    Raises:
+        ElevenLabsError: If any non-empty range is shorter than 3s, the
+            regenerate range is longer than 120s, or it is inverted/empty.
+    """
+    regen_start, regen_end = regenerate_range
+    regen_duration = regen_end - regen_start
+    if regen_duration <= 0:
+        raise ElevenLabsError(f"Invalid regenerate range [{regen_start}ms, {regen_end}ms]: start must be before end.")
+    if regen_duration < SECTION_MIN_MS:
+        raise ElevenLabsError(
+            f"Regenerate range is {regen_duration}ms but ElevenLabs sections must be at least "
+            f"{SECTION_MIN_MS // 1000}s. Widen the region (e.g. adjust --start/--end or --duration)."
+        )
+    if regen_duration > SECTION_MAX_MS:
+        raise ElevenLabsError(
+            f"Regenerate range is {regen_duration}ms but ElevenLabs sections are capped at "
+            f"{SECTION_MAX_MS // 1000}s (120s). Narrow the region or run multiple passes."
+        )
+
+    entries: list[tuple[int, int, bool]] = [(regen_start, regen_end, True)]
+    for start_ms, end_ms in keep_ranges:
+        duration = end_ms - start_ms
+        if duration <= 0:
+            continue
+        if duration < SECTION_MIN_MS:
+            raise ElevenLabsError(
+                f"Kept range [{start_ms}ms, {end_ms}ms] is {duration}ms but ElevenLabs sections "
+                f"must be at least {SECTION_MIN_MS // 1000}s. Move the repaint boundary so at "
+                f"least 3s of audio is kept on that side, or extend the region to the clip edge."
+            )
+        for chunk_start, chunk_end in _split_keep_range(start_ms, end_ms):
+            entries.append((chunk_start, chunk_end, False))
+    entries.sort(key=lambda entry: entry[0])
+
+    # The whole composed track is capped at 600s — fail here so callers can
+    # validate before paying for an upload that could never compose.
+    total_ms = sum(end_ms - start_ms for start_ms, end_ms, _ in entries)
+    if total_ms > TRACK_MAX_MS:
+        raise ElevenLabsError(
+            f"Inpainting plan totals {total_ms}ms but ElevenLabs tracks are capped at "
+            f"{TRACK_MAX_MS // 1000}s (10 min). Use a shorter source clip or a smaller extension."
+        )
+
+    positive_styles = [prompt]
+    if style:
+        positive_styles.extend(part.strip() for part in style.split(",") if part.strip())
+    lines = [line.strip() for line in lyrics.splitlines() if line.strip()] if lyrics else []
+
+    sections: list[dict] = []
+    keep_index = 0
+    for start_ms, end_ms, is_regen in entries:
+        if is_regen:
+            sections.append(
+                {
+                    "section_name": "Regenerated",
+                    "positive_local_styles": positive_styles,
+                    "negative_local_styles": [],
+                    "duration_ms": end_ms - start_ms,
+                    "lines": lines,
+                }
+            )
+        else:
+            keep_index += 1
+            sections.append(
+                {
+                    "section_name": f"Keep {keep_index}",
+                    "positive_local_styles": [],
+                    "negative_local_styles": [],
+                    "duration_ms": end_ms - start_ms,
+                    "lines": [],
+                    "source_from": {
+                        "song_id": song_id,
+                        "range": {"start_ms": start_ms, "end_ms": end_ms},
+                    },
+                }
+            )
+
+    return {
+        "positive_global_styles": [],
+        "negative_global_styles": [],
+        "sections": sections,
+    }
 
 
 def _validate_duration(duration: float | None) -> None:
@@ -258,6 +394,60 @@ class ElevenLabsClient:
         except httpx.RequestError as exc:
             raise ElevenLabsError(f"ElevenLabs stem separation failed: {exc}") from exc
         return _parse_stem_zip(response.content)
+
+    def upload_for_inpainting(self, audio_path: str | Path) -> str:
+        """Upload an audio file for inpainting via POST /v1/music/upload.
+
+        The uploaded song can then be referenced by ``song_id`` from a
+        composition plan section's ``source_from`` to keep ranges of the
+        original audio while regenerating others. Only available to accounts
+        with access to the ElevenLabs inpainting feature; uploading is priced
+        the same as a generation.
+
+        Args:
+            audio_path: Path to the audio file to upload.
+
+        Returns:
+            The ``song_id`` assigned to the uploaded song.
+
+        Raises:
+            ElevenLabsError: On unreadable input file, HTTP error, connection
+                failure, or a response without a ``song_id``.
+        """
+        audio_path = Path(audio_path)
+        try:
+            with open(audio_path, "rb") as fh:
+                response = httpx.post(
+                    f"{_BASE_URL}/v1/music/upload",
+                    # No explicit content-type: httpx infers it from the
+                    # filename (e.g. audio/x-wav, audio/mpeg) — same pattern
+                    # proven against the live API by separate_stems (#97).
+                    files={"file": (audio_path.name, fh)},
+                    headers=self._headers,
+                    timeout=_UPLOAD_TIMEOUT,
+                )
+            response.raise_for_status()
+        except OSError as exc:
+            raise ElevenLabsError(f"ElevenLabs upload failed: cannot read {audio_path}: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            # Include the response body (truncated) — 403 carries the
+            # enterprise-gating reason and 422 the validation detail.
+            detail = (exc.response.text or "").strip()[:200]
+            message = f"ElevenLabs upload failed: {exc.response.status_code}"
+            if detail:
+                message = f"{message} — {detail}"
+            raise ElevenLabsError(message) from exc
+        except httpx.RequestError as exc:
+            raise ElevenLabsError(f"ElevenLabs upload failed: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ElevenLabsError("ElevenLabs upload failed: invalid JSON response") from exc
+        song_id = payload.get("song_id") if isinstance(payload, dict) else None
+        if not song_id:
+            raise ElevenLabsError("ElevenLabs upload failed: response contains no song_id")
+        return str(song_id)
 
     def validate_key(self, timeout: float = 5.0) -> bool:
         """Validate the API key via GET /v1/user. Returns True if valid, False otherwise."""

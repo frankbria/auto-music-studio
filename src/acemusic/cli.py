@@ -55,6 +55,7 @@ from acemusic.elevenlabs_client import (
     DURATION_MIN_S as EL_DURATION_MIN_S,
     ElevenLabsClient,
     ElevenLabsError,
+    build_inpaint_plan,
 )
 from acemusic.midi_client import MidiClient, MidiError
 from acemusic.models import Clip, Preset
@@ -196,6 +197,8 @@ def main(
         "generate",
         "sounds",
         "sample",
+        "repaint",
+        "extend",
     ):
         config = load_config()
         if not config.api_url:
@@ -2463,6 +2466,104 @@ def _parse_from_flag(value: str, source_duration: float) -> float:
     return parse_time_string(value) / 1000.0
 
 
+def _extend_via_elevenlabs(
+    *,
+    config,
+    source: Clip,
+    clip_id: int,
+    from_ms: int,
+    duration_ms: int,
+    style: Optional[str],
+    lyrics: Optional[str],
+) -> None:
+    """Extend a clip via ElevenLabs inpainting (upload → plan → compose).
+
+    The source clip is uploaded to obtain a ``song_id``; a composition plan
+    keeps [0, from] via ``source_from`` and appends a new [from, from+duration]
+    section described by the source's style (or the overrides). Audio past the
+    splice point is replaced, consistent with the ACE-Step behaviour — no
+    local trimming is needed because the keep range handles it server-side.
+    """
+    if not config.elevenlabs_api_key:
+        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+        raise typer.Exit(code=1)
+
+    # --style is an override: when given, it alone shapes the new section —
+    # blending in the source's old style tags would send contradictory
+    # directions to the model.
+    if style:
+        prompt, section_style = "continue the song", style
+    else:
+        prompt, section_style = (source.style_tags or source.title or "continue the song"), None
+    keep_ranges = [(0, from_ms)]
+    regenerate_range = (from_ms, from_ms + duration_ms)
+
+    # Validate the plan shape before uploading — uploads are priced like a
+    # generation, so range errors must fail before any credits are spent.
+    try:
+        build_inpaint_plan("pending-upload", keep_ranges, regenerate_range, prompt, section_style, lyrics)
+    except ElevenLabsError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
+    try:
+        with console.status("[bold green]Uploading source clip to ElevenLabs…[/bold green]", spinner="dots"):
+            song_id = el_client.upload_for_inpainting(source.file_path)
+        plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, section_style, lyrics)
+        with console.status("[bold green]Extending via ElevenLabs…[/bold green]", spinner="dots"):
+            data = el_client.generate_from_plan(plan, seed=source.seed)
+    except ElevenLabsError as exc:
+        console.print(f"[red]ElevenLabs error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    ext = _elevenlabs_ext(config.elevenlabs_output_format)
+    try:
+        clips_dir = get_workspace_path(source.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = clips_dir / f"{make_slug(source.title or 'clip')}-extend-{uuid.uuid4().hex[:8]}.{ext}"
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing extended clip: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"extended clip duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
+
+    new_title = f"{source.title} (extended)" if source.title else None
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        title=new_title,
+        format=ext,
+        duration=new_duration,
+        bpm=source.bpm,
+        key=source.key,
+        style_tags=style or source.style_tags,
+        lyrics=lyrics or source.lyrics,
+        vocal_language=source.vocal_language,
+        model="elevenlabs",
+        seed=source.seed,
+        parent_clip_id=source.id,
+        generation_mode="extend",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dur_str = f"{new_duration:.1f}s" if new_duration is not None else "unknown"
+    console.print(f"  [green]✓[/green] Extended clip {clip_id} → clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {dur_str}")
+
+
 @app.command()
 def extend(
     clip_id: int = typer.Argument(..., help="ID of the source clip to extend."),
@@ -2470,6 +2571,13 @@ def extend(
     from_: str = typer.Option("end", "--from", help="Extension point: 'end' (default) or a timestamp like '45s'."),
     style: Optional[str] = typer.Option(None, "--style", help="Optional style override for the extension."),
     lyrics: Optional[str] = typer.Option(None, "--lyrics", help="Optional lyrics for the extended section."),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto'/'ace-step' (ACE-Step repaint task) or 'elevenlabs' "
+        "(cloud inpainting via composition plan; sections must be 3s–120s). "
+        "Defaults to ACEMUSIC_BACKEND, then 'auto'.",
+    ),
 ) -> None:
     """Extend an existing clip by generating audio that continues the song.
 
@@ -2526,6 +2634,25 @@ def extend(
     target_audio_duration = repaint_end
 
     config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs":
+        _extend_via_elevenlabs(
+            config=config,
+            source=source,
+            clip_id=clip_id,
+            from_ms=int(round(from_seconds * 1000)),
+            duration_ms=duration_ms,
+            style=style,
+            lyrics=lyrics,
+        )
+        return
+
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
 
     clips_dir = get_workspace_path(source.workspace_id)
@@ -2590,7 +2717,11 @@ def extend(
             console.print(f"[red]Error downloading extended clip: {exc}[/red]")
             raise typer.Exit(code=1)
 
-        dest_path.write_bytes(data)
+        try:
+            dest_path.write_bytes(data)
+        except OSError as exc:
+            console.print(f"[red]Error writing extended clip: {exc}[/red]")
+            raise typer.Exit(code=1)
     finally:
         if trimmed is not None:
             trimmed.unlink(missing_ok=True)
@@ -3036,6 +3167,113 @@ def cover(
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_CROSSFADE_MS = 50
+
+
+def _repaint_via_elevenlabs(
+    *,
+    config,
+    source: Clip,
+    clip_id: int,
+    start_ms: int,
+    end_ms: int,
+    source_duration: float,
+    prompt: str,
+    style: Optional[str],
+    output: Optional[Path],
+    name: Optional[str],
+    start_label: str,
+    end_label: str,
+) -> None:
+    """Repaint a clip section via ElevenLabs inpainting (upload → plan → compose).
+
+    The source clip (any supported format, including ACE-Step WAVs) is uploaded
+    to obtain a ``song_id``; a composition plan keeps [0, start] and
+    [end, duration] via ``source_from`` and regenerates [start, end] from the
+    prompt/style. ElevenLabs composes the full track server-side, so no local
+    crossfade stitching is needed.
+    """
+    if not config.elevenlabs_api_key:
+        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+        raise typer.Exit(code=1)
+
+    duration_ms_total = int(round(source_duration * 1000))
+    keep_ranges = [(0, start_ms), (end_ms, duration_ms_total)]
+    regenerate_range = (start_ms, end_ms)
+
+    # Validate the plan shape before uploading — uploads are priced like a
+    # generation, so range errors must fail before any credits are spent.
+    try:
+        build_inpaint_plan("pending-upload", keep_ranges, regenerate_range, prompt, style)
+    except ElevenLabsError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
+    try:
+        with console.status("[bold green]Uploading source clip to ElevenLabs…[/bold green]", spinner="dots"):
+            song_id = el_client.upload_for_inpainting(source.file_path)
+        plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, style)
+        with console.status("[bold green]Repainting via ElevenLabs…[/bold green]", spinner="dots"):
+            data = el_client.generate_from_plan(plan, seed=source.seed)
+    except ElevenLabsError as exc:
+        console.print(f"[red]ElevenLabs error: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    ext = _elevenlabs_ext(config.elevenlabs_output_format)
+    title_slug = make_slug(name or source.title or "clip")
+    try:
+        clips_dir = output if output is not None else get_workspace_path(source.workspace_id)
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = clips_dir / f"{title_slug}-repaint-{uuid.uuid4().hex[:8]}.{ext}"
+        dest_path.write_bytes(data)
+    except OSError as exc:
+        console.print(f"[red]Error writing repainted clip: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        new_duration = get_duration(dest_path)
+    except Exception as exc:
+        warnings.warn(f"repaint clip duration probe failed: {exc}", stacklevel=2)
+        new_duration = None
+
+    if name:
+        new_title = name
+    elif source.title:
+        new_title = f"{source.title} (repaint)"
+    else:
+        new_title = None
+
+    new_clip = Clip(
+        workspace_id=source.workspace_id,
+        file_path=str(dest_path.resolve()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        title=new_title,
+        format=ext,
+        duration=new_duration,
+        bpm=source.bpm,
+        key=source.key,
+        style_tags=style or source.style_tags,
+        lyrics=source.lyrics,
+        vocal_language=source.vocal_language,
+        model="elevenlabs",
+        seed=source.seed,
+        parent_clip_id=source.id,
+        generation_mode="repaint",
+    )
+    try:
+        new_id = create_clip(new_clip)
+    except Exception as exc:
+        dest_path.unlink(missing_ok=True)
+        console.print(f"[red]Error saving clip record: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    dur_str = f"{new_duration:.1f}s" if new_duration is not None else "unknown"
+    console.print(f"  [green]✓[/green] Repainted clip {clip_id} ({start_label}–{end_label}) → clip {new_id}")
+    console.print(f"    Path:     {dest_path}")
+    console.print(f"    Duration: {dur_str}")
+
+
 @app.command()
 def repaint(
     clip_id: int = typer.Argument(..., help="ID of the source clip to repaint."),
@@ -3046,9 +3284,16 @@ def repaint(
     output: Optional[Path] = typer.Option(None, "--output", help="Directory to save the repainted clip."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom filename prefix for the repainted clip."),
     crossfade_ms: int = typer.Option(
-        50,
+        _DEFAULT_CROSSFADE_MS,
         "--crossfade-ms",
-        help="Crossfade length at the splice boundaries (milliseconds).",
+        help="Crossfade length at the splice boundaries (milliseconds). ACE-Step backend only.",
+    ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        help="Engine: 'auto'/'ace-step' (ACE-Step repaint + local stitch) or 'elevenlabs' "
+        "(cloud inpainting via composition plan; sections must be 3s–120s). "
+        "Defaults to ACEMUSIC_BACKEND, then 'auto'.",
     ),
 ) -> None:
     """Regenerate a section of a clip while preserving the surrounding audio.
@@ -3117,6 +3362,35 @@ def repaint(
         raise typer.Exit(code=1)
 
     config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if effective_backend == "elevenlabs":
+        if crossfade_ms != _DEFAULT_CROSSFADE_MS:
+            console.print(
+                "[yellow]Warning: --crossfade-ms is ignored with the elevenlabs backend "
+                "(composition happens server-side).[/yellow]"
+            )
+        _repaint_via_elevenlabs(
+            config=config,
+            source=source,
+            clip_id=clip_id,
+            start_ms=int(start_ms),
+            end_ms=int(end_ms),
+            source_duration=source_duration,
+            prompt=prompt,
+            style=style,
+            output=output,
+            name=name,
+            start_label=start,
+            end_label=end,
+        )
+        return
+
+    _require_ace_step_url(config)
     ace_client = AceStepClient(base_url=config.api_url, api_key=config.api_key)
 
     clips_dir = output if output is not None else get_workspace_path(source.workspace_id)

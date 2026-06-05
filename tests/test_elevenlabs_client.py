@@ -15,6 +15,7 @@ from acemusic.elevenlabs_client import (
     ELEVENLABS_STEM_LABELS,
     ElevenLabsClient,
     ElevenLabsError,
+    build_inpaint_plan,
 )
 
 FAKE_MP3 = b"ID3" + b"\x00" * 100  # minimal fake MP3 bytes
@@ -604,6 +605,333 @@ class TestElevenLabsClientSeparateStems:
 
         with pytest.raises(ElevenLabsError):
             client.separate_stems(tmp_path / "does-not-exist.wav")
+
+
+class TestElevenLabsClientUploadForInpainting:
+    """Tests for ElevenLabsClient.upload_for_inpainting() (issue #98)."""
+
+    @pytest.fixture
+    def audio_file(self, tmp_path):
+        path = tmp_path / "source.wav"
+        path.write_bytes(b"fake audio data")
+        return path
+
+    def test_upload_returns_song_id(self, audio_file):
+        """upload_for_inpainting() returns the song_id from the JSON response."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            result = client.upload_for_inpainting(audio_file)
+
+        assert result == "song-abc123"
+
+    def test_upload_posts_to_upload_endpoint(self, audio_file):
+        """upload_for_inpainting() POSTs to /v1/music/upload."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        url = mock_post.call_args.args[0]
+        assert url.endswith("/v1/music/upload")
+
+    def test_upload_sends_file_as_multipart(self, audio_file):
+        """upload_for_inpainting() uploads the audio under the 'file' multipart field."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        files = mock_post.call_args.kwargs.get("files", {})
+        assert "file" in files
+
+    def test_upload_sends_api_key_header(self, audio_file):
+        """upload_for_inpainting() sends xi-api-key in request headers."""
+        client = ElevenLabsClient(api_key="secret-key-123")
+        resp = _mock_response(200, b"", json_data={"song_id": "song-abc123"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp) as mock_post:
+            client.upload_for_inpainting(audio_file)
+
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("xi-api-key") == "secret-key-123"
+
+    def test_upload_raises_elevenlabs_error_on_403(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError on 403 (enterprise gate)."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=_error_response(403)):
+            with pytest.raises(ElevenLabsError, match="403"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_surfaces_error_response_detail(self, audio_file):
+        """upload_for_inpainting() includes the API's error body in the message."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _error_response(403)
+        resp.text = '{"detail": "inpainting requires an enterprise plan"}'
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="enterprise plan"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_connection_failure(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the request fails."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with patch(
+            "acemusic.elevenlabs_client.httpx.post",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            with pytest.raises(ElevenLabsError):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_missing_song_id(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the response has no song_id."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"", json_data={"unexpected": "shape"})
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)song_id"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_invalid_json(self, audio_file):
+        """upload_for_inpainting() raises ElevenLabsError when the response is not JSON."""
+        client = ElevenLabsClient(api_key="test-key")
+        resp = _mock_response(200, b"")
+        resp.json.side_effect = ValueError("not json")
+
+        with patch("acemusic.elevenlabs_client.httpx.post", return_value=resp):
+            with pytest.raises(ElevenLabsError, match="(?i)json"):
+                client.upload_for_inpainting(audio_file)
+
+    def test_upload_raises_elevenlabs_error_on_missing_file(self, tmp_path):
+        """upload_for_inpainting() raises ElevenLabsError when the audio file does not exist."""
+        client = ElevenLabsClient(api_key="test-key")
+
+        with pytest.raises(ElevenLabsError):
+            client.upload_for_inpainting(tmp_path / "does-not-exist.wav")
+
+
+class TestBuildInpaintPlan:
+    """Tests for build_inpaint_plan() (issue #98)."""
+
+    def test_repaint_plan_has_keep_regen_keep_sections_in_order(self):
+        """A mid-clip repaint yields keep / regenerate / keep sections chronologically."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000), (20_000, 30_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="add a guitar solo",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 3
+        # keep before
+        assert sections[0]["source_from"] == {
+            "song_id": "song-1",
+            "range": {"start_ms": 0, "end_ms": 10_000},
+        }
+        assert sections[0]["duration_ms"] == 10_000
+        # regenerate (no source_from)
+        assert "source_from" not in sections[1]
+        assert sections[1]["duration_ms"] == 10_000
+        assert "add a guitar solo" in sections[1]["positive_local_styles"]
+        # keep after
+        assert sections[2]["source_from"] == {
+            "song_id": "song-1",
+            "range": {"start_ms": 20_000, "end_ms": 30_000},
+        }
+
+    def test_plan_has_required_top_level_and_section_fields(self):
+        """Every section carries the fields required by the MusicPrompt schema."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="new outro",
+        )
+
+        assert plan["positive_global_styles"] == []
+        assert plan["negative_global_styles"] == []
+        for section in plan["sections"]:
+            for field in (
+                "section_name",
+                "positive_local_styles",
+                "negative_local_styles",
+                "duration_ms",
+                "lines",
+            ):
+                assert field in section, field
+
+    def test_extend_plan_appends_new_section(self):
+        """An extend (no trailing keep) yields keep + new section."""
+        plan = build_inpaint_plan(
+            song_id="song-2",
+            keep_ranges=[(0, 30_000)],
+            regenerate_range=(30_000, 45_000),
+            prompt="epic finale",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert sections[0]["source_from"]["range"] == {"start_ms": 0, "end_ms": 30_000}
+        assert "source_from" not in sections[1]
+        assert sections[1]["duration_ms"] == 15_000
+
+    def test_style_descriptors_are_added_to_regenerate_section(self):
+        """Comma-separated style descriptors land in positive_local_styles."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="bridge",
+            style="dark synthwave, heavy bass",
+        )
+
+        regen = plan["sections"][-1]
+        assert "dark synthwave" in regen["positive_local_styles"]
+        assert "heavy bass" in regen["positive_local_styles"]
+
+    def test_lyrics_are_split_into_lines(self):
+        """Lyrics text becomes the regenerate section's lines (blank lines dropped)."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="verse",
+            lyrics="first line\n\nsecond line\n",
+        )
+
+        regen = plan["sections"][-1]
+        assert regen["lines"] == ["first line", "second line"]
+
+    def test_keep_sections_have_no_lyrics_or_styles(self):
+        """Keep sections carry empty styles and lines."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="verse",
+            lyrics="la la la",
+        )
+
+        keep = plan["sections"][0]
+        assert keep["positive_local_styles"] == []
+        assert keep["lines"] == []
+
+    def test_empty_keep_ranges_are_skipped(self):
+        """Zero-length keep ranges (e.g. repaint starting at 0ms) are omitted."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 0), (10_000, 20_000)],
+            regenerate_range=(0, 10_000),
+            prompt="new intro",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert "source_from" not in sections[0]
+        assert sections[1]["source_from"]["range"] == {"start_ms": 10_000, "end_ms": 20_000}
+
+    def test_keep_range_at_exactly_section_max_stays_one_chunk(self):
+        """A keep range of exactly 120s produces a single section, not two."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 120_000)],
+            regenerate_range=(120_000, 130_000),
+            prompt="outro",
+        )
+
+        keep_sections = [s for s in plan["sections"] if "source_from" in s]
+        assert len(keep_sections) == 1
+        assert keep_sections[0]["duration_ms"] == 120_000
+
+    def test_long_keep_range_is_split_into_chunks(self):
+        """Keep ranges longer than 120s are split into <=120s chunks (all >=3s)."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 250_000)],
+            regenerate_range=(250_000, 260_000),
+            prompt="outro",
+        )
+
+        keep_sections = [s for s in plan["sections"] if "source_from" in s]
+        assert len(keep_sections) == 3
+        # Chunks tile the original range contiguously.
+        assert keep_sections[0]["source_from"]["range"]["start_ms"] == 0
+        assert keep_sections[-1]["source_from"]["range"]["end_ms"] == 250_000
+        for i in range(len(keep_sections) - 1):
+            assert (
+                keep_sections[i]["source_from"]["range"]["end_ms"]
+                == keep_sections[i + 1]["source_from"]["range"]["start_ms"]
+            )
+        for section in keep_sections:
+            assert 3_000 <= section["duration_ms"] <= 120_000
+            rng = section["source_from"]["range"]
+            assert section["duration_ms"] == rng["end_ms"] - rng["start_ms"]
+
+    def test_too_short_keep_range_raises(self):
+        """A keep range shorter than 3s raises ElevenLabsError with guidance."""
+        with pytest.raises(ElevenLabsError, match="(?i)3"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 1_000)],
+                regenerate_range=(1_000, 10_000),
+                prompt="solo",
+            )
+
+    def test_too_short_regenerate_range_raises(self):
+        """A regenerate range shorter than 3s raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="(?i)3"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(10_000, 11_000),
+                prompt="blip",
+            )
+
+    def test_too_long_regenerate_range_raises(self):
+        """A regenerate range longer than 120s raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="120"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(10_000, 140_000),
+                prompt="megasolo",
+            )
+
+    def test_inverted_regenerate_range_raises(self):
+        """A regenerate range with start >= end raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(20_000, 20_000),
+                prompt="nothing",
+            )
+
+    def test_total_duration_over_track_limit_raises(self):
+        """A plan totalling more than 600s (the track limit) raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="600"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 590_000), (605_000, 660_000)],
+                regenerate_range=(590_000, 605_000),
+                prompt="midsection",
+            )
+
+    def test_total_duration_at_track_limit_is_allowed(self):
+        """A plan totalling exactly 600s passes validation."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 590_000)],
+            regenerate_range=(590_000, 600_000),
+            prompt="outro",
+        )
+        assert sum(s["duration_ms"] for s in plan["sections"]) == 600_000
 
 
 @pytest.mark.integration
