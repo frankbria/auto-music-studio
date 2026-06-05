@@ -804,6 +804,8 @@ class TestMashupElevenLabsBackend:
         assert result.exit_code == 1
         assert f"clip {ids[1]}" in result.output
         assert "enterprise plan" in result.output
+        # The first upload succeeded — the user is told it may have been billed.
+        assert "billed" in result.output
 
     def test_blend_is_ignored_with_warning(self, workspace_with_three_long_clips, monkeypatch):
         """--blend is ACE-Step-only; the elevenlabs path warns and proceeds."""
