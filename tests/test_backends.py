@@ -60,6 +60,20 @@ class TestCapabilities:
             ensure_supports("elevenlabs", "midi")
 
 
+class TestIssue98Capabilities:
+    """Capability entries added by #98 (ElevenLabs inpainting: repaint/extend)."""
+
+    def test_repaint_supported_by_both_engines(self):
+        assert supports("ace-step", "repaint")
+        assert supports("elevenlabs", "repaint")
+        assert supports("auto", "repaint")
+
+    def test_extend_supported_by_both_engines(self):
+        assert supports("ace-step", "extend")
+        assert supports("elevenlabs", "extend")
+        assert supports("auto", "extend")
+
+
 class TestIssue96Capabilities:
     """Capability entries added by #96 (ElevenLabs first-class generate/compose)."""
 
