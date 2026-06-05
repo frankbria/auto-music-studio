@@ -2488,14 +2488,20 @@ def _extend_via_elevenlabs(
         console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
         raise typer.Exit(code=1)
 
-    prompt = source.style_tags or source.title or "continue the song"
+    # --style is an override: when given, it alone shapes the new section —
+    # blending in the source's old style tags would send contradictory
+    # directions to the model.
+    if style:
+        prompt, section_style = "continue the song", style
+    else:
+        prompt, section_style = source.style_tags or source.title or "continue the song", None
     keep_ranges = [(0, from_ms)]
     regenerate_range = (from_ms, from_ms + duration_ms)
 
     # Validate the plan shape before uploading — uploads are priced like a
     # generation, so range errors must fail before any credits are spent.
     try:
-        build_inpaint_plan("pending-upload", keep_ranges, regenerate_range, prompt, style, lyrics)
+        build_inpaint_plan("pending-upload", keep_ranges, regenerate_range, prompt, section_style, lyrics)
     except ElevenLabsError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(code=1)
@@ -2504,7 +2510,7 @@ def _extend_via_elevenlabs(
     try:
         with console.status("[bold green]Uploading source clip to ElevenLabs…[/bold green]", spinner="dots"):
             song_id = el_client.upload_for_inpainting(source.file_path)
-        plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, style, lyrics)
+        plan = build_inpaint_plan(song_id, keep_ranges, regenerate_range, prompt, section_style, lyrics)
         with console.status("[bold green]Extending via ElevenLabs…[/bold green]", spinner="dots"):
             data = el_client.generate_from_plan(plan)
     except ElevenLabsError as exc:

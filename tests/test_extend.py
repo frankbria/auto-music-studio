@@ -468,6 +468,25 @@ class TestExtendElevenLabsBackend:
         new_section = el.generate_from_plan.call_args.args[0]["sections"][-1]
         assert "epic strings" in new_section["positive_local_styles"]
         assert new_section["lines"] == ["new line one", "new line two"]
+        # --style is an override: the source's old style tags must not be
+        # blended in, or the section gets contradictory directions.
+        assert "ambient" not in new_section["positive_local_styles"]
+
+    def test_source_style_shapes_the_new_section_without_override(self, workspace_with_long_clip, monkeypatch):
+        """Without --style, the source's style tags describe the new section."""
+        ws, clip_id, src_wav = workspace_with_long_clip
+        _el_config(monkeypatch)
+        el = _make_elevenlabs_client_mock()
+
+        with patch("acemusic.cli.ElevenLabsClient", return_value=el):
+            result = runner.invoke(
+                app,
+                ["extend", str(clip_id), "--duration", "5s", "--backend", "elevenlabs"],
+            )
+
+        assert result.exit_code == 0, result.output
+        new_section = el.generate_from_plan.call_args.args[0]["sections"][-1]
+        assert "ambient" in new_section["positive_local_styles"]
 
     def test_too_short_extension_fails_before_upload(self, workspace_with_long_clip, monkeypatch):
         """--duration under 3s exits with guidance without spending an upload."""
