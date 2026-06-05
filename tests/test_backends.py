@@ -74,6 +74,15 @@ class TestIssue98Capabilities:
         assert supports("auto", "extend")
 
 
+class TestIssue99Capabilities:
+    """Capability entry added by #99 (ElevenLabs mashup)."""
+
+    def test_mashup_supported_by_both_engines(self):
+        assert supports("ace-step", "mashup")
+        assert supports("elevenlabs", "mashup")
+        assert supports("auto", "mashup")
+
+
 class TestIssue96Capabilities:
     """Capability entries added by #96 (ElevenLabs first-class generate/compose)."""
 
