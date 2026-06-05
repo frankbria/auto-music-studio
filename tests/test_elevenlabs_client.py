@@ -15,6 +15,7 @@ from acemusic.elevenlabs_client import (
     ELEVENLABS_STEM_LABELS,
     ElevenLabsClient,
     ElevenLabsError,
+    build_inpaint_plan,
 )
 
 FAKE_MP3 = b"ID3" + b"\x00" * 100  # minimal fake MP3 bytes
@@ -712,6 +713,192 @@ class TestElevenLabsClientUploadForInpainting:
 
         with pytest.raises(ElevenLabsError):
             client.upload_for_inpainting(tmp_path / "does-not-exist.wav")
+
+
+class TestBuildInpaintPlan:
+    """Tests for build_inpaint_plan() (issue #98)."""
+
+    def test_repaint_plan_has_keep_regen_keep_sections_in_order(self):
+        """A mid-clip repaint yields keep / regenerate / keep sections chronologically."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000), (20_000, 30_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="add a guitar solo",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 3
+        # keep before
+        assert sections[0]["source_from"] == {
+            "song_id": "song-1",
+            "range": {"start_ms": 0, "end_ms": 10_000},
+        }
+        assert sections[0]["duration_ms"] == 10_000
+        # regenerate (no source_from)
+        assert "source_from" not in sections[1]
+        assert sections[1]["duration_ms"] == 10_000
+        assert "add a guitar solo" in sections[1]["positive_local_styles"]
+        # keep after
+        assert sections[2]["source_from"] == {
+            "song_id": "song-1",
+            "range": {"start_ms": 20_000, "end_ms": 30_000},
+        }
+
+    def test_plan_has_required_top_level_and_section_fields(self):
+        """Every section carries the fields required by the MusicPrompt schema."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="new outro",
+        )
+
+        assert plan["positive_global_styles"] == []
+        assert plan["negative_global_styles"] == []
+        for section in plan["sections"]:
+            for field in (
+                "section_name",
+                "positive_local_styles",
+                "negative_local_styles",
+                "duration_ms",
+                "lines",
+            ):
+                assert field in section, field
+
+    def test_extend_plan_appends_new_section(self):
+        """An extend (no trailing keep) yields keep + new section."""
+        plan = build_inpaint_plan(
+            song_id="song-2",
+            keep_ranges=[(0, 30_000)],
+            regenerate_range=(30_000, 45_000),
+            prompt="epic finale",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert sections[0]["source_from"]["range"] == {"start_ms": 0, "end_ms": 30_000}
+        assert "source_from" not in sections[1]
+        assert sections[1]["duration_ms"] == 15_000
+
+    def test_style_descriptors_are_added_to_regenerate_section(self):
+        """Comma-separated style descriptors land in positive_local_styles."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="bridge",
+            style="dark synthwave, heavy bass",
+        )
+
+        regen = plan["sections"][-1]
+        assert "dark synthwave" in regen["positive_local_styles"]
+        assert "heavy bass" in regen["positive_local_styles"]
+
+    def test_lyrics_are_split_into_lines(self):
+        """Lyrics text becomes the regenerate section's lines (blank lines dropped)."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="verse",
+            lyrics="first line\n\nsecond line\n",
+        )
+
+        regen = plan["sections"][-1]
+        assert regen["lines"] == ["first line", "second line"]
+
+    def test_keep_sections_have_no_lyrics_or_styles(self):
+        """Keep sections carry empty styles and lines."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 10_000)],
+            regenerate_range=(10_000, 20_000),
+            prompt="verse",
+            lyrics="la la la",
+        )
+
+        keep = plan["sections"][0]
+        assert keep["positive_local_styles"] == []
+        assert keep["lines"] == []
+
+    def test_empty_keep_ranges_are_skipped(self):
+        """Zero-length keep ranges (e.g. repaint starting at 0ms) are omitted."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 0), (10_000, 20_000)],
+            regenerate_range=(0, 10_000),
+            prompt="new intro",
+        )
+
+        sections = plan["sections"]
+        assert len(sections) == 2
+        assert "source_from" not in sections[0]
+        assert sections[1]["source_from"]["range"] == {"start_ms": 10_000, "end_ms": 20_000}
+
+    def test_long_keep_range_is_split_into_chunks(self):
+        """Keep ranges longer than 120s are split into <=120s chunks (all >=3s)."""
+        plan = build_inpaint_plan(
+            song_id="song-1",
+            keep_ranges=[(0, 250_000)],
+            regenerate_range=(250_000, 260_000),
+            prompt="outro",
+        )
+
+        keep_sections = [s for s in plan["sections"] if "source_from" in s]
+        assert len(keep_sections) == 3
+        # Chunks tile the original range contiguously.
+        assert keep_sections[0]["source_from"]["range"]["start_ms"] == 0
+        assert keep_sections[-1]["source_from"]["range"]["end_ms"] == 250_000
+        for i in range(len(keep_sections) - 1):
+            assert (
+                keep_sections[i]["source_from"]["range"]["end_ms"]
+                == keep_sections[i + 1]["source_from"]["range"]["start_ms"]
+            )
+        for section in keep_sections:
+            assert 3_000 <= section["duration_ms"] <= 120_000
+            rng = section["source_from"]["range"]
+            assert section["duration_ms"] == rng["end_ms"] - rng["start_ms"]
+
+    def test_too_short_keep_range_raises(self):
+        """A keep range shorter than 3s raises ElevenLabsError with guidance."""
+        with pytest.raises(ElevenLabsError, match="(?i)3"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 1_000)],
+                regenerate_range=(1_000, 10_000),
+                prompt="solo",
+            )
+
+    def test_too_short_regenerate_range_raises(self):
+        """A regenerate range shorter than 3s raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="(?i)3"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(10_000, 11_000),
+                prompt="blip",
+            )
+
+    def test_too_long_regenerate_range_raises(self):
+        """A regenerate range longer than 120s raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError, match="120"):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(10_000, 140_000),
+                prompt="megasolo",
+            )
+
+    def test_inverted_regenerate_range_raises(self):
+        """A regenerate range with start >= end raises ElevenLabsError."""
+        with pytest.raises(ElevenLabsError):
+            build_inpaint_plan(
+                song_id="song-1",
+                keep_ranges=[(0, 10_000)],
+                regenerate_range=(20_000, 20_000),
+                prompt="nothing",
+            )
 
 
 @pytest.mark.integration
