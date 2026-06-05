@@ -35,7 +35,7 @@ from acemusic.audio import (
     remaster_audio,
     time_stretch_audio,
 )
-from acemusic.backends import BackendError, resolve_backend
+from acemusic.backends import BackendError, ensure_supports, resolve_backend
 from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
 from acemusic.config import load_config
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
@@ -4155,6 +4155,7 @@ def mashup(
     config = load_config()
     try:
         effective_backend = resolve_backend(backend, config.backend)
+        ensure_supports(effective_backend, "mashup")
     except BackendError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)

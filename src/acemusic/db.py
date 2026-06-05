@@ -57,12 +57,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """)
     conn.commit()
-    # Migration: databases created before #99 lack parent_clip_ids. ALTER is
-    # cheap and idempotent thanks to the PRAGMA check.
     clip_columns = [row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()]
-    if "parent_clip_ids" not in clip_columns:
-        conn.execute("ALTER TABLE clips ADD COLUMN parent_clip_ids TEXT")
-        conn.commit()
+    _migrate_clips_schema(conn, existing_columns=clip_columns)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS presets (
             id               INTEGER PRIMARY KEY,
@@ -88,6 +84,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         )
         """)
     conn.commit()
+
+
+def _migrate_clips_schema(conn: sqlite3.Connection, existing_columns: list[str]) -> None:
+    """Add columns introduced after a database was created (#99: parent_clip_ids).
+
+    The PRAGMA check makes re-runs cheap, but a concurrent process can add the
+    column between the check and the ALTER (TOCTOU), so a duplicate-column
+    error is tolerated rather than aborting startup.
+    """
+    if "parent_clip_ids" not in existing_columns:
+        try:
+            conn.execute("ALTER TABLE clips ADD COLUMN parent_clip_ids TEXT")
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
 
 # ---------------------------------------------------------------------------

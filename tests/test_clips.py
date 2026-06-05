@@ -210,6 +210,22 @@ class TestParentClipIds:
             conn.close()
             assert "parent_clip_ids" in cols
 
+    def test_migration_tolerates_concurrent_duplicate_column(self, isolated_db):
+        """A racing process adding the column between check and ALTER is tolerated.
+
+        Simulates the TOCTOU window by handing the migration a stale column
+        list that misses parent_clip_ids even though the DB already has it.
+        """
+        import acemusic.db as _db
+
+        conn = _db.get_db()  # fully migrated: column exists
+        try:
+            _db._migrate_clips_schema(conn, existing_columns=[])  # stale view → duplicate ALTER
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(clips)").fetchall()]
+            assert "parent_clip_ids" in cols
+        finally:
+            conn.close()
+
 
 # ---------------------------------------------------------------------------
 # DB layer: CRUD
