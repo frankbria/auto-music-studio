@@ -90,9 +90,7 @@ def build_inpaint_plan(
     regen_start, regen_end = regenerate_range
     regen_duration = regen_end - regen_start
     if regen_duration <= 0:
-        raise ElevenLabsError(
-            f"Invalid regenerate range [{regen_start}ms, {regen_end}ms]: start must be before end."
-        )
+        raise ElevenLabsError(f"Invalid regenerate range [{regen_start}ms, {regen_end}ms]: start must be before end.")
     if regen_duration < SECTION_MIN_MS:
         raise ElevenLabsError(
             f"Regenerate range is {regen_duration}ms but ElevenLabs sections must be at least "
