@@ -267,7 +267,7 @@ class TestRouteProtectionPattern:
     @pytest.fixture
     async def protected_client(self, settings):
         app = create_app(settings)
-        router = APIRouter(prefix="/secret", dependencies=[Depends(get_current_user)])
+        router = APIRouter(prefix="/secret")
 
         @router.get("")
         def secret(user: CurrentUser = Depends(get_current_user)) -> dict:

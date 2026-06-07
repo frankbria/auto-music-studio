@@ -99,7 +99,6 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
     """Complete the OAuth flow: validate state, exchange code, upsert user, mint tokens."""
     settings = _settings(request)
 
-    # 1. CSRF: validate the signed state for this provider (400 on any failure).
     try:
         oauth.validate_state(body.state, provider, settings)
     except UnknownProviderError as exc:
@@ -107,7 +106,6 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
     except OAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OAuth state.") from exc
 
-    # 2. Exchange the code with the provider (502 on upstream failure; no leakage).
     try:
         info = await oauth.exchange_code_for_user(provider, body.code, settings)
     except UnknownProviderError as exc:
@@ -118,7 +116,6 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
             detail=f"OAuth exchange with {provider!r} failed.",
         ) from exc
 
-    # 3. Upsert the user by (oauth_provider, oauth_id).
     user = await User.find_one(User.oauth_provider == info.provider, User.oauth_id == info.oauth_id)
     if user is None:
         user = User(
@@ -134,7 +131,6 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
         user.updated_at = datetime.now(timezone.utc)
         await user.save()
 
-    # 4. Mint + persist tokens.
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     await services.store_refresh_token(user.id, refresh, expires_at)
@@ -168,7 +164,6 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Rotate: revoke the presented token before issuing a replacement.
     await services.revoke_refresh_token(body.refresh_token)
     access, new_refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)

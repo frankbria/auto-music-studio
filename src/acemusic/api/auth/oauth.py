@@ -164,7 +164,6 @@ def _normalize_userinfo(provider: str, data: dict) -> OAuthUserInfo:
             email=data["email"],
             name=data.get("name") or data.get("email", ""),
         )
-    # discord
     name = data.get("global_name") or data.get("username") or data.get("email", "")
     return OAuthUserInfo(
         provider="discord",
