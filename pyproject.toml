@@ -94,3 +94,8 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires a live external service (deselect with -m 'not integration')",
 ]
+
+[dependency-groups]
+dev = [
+    "respx>=0.23.1",
+]
