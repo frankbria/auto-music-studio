@@ -172,7 +172,7 @@ class TestCallback:
         # No account is created on an unverified address.
         assert await User.find_one(User.email == "unverified@example.com") is None
 
-    async def test_same_email_via_second_provider_links_no_duplicate(self, client, settings, monkeypatch):
+    async def test_same_email_via_second_provider_rejected_409(self, client, settings, monkeypatch):
         # First login via Google creates the account.
         _fake_exchange(
             monkeypatch,
@@ -185,7 +185,9 @@ class TestCallback:
             json={"code": "c1", "state": _valid_state("google", settings)},
         )
         assert first.status_code == 200
-        # Same person logs in via Discord with the same verified email.
+        # Same email arrives via a second provider (Discord). The single-identity
+        # model can't link it yet, so it is rejected deterministically (409) —
+        # not 500'd on the unique index and not silently duplicated.
         _fake_exchange(
             monkeypatch,
             OAuthUserInfo(
@@ -196,18 +198,16 @@ class TestCallback:
             f"{API_V1_PREFIX}/auth/callback/discord",
             json={"code": "c2", "state": _valid_state("discord", settings)},
         )
-        # No 500 from the unique-email index; a valid JWT is returned.
-        assert second.status_code == 200
-        claims = decode_access_token(second.json()["access_token"], settings)
-        assert claims["email"] == "shared@example.com"
-        # The two logins resolve to a single account, not a duplicate.
+        assert second.status_code == 409
+        # No duplicate account was created for the shared email.
         users = await User.find(User.email == "shared@example.com").to_list()
         assert len(users) == 1
-        assert claims["sub"] == str(users[0].id)
+        assert users[0].oauth_provider == "google"
 
     async def test_existing_identity_email_change_to_owned_address_does_not_500(self, client, settings, monkeypatch):
         """If a provider reports an email already owned by another account, the
-        update path links to the owner instead of violating the unique index."""
+        known-identity update keeps its current email rather than violating the
+        unique index — the user still logs into their own account."""
         # Account A owns alice@example.com (via Google).
         _fake_exchange(
             monkeypatch,
@@ -220,7 +220,6 @@ class TestCallback:
             json={"code": "cA", "state": _valid_state("google", settings)},
         )
         assert a.status_code == 200
-        account_a_id = decode_access_token(a.json()["access_token"], settings)["sub"]
 
         # Account B exists (via Discord) with a different email.
         _fake_exchange(
@@ -232,6 +231,7 @@ class TestCallback:
             json={"code": "cB", "state": _valid_state("discord", settings)},
         )
         assert b.status_code == 200
+        account_b_id = decode_access_token(b.json()["access_token"], settings)["sub"]
 
         # B logs in again, but Discord now reports alice@example.com (already A's).
         _fake_exchange(
@@ -244,9 +244,12 @@ class TestCallback:
             f"{API_V1_PREFIX}/auth/callback/discord",
             json={"code": "cB2", "state": _valid_state("discord", settings)},
         )
-        # No duplicate-key 500; the session resolves to A (the email owner).
+        # No duplicate-key 500; B logs into its own account, email unchanged.
         assert resp.status_code == 200
-        assert decode_access_token(resp.json()["access_token"], settings)["sub"] == account_a_id
+        assert decode_access_token(resp.json()["access_token"], settings)["sub"] == account_b_id
+        b_user = await User.find_one(User.oauth_provider == "discord", User.oauth_id == "d-B")
+        assert b_user.email == "bob@example.com"
+        # A still uniquely owns alice@example.com.
         assert len(await User.find(User.email == "alice@example.com").to_list()) == 1
 
     async def test_bad_state_returns_400(self, client, settings, monkeypatch):

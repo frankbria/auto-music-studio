@@ -166,26 +166,42 @@ def _coerce_bool(value: object) -> bool:
     return str(value).strip().lower() == "true"
 
 
+def _require_field(provider: str, data: dict, key: str) -> object:
+    """Return ``data[key]`` or raise :class:`OAuthError` if the provider omitted it.
+
+    Provider userinfo is an upstream surface we don't control (e.g. Discord may
+    return an account with no ``email``); a missing required field is an upstream
+    failure (→ 502), not a server bug (→ 500).
+    """
+    value = data.get(key)
+    if value is None or value == "":
+        raise OAuthError(f"OAuth provider {provider!r} returned no {key!r}.")
+    return value
+
+
 def _normalize_userinfo(provider: str, data: dict) -> OAuthUserInfo:
     """Map a provider's userinfo payload to :class:`OAuthUserInfo`.
 
     The provider's email-verification signal is preserved (Google's
     ``email_verified``, Discord's ``verified``) so the caller can refuse to
-    create or link accounts on an unverified address.
+    create or link accounts on an unverified address. A payload missing a
+    required identity field raises :class:`OAuthError` rather than ``KeyError``.
     """
     if provider == "google":
+        email = _require_field("google", data, "email")
         return OAuthUserInfo(
             provider="google",
-            oauth_id=str(data["sub"]),
-            email=data["email"],
-            name=data.get("name") or data.get("email", ""),
+            oauth_id=str(_require_field("google", data, "sub")),
+            email=str(email),
+            name=data.get("name") or str(email),
             email_verified=_coerce_bool(data.get("email_verified")),
         )
-    name = data.get("global_name") or data.get("username") or data.get("email", "")
+    email = _require_field("discord", data, "email")
+    name = data.get("global_name") or data.get("username") or str(email)
     return OAuthUserInfo(
         provider="discord",
-        oauth_id=str(data["id"]),
-        email=data["email"],
+        oauth_id=str(_require_field("discord", data, "id")),
+        email=str(email),
         name=name,
         email_verified=_coerce_bool(data.get("verified")),
     )

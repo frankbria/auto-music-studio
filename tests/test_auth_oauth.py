@@ -194,6 +194,21 @@ class TestExchangeCodeForUser:
         with pytest.raises(OAuthError):
             await exchange_code_for_user("google", "code", settings)
 
+    @respx.mock
+    async def test_userinfo_missing_email_raises_oauth_error(self):
+        """A provider userinfo payload missing a required field is an upstream
+        failure (OAuthError → 502), not an uncaught KeyError → 500."""
+        settings = _settings()
+        respx.post(DISCORD_TOKEN_URL).mock(
+            return_value=httpx.Response(200, json={"access_token": "tok", "token_type": "Bearer"})
+        )
+        # Discord can return an account with no email.
+        respx.get(DISCORD_USERINFO_URL).mock(
+            return_value=httpx.Response(200, json={"id": "d-noemail", "username": "noemail"})
+        )
+        with pytest.raises(OAuthError):
+            await exchange_code_for_user("discord", "code", settings)
+
     async def test_exchange_unknown_provider_raises(self):
         with pytest.raises(UnknownProviderError):
             await exchange_code_for_user("github", "code", _settings())

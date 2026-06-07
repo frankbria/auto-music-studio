@@ -126,35 +126,31 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
 
     user = await User.find_one(User.oauth_provider == info.provider, User.oauth_id == info.oauth_id)
     if user is None:
-        # No account for this provider identity. Email is unique-indexed, so a
-        # blind insert would 500 when the (verified) address is already
-        # registered via another provider — authenticate that account instead.
-        # The User model holds a single OAuth identity; multi-identity linking
-        # is future work (see PR "Known limitations").
-        existing = await User.find_one(User.email == info.email)
-        if existing is not None:
-            user = existing
-        else:
-            user = User(
-                email=info.email,
-                name=info.name,
-                oauth_provider=info.provider,
-                oauth_id=info.oauth_id,
+        # No account for this provider identity. The User model holds a single
+        # OAuth identity and email is unique-indexed, so if the verified address
+        # is already registered under another provider we cannot link a second
+        # identity yet: reject deterministically (409) rather than 500 on the
+        # index or silently create a duplicate. Multi-identity linking is tracked
+        # as future work (see PR "Known limitations").
+        if await User.find_one(User.email == info.email) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This email is already registered with a different sign-in provider.",
             )
-            await user.insert()
+        user = User(
+            email=info.email,
+            name=info.name,
+            oauth_provider=info.provider,
+            oauth_id=info.oauth_id,
+        )
+        await user.insert()
     else:
-        # The provider may report a changed email. If that address already
-        # belongs to a different account, overwriting would violate the unique
-        # email index (500); authenticate the email owner instead, matching the
-        # link-by-email behavior of the insert path above.
-        # The provider may report a changed email. If that address already
-        # belongs to a different account, overwriting would violate the unique
-        # email index (500); authenticate the email owner instead, matching the
-        # link-by-email behavior of the insert path above.
+        # Known identity. The provider may report a changed email; only apply it
+        # when the address is free (or already ours), otherwise keep our current
+        # email so the user still logs into their own account without violating
+        # the unique index.
         email_owner = await User.find_one(User.email == info.email)
-        if email_owner is not None and email_owner.id != user.id:
-            user = email_owner
-        else:
+        if email_owner is None or email_owner.id == user.id:
             user.email = info.email
             user.name = info.name
             user.updated_at = datetime.now(timezone.utc)
