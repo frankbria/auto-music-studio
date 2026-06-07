@@ -133,7 +133,12 @@ class TestExchangeCodeForUser:
         respx.get(GOOGLE_USERINFO_URL).mock(
             return_value=httpx.Response(
                 200,
-                json={"sub": "google-sub-123", "email": "alice@example.com", "name": "Alice"},
+                json={
+                    "sub": "google-sub-123",
+                    "email": "alice@example.com",
+                    "name": "Alice",
+                    "email_verified": True,
+                },
             )
         )
         info = await exchange_code_for_user("google", "auth-code", settings)
@@ -142,6 +147,8 @@ class TestExchangeCodeForUser:
         assert info.oauth_id == "google-sub-123"
         assert info.email == "alice@example.com"
         assert info.name == "Alice"
+        # email_verified drives the 403 gate, so assert the mapping explicitly.
+        assert info.email_verified is True
 
     @respx.mock
     async def test_discord_happy_path(self):
@@ -152,7 +159,13 @@ class TestExchangeCodeForUser:
         respx.get(DISCORD_USERINFO_URL).mock(
             return_value=httpx.Response(
                 200,
-                json={"id": "discord-id-456", "email": "bob@example.com", "username": "bob", "global_name": "Bob"},
+                json={
+                    "id": "discord-id-456",
+                    "email": "bob@example.com",
+                    "username": "bob",
+                    "global_name": "Bob",
+                    "verified": True,
+                },
             )
         )
         info = await exchange_code_for_user("discord", "auth-code", settings)
@@ -161,6 +174,8 @@ class TestExchangeCodeForUser:
         assert info.email == "bob@example.com"
         # global_name preferred when present
         assert info.name == "Bob"
+        # Discord's verification flag ("verified") maps to email_verified.
+        assert info.email_verified is True
 
     @respx.mock
     async def test_discord_falls_back_to_username(self):

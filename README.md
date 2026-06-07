@@ -33,6 +33,24 @@ Set `ACEMUSIC_API_MONGODB_URL` (defaults to `mongodb://localhost:27017`); use an
 Atlas `mongodb+srv://…` string for staging/production. Local integration tests
 run only against a local MongoDB (`uv run pytest -m integration`).
 
+### Authentication
+
+Sign-in uses **OAuth2** (Google and Discord) and issues a short-lived JWT access
+token plus a rotating, single-use refresh token. All `/api/v1` routes except
+`/health` and `/auth/*` require an `Authorization: Bearer <access_token>` header.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/auth/login/{provider}` | Returns the provider authorization URL |
+| `POST /api/v1/auth/callback/{provider}` | Exchanges the code, upserts the user, mints tokens |
+| `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
+| `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
+
+Configure provider credentials and the JWT signing secret via the
+`ACEMUSIC_API_GOOGLE_*`, `ACEMUSIC_API_DISCORD_*`, and `ACEMUSIC_API_JWT_SECRET_KEY`
+environment variables (see `.env.example`). `jwt_algorithm` is restricted to the
+HMAC family (`HS256`/`HS384`/`HS512`).
+
 ## Stem separation backends
 
 `acemusic stems <clip_id>` separates a clip into stems. Two engines are available
