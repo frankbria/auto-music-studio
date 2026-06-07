@@ -12,6 +12,11 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:8000"]
 
+# HMAC only: the auth layer signs with a single shared secret. Allowing an
+# asymmetric alg (e.g. RS256) without a key would fail at token-mint time rather
+# than startup, so the allowed set is restricted to the HS family.
+ALLOWED_JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
+
 
 class ApiSettings(BaseSettings):
     """Runtime configuration for the FastAPI service.
@@ -38,6 +43,35 @@ class ApiSettings(BaseSettings):
     mongodb_min_pool_size: int = Field(default=10, ge=0)
     mongodb_max_pool_size: int = Field(default=100, ge=1)
     mongodb_server_selection_timeout_ms: int = Field(default=5000, ge=1)
+
+    # OAuth2 providers (US-8.3). Credentials are issued per-provider in their
+    # developer consoles; left unset until configured via the environment. A
+    # provider is only usable once its three vars (id/secret/redirect_uri) are set.
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str | None = None
+    discord_client_id: str | None = None
+    discord_client_secret: str | None = None
+    discord_redirect_uri: str | None = None
+
+    # JWT signing (US-8.3). ``jwt_secret_key`` has no default on purpose: the auth
+    # layer raises a clear error if a token is minted while it is unset, rather
+    # than silently signing with a guessable key. Lifetimes follow the common
+    # short-access / longer-refresh pattern.
+    jwt_secret_key: str | None = None
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = Field(default=15, ge=1)
+    refresh_token_expire_days: int = Field(default=7, ge=1)
+
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def _check_jwt_algorithm(cls, value: str) -> str:
+        """Reject non-HMAC algorithms at parse time, not at token-mint time."""
+        if value not in ALLOWED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"jwt_algorithm {value!r} is not supported; " f"choose one of {', '.join(ALLOWED_JWT_ALGORITHMS)}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _check_pool_bounds(self) -> "ApiSettings":

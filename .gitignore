@@ -53,3 +53,6 @@ htmlcov/
 
 # Beads local issue tracking (local-only, not shared)
 .beads/
+
+# Per-session planning scratch (local-only)
+tasks/
