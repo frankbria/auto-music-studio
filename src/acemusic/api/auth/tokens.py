@@ -81,7 +81,12 @@ def decode_access_token(token: str, settings: ApiSettings) -> dict:
     """
     secret = _require_secret(settings)
     try:
-        payload = jwt.decode(token, secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["sub", "exp", "type"]},
+        )
     except jwt.ExpiredSignatureError as exc:
         raise TokenExpiredError("Access token has expired.") from exc
     except jwt.PyJWTError as exc:

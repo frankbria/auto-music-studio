@@ -81,8 +81,12 @@ def get_current_user_optional(
 
     Anonymous access (no header) yields ``None``. An *explicitly supplied* but
     invalid/expired token is still a 401 — it signals a broken client, not an
-    intentional anonymous request.
+    intentional anonymous request. This includes a malformed or wrong-scheme
+    ``Authorization`` header, which ``HTTPBearer(auto_error=False)`` reports as
+    ``None`` credentials: we distinguish it from "no header" and reject it.
     """
     if credentials is None:
+        if request.headers.get("Authorization"):
+            raise _unauthorized("Invalid access token.")
         return None
     return _user_from_token(credentials.credentials, _settings(request))

@@ -5,6 +5,8 @@ The API uses pydantic-settings (separate from the CLI's dataclass config) with t
 ergonomic ``.env`` configuration.
 """
 
+import pytest
+
 from acemusic.api.settings import ApiSettings
 
 
@@ -49,6 +51,25 @@ class TestApiSettings:
 
 class TestAuthSettings:
     """OAuth2 / JWT configuration (US-8.3)."""
+
+    _AUTH_ENV_VARS = (
+        "ACEMUSIC_API_GOOGLE_CLIENT_ID",
+        "ACEMUSIC_API_GOOGLE_CLIENT_SECRET",
+        "ACEMUSIC_API_GOOGLE_REDIRECT_URI",
+        "ACEMUSIC_API_DISCORD_CLIENT_ID",
+        "ACEMUSIC_API_DISCORD_CLIENT_SECRET",
+        "ACEMUSIC_API_DISCORD_REDIRECT_URI",
+        "ACEMUSIC_API_JWT_SECRET_KEY",
+        "ACEMUSIC_API_JWT_ALGORITHM",
+        "ACEMUSIC_API_ACCESS_TOKEN_EXPIRE_MINUTES",
+        "ACEMUSIC_API_REFRESH_TOKEN_EXPIRE_DAYS",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _clear_auth_env(self, monkeypatch):
+        """Default-value assertions must not depend on the host's exported env."""
+        for key in self._AUTH_ENV_VARS:
+            monkeypatch.delenv(key, raising=False)
 
     def test_oauth_credentials_default_to_none(self):
         """Provider credentials are unset until configured via the environment."""
@@ -95,3 +116,16 @@ class TestAuthSettings:
         assert settings.jwt_algorithm == "HS512"
         assert settings.access_token_expire_minutes == 30
         assert settings.refresh_token_expire_days == 14
+
+    @pytest.mark.parametrize("algorithm", ["HS256", "HS384", "HS512"])
+    def test_jwt_algorithm_allows_hmac_family(self, monkeypatch, algorithm):
+        """The supported HMAC algorithms are accepted."""
+        monkeypatch.setenv("ACEMUSIC_API_JWT_ALGORITHM", algorithm)
+        assert ApiSettings(_env_file=None).jwt_algorithm == algorithm
+
+    @pytest.mark.parametrize("algorithm", ["RS256", "none", "ES256", "hs256"])
+    def test_jwt_algorithm_rejects_non_hmac(self, monkeypatch, algorithm):
+        """Asymmetric/unknown algorithms are rejected at parse time, not mint time."""
+        monkeypatch.setenv("ACEMUSIC_API_JWT_ALGORITHM", algorithm)
+        with pytest.raises(ValueError, match="jwt_algorithm"):
+            ApiSettings(_env_file=None)

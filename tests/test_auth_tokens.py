@@ -4,6 +4,8 @@ Pure functions — no database, no integration marker. ``freezegun`` drives the
 clock so expiry is deterministic.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import jwt
 import pytest
 from freezegun import freeze_time
@@ -72,9 +74,23 @@ class TestDecodeAccessToken:
 
     def test_wrong_type_rejected(self):
         settings = _settings()
-        # Hand-mint a token whose type is not "access" (e.g. a refresh-style token).
+        # Hand-mint a well-formed token whose type is not "access" (e.g. a
+        # refresh-style token); it carries all required claims so it reaches and
+        # fails the type check specifically.
         forged = jwt.encode(
-            {"sub": "u", "type": "refresh"},
+            {"sub": "u", "type": "refresh", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+            settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
+        )
+        with pytest.raises(TokenInvalidError):
+            decode_access_token(forged, settings)
+
+    def test_missing_required_claim_rejected(self):
+        """A signed token missing a required claim (``sub``) is rejected as invalid,
+        not allowed through to raise a downstream KeyError/500."""
+        settings = _settings()
+        forged = jwt.encode(
+            {"type": "access", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
             settings.jwt_secret_key,
             algorithm=settings.jwt_algorithm,
         )

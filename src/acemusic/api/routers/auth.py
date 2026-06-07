@@ -143,10 +143,22 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
             )
             await user.insert()
     else:
-        user.email = info.email
-        user.name = info.name
-        user.updated_at = datetime.now(timezone.utc)
-        await user.save()
+        # The provider may report a changed email. If that address already
+        # belongs to a different account, overwriting would violate the unique
+        # email index (500); authenticate the email owner instead, matching the
+        # link-by-email behavior of the insert path above.
+        # The provider may report a changed email. If that address already
+        # belongs to a different account, overwriting would violate the unique
+        # email index (500); authenticate the email owner instead, matching the
+        # link-by-email behavior of the insert path above.
+        email_owner = await User.find_one(User.email == info.email)
+        if email_owner is not None and email_owner.id != user.id:
+            user = email_owner
+        else:
+            user.email = info.email
+            user.name = info.name
+            user.updated_at = datetime.now(timezone.utc)
+            await user.save()
 
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)

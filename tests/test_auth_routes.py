@@ -205,6 +205,50 @@ class TestCallback:
         assert len(users) == 1
         assert claims["sub"] == str(users[0].id)
 
+    async def test_existing_identity_email_change_to_owned_address_does_not_500(self, client, settings, monkeypatch):
+        """If a provider reports an email already owned by another account, the
+        update path links to the owner instead of violating the unique index."""
+        # Account A owns alice@example.com (via Google).
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="google", oauth_id="g-A", email="alice@example.com", name="Alice", email_verified=True
+            ),
+        )
+        a = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "cA", "state": _valid_state("google", settings)},
+        )
+        assert a.status_code == 200
+        account_a_id = decode_access_token(a.json()["access_token"], settings)["sub"]
+
+        # Account B exists (via Discord) with a different email.
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="discord", oauth_id="d-B", email="bob@example.com", name="Bob", email_verified=True),
+        )
+        b = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/discord",
+            json={"code": "cB", "state": _valid_state("discord", settings)},
+        )
+        assert b.status_code == 200
+
+        # B logs in again, but Discord now reports alice@example.com (already A's).
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="discord", oauth_id="d-B", email="alice@example.com", name="Bob", email_verified=True
+            ),
+        )
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/discord",
+            json={"code": "cB2", "state": _valid_state("discord", settings)},
+        )
+        # No duplicate-key 500; the session resolves to A (the email owner).
+        assert resp.status_code == 200
+        assert decode_access_token(resp.json()["access_token"], settings)["sub"] == account_a_id
+        assert len(await User.find(User.email == "alice@example.com").to_list()) == 1
+
     async def test_bad_state_returns_400(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,

@@ -3,6 +3,7 @@
 Run against a real local MongoDB via the ``mongo_db`` fixture (no mocking).
 """
 
+import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
 
@@ -74,12 +75,18 @@ class TestConsume:
         assert await consume_refresh_token(raw) is None
         assert await validate_refresh_token(raw) is None
 
-    async def test_consume_is_single_use_under_repeat(self, mongo_db):
-        """Single-use rotation: only the first consume of a token wins."""
+    async def test_consume_is_single_use_under_concurrency(self, mongo_db):
+        """Single-use rotation holds under *concurrent* consumes: exactly one wins.
+
+        Dispatching the consumes with ``asyncio.gather`` (rather than awaiting
+        them serially) exercises the atomicity contract the implementation
+        claims — the ``find_one_and_update`` on ``revoked: False`` must let only
+        the first consumer flip the flag and receive the document.
+        """
         user_id = PydanticObjectId()
         raw = create_refresh_token()
         await store_refresh_token(user_id, raw, _future())
-        results = [await consume_refresh_token(raw) for _ in range(5)]
+        results = await asyncio.gather(*(consume_refresh_token(raw) for _ in range(5)))
         assert results.count(user_id) == 1
         assert results.count(None) == 4
 

@@ -122,6 +122,12 @@ class TestGetCurrentUserOptional:
         resp = client.get("/optional", headers={"Authorization": "Bearer not.a.jwt"})
         assert resp.status_code == 401
 
+    def test_malformed_or_wrong_scheme_header_returns_401(self, client):
+        """A wrong-scheme header (which HTTPBearer reports as no credentials) is
+        rejected, not silently treated as anonymous."""
+        resp = client.get("/optional", headers={"Authorization": "Basic Zm9vOmJhcg=="})
+        assert resp.status_code == 401
+
     def test_valid_token_authenticates(self, client, settings):
         token = _token(settings)
         resp = client.get("/optional", headers={"Authorization": f"Bearer {token}"})
