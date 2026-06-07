@@ -59,6 +59,7 @@ dev = [
     "black",
     "uvicorn[standard]>=0.29",
     "freezegun",
+    "respx>=0.23.1",
 ]
 audio-ml-midi = [
     "basic-pitch>=0.3.0",
@@ -93,9 +94,4 @@ bdd_features_base_dir = "tests/features"
 asyncio_mode = "auto"
 markers = [
     "integration: requires a live external service (deselect with -m 'not integration')",
-]
-
-[dependency-groups]
-dev = [
-    "respx>=0.23.1",
 ]

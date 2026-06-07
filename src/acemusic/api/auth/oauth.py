@@ -63,6 +63,7 @@ class OAuthUserInfo:
     oauth_id: str
     email: str
     name: str
+    email_verified: bool
 
 
 def _provider_config(provider: str, settings: ApiSettings) -> dict:
@@ -139,9 +140,12 @@ def get_authorization_url(provider: str, settings: ApiSettings) -> str:
 def validate_state(state: str, provider: str, settings: ApiSettings) -> bool:
     """Verify the signed CSRF ``state`` for ``provider``.
 
-    Returns ``True`` on success; raises :class:`OAuthError` if the state is
-    expired, tampered, the wrong token type, or for a different provider.
+    Returns ``True`` on success; raises :class:`UnknownProviderError` for an
+    unsupported provider, or :class:`OAuthError` if the state is expired,
+    tampered, the wrong token type, or for a different provider.
     """
+    if provider not in SUPPORTED_PROVIDERS:
+        raise UnknownProviderError(f"Unsupported OAuth provider: {provider!r}")
     secret = _require_secret(settings)
     try:
         payload = jwt.decode(state, secret, algorithms=[settings.jwt_algorithm])
@@ -155,14 +159,27 @@ def validate_state(state: str, provider: str, settings: ApiSettings) -> bool:
     return True
 
 
+def _coerce_bool(value: object) -> bool:
+    """Coerce a provider's verification flag (bool or "true"/"false" string)."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
 def _normalize_userinfo(provider: str, data: dict) -> OAuthUserInfo:
-    """Map a provider's userinfo payload to :class:`OAuthUserInfo`."""
+    """Map a provider's userinfo payload to :class:`OAuthUserInfo`.
+
+    The provider's email-verification signal is preserved (Google's
+    ``email_verified``, Discord's ``verified``) so the caller can refuse to
+    create or link accounts on an unverified address.
+    """
     if provider == "google":
         return OAuthUserInfo(
             provider="google",
             oauth_id=str(data["sub"]),
             email=data["email"],
             name=data.get("name") or data.get("email", ""),
+            email_verified=_coerce_bool(data.get("email_verified")),
         )
     name = data.get("global_name") or data.get("username") or data.get("email", "")
     return OAuthUserInfo(
@@ -170,6 +187,7 @@ def _normalize_userinfo(provider: str, data: dict) -> OAuthUserInfo:
         oauth_id=str(data["id"]),
         email=data["email"],
         name=name,
+        email_verified=_coerce_bool(data.get("verified")),
     )
 
 

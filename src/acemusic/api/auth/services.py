@@ -54,6 +54,33 @@ async def validate_refresh_token(raw_token: str) -> PydanticObjectId | None:
     return token.user_id
 
 
+async def consume_refresh_token(raw_token: str) -> PydanticObjectId | None:
+    """Atomically revoke a valid token and return its owner, else ``None``.
+
+    The revoke-and-return is a single ``find_one_and_update`` filtered on
+    ``revoked: False``, so two concurrent refreshes on the same token cannot both
+    succeed — only the first flips ``revoked`` and gets the document; the loser
+    matches nothing and gets ``None``. This preserves single-use rotation even
+    under duplicate/concurrent requests, which a separate validate-then-revoke
+    cannot guarantee. An expired (but still un-revoked) token is consumed and
+    rejected as ``None``.
+    """
+    collection = RefreshToken.get_pymongo_collection()
+    doc = await collection.find_one_and_update(
+        {"token_hash": _hash_token(raw_token), "revoked": False},
+        {"$set": {"revoked": True}},
+    )
+    if doc is None:
+        return None
+
+    expires_at = doc["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        return None
+    return doc["user_id"]
+
+
 async def revoke_refresh_token(raw_token: str) -> bool:
     """Revoke a single token. Return ``True`` if a token was revoked."""
     token = await RefreshToken.find_one(RefreshToken.token_hash == _hash_token(raw_token))

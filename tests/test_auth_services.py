@@ -10,6 +10,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from acemusic.api.auth.services import (
+    consume_refresh_token,
     revoke_all_user_tokens,
     revoke_refresh_token,
     store_refresh_token,
@@ -61,6 +62,35 @@ class TestStoreAndValidate:
         await store_refresh_token(user_id, raw, _future())
         assert await revoke_refresh_token(raw) is True
         assert await validate_refresh_token(raw) is None
+
+
+class TestConsume:
+    async def test_consume_returns_user_id_then_revokes(self, mongo_db):
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        await store_refresh_token(user_id, raw, _future())
+        assert await consume_refresh_token(raw) == user_id
+        # The token is now revoked — a second consume yields nothing.
+        assert await consume_refresh_token(raw) is None
+        assert await validate_refresh_token(raw) is None
+
+    async def test_consume_is_single_use_under_repeat(self, mongo_db):
+        """Single-use rotation: only the first consume of a token wins."""
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        await store_refresh_token(user_id, raw, _future())
+        results = [await consume_refresh_token(raw) for _ in range(5)]
+        assert results.count(user_id) == 1
+        assert results.count(None) == 4
+
+    async def test_consume_unknown_returns_none(self, mongo_db):
+        assert await consume_refresh_token("never-stored") is None
+
+    async def test_consume_expired_returns_none(self, mongo_db):
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        await store_refresh_token(user_id, raw, _past())
+        assert await consume_refresh_token(raw) is None
 
 
 class TestRevoke:

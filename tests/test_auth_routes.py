@@ -97,7 +97,9 @@ class TestCallback:
     async def test_google_callback_creates_user_and_returns_jwt(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="google", oauth_id="g-1", email="alice@example.com", name="Alice"),
+            OAuthUserInfo(
+                provider="google", oauth_id="g-1", email="alice@example.com", name="Alice", email_verified=True
+            ),
         )
         state = _valid_state("google", settings)
         resp = await client.post(
@@ -119,7 +121,7 @@ class TestCallback:
     async def test_discord_callback_creates_user_and_returns_jwt(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="discord", oauth_id="d-1", email="bob@example.com", name="Bob"),
+            OAuthUserInfo(provider="discord", oauth_id="d-1", email="bob@example.com", name="Bob", email_verified=True),
         )
         state = _valid_state("discord", settings)
         resp = await client.post(
@@ -135,7 +137,7 @@ class TestCallback:
     async def test_existing_user_is_updated_not_duplicated(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="google", oauth_id="g-9", email="old@example.com", name="Old"),
+            OAuthUserInfo(provider="google", oauth_id="g-9", email="old@example.com", name="Old", email_verified=True),
         )
         await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
@@ -143,7 +145,7 @@ class TestCallback:
         )
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="google", oauth_id="g-9", email="new@example.com", name="New"),
+            OAuthUserInfo(provider="google", oauth_id="g-9", email="new@example.com", name="New", email_verified=True),
         )
         await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
@@ -155,10 +157,58 @@ class TestCallback:
         assert users[0].name == "New"
         assert users[0].updated_at is not None
 
+    async def test_unverified_email_returns_403(self, client, settings, monkeypatch):
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="google", oauth_id="g-u", email="unverified@example.com", name="U", email_verified=False
+            ),
+        )
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": _valid_state("google", settings)},
+        )
+        assert resp.status_code == 403
+        # No account is created on an unverified address.
+        assert await User.find_one(User.email == "unverified@example.com") is None
+
+    async def test_same_email_via_second_provider_links_no_duplicate(self, client, settings, monkeypatch):
+        # First login via Google creates the account.
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="google", oauth_id="g-shared", email="shared@example.com", name="Shared", email_verified=True
+            ),
+        )
+        first = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "c1", "state": _valid_state("google", settings)},
+        )
+        assert first.status_code == 200
+        # Same person logs in via Discord with the same verified email.
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="discord", oauth_id="d-shared", email="shared@example.com", name="Shared", email_verified=True
+            ),
+        )
+        second = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/discord",
+            json={"code": "c2", "state": _valid_state("discord", settings)},
+        )
+        # No 500 from the unique-email index; a valid JWT is returned.
+        assert second.status_code == 200
+        claims = decode_access_token(second.json()["access_token"], settings)
+        assert claims["email"] == "shared@example.com"
+        # The two logins resolve to a single account, not a duplicate.
+        users = await User.find(User.email == "shared@example.com").to_list()
+        assert len(users) == 1
+        assert claims["sub"] == str(users[0].id)
+
     async def test_bad_state_returns_400(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="google", oauth_id="g-2", email="x@example.com", name="X"),
+            OAuthUserInfo(provider="google", oauth_id="g-2", email="x@example.com", name="X", email_verified=True),
         )
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
@@ -169,7 +219,7 @@ class TestCallback:
     async def test_expired_state_returns_400(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
-            OAuthUserInfo(provider="google", oauth_id="g-3", email="y@example.com", name="Y"),
+            OAuthUserInfo(provider="google", oauth_id="g-3", email="y@example.com", name="Y", email_verified=True),
         )
         now = datetime.now(timezone.utc)
         expired = jwt.encode(
@@ -203,7 +253,7 @@ class TestCallback:
 async def _login(client, settings, monkeypatch, *, oauth_id="r-1", email="r@example.com") -> dict:
     _fake_exchange(
         monkeypatch,
-        OAuthUserInfo(provider="google", oauth_id=oauth_id, email=email, name="R"),
+        OAuthUserInfo(provider="google", oauth_id=oauth_id, email=email, name="R", email_verified=True),
     )
     resp = await client.post(
         f"{API_V1_PREFIX}/auth/callback/google",

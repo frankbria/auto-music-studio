@@ -116,15 +116,32 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
             detail=f"OAuth exchange with {provider!r} failed.",
         ) from exc
 
+    if not info.email_verified:
+        # An unverified address could belong to anyone; creating or linking an
+        # account on it would let an attacker squat or hijack a victim's email.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The OAuth provider has not verified this email address.",
+        )
+
     user = await User.find_one(User.oauth_provider == info.provider, User.oauth_id == info.oauth_id)
     if user is None:
-        user = User(
-            email=info.email,
-            name=info.name,
-            oauth_provider=info.provider,
-            oauth_id=info.oauth_id,
-        )
-        await user.insert()
+        # No account for this provider identity. Email is unique-indexed, so a
+        # blind insert would 500 when the (verified) address is already
+        # registered via another provider — authenticate that account instead.
+        # The User model holds a single OAuth identity; multi-identity linking
+        # is future work (see PR "Known limitations").
+        existing = await User.find_one(User.email == info.email)
+        if existing is not None:
+            user = existing
+        else:
+            user = User(
+                email=info.email,
+                name=info.name,
+                oauth_provider=info.provider,
+                oauth_id=info.oauth_id,
+            )
+            await user.insert()
     else:
         user.email = info.email
         user.name = info.name
@@ -144,10 +161,12 @@ async def callback(provider: str, body: CallbackRequest, request: Request) -> To
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
-    """Rotate a refresh token: validate, revoke the old, issue a new pair."""
+    """Rotate a refresh token: atomically consume the old, issue a new pair."""
     settings = _settings(request)
 
-    user_id = await services.validate_refresh_token(body.refresh_token)
+    # Atomic consume (validate + revoke in one op) so a duplicated/concurrent
+    # refresh can't mint two token pairs from the same single-use token.
+    user_id = await services.consume_refresh_token(body.refresh_token)
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -164,7 +183,6 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    await services.revoke_refresh_token(body.refresh_token)
     access, new_refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     await services.store_refresh_token(user.id, new_refresh, expires_at)
