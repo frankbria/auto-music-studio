@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from acemusic import __version__
 
 from . import database
-from .routers import health
+from .routers import auth, health
 from .settings import ApiSettings
 
 API_V1_PREFIX = "/api/v1"
@@ -85,7 +85,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Public routers: health is a liveness probe and auth is the login surface,
+    # so neither is gated. Every FUTURE router that exposes user data (workspaces,
+    # clips, jobs, …) MUST protect itself with
+    # ``APIRouter(..., dependencies=[Depends(get_current_user)])`` (see
+    # acemusic.api.auth.dependencies) so all /api/v1 routes except health and auth
+    # require a valid Bearer access token.
     app.include_router(health.router, prefix=API_V1_PREFIX)
+    app.include_router(auth.router, prefix=API_V1_PREFIX)
 
     return app
 
