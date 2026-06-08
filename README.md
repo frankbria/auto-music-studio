@@ -46,6 +46,15 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
 | `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
 
+### User profile
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/users/me` | Returns the authenticated user's full profile |
+| `PATCH /api/v1/users/me` | Partially updates the profile (`display_name`, `handle`, `bio`, `style_tags`); unset fields are left unchanged |
+
+Profile fields: `display_name` (user-editable name, 1–100 chars), `handle` (unique public identifier — alphanumeric + hyphens, 3–30 chars, must start and end with a letter or number; currently case-sensitive), `bio` (up to 500 chars), `style_tags` (up to 20 tags, 30 chars each). A duplicate handle returns `409 Conflict`; an invalid handle or unknown PATCH key returns `422`.
+
 The OAuth `state` is bound to the initiating client to prevent login CSRF /
 session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
 nonce, and `/callback` requires that cookie to match the signed `state`. **The
