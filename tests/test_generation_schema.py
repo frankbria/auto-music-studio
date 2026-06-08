@@ -121,6 +121,15 @@ class TestNumericRangeValidation:
         with pytest.raises(ValidationError):
             GenerationRequest(prompt="x", inference_steps=bad_steps)
 
+    def test_inference_steps_over_ceiling_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", inference_steps=1_000_000)
+
+    def test_seed_beyond_int64_rejected(self):
+        # Out of MongoDB's signed-64-bit range → 422, not a persistence-time 500.
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", seed=2**63)
+
 
 class TestEnumValidation:
     def test_invalid_format_rejected(self):
@@ -170,6 +179,10 @@ class TestTextLengthLimits:
     def test_oversized_key_rejected(self):
         with pytest.raises(ValidationError):
             GenerationRequest(prompt="x", key="k" * 51)
+
+    def test_oversized_vocal_language_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", vocal_language="l" * 101)
 
     def test_long_but_valid_lyrics_accepted(self):
         req = GenerationRequest(prompt="ballad", lyrics="verse line\n" * 200)

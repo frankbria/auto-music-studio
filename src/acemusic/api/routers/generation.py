@@ -20,6 +20,7 @@ from acemusic.constants import (
     BPM_MIN,
     DURATION_MAX,
     DURATION_MIN,
+    INFERENCE_STEPS_MAX,
     STYLE_INFLUENCE_MAX,
     STYLE_INFLUENCE_MIN,
     VALID_FORMATS,
@@ -28,6 +29,12 @@ from acemusic.constants import (
     WEIRDNESS_MAX,
     WEIRDNESS_MIN,
 )
+
+# Seeds are opaque values forwarded to the backend; bound them to MongoDB's
+# signed 64-bit integer range so an oversized value is a clean 422 rather than a
+# BSON-encoding 500 when the job is persisted.
+_SEED_MIN = -(2**63)
+_SEED_MAX = 2**63 - 1
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..services import generation as generation_service, users as user_service
@@ -74,8 +81,8 @@ class GenerationRequest(BaseModel):
     # Upper bound and positivity hold for every mode; the 30s song floor is
     # enforced mode-aware below so short sounds (one-shots, loops) are allowed.
     duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
-    seed: int | None = None
-    inference_steps: Annotated[int, Field(gt=0)] | None = None
+    seed: Annotated[int, Field(ge=_SEED_MIN, le=_SEED_MAX)] | None = None
+    inference_steps: Annotated[int, Field(gt=0, le=INFERENCE_STEPS_MAX)] | None = None
     model: str | None = None
     weirdness: Annotated[int, Field(ge=WEIRDNESS_MIN, le=WEIRDNESS_MAX)] = 50
     style_influence: Annotated[int, Field(ge=STYLE_INFLUENCE_MIN, le=STYLE_INFLUENCE_MAX)] = 50

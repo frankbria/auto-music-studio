@@ -44,10 +44,14 @@ from acemusic.constants import (
     DURATION_MAX as _DURATION_MAX,
     DURATION_MIN as _DURATION_MIN,
     MODELS,
+    STYLE_INFLUENCE_MAX as _STYLE_INFLUENCE_MAX,
+    STYLE_INFLUENCE_MIN as _STYLE_INFLUENCE_MIN,
     VALID_FORMATS as _VALID_FORMATS,
     VALID_MODELS,
     VALID_SOUND_TYPES as _VALID_SOUND_TYPES,
     VALID_TIME_SIGNATURES as _VALID_TIME_SIGNATURES,
+    WEIRDNESS_MAX as _WEIRDNESS_MAX,
+    WEIRDNESS_MIN as _WEIRDNESS_MIN,
 )
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
 from acemusic.db import (
@@ -491,12 +495,17 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    if not (0 <= weirdness <= 100):
-        console.print(f"[red]Invalid --weirdness: {weirdness}. Must be between 0 and 100.[/red]")
+    if not (_WEIRDNESS_MIN <= weirdness <= _WEIRDNESS_MAX):
+        console.print(
+            f"[red]Invalid --weirdness: {weirdness}. Must be between {_WEIRDNESS_MIN} and {_WEIRDNESS_MAX}.[/red]"
+        )
         raise typer.Exit(code=1)
 
-    if not (0 <= style_influence <= 100):
-        console.print(f"[red]Invalid --style-influence: {style_influence}. Must be between 0 and 100.[/red]")
+    if not (_STYLE_INFLUENCE_MIN <= style_influence <= _STYLE_INFLUENCE_MAX):
+        console.print(
+            f"[red]Invalid --style-influence: {style_influence}. "
+            f"Must be between {_STYLE_INFLUENCE_MIN} and {_STYLE_INFLUENCE_MAX}.[/red]"
+        )
         raise typer.Exit(code=1)
 
     parsed_bpm: int | str | None = None

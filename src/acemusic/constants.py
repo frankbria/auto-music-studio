@@ -70,6 +70,10 @@ WEIRDNESS_MAX = 100
 STYLE_INFLUENCE_MIN = 0
 STYLE_INFLUENCE_MAX = 100
 
+# Diffusion inference steps. Models run 8-64 steps (see MODELS); this is a
+# generous upper guard so an API request cannot persist an absurd value.
+INFERENCE_STEPS_MAX = 500
+
 # Creation modes and the sound sub-types valid when ``mode == "sound"``.
 VALID_MODES: frozenset[str] = frozenset({"song", "sound"})
 VALID_SOUND_TYPES: frozenset[str] = frozenset({"one-shot", "loop"})
