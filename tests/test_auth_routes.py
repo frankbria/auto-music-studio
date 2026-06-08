@@ -22,7 +22,12 @@ from fastapi import APIRouter, Depends
 
 from acemusic.api.auth import oauth as oauth_module
 from acemusic.api.auth.dependencies import CurrentUser, get_current_user
-from acemusic.api.auth.oauth import OAuthError, OAuthUserInfo, get_authorization_url
+from acemusic.api.auth.oauth import (
+    STATE_COOKIE_PREFIX,
+    OAuthError,
+    OAuthUserInfo,
+    build_authorization_request,
+)
 from acemusic.api.auth.tokens import create_access_token, decode_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import User
@@ -42,6 +47,9 @@ def _auth_settings(mongo_settings: ApiSettings) -> ApiSettings:
             "discord_client_id": "discord-id",
             "discord_client_secret": "discord-secret",
             "discord_redirect_uri": "https://app.example.com/api/v1/auth/callback/discord",
+            # The test client speaks plain HTTP, so a Secure cookie would never be
+            # sent back; disable Secure here (production default stays True).
+            "oauth_cookie_secure": False,
         }
     )
 
@@ -63,9 +71,18 @@ async def client(settings):
         yield ac
 
 
-def _valid_state(provider: str, settings: ApiSettings) -> str:
-    url = get_authorization_url(provider, settings)
-    return parse_qs(urlparse(url).query)["state"][0]
+def _bind_state(client: httpx.AsyncClient, provider: str, settings: ApiSettings) -> str:
+    """Mint a client-bound state and place its nonce in the client's cookie jar.
+
+    Mirrors what ``POST /login/{provider}`` does (issue #110): the callback only
+    succeeds when the request carries the cookie nonce matching the state. The
+    real login-sets-the-cookie path is covered separately by
+    ``TestLogin::test_login_sets_state_cookie`` and ``TestCallback::
+    test_end_to_end_login_then_callback``.
+    """
+    req = build_authorization_request(provider, settings)
+    client.cookies.set(req.cookie_name, req.state_nonce)
+    return parse_qs(urlparse(req.url).query)["state"][0]
 
 
 def _fake_exchange(monkeypatch, info: OAuthUserInfo) -> None:
@@ -92,8 +109,123 @@ class TestLogin:
         resp = await client.post(f"{API_V1_PREFIX}/auth/login/github")
         assert resp.status_code == 400
 
+    async def test_login_sets_client_binding_state_cookie(self, client):
+        """Login must set the HttpOnly+SameSite state cookie that binds the flow
+        to this client (issue #110)."""
+        resp = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie")
+        assert set_cookie is not None
+        assert STATE_COOKIE_PREFIX in set_cookie
+        assert "httponly" in set_cookie.lower()
+        assert "samesite=lax" in set_cookie.lower()
+        # Secure is disabled only because the test client speaks HTTP; the
+        # production default (oauth_cookie_secure=True) would add it.
+        assert "secure" not in set_cookie.lower()
+        assert any(name.startswith(STATE_COOKIE_PREFIX) for name in client.cookies.keys())
+
+    async def test_login_cookie_honors_samesite_none_for_split_origin(self, settings):
+        """A split-origin deployment can emit SameSite=None; Secure so the cookie
+        is sent on the cross-site callback (issue #110 contract)."""
+        split = settings.model_copy(update={"oauth_cookie_samesite": "none", "oauth_cookie_secure": True})
+        async with _async_client(create_app(split)) as ac:
+            resp = await ac.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert resp.status_code == 200
+        set_cookie = (resp.headers.get("set-cookie") or "").lower()
+        assert "samesite=none" in set_cookie
+        assert "secure" in set_cookie
+
 
 class TestCallback:
+    async def test_end_to_end_login_then_callback(self, client, settings, monkeypatch):
+        """The cookie set by the real /login flows to /callback and validates."""
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="e2e-1", email="e2e@example.com", name="E", email_verified=True),
+        )
+        login = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert login.status_code == 200
+        state = parse_qs(urlparse(login.json()["authorization_url"]).query)["state"][0]
+        # The state cookie is now in the client jar from login; reuse the client.
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": state},
+        )
+        assert resp.status_code == 200
+
+    async def test_callback_without_state_cookie_returns_400(self, client, settings, monkeypatch):
+        """A state replayed without the initiating client's cookie is rejected
+        (login CSRF / session fixation, issue #110)."""
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="csrf-1", email="v@example.com", name="V", email_verified=True),
+        )
+        # Mint a perfectly valid, signed state but DON'T set the matching cookie.
+        req = build_authorization_request("google", settings)
+        state = parse_qs(urlparse(req.url).query)["state"][0]
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": state},
+        )
+        assert resp.status_code == 400
+        # The victim's account is never created from a replayed state.
+        assert await User.find_one(User.email == "v@example.com") is None
+
+    async def test_callback_with_mismatched_state_cookie_returns_400(self, client, settings, monkeypatch):
+        """A state bound to one client cannot be completed with a different nonce."""
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="csrf-2", email="w@example.com", name="W", email_verified=True),
+        )
+        req = build_authorization_request("google", settings)
+        state = parse_qs(urlparse(req.url).query)["state"][0]
+        # Attacker-controlled cookie (right name, wrong value) that does not match
+        # the state's commitment.
+        client.cookies.set(req.cookie_name, "some-other-clients-nonce")
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": state},
+        )
+        assert resp.status_code == 400
+
+    async def test_callback_clears_state_cookie_on_success(self, client, settings, monkeypatch):
+        """The single-use state cookie is cleared once the callback consumes it."""
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="clr-1", email="clr@example.com", name="C", email_verified=True),
+        )
+        state = _bind_state(client, "google", settings)
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": state},
+        )
+        assert resp.status_code == 200
+        set_cookie = (resp.headers.get("set-cookie") or "").lower()
+        assert STATE_COOKIE_PREFIX in set_cookie
+        assert "max-age=0" in set_cookie or "expires=" in set_cookie
+
+    async def test_concurrent_logins_do_not_clobber_each_other(self, client, settings, monkeypatch):
+        """Two login flows in one browser stay independent (per-flow cookies).
+
+        Regression guard: a single shared cookie would let the second /login
+        overwrite the first flow's nonce, breaking the first callback.
+        """
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="cc-1", email="cc@example.com", name="CC", email_verified=True),
+        )
+        first = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        first_state = parse_qs(urlparse(first.json()["authorization_url"]).query)["state"][0]
+        # A second login (e.g. another tab / double-click) before the first completes.
+        second = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert second.status_code == 200
+        # The first flow still completes — its per-flow cookie was not overwritten.
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": first_state},
+        )
+        assert resp.status_code == 200
+
     async def test_google_callback_creates_user_and_returns_jwt(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
@@ -101,7 +233,7 @@ class TestCallback:
                 provider="google", oauth_id="g-1", email="alice@example.com", name="Alice", email_verified=True
             ),
         )
-        state = _valid_state("google", settings)
+        state = _bind_state(client, "google", settings)
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
             json={"code": "auth-code", "state": state},
@@ -123,7 +255,7 @@ class TestCallback:
             monkeypatch,
             OAuthUserInfo(provider="discord", oauth_id="d-1", email="bob@example.com", name="Bob", email_verified=True),
         )
-        state = _valid_state("discord", settings)
+        state = _bind_state(client, "discord", settings)
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/discord",
             json={"code": "auth-code", "state": state},
@@ -141,7 +273,7 @@ class TestCallback:
         )
         await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "c1", "state": _valid_state("google", settings)},
+            json={"code": "c1", "state": _bind_state(client, "google", settings)},
         )
         _fake_exchange(
             monkeypatch,
@@ -149,7 +281,7 @@ class TestCallback:
         )
         await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "c2", "state": _valid_state("google", settings)},
+            json={"code": "c2", "state": _bind_state(client, "google", settings)},
         )
         users = await User.find(User.oauth_provider == "google", User.oauth_id == "g-9").to_list()
         assert len(users) == 1
@@ -166,7 +298,7 @@ class TestCallback:
         )
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "auth-code", "state": _valid_state("google", settings)},
+            json={"code": "auth-code", "state": _bind_state(client, "google", settings)},
         )
         assert resp.status_code == 403
         # No account is created on an unverified address.
@@ -182,7 +314,7 @@ class TestCallback:
         )
         first = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "c1", "state": _valid_state("google", settings)},
+            json={"code": "c1", "state": _bind_state(client, "google", settings)},
         )
         assert first.status_code == 200
         # Same email arrives via a second provider (Discord). The single-identity
@@ -196,7 +328,7 @@ class TestCallback:
         )
         second = await client.post(
             f"{API_V1_PREFIX}/auth/callback/discord",
-            json={"code": "c2", "state": _valid_state("discord", settings)},
+            json={"code": "c2", "state": _bind_state(client, "discord", settings)},
         )
         assert second.status_code == 409
         # No duplicate account was created for the shared email.
@@ -217,7 +349,7 @@ class TestCallback:
         )
         a = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "cA", "state": _valid_state("google", settings)},
+            json={"code": "cA", "state": _bind_state(client, "google", settings)},
         )
         assert a.status_code == 200
 
@@ -228,7 +360,7 @@ class TestCallback:
         )
         b = await client.post(
             f"{API_V1_PREFIX}/auth/callback/discord",
-            json={"code": "cB", "state": _valid_state("discord", settings)},
+            json={"code": "cB", "state": _bind_state(client, "discord", settings)},
         )
         assert b.status_code == 200
         account_b_id = decode_access_token(b.json()["access_token"], settings)["sub"]
@@ -242,7 +374,7 @@ class TestCallback:
         )
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/discord",
-            json={"code": "cB2", "state": _valid_state("discord", settings)},
+            json={"code": "cB2", "state": _bind_state(client, "discord", settings)},
         )
         # No duplicate-key 500; B logs into its own account, email unchanged.
         assert resp.status_code == 200
@@ -292,7 +424,7 @@ class TestCallback:
         monkeypatch.setattr(oauth_module, "exchange_code_for_user", _boom)
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
-            json={"code": "bad", "state": _valid_state("google", settings)},
+            json={"code": "bad", "state": _bind_state(client, "google", settings)},
         )
         assert resp.status_code == 502
 
@@ -304,7 +436,7 @@ async def _login(client, settings, monkeypatch, *, oauth_id="r-1", email="r@exam
     )
     resp = await client.post(
         f"{API_V1_PREFIX}/auth/callback/google",
-        json={"code": "code", "state": _valid_state("google", settings)},
+        json={"code": "code", "state": _bind_state(client, "google", settings)},
     )
     assert resp.status_code == 200
     return resp.json()

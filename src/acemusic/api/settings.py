@@ -17,6 +17,12 @@ DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:8000"]
 # than startup, so the allowed set is restricted to the HS family.
 ALLOWED_JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
 
+# SameSite policies for the OAuth state cookie. "lax" suits a same-origin
+# deployment (frontend and API behind one origin); "none" is required for a
+# split-origin SPA so the cookie is sent on the cross-site callback (browsers
+# also require Secure in that case).
+ALLOWED_COOKIE_SAMESITE = ("lax", "strict", "none")
+
 
 class ApiSettings(BaseSettings):
     """Runtime configuration for the FastAPI service.
@@ -62,6 +68,38 @@ class ApiSettings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=15, ge=1)
     refresh_token_expire_days: int = Field(default=7, ge=1)
+
+    # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
+    # flow sets a per-client nonce cookie that the callback requires.
+    # ``oauth_cookie_secure`` marks it Secure (HTTPS-only); keep True in
+    # production, set False only for local/dev or tests over plain HTTP.
+    # ``oauth_cookie_samesite`` is "lax" for a same-origin frontend/API; a
+    # split-origin SPA must use "none" (which the browser only honours when the
+    # cookie is also Secure, i.e. over HTTPS) so the cookie is sent on the
+    # cross-site callback.
+    oauth_cookie_secure: bool = True
+    oauth_cookie_samesite: str = "lax"
+
+    @field_validator("oauth_cookie_samesite")
+    @classmethod
+    def _check_cookie_samesite(cls, value: str) -> str:
+        """Normalize and validate the SameSite policy at parse time."""
+        normalized = value.strip().lower()
+        if normalized not in ALLOWED_COOKIE_SAMESITE:
+            raise ValueError(
+                f"oauth_cookie_samesite {value!r} is not supported; "
+                f"choose one of {', '.join(ALLOWED_COOKIE_SAMESITE)}"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _samesite_none_requires_secure(self) -> "ApiSettings":
+        """SameSite=None cookies are ignored by browsers unless also Secure."""
+        if self.oauth_cookie_samesite == "none" and not self.oauth_cookie_secure:
+            raise ValueError(
+                "oauth_cookie_samesite='none' requires oauth_cookie_secure=True (browsers ignore it otherwise)."
+            )
+        return self
 
     @field_validator("jwt_algorithm")
     @classmethod

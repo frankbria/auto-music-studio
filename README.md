@@ -41,15 +41,25 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v1/auth/login/{provider}` | Returns the provider authorization URL |
-| `POST /api/v1/auth/callback/{provider}` | Exchanges the code, upserts the user, mints tokens |
+| `POST /api/v1/auth/login/{provider}` | Returns the provider authorization URL and sets the CSRF state cookie |
+| `POST /api/v1/auth/callback/{provider}` | Validates state against the cookie, exchanges the code, upserts the user, mints tokens |
 | `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
 | `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
 
+The OAuth `state` is bound to the initiating client to prevent login CSRF /
+session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
+nonce, and `/callback` requires that cookie to match the signed `state`. **The
+client must therefore preserve cookies between `/login` and `/callback`.** Use a
+same-origin frontend/API in dev (the default `SameSite=Lax` works); a split-origin
+SPA must serve over HTTPS with `ACEMUSIC_API_OAUTH_COOKIE_SAMESITE=none` and make
+credentialed requests (a cross-origin **plain-HTTP** pair cannot carry the cookie —
+a browser constraint, not a code limitation).
+
 Configure provider credentials and the JWT signing secret via the
 `ACEMUSIC_API_GOOGLE_*`, `ACEMUSIC_API_DISCORD_*`, and `ACEMUSIC_API_JWT_SECRET_KEY`
-environment variables (see `.env.example`). `jwt_algorithm` is restricted to the
-HMAC family (`HS256`/`HS384`/`HS512`).
+environment variables (see `.env.example`); cookie behavior is tuned via
+`ACEMUSIC_API_OAUTH_COOKIE_SECURE` / `ACEMUSIC_API_OAUTH_COOKIE_SAMESITE`.
+`jwt_algorithm` is restricted to the HMAC family (`HS256`/`HS384`/`HS512`).
 
 ## Stem separation backends
 
