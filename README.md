@@ -70,6 +70,16 @@ environment variables (see `.env.example`); cookie behavior is tuned via
 `ACEMUSIC_API_OAUTH_COOKIE_SECURE` / `ACEMUSIC_API_OAUTH_COOKIE_SAMESITE`.
 `jwt_algorithm` is restricted to the HMAC family (`HS256`/`HS384`/`HS512`).
 
+### Generation
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/generate` | Submits a generation request and returns a `job_id` for async tracking (HTTP 202) |
+
+The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), and `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`). The job is created with status `queued`; execution is handled asynchronously (US-9.2).
+
+Invalid parameters return 422 with field-level errors. The response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
+
 ## Stem separation backends
 
 `acemusic stems <clip_id>` separates a clip into stems. Two engines are available
