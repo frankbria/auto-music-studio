@@ -1,0 +1,169 @@
+"""Generation endpoint (US-9.1), mounted under ``/api/v1/generate``.
+
+``POST /api/v1/generate`` accepts the full creative parameter set — text-to-music
+("song") and "sound" (one-shot / loop) modes — validates it, creates a queued
+:class:`~acemusic.api.models.job.Job`, and returns a job id for async tracking.
+Actual job execution is US-9.2; this endpoint only validates and enqueues.
+
+Request/response schemas live here, matching the auth and users routers. Field
+bounds and enumerations come from :mod:`acemusic.constants` so CLI and API
+validation share one source of truth.
+"""
+
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from acemusic.constants import (
+    BPM_MAX,
+    BPM_MIN,
+    DURATION_MAX,
+    DURATION_MIN,
+    INFERENCE_STEPS_MAX,
+    STYLE_INFLUENCE_MAX,
+    STYLE_INFLUENCE_MIN,
+    VALID_FORMATS,
+    VALID_MODELS,
+    VALID_TIME_SIGNATURES,
+    WEIRDNESS_MAX,
+    WEIRDNESS_MIN,
+)
+
+# Seeds are opaque values forwarded to the backend; bound them to MongoDB's
+# signed 64-bit integer range so an oversized value is a clean 422 rather than a
+# BSON-encoding 500 when the job is persisted.
+_SEED_MIN = -(2**63)
+_SEED_MAX = 2**63 - 1
+
+from ..auth.dependencies import CurrentUser, get_current_user
+from ..services import generation as generation_service, users as user_service
+
+# Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
+# short sound is roughly fixed. These are advisory hints returned to the client.
+_SONG_BASE_SECONDS = 30
+_SOUND_BASE_SECONDS = 15
+
+# Free-text fields are persisted verbatim in ``Job.input_params`` and re-read by
+# the worker, so cap them: a single request must not be able to bloat the jobs
+# document (or approach MongoDB's 16MB cap) and turn into a 500 (same rationale
+# as the profile caps in the users router). Lyrics get the most headroom since a
+# full song's words are legitimately long.
+_PROMPT_MAX_LENGTH = 2000
+_STYLE_MAX_LENGTH = 1000
+_LYRICS_MAX_LENGTH = 5000
+_VOCAL_LANGUAGE_MAX_LENGTH = 100
+_KEY_MAX_LENGTH = 50
+
+# Router-level dependency gates every route behind a valid Bearer token, so an
+# unauthenticated request is rejected with 401 before any handler runs.
+router = APIRouter(prefix="/generate", tags=["generation"], dependencies=[Depends(get_current_user)])
+
+
+class GenerationRequest(BaseModel):
+    """The full creative parameter set for a generation request.
+
+    ``extra="forbid"`` rejects unknown keys with 422 (a client typo surfaces
+    instead of being silently dropped). Numeric ranges are enforced with
+    ``Field`` constraints; enum-like fields validate against the shared constants.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: Annotated[str, Field(min_length=1, max_length=_PROMPT_MAX_LENGTH)]
+    style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
+    lyrics: Annotated[str, Field(max_length=_LYRICS_MAX_LENGTH)] | None = None
+    vocal_language: Annotated[str, Field(max_length=_VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
+    instrumental: bool = False
+    bpm: Annotated[int, Field(ge=BPM_MIN, le=BPM_MAX)] | Literal["auto"] | None = None
+    key: Annotated[str, Field(max_length=_KEY_MAX_LENGTH)] | None = None
+    time_signature: str | None = None
+    # Upper bound and positivity hold for every mode; the 30s song floor is
+    # enforced mode-aware below so short sounds (one-shots, loops) are allowed.
+    duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
+    seed: Annotated[int, Field(ge=_SEED_MIN, le=_SEED_MAX)] | None = None
+    inference_steps: Annotated[int, Field(gt=0, le=INFERENCE_STEPS_MAX)] | None = None
+    model: str | None = None
+    weirdness: Annotated[int, Field(ge=WEIRDNESS_MIN, le=WEIRDNESS_MAX)] = 50
+    style_influence: Annotated[int, Field(ge=STYLE_INFLUENCE_MIN, le=STYLE_INFLUENCE_MAX)] = 50
+    format: str = "wav"
+    thinking: bool = False
+    mode: Literal["song", "sound"] = "song"
+    sound_type: Literal["one-shot", "loop"] | None = None
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, value: str) -> str:
+        if value not in VALID_FORMATS:
+            raise ValueError(f"format must be one of {sorted(VALID_FORMATS)}")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def _check_model(cls, value: str | None) -> str | None:
+        if value is not None and value not in VALID_MODELS:
+            raise ValueError(f"model must be one of {sorted(VALID_MODELS)}")
+        return value
+
+    @field_validator("time_signature")
+    @classmethod
+    def _check_time_signature(cls, value: str | None) -> str | None:
+        if value is not None and value not in VALID_TIME_SIGNATURES:
+            raise ValueError(f"time_signature must be one of {sorted(VALID_TIME_SIGNATURES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _check_mode_constraints(self) -> "GenerationRequest":
+        # sound_type and mode are coupled: it is required for sounds and
+        # meaningless for songs.
+        if self.mode == "sound" and self.sound_type is None:
+            raise ValueError("sound_type is required when mode is 'sound'")
+        if self.mode == "song" and self.sound_type is not None:
+            raise ValueError("sound_type must be omitted when mode is 'song'")
+        # Songs have a 30s floor (full-track generation); sounds may be short.
+        if self.mode == "song" and self.duration is not None and self.duration < DURATION_MIN:
+            raise ValueError(f"duration must be at least {DURATION_MIN}s for songs")
+        # A one-shot is a single hit with no tempo/tonal context; bpm/key apply
+        # only to loops (mirrors the CLI `sounds` command).
+        if self.sound_type == "one-shot" and (self.bpm is not None or self.key is not None):
+            raise ValueError("bpm and key are not allowed for one-shot sounds")
+        return self
+
+
+class GenerationResponse(BaseModel):
+    """The accepted-job acknowledgement returned with HTTP 202."""
+
+    job_id: str
+    status: Literal["queued"] = "queued"
+    estimated_time_seconds: int
+
+
+def estimate_seconds(request: GenerationRequest) -> int:
+    """Rough wall-clock estimate for a request, in seconds (advisory)."""
+    if request.mode == "sound":
+        return _SOUND_BASE_SECONDS
+    duration = request.duration if request.duration is not None else DURATION_MIN
+    return _SONG_BASE_SECONDS + int(duration)
+
+
+@router.post("", response_model=GenerationResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_generation(
+    request: GenerationRequest,
+    current: CurrentUser = Depends(get_current_user),
+) -> GenerationResponse:
+    """Validate the request, persist a queued job, and return its id.
+
+    Pydantic returns 422 with field-level errors for invalid bodies; the router
+    dependency returns 401 for missing/invalid tokens — both before this runs.
+    """
+    # The token is valid, but the principal may have been deleted (or carry a
+    # malformed id). Resolve the real user before writing any user-scoped records,
+    # so a stale token yields a clean 404 instead of orphaned job/workspace rows.
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    job = await generation_service.create_generation_job(
+        user_id=user.id,
+        params=request.model_dump(exclude_none=True),
+    )
+    return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))

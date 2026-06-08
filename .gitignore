@@ -46,6 +46,7 @@ __pypackages__/
 # pytest / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # ruff
@@ -54,5 +55,6 @@ htmlcov/
 # Beads local issue tracking (local-only, not shared)
 .beads/
 
-# Per-session planning scratch (local-only)
-tasks/
+# Per-session planning scratch (local-only). Anchored to the repo root so it
+# does not also ignore source packages named "tasks" (e.g. acemusic/api/tasks).
+/tasks/

@@ -38,6 +38,21 @@ from acemusic.audio import (
 from acemusic.backends import BackendError, ensure_supports, resolve_backend
 from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
 from acemusic.config import load_config
+from acemusic.constants import (
+    BPM_MAX as _BPM_MAX,
+    BPM_MIN as _BPM_MIN,
+    DURATION_MAX as _DURATION_MAX,
+    DURATION_MIN as _DURATION_MIN,
+    MODELS,
+    STYLE_INFLUENCE_MAX as _STYLE_INFLUENCE_MAX,
+    STYLE_INFLUENCE_MIN as _STYLE_INFLUENCE_MIN,
+    VALID_FORMATS as _VALID_FORMATS,
+    VALID_MODELS,
+    VALID_SOUND_TYPES as _VALID_SOUND_TYPES,
+    VALID_TIME_SIGNATURES as _VALID_TIME_SIGNATURES,
+    WEIRDNESS_MAX as _WEIRDNESS_MAX,
+    WEIRDNESS_MIN as _WEIRDNESS_MIN,
+)
 from acemusic.daw_export import build_daw_bundle, export_midi, export_stems, project_slug
 from acemusic.db import (
     create_clip,
@@ -97,48 +112,9 @@ presets_app = typer.Typer(help="Manage generation presets")
 app.add_typer(presets_app, name="preset")
 console = Console()
 
-# ACE-Step model registry (US-3.4).
-# Keys map directly to the --model flag value and the API's model field.
-# All fields are rendered in `acemusic models` output.
-MODELS: dict[str, dict[str, str]] = {
-    "turbo": {
-        "description": "Fastest generation; best for quick drafts and iteration",
-        "vram": "~2.4GB",
-        "steps": "8",
-        "dit_size": "2B",
-    },
-    "base": {
-        "description": "Balanced quality/speed; general-purpose generation",
-        "vram": "~2.4GB",
-        "steps": "32-64",
-        "dit_size": "2B",
-    },
-    "sft": {
-        "description": "Fine-tuned on supervised data; improved coherence",
-        "vram": "~2.4GB",
-        "steps": "32-64",
-        "dit_size": "2B",
-    },
-    "xl-base": {
-        "description": "Highest quality; best for professional-grade output",
-        "vram": "~8GB",
-        "steps": "32-64",
-        "dit_size": "4B",
-    },
-    "xl-sft": {
-        "description": "XL fine-tuned; premium quality with improved coherence",
-        "vram": "~8GB",
-        "steps": "32-64",
-        "dit_size": "4B",
-    },
-    "xl-turbo": {
-        "description": "Fast XL generation; high quality with reduced steps",
-        "vram": "~8GB",
-        "steps": "8",
-        "dit_size": "4B",
-    },
-}
-VALID_MODELS: frozenset[str] = frozenset(MODELS.keys())
+# Generation-parameter bounds, the ACE-Step model registry, and related enums
+# now live in ``acemusic.constants`` (imported above) so the CLI and the
+# platform API validate against one source of truth.
 
 # Mashup blend strategies (US-6.4).
 VALID_BLEND_MODES: frozenset[str] = frozenset({"layered", "sequential", "ai-guided"})
@@ -399,12 +375,6 @@ def _poll_until_complete(
         time.sleep(poll_interval)
 
 
-_VALID_TIME_SIGNATURES = {"4/4", "3/4", "6/8", "5/4", "7/8"}
-_BPM_MIN = 60
-_BPM_MAX = 180
-_DURATION_MIN = 30.0
-_DURATION_MAX = 240.0
-
 # ISO 639-1 codes → English names for ElevenLabs prompt injection (the API has
 # no language field; vocal language is steered through the prompt text).
 _LANGUAGE_NAMES: dict[str, str] = {
@@ -515,7 +485,6 @@ def generate(
     ),
 ) -> None:
     """Generate music from a text prompt using the ACE-Step model or ElevenLabs cloud."""
-    _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
     if format not in _VALID_FORMATS:
         console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
         raise typer.Exit(code=1)
@@ -526,12 +495,17 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    if not (0 <= weirdness <= 100):
-        console.print(f"[red]Invalid --weirdness: {weirdness}. Must be between 0 and 100.[/red]")
+    if not (_WEIRDNESS_MIN <= weirdness <= _WEIRDNESS_MAX):
+        console.print(
+            f"[red]Invalid --weirdness: {weirdness}. Must be between {_WEIRDNESS_MIN} and {_WEIRDNESS_MAX}.[/red]"
+        )
         raise typer.Exit(code=1)
 
-    if not (0 <= style_influence <= 100):
-        console.print(f"[red]Invalid --style-influence: {style_influence}. Must be between 0 and 100.[/red]")
+    if not (_STYLE_INFLUENCE_MIN <= style_influence <= _STYLE_INFLUENCE_MAX):
+        console.print(
+            f"[red]Invalid --style-influence: {style_influence}. "
+            f"Must be between {_STYLE_INFLUENCE_MIN} and {_STYLE_INFLUENCE_MAX}.[/red]"
+        )
         raise typer.Exit(code=1)
 
     parsed_bpm: int | str | None = None
@@ -997,9 +971,6 @@ def _generate_via_elevenlabs(
         console.print(f"  [green]✓[/green] {dest.resolve()}  ({dur_str})")
 
 
-_VALID_SOUND_TYPES = {"one-shot", "loop"}
-
-
 @app.command()
 def sounds(
     prompt: str = typer.Argument(..., help="Text description of the sound to generate."),
@@ -1027,7 +998,6 @@ def sounds(
     ),
 ) -> None:
     """Generate short audio samples (loops or one-shots) via ACE-Step or ElevenLabs."""
-    _VALID_FORMATS = {"wav", "flac", "mp3", "aac", "opus"}
     if format not in _VALID_FORMATS:
         console.print(f"[red]Invalid --format: {format!r}. Allowed values: {', '.join(sorted(_VALID_FORMATS))}[/red]")
         raise typer.Exit(code=1)

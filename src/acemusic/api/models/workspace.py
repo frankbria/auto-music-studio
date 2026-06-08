@@ -20,4 +20,16 @@ class Workspace(Document):
 
     class Settings:
         name = "workspaces"
-        indexes = [IndexModel([("user_id", ASCENDING)])]
+        indexes = [
+            IndexModel([("user_id", ASCENDING)]),
+            # At most one default workspace per user. The partial filter scopes
+            # uniqueness to ``is_default == True`` so a user may still hold many
+            # non-default workspaces. This makes the lazy "get-or-create default"
+            # in the generation service race-safe: a concurrent double-insert
+            # fails the unique index instead of creating two defaults.
+            IndexModel(
+                [("user_id", ASCENDING), ("is_default", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"is_default": True},
+            ),
+        ]
