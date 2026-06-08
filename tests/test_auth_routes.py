@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends
 from acemusic.api.auth import oauth as oauth_module
 from acemusic.api.auth.dependencies import CurrentUser, get_current_user
 from acemusic.api.auth.oauth import (
-    STATE_COOKIE_NAME,
+    STATE_COOKIE_PREFIX,
     OAuthError,
     OAuthUserInfo,
     build_authorization_request,
@@ -81,7 +81,7 @@ def _bind_state(client: httpx.AsyncClient, provider: str, settings: ApiSettings)
     test_end_to_end_login_then_callback``.
     """
     req = build_authorization_request(provider, settings)
-    client.cookies.set(STATE_COOKIE_NAME, req.state_nonce)
+    client.cookies.set(req.cookie_name, req.state_nonce)
     return parse_qs(urlparse(req.url).query)["state"][0]
 
 
@@ -116,13 +116,13 @@ class TestLogin:
         assert resp.status_code == 200
         set_cookie = resp.headers.get("set-cookie")
         assert set_cookie is not None
-        assert STATE_COOKIE_NAME in set_cookie
+        assert STATE_COOKIE_PREFIX in set_cookie
         assert "httponly" in set_cookie.lower()
         assert "samesite=lax" in set_cookie.lower()
         # Secure is disabled only because the test client speaks HTTP; the
         # production default (oauth_cookie_secure=True) would add it.
         assert "secure" not in set_cookie.lower()
-        assert client.cookies.get(STATE_COOKIE_NAME)
+        assert any(name.startswith(STATE_COOKIE_PREFIX) for name in client.cookies.keys())
 
 
 class TestCallback:
@@ -168,8 +168,9 @@ class TestCallback:
         )
         req = build_authorization_request("google", settings)
         state = parse_qs(urlparse(req.url).query)["state"][0]
-        # Attacker-controlled cookie that does not match the state's commitment.
-        client.cookies.set(STATE_COOKIE_NAME, "some-other-clients-nonce")
+        # Attacker-controlled cookie (right name, wrong value) that does not match
+        # the state's commitment.
+        client.cookies.set(req.cookie_name, "some-other-clients-nonce")
         resp = await client.post(
             f"{API_V1_PREFIX}/auth/callback/google",
             json={"code": "auth-code", "state": state},
@@ -189,8 +190,30 @@ class TestCallback:
         )
         assert resp.status_code == 200
         set_cookie = (resp.headers.get("set-cookie") or "").lower()
-        assert STATE_COOKIE_NAME in set_cookie
+        assert STATE_COOKIE_PREFIX in set_cookie
         assert "max-age=0" in set_cookie or "expires=" in set_cookie
+
+    async def test_concurrent_logins_do_not_clobber_each_other(self, client, settings, monkeypatch):
+        """Two login flows in one browser stay independent (per-flow cookies).
+
+        Regression guard: a single shared cookie would let the second /login
+        overwrite the first flow's nonce, breaking the first callback.
+        """
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="cc-1", email="cc@example.com", name="CC", email_verified=True),
+        )
+        first = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        first_state = parse_qs(urlparse(first.json()["authorization_url"]).query)["state"][0]
+        # A second login (e.g. another tab / double-click) before the first completes.
+        second = await client.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert second.status_code == 200
+        # The first flow still completes — its per-flow cookie was not overwritten.
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": first_state},
+        )
+        assert resp.status_code == 200
 
     async def test_google_callback_creates_user_and_returns_jwt(self, client, settings, monkeypatch):
         _fake_exchange(

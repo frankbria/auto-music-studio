@@ -87,11 +87,13 @@ class TestAuthorizationUrl:
         assert "state" in qs
         assert req.state_nonce
 
-    def test_each_request_has_a_unique_nonce(self):
+    def test_each_request_has_a_unique_nonce_and_cookie(self):
         settings = _settings()
         first = _request("google", settings)
         second = _request("google", settings)
         assert first.state_nonce != second.state_nonce
+        # Per-flow cookie names keep concurrent logins from clobbering each other.
+        assert first.cookie_name != second.cookie_name
 
     def test_unknown_provider_raises(self):
         with pytest.raises(UnknownProviderError):
@@ -103,37 +105,55 @@ class TestAuthorizationUrl:
             build_authorization_request("google", settings)
 
 
+def _cookies(req: AuthorizationRequest) -> dict[str, str]:
+    """The cookie jar a well-behaved client would present at the callback."""
+    return {req.cookie_name: req.state_nonce}
+
+
 class TestStateRoundTrip:
-    def test_state_validates_with_matching_nonce(self):
+    def test_state_validates_with_matching_cookie(self):
         settings = _settings()
         req = _request("google", settings)
-        assert validate_state(_state_of(req), "google", settings, req.state_nonce) is True
+        # Returns the consumed cookie name so the caller can clear it.
+        assert validate_state(_state_of(req), "google", settings, _cookies(req)) == req.cookie_name
 
-    def test_missing_nonce_rejected(self):
-        """A state replayed without the client's cookie nonce must fail (login CSRF)."""
+    def test_missing_cookie_rejected(self):
+        """A state replayed without the client's cookie must fail (login CSRF)."""
         settings = _settings()
         req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(_state_of(req), "google", settings, None)
+            validate_state(_state_of(req), "google", settings, {})
 
     def test_wrong_nonce_rejected(self):
         """A state bound to one client cannot be completed with a different nonce."""
         settings = _settings()
         req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(_state_of(req), "google", settings, "some-other-clients-nonce")
+            validate_state(_state_of(req), "google", settings, {req.cookie_name: "some-other-clients-nonce"})
+
+    def test_other_flows_cookie_does_not_satisfy_state(self):
+        """Concurrent flows are independent: flow A's cookie can't complete flow B."""
+        settings = _settings()
+        a = _request("google", settings)
+        b = _request("google", settings)
+        # Present only A's cookie while completing B's state.
+        with pytest.raises(OAuthError):
+            validate_state(_state_of(b), "google", settings, _cookies(a))
+        # Each still validates with its own cookie.
+        assert validate_state(_state_of(a), "google", settings, _cookies(a)) == a.cookie_name
+        assert validate_state(_state_of(b), "google", settings, _cookies(b)) == b.cookie_name
 
     def test_tampered_state_rejected(self):
         settings = _settings()
         req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(_state_of(req) + "tampered", "google", settings, req.state_nonce)
+            validate_state(_state_of(req) + "tampered", "google", settings, _cookies(req))
 
     def test_wrong_provider_rejected(self):
         settings = _settings()
         req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(_state_of(req), "discord", settings, req.state_nonce)
+            validate_state(_state_of(req), "discord", settings, _cookies(req))
 
     def test_expired_state_rejected(self):
         settings = _settings()
@@ -141,7 +161,7 @@ class TestStateRoundTrip:
             req = _request("google", settings)
         with freeze_time("2026-01-01 12:30:00"):
             with pytest.raises(OAuthError):
-                validate_state(_state_of(req), "google", settings, req.state_nonce)
+                validate_state(_state_of(req), "google", settings, _cookies(req))
 
     def test_non_oauth_state_jwt_rejected(self):
         """A validly-signed JWT that is not an oauth_state token must be rejected."""
@@ -152,7 +172,7 @@ class TestStateRoundTrip:
             algorithm=settings.jwt_algorithm,
         )
         with pytest.raises(OAuthError):
-            validate_state(forged, "google", settings, "nonce")
+            validate_state(forged, "google", settings, {"oauth_state_x": "nonce"})
 
 
 class TestExchangeCodeForUser:

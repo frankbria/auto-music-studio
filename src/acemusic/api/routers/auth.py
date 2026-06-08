@@ -30,7 +30,6 @@ from pydantic import BaseModel
 
 from ..auth import oauth, services
 from ..auth.oauth import (
-    STATE_COOKIE_NAME,
     STATE_EXPIRE_MINUTES,
     OAuthError,
     UnknownProviderError,
@@ -117,7 +116,7 @@ def login(provider: str, request: Request, response: Response) -> LoginResponse:
             detail=f"OAuth provider {provider!r} is not configured.",
         ) from exc
     response.set_cookie(
-        key=STATE_COOKIE_NAME,
+        key=auth_request.cookie_name,
         value=auth_request.state_nonce,
         max_age=STATE_EXPIRE_MINUTES * 60,
         httponly=True,
@@ -133,17 +132,15 @@ async def callback(provider: str, body: CallbackRequest, request: Request, respo
     """Complete the OAuth flow: validate state, exchange code, upsert user, mint tokens."""
     settings = _settings(request)
 
-    nonce = request.cookies.get(STATE_COOKIE_NAME)
     try:
-        oauth.validate_state(body.state, provider, settings, nonce)
+        consumed_cookie = oauth.validate_state(body.state, provider, settings, request.cookies)
     except UnknownProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OAuth state.") from exc
 
-    # Single-use: the state has served its purpose, so clear the cookie regardless
-    # of how the rest of the callback resolves.
-    response.delete_cookie(STATE_COOKIE_NAME, path=_state_cookie_path(request))
+    # Single-use: the state has served its purpose, so clear its per-flow cookie.
+    response.delete_cookie(consumed_cookie, path=_state_cookie_path(request))
 
     try:
         info = await oauth.exchange_code_for_user(provider, body.code, settings)

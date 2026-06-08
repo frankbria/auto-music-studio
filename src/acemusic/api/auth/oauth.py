@@ -28,6 +28,7 @@ Provider differences (Google OIDC vs. Discord) are normalized to a single
 import hashlib
 import hmac
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -56,12 +57,22 @@ DISCORD_SCOPE = "identify email"
 STATE_TOKEN_TYPE = "oauth_state"
 #: ``state`` JWTs are short-lived: the round trip to the provider is seconds.
 STATE_EXPIRE_MINUTES = 10
-#: Cookie carrying the raw client-bound nonce whose hash is committed in ``state``.
-STATE_COOKIE_NAME = "oauth_state_nonce"
+#: Prefix for the per-flow cookie carrying the raw client-bound nonce. Each login
+#: gets its own ``<prefix><flow_id>`` cookie so concurrent flows (multi-tab,
+#: double-click) don't clobber each other's nonce — the ``state`` names its cookie
+#: via the ``sid`` claim.
+STATE_COOKIE_PREFIX = "oauth_state_"
 #: Bytes of entropy for the state nonce (``secrets.token_urlsafe`` argument).
 STATE_NONCE_BYTES = 32
+#: Bytes of entropy for the per-flow id that namespaces the state cookie.
+STATE_FLOW_ID_BYTES = 8
 
 SUPPORTED_PROVIDERS = ("google", "discord")
+
+
+def state_cookie_name(flow_id: str) -> str:
+    """Cookie name carrying the nonce for the login flow identified by ``flow_id``."""
+    return f"{STATE_COOKIE_PREFIX}{flow_id}"
 
 
 class OAuthError(Exception):
@@ -88,13 +99,15 @@ class AuthorizationRequest:
     """An authorization URL plus the raw nonce that binds its ``state`` to a client.
 
     ``url`` is the provider authorization URL (the client redirects to it).
-    ``state_nonce`` is the high-entropy secret the caller must set in an
-    HttpOnly+SameSite cookie; only its SHA-256 is committed inside the signed
-    ``state``, so the URL never carries the nonce itself.
+    ``state_nonce`` is the high-entropy secret the caller must set in the
+    ``cookie_name`` cookie (HttpOnly+SameSite); only its SHA-256 is committed
+    inside the signed ``state``, so the URL never carries the nonce itself.
+    ``cookie_name`` is per-flow so concurrent logins don't overwrite each other.
     """
 
     url: str
     state_nonce: str
+    cookie_name: str
 
 
 def _provider_config(provider: str, settings: ApiSettings) -> dict:
@@ -143,11 +156,12 @@ def _hash_nonce(nonce: str) -> str:
     return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
 
 
-def _create_state(provider: str, nonce: str, settings: ApiSettings) -> str:
+def _create_state(provider: str, nonce: str, flow_id: str, settings: ApiSettings) -> str:
     """Mint a short-lived signed JWT used as the CSRF ``state`` value.
 
     The ``cnf`` (confirmation) claim binds the state to the client: it holds the
-    SHA-256 of ``nonce``, whose raw value the client returns via cookie.
+    SHA-256 of ``nonce``, whose raw value the client returns via cookie. The
+    ``sid`` claim names that per-flow cookie so the callback reads the right one.
     """
     secret = _require_secret(settings)
     now = datetime.now(timezone.utc)
@@ -155,6 +169,7 @@ def _create_state(provider: str, nonce: str, settings: ApiSettings) -> str:
         "type": STATE_TOKEN_TYPE,
         "provider": provider,
         "cnf": _hash_nonce(nonce),
+        "sid": flow_id,
         "iat": now,
         "exp": now + timedelta(minutes=STATE_EXPIRE_MINUTES),
     }
@@ -165,38 +180,41 @@ def build_authorization_request(provider: str, settings: ApiSettings) -> Authori
     """Build the provider authorization URL plus the client-binding state nonce.
 
     Returns an :class:`AuthorizationRequest`; the caller redirects to ``.url`` and
-    must set ``.state_nonce`` in an HttpOnly+SameSite cookie so the callback can
-    prove the same client is completing the flow.
+    must set ``.state_nonce`` in the ``.cookie_name`` HttpOnly+SameSite cookie so
+    the callback can prove the same client is completing the flow.
 
     Raises :class:`UnknownProviderError` for an unknown provider and
     :class:`OAuthError` if the provider's credentials are unconfigured.
     """
     config = _provider_config(provider, settings)
     nonce = secrets.token_urlsafe(STATE_NONCE_BYTES)
+    flow_id = secrets.token_urlsafe(STATE_FLOW_ID_BYTES)
     params = {
         "client_id": config["client_id"],
         "redirect_uri": config["redirect_uri"],
         "response_type": "code",
         "scope": config["scope"],
-        "state": _create_state(provider, nonce, settings),
+        "state": _create_state(provider, nonce, flow_id, settings),
     }
     return AuthorizationRequest(
         url=f"{config['authorize_url']}?{urlencode(params)}",
         state_nonce=nonce,
+        cookie_name=state_cookie_name(flow_id),
     )
 
 
-def validate_state(state: str, provider: str, settings: ApiSettings, nonce: str | None) -> bool:
-    """Verify the signed CSRF ``state`` for ``provider`` against the client ``nonce``.
+def validate_state(state: str, provider: str, settings: ApiSettings, cookies: Mapping[str, str]) -> str:
+    """Verify the signed CSRF ``state`` for ``provider`` against the client's cookies.
 
-    ``nonce`` is the raw value the client returns from its state cookie; it must
-    hash to the ``cnf`` committed when the state was minted. A missing or
-    mismatched nonce means the caller is not the client that started the flow.
+    The state names its own cookie (``sid`` claim); ``cookies`` is the request's
+    cookie jar. The raw nonce in that cookie must hash to the ``cnf`` committed
+    when the state was minted — a missing or mismatched nonce means the caller is
+    not the client that started the flow.
 
-    Returns ``True`` on success; raises :class:`UnknownProviderError` for an
-    unsupported provider, or :class:`OAuthError` if the state is expired,
-    tampered, the wrong token type, for a different provider, or not bound to
-    this client.
+    Returns the name of the consumed cookie (so the caller can clear it); raises
+    :class:`UnknownProviderError` for an unsupported provider, or
+    :class:`OAuthError` if the state is expired, tampered, the wrong token type,
+    for a different provider, or not bound to this client.
     """
     if provider not in SUPPORTED_PROVIDERS:
         raise UnknownProviderError(f"Unsupported OAuth provider: {provider!r}")
@@ -212,14 +230,17 @@ def validate_state(state: str, provider: str, settings: ApiSettings, nonce: str 
         raise OAuthError("OAuth state provider mismatch.")
 
     committed = payload.get("cnf")
-    if not committed:
+    flow_id = payload.get("sid")
+    if not committed or not flow_id:
         raise OAuthError("OAuth state is not bound to a client.")
+    cookie_name = state_cookie_name(flow_id)
+    nonce = cookies.get(cookie_name)
     if not nonce:
         raise OAuthError("Missing OAuth state cookie.")
     # Constant-time compare so a mismatch can't be probed by timing.
     if not hmac.compare_digest(committed, _hash_nonce(nonce)):
         raise OAuthError("OAuth state does not match the initiating client.")
-    return True
+    return cookie_name
 
 
 def _coerce_bool(value: object) -> bool:
