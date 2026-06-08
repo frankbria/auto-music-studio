@@ -158,7 +158,6 @@ class TestModeConstraints:
 class TestEstimateHeuristic:
     def test_song_with_duration(self):
         req = GenerationRequest(prompt="x", duration=90.0)
-        # base 30 + duration
         assert estimate_seconds(req) == 120
 
     def test_song_without_duration_uses_minimum(self):

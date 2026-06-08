@@ -12,7 +12,7 @@ validation share one source of truth.
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from acemusic.constants import (
@@ -30,7 +30,7 @@ from acemusic.constants import (
 )
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..services import generation as generation_service
+from ..services import generation as generation_service, users as user_service
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -133,8 +133,14 @@ async def create_generation(
     Pydantic returns 422 with field-level errors for invalid bodies; the router
     dependency returns 401 for missing/invalid tokens — both before this runs.
     """
+    # The token is valid, but the principal may have been deleted (or carry a
+    # malformed id). Resolve the real user before writing any user-scoped records,
+    # so a stale token yields a clean 404 instead of orphaned job/workspace rows.
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     job = await generation_service.create_generation_job(
-        user_id=current.user_id,
+        user_id=user.id,
         params=request.model_dump(exclude_none=True),
     )
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))

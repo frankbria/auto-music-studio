@@ -62,7 +62,6 @@ DURATION_MAX = 240.0
 # Output audio container formats.
 VALID_FORMATS: frozenset[str] = frozenset({"wav", "flac", "mp3", "aac", "opus"})
 
-# Supported meters.
 VALID_TIME_SIGNATURES: frozenset[str] = frozenset({"4/4", "3/4", "6/8", "5/4", "7/8"})
 
 # Creative-control ranges (0-100), ACE-Step only.

@@ -147,6 +147,29 @@ class TestJobPersistence:
         assert job_one.workspace_id == workspaces[0].id == job_two.workspace_id
 
 
+class TestWorkspaceRace:
+    async def test_concurrent_first_generation_creates_single_default(self, settings):
+        """Two concurrent first-time generations converge on one default workspace.
+
+        Exercises the unique-index + ``DuplicateKeyError`` re-read path in
+        ``get_or_create_default_workspace`` against a real MongoDB (no mocking):
+        both calls miss the initial lookup, race the insert, and one falls back
+        to re-reading the winner.
+        """
+        import asyncio
+
+        from acemusic.api.services import generation as gen_service
+
+        user = await _make_user("gen-race@example.com")
+        a, b = await asyncio.gather(
+            gen_service.get_or_create_default_workspace(user.id),
+            gen_service.get_or_create_default_workspace(user.id),
+        )
+        workspaces = await Workspace.find(Workspace.user_id == user.id).to_list()
+        assert len(workspaces) == 1
+        assert a.id == b.id == workspaces[0].id
+
+
 class TestValidationErrors:
     async def test_bpm_out_of_range_returns_422(self, client, settings):
         user = await _make_user("gen-bpm@example.com")
@@ -190,3 +213,48 @@ class TestAuthentication:
             headers={"Authorization": "Bearer not-a-real-token"},
         )
         assert resp.status_code == 401
+
+
+class TestStaleToken:
+    """Token signature/expiry are valid, but the principal cannot be resolved."""
+
+    def _token_headers(self, sub: str, settings: ApiSettings) -> dict[str, str]:
+        token = create_access_token(
+            user_id=sub,
+            email="ghost@example.com",
+            subscription_tier="free",
+            settings=settings,
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    async def test_deleted_user_returns_404(self, client, settings):
+        from bson import ObjectId
+
+        # A well-formed user id that does not exist (e.g. deleted account): the
+        # endpoint must not persist an orphaned job/workspace.
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "x"},
+            headers=self._token_headers(str(ObjectId()), settings),
+        )
+        assert resp.status_code == 404
+
+    async def test_malformed_subject_returns_404(self, client, settings):
+        # A non-ObjectId subject must resolve to "no such user", not crash (500).
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "x"},
+            headers=self._token_headers("not-an-object-id", settings),
+        )
+        assert resp.status_code == 404
+
+    async def test_no_orphan_workspace_created_for_deleted_user(self, client, settings):
+        from bson import ObjectId
+
+        ghost = ObjectId()
+        await client.post(
+            GENERATE_URL,
+            json={"prompt": "x"},
+            headers=self._token_headers(str(ghost), settings),
+        )
+        assert await Workspace.find(Workspace.user_id == ghost).to_list() == []

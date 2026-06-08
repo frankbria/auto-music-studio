@@ -108,10 +108,9 @@ presets_app = typer.Typer(help="Manage generation presets")
 app.add_typer(presets_app, name="preset")
 console = Console()
 
-# ACE-Step model registry (US-3.4) and generation-parameter validation bounds
-# now live in ``acemusic.constants`` so the CLI and the platform API share one
-# source of truth. Re-exported here under their established names for callers
-# (and tests) that import them from ``acemusic.cli``.
+# Generation-parameter bounds, the ACE-Step model registry, and related enums
+# now live in ``acemusic.constants`` (imported above) so the CLI and the
+# platform API validate against one source of truth.
 
 # Mashup blend strategies (US-6.4).
 VALID_BLEND_MODES: frozenset[str] = frozenset({"layered", "sequential", "ai-guided"})
