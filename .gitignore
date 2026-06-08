@@ -46,6 +46,7 @@ __pypackages__/
 # pytest / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # ruff
