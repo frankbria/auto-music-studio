@@ -124,6 +124,25 @@ engines blend differently:
 Mashup results record **all** sources in `parent_clip_ids` (JSON list; existing
 databases are migrated automatically) plus `parent_clip_id` for the primary.
 
+## File storage
+
+Audio files are managed through a single storage interface
+(`acemusic.storage`) so callers are deployment-agnostic. Select a backend with
+`ACEMUSIC_STORAGE_BACKEND`:
+
+- `local` (default) — files on the local filesystem under
+  `ACEMUSIC_STORAGE_LOCAL_ROOT` (defaults to `./storage`).
+- `s3` — any S3-compatible bucket (AWS, MinIO, Backblaze B2) via the optional
+  `s3` extra (`uv sync --extra s3`). Set `ACEMUSIC_S3_BUCKET` and, for non-AWS
+  endpoints, `ACEMUSIC_S3_ENDPOINT_URL`. Credentials come from boto3's default
+  chain (env vars / shared config / IAM roles) — never put them in app config.
+  Downloads return presigned URLs whose lifetime is `ACEMUSIC_S3_URL_EXPIRY`
+  seconds (default 3600).
+
+Build the configured backend with `acemusic.storage.get_storage_backend()`;
+keys follow `{user_id}/{workspace_id}/clips/{clip_id}.{format}`. See
+`.env.example` for the full list of storage variables.
+
 ## Environment
 
 Copy `.env.example` to `.env` and fill in the required values before running.

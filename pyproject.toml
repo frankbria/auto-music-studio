@@ -67,6 +67,9 @@ audio-ml-midi = [
 api = [
     "uvicorn[standard]>=0.29",
 ]
+s3 = [
+    "boto3>=1.34",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/acemusic"]
