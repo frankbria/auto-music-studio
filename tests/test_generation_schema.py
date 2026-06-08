@@ -75,6 +75,17 @@ class TestValidRequests:
         assert req.sound_type == "loop"
         assert req.bpm == 124
 
+    @pytest.mark.parametrize("short_duration", [0.5, 2.0, 8.0, 29.0])
+    def test_sound_allows_short_duration(self, short_duration):
+        # One-shots and loops are short; the 30s song floor must not apply here.
+        req = GenerationRequest(
+            prompt="snare hit",
+            mode="sound",
+            sound_type="one-shot",
+            duration=short_duration,
+        )
+        assert req.duration == short_duration
+
 
 class TestNumericRangeValidation:
     @pytest.mark.parametrize("bad_bpm", [59, 181, 999, 0])
@@ -84,9 +95,16 @@ class TestNumericRangeValidation:
         assert any(e["loc"][-1] == "bpm" or e["loc"][0] == "bpm" for e in exc.value.errors())
 
     @pytest.mark.parametrize("bad_duration", [29.9, 240.1, 0.0, -5.0])
-    def test_duration_out_of_range_rejected(self, bad_duration):
+    def test_song_duration_out_of_range_rejected(self, bad_duration):
+        # Default mode is song: below the 30s floor or above the 240s cap → 422.
         with pytest.raises(ValidationError):
             GenerationRequest(prompt="x", duration=bad_duration)
+
+    @pytest.mark.parametrize("bad_duration", [240.1, 0.0, -5.0])
+    def test_sound_duration_bounds_still_enforced(self, bad_duration):
+        # Sounds drop the 30s floor but still must be positive and within the cap.
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", mode="sound", sound_type="loop", duration=bad_duration)
 
     @pytest.mark.parametrize("bad", [-1, 101, 200])
     def test_weirdness_out_of_range_rejected(self, bad):
@@ -132,6 +150,30 @@ class TestEnumValidation:
     def test_empty_prompt_rejected(self):
         with pytest.raises(ValidationError):
             GenerationRequest(prompt="")
+
+
+class TestTextLengthLimits:
+    """Persisted free-text fields are capped so a request cannot bloat the job doc."""
+
+    def test_oversized_prompt_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x" * 2001)
+
+    def test_oversized_style_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", style="s" * 1001)
+
+    def test_oversized_lyrics_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", lyrics="la " * 2000)
+
+    def test_oversized_key_rejected(self):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", key="k" * 51)
+
+    def test_long_but_valid_lyrics_accepted(self):
+        req = GenerationRequest(prompt="ballad", lyrics="verse line\n" * 200)
+        assert req.lyrics
 
 
 class TestModeConstraints:

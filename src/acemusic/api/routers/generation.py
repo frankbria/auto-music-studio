@@ -37,6 +37,17 @@ from ..services import generation as generation_service, users as user_service
 _SONG_BASE_SECONDS = 30
 _SOUND_BASE_SECONDS = 15
 
+# Free-text fields are persisted verbatim in ``Job.input_params`` and re-read by
+# the worker, so cap them: a single request must not be able to bloat the jobs
+# document (or approach MongoDB's 16MB cap) and turn into a 500 (same rationale
+# as the profile caps in the users router). Lyrics get the most headroom since a
+# full song's words are legitimately long.
+_PROMPT_MAX_LENGTH = 2000
+_STYLE_MAX_LENGTH = 1000
+_LYRICS_MAX_LENGTH = 5000
+_VOCAL_LANGUAGE_MAX_LENGTH = 100
+_KEY_MAX_LENGTH = 50
+
 # Router-level dependency gates every route behind a valid Bearer token, so an
 # unauthenticated request is rejected with 401 before any handler runs.
 router = APIRouter(prefix="/generate", tags=["generation"], dependencies=[Depends(get_current_user)])
@@ -52,15 +63,17 @@ class GenerationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: Annotated[str, Field(min_length=1)]
-    style: str | None = None
-    lyrics: str | None = None
-    vocal_language: str | None = None
+    prompt: Annotated[str, Field(min_length=1, max_length=_PROMPT_MAX_LENGTH)]
+    style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
+    lyrics: Annotated[str, Field(max_length=_LYRICS_MAX_LENGTH)] | None = None
+    vocal_language: Annotated[str, Field(max_length=_VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
     instrumental: bool = False
     bpm: Annotated[int, Field(ge=BPM_MIN, le=BPM_MAX)] | Literal["auto"] | None = None
-    key: str | None = None
+    key: Annotated[str, Field(max_length=_KEY_MAX_LENGTH)] | None = None
     time_signature: str | None = None
-    duration: Annotated[float, Field(ge=DURATION_MIN, le=DURATION_MAX)] | None = None
+    # Upper bound and positivity hold for every mode; the 30s song floor is
+    # enforced mode-aware below so short sounds (one-shots, loops) are allowed.
+    duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
     seed: int | None = None
     inference_steps: Annotated[int, Field(gt=0)] | None = None
     model: str | None = None
@@ -100,6 +113,9 @@ class GenerationRequest(BaseModel):
             raise ValueError("sound_type is required when mode is 'sound'")
         if self.mode == "song" and self.sound_type is not None:
             raise ValueError("sound_type must be omitted when mode is 'song'")
+        # Songs have a 30s floor (full-track generation); sounds may be short.
+        if self.mode == "song" and self.duration is not None and self.duration < DURATION_MIN:
+            raise ValueError(f"duration must be at least {DURATION_MIN}s for songs")
         # A one-shot is a single hit with no tempo/tonal context; bpm/key apply
         # only to loops (mirrors the CLI `sounds` command).
         if self.sound_type == "one-shot" and (self.bpm is not None or self.key is not None):
