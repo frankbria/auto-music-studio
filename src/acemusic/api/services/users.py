@@ -19,7 +19,9 @@ from ..models.common import utcnow
 
 HANDLE_MIN_LENGTH = 3
 HANDLE_MAX_LENGTH = 30
-_HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
+# Letters/digits/hyphens, but must start and end with an alphanumeric — so
+# "-foo", "foo-" and "---" are rejected as the entry errors they look like.
+_HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$")
 
 # Only these fields are writable through the profile-update path. Everything else
 # on the User document (email, subscription_tier, oauth_*) is off-limits here so a
@@ -42,7 +44,9 @@ def validate_handle(handle: str) -> str:
     if len(handle) > HANDLE_MAX_LENGTH:
         raise HandleValidationError(f"Handle must be at most {HANDLE_MAX_LENGTH} characters.")
     if not _HANDLE_PATTERN.match(handle):
-        raise HandleValidationError("Handle may contain only letters, numbers, and hyphens.")
+        raise HandleValidationError(
+            "Handle may contain only letters, numbers, and hyphens, " "and must start and end with a letter or number."
+        )
     return handle
 
 
@@ -97,7 +101,19 @@ async def get_or_create_user(*, email: str, provider: str, oauth_id: str, name: 
         oauth_provider=provider,
         oauth_id=oauth_id,
     )
-    await user.insert()
+    try:
+        await user.insert()
+    except DuplicateKeyError:
+        # A concurrent first-login for the same identity (or email) raced us
+        # between the checks above and this insert. The unique indexes are the
+        # real guard, so re-resolve rather than 500: if our identity won
+        # elsewhere, return that row (first-login is idempotent); if a different
+        # identity claimed the email first, surface the same 409 as the non-race
+        # path.
+        existing = await User.find_one(User.oauth_provider == provider, User.oauth_id == oauth_id)
+        if existing is not None:
+            return existing
+        raise EmailAlreadyRegisteredError(email) from None
     return user
 
 
@@ -124,5 +140,9 @@ async def update_user_profile(user_id: str | PydanticObjectId, updates: dict) ->
     try:
         await user.save()
     except DuplicateKeyError as exc:
+        # ``handle`` is the only writable field (see _UPDATABLE_FIELDS) that
+        # carries a unique index, so a duplicate-key error on this path can only
+        # be a handle collision. If a future writable field gains a unique index,
+        # narrow this catch (inspect exc.details) so it isn't misreported as 409.
         raise HandleConflictError(fields.get("handle")) from exc
     return user

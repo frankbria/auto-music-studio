@@ -118,6 +118,59 @@ class TestUpdateProfile:
         )
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize("handle", ["-lead", "trail-", "---"])
+    async def test_leading_or_trailing_hyphen_returns_422(self, client, settings, handle):
+        user = await _make_user(f"hyphen-{handle}@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"handle": handle},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
+    async def test_empty_display_name_returns_422(self, client, settings):
+        user = await _make_user("empty-name@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"display_name": ""},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
+    async def test_style_tags_are_stripped(self, client, settings):
+        user = await _make_user("strip-tags@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"style_tags": ["  lofi  ", "edm "]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["style_tags"] == ["lofi", "edm"]
+
+    async def test_blank_style_tag_returns_422(self, client, settings):
+        user = await _make_user("blank-tag@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"style_tags": ["ok", "   "]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
+    async def test_null_style_tags_clears_to_empty_list(self, client, settings):
+        user = await _make_user("null-tags@example.com")
+        await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"style_tags": ["lofi"]},
+            headers=_auth_headers(user, settings),
+        )
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"style_tags": None},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["style_tags"] == []
+
     async def test_duplicate_handle_returns_409(self, client, settings):
         owner = await _make_user("owner@example.com")
         other = await _make_user("other@example.com")

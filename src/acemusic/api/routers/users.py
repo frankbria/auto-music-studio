@@ -75,7 +75,7 @@ class UserProfileUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    display_name: Annotated[str, Field(max_length=DISPLAY_NAME_MAX_LENGTH)] | None = None
+    display_name: Annotated[str, Field(min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)] | None = None
     handle: str | None = None
     bio: Annotated[str, Field(max_length=BIO_MAX_LENGTH)] | None = None
     style_tags: (
@@ -96,6 +96,20 @@ class UserProfileUpdate(BaseModel):
         except user_service.HandleValidationError as exc:
             # Surface the precise rule violation as a 422 via Pydantic.
             raise ValueError(str(exc)) from exc
+
+    @field_validator("style_tags")
+    @classmethod
+    def _clean_style_tags(cls, value: list[str] | None) -> list[str]:
+        # The validator only runs when the field is *present*. An explicit null
+        # means "clear my tags": coerce to [] (style_tags is a non-nullable list
+        # on the model, so storing None would 500 on read-back). An omitted field
+        # never reaches here and is left unchanged by exclude_unset.
+        if value is None:
+            return []
+        cleaned = [tag.strip() for tag in value]
+        if any(not tag for tag in cleaned):
+            raise ValueError("Style tags must not be empty or whitespace-only.")
+        return cleaned
 
 
 def _not_found() -> HTTPException:

@@ -27,7 +27,10 @@ class TestHandleValidation:
             validate_handle("x" * 31)
         assert "at most" in str(exc.value).lower()
 
-    @pytest.mark.parametrize("handle", ["bad handle", "no_underscores", "emoji😀", "dot.dot", "slash/x"])
+    @pytest.mark.parametrize(
+        "handle",
+        ["bad handle", "no_underscores", "emoji😀", "dot.dot", "slash/x", "-lead", "trail-", "---"],
+    )
     def test_rejects_invalid_characters(self, handle):
         with pytest.raises(HandleValidationError) as exc:
             validate_handle(handle)
@@ -67,6 +70,81 @@ class TestGetOrCreateUser:
         with pytest.raises(EmailAlreadyRegisteredError):
             await user_service.get_or_create_user(
                 email="shared@example.com", provider="discord", oauth_id="d-1", name="Shared"
+            )
+
+    async def test_concurrent_first_login_is_idempotent(self, mongo_db):
+        """Concurrent first-logins for one identity stay idempotent against the
+        real DB: whatever the interleaving, they resolve to one user and one row."""
+        import asyncio
+
+        from acemusic.api.models import User
+
+        results = await asyncio.gather(
+            *[
+                user_service.get_or_create_user(
+                    email="race@example.com", provider="google", oauth_id="g-race", name="Racer"
+                )
+                for _ in range(6)
+            ]
+        )
+        assert len({str(u.id) for u in results}) == 1
+        assert await User.find(User.email == "race@example.com").count() == 1
+
+    async def test_insert_race_recovers_to_winning_identity(self, mongo_db, monkeypatch):
+        """If a concurrent worker commits our identity first, the losing insert's
+        DuplicateKeyError is recovered to that winner row (idempotent first-login).
+
+        The DB is real; we only *inject* the race that ``asyncio.gather`` cannot
+        trigger deterministically — the fake insert commits the winner via the raw
+        collection, then raises the duplicate-key error our code must handle.
+        """
+        from pymongo.errors import DuplicateKeyError
+
+        from acemusic.api.models import User
+        from acemusic.api.models.common import utcnow
+
+        coll = User.get_pymongo_collection()
+
+        async def winner_then_collide(self):
+            await coll.insert_one(
+                {
+                    "email": "win@example.com",
+                    "name": "Winner",
+                    "display_name": "Winner",
+                    "oauth_provider": "google",
+                    "oauth_id": "g-win",
+                    "subscription_tier": "free",
+                    "handle": None,
+                    "bio": None,
+                    "style_tags": [],
+                    "avatar_url": None,
+                    "created_at": utcnow(),
+                    "updated_at": None,
+                }
+            )
+            raise DuplicateKeyError("E11000 duplicate key (simulated race)")
+
+        monkeypatch.setattr(User, "insert", winner_then_collide)
+        result = await user_service.get_or_create_user(
+            email="win@example.com", provider="google", oauth_id="g-win", name="Winner"
+        )
+        assert result.oauth_id == "g-win"
+        assert await User.find(User.email == "win@example.com").count() == 1
+
+    async def test_insert_race_on_foreign_email_raises_conflict(self, mongo_db, monkeypatch):
+        """If the insert collides but no row exists for our identity (a different
+        identity grabbed the email mid-flight), we surface the same 409 signal."""
+        from pymongo.errors import DuplicateKeyError
+
+        from acemusic.api.models import User
+
+        async def always_collide(self):
+            raise DuplicateKeyError("E11000 duplicate key (simulated race)")
+
+        monkeypatch.setattr(User, "insert", always_collide)
+        with pytest.raises(EmailAlreadyRegisteredError):
+            await user_service.get_or_create_user(
+                email="foreign@example.com", provider="google", oauth_id="g-foreign", name="Foreign"
             )
 
 
@@ -123,3 +201,10 @@ class TestGetUserById:
 
     async def test_returns_none_for_malformed_id(self, mongo_db):
         assert await user_service.get_user_by_id("not-an-object-id") is None
+
+    async def test_accepts_object_id_instance(self, mongo_db):
+        user = await user_service.get_or_create_user(
+            email="oid@example.com", provider="google", oauth_id="g-oid", name="Oid"
+        )
+        found = await user_service.get_user_by_id(user.id)  # pass the ObjectId directly
+        assert found is not None and found.id == user.id
