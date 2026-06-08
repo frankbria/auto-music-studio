@@ -19,9 +19,11 @@ from pathlib import Path
 
 from .config import load_config
 
-# S3 error codes that mean "object not found"; normalised to FileNotFoundError
-# so callers can handle a miss identically across backends.
-_S3_NOT_FOUND_CODES = {"NoSuchKey", "NoSuchBucket", "404"}
+# S3 error codes that mean "this object does not exist"; normalised to
+# FileNotFoundError so callers handle a miss identically across backends.
+# NoSuchBucket is deliberately excluded: a missing/misconfigured bucket is a
+# backend configuration failure and must surface loudly, not look like a miss.
+_S3_NOT_FOUND_CODES = {"NoSuchKey", "404"}
 
 # boto3 is an optional dependency (the ``s3`` extra). Guard the import so the
 # module stays usable with only LocalStorage; S3Storage raises if it is missing.

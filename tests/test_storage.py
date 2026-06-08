@@ -170,6 +170,16 @@ class TestS3Storage:
         with pytest.raises(Exception, match="access denied"):
             backend.download(SAMPLE_KEY)
 
+    def test_download_missing_bucket_does_not_look_like_a_miss(self):
+        # A misconfigured/deleted bucket must surface loudly, not as FileNotFoundError.
+        backend, client, _ = self._backend_and_client()
+        err = Exception("bucket gone")
+        err.response = {"Error": {"Code": "NoSuchBucket"}}  # type: ignore[attr-defined]
+        client.get_object.side_effect = err
+        with pytest.raises(Exception, match="bucket gone") as exc_info:
+            backend.download(SAMPLE_KEY)
+        assert not isinstance(exc_info.value, FileNotFoundError)
+
     def test_download_non_client_error_propagates(self):
         # An exception with no ``response`` attribute is not an S3 not-found.
         backend, client, _ = self._backend_and_client()
