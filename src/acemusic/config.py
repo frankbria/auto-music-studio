@@ -29,6 +29,15 @@ class AceConfig:
     # `backend` in config.yaml. None means "unset" → resolver falls back to auto.
     # Not validated here; resolve_backend() validates and reports bad values.
     backend: str | None = None
+    # File storage abstraction (US-8.5). Selects which StorageBackend the factory
+    # builds; "local" or "s3". Validated by get_storage_backend(), not here.
+    storage_backend: str = "local"
+    storage_local_root: str | None = None
+    s3_bucket: str | None = None
+    s3_prefix: str | None = None
+    s3_region: str | None = None
+    s3_endpoint_url: str | None = None
+    s3_url_expiry: int = 3600
 
 
 def load_config() -> AceConfig:
@@ -67,6 +76,15 @@ def load_config() -> AceConfig:
     default_model: str | None = os.environ.get("ACEMUSIC_DEFAULT_MODEL") or yaml_default_model or None
     backend: str | None = os.environ.get("ACEMUSIC_BACKEND") or yaml_backend or None
 
+    # Storage abstraction (US-8.5). Env-only; defaults keep local-filesystem behaviour.
+    storage_backend = os.environ.get("ACEMUSIC_STORAGE_BACKEND") or "local"
+    storage_local_root = os.environ.get("ACEMUSIC_STORAGE_LOCAL_ROOT") or None
+    s3_bucket = os.environ.get("ACEMUSIC_S3_BUCKET") or None
+    s3_prefix = os.environ.get("ACEMUSIC_S3_PREFIX") or None
+    s3_region = os.environ.get("ACEMUSIC_S3_REGION") or None
+    s3_endpoint_url = os.environ.get("ACEMUSIC_S3_ENDPOINT_URL") or None
+    s3_url_expiry = int(os.environ.get("ACEMUSIC_S3_URL_EXPIRY") or 3600)
+
     return AceConfig(
         api_url=api_url,
         api_key=api_key,
@@ -75,4 +93,11 @@ def load_config() -> AceConfig:
         elevenlabs_output_format=elevenlabs_output_format,
         default_model=default_model,
         backend=backend,
+        storage_backend=storage_backend,
+        storage_local_root=storage_local_root,
+        s3_bucket=s3_bucket,
+        s3_prefix=s3_prefix,
+        s3_region=s3_region,
+        s3_endpoint_url=s3_endpoint_url,
+        s3_url_expiry=s3_url_expiry,
     )
