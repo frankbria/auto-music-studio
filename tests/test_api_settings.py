@@ -64,6 +64,7 @@ class TestAuthSettings:
         "ACEMUSIC_API_ACCESS_TOKEN_EXPIRE_MINUTES",
         "ACEMUSIC_API_REFRESH_TOKEN_EXPIRE_DAYS",
         "ACEMUSIC_API_OAUTH_COOKIE_SECURE",
+        "ACEMUSIC_API_OAUTH_COOKIE_SAMESITE",
     )
 
     @pytest.fixture(autouse=True)
@@ -126,6 +127,27 @@ class TestAuthSettings:
         """Local/dev over plain HTTP can disable Secure so the cookie is returned."""
         monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SECURE", "false")
         assert ApiSettings(_env_file=None).oauth_cookie_secure is False
+
+    def test_oauth_cookie_samesite_defaults_lax(self):
+        """A same-origin frontend/API deployment uses Lax by default."""
+        assert ApiSettings(_env_file=None).oauth_cookie_samesite == "lax"
+
+    def test_oauth_cookie_samesite_normalized_and_overridable(self, monkeypatch):
+        """Split-origin SPAs set 'none'; the value is normalized to lowercase."""
+        monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SAMESITE", "None")
+        assert ApiSettings(_env_file=None).oauth_cookie_samesite == "none"
+
+    def test_oauth_cookie_samesite_rejects_unknown(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SAMESITE", "bogus")
+        with pytest.raises(ValueError, match="oauth_cookie_samesite"):
+            ApiSettings(_env_file=None)
+
+    def test_oauth_cookie_samesite_none_requires_secure(self, monkeypatch):
+        """SameSite=None without Secure is rejected (browsers would ignore it)."""
+        monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SAMESITE", "none")
+        monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SECURE", "false")
+        with pytest.raises(ValueError, match="requires oauth_cookie_secure"):
+            ApiSettings(_env_file=None)
 
     @pytest.mark.parametrize("algorithm", ["HS256", "HS384", "HS512"])
     def test_jwt_algorithm_allows_hmac_family(self, monkeypatch, algorithm):

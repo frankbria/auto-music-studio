@@ -124,6 +124,17 @@ class TestLogin:
         assert "secure" not in set_cookie.lower()
         assert any(name.startswith(STATE_COOKIE_PREFIX) for name in client.cookies.keys())
 
+    async def test_login_cookie_honors_samesite_none_for_split_origin(self, settings):
+        """A split-origin deployment can emit SameSite=None; Secure so the cookie
+        is sent on the cross-site callback (issue #110 contract)."""
+        split = settings.model_copy(update={"oauth_cookie_samesite": "none", "oauth_cookie_secure": True})
+        async with _async_client(create_app(split)) as ac:
+            resp = await ac.post(f"{API_V1_PREFIX}/auth/login/google")
+        assert resp.status_code == 200
+        set_cookie = (resp.headers.get("set-cookie") or "").lower()
+        assert "samesite=none" in set_cookie
+        assert "secure" in set_cookie
+
 
 class TestCallback:
     async def test_end_to_end_login_then_callback(self, client, settings, monkeypatch):

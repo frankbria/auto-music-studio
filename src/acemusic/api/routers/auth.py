@@ -12,6 +12,19 @@ State (CSRF) validation is stateless via the signed ``state`` JWT minted in
 the ``oauth`` module (not imported by name) so route tests can substitute a stub
 for the external provider HTTP without touching our own logic.
 
+**Client-binding cookie (issue #110).** ``/login`` sets a per-flow, HttpOnly state
+cookie whose nonce ``/callback`` must echo back, which is what stops a replayed
+``state`` from completing in another browser (login CSRF / session fixation). This
+means the client MUST preserve cookies between ``/login`` and ``/callback``:
+
+* Same-origin frontend + API (recommended; e.g. the SPA served behind the same
+  origin as the API via a reverse proxy): the default ``SameSite=Lax`` works.
+* Split-origin SPA (frontend and API on different origins): the browser only
+  sends the cookie on the cross-site callback when it is ``SameSite=None`` AND
+  ``Secure`` (so, over HTTPS) and the fetch is credentialed
+  (``credentials: 'include'``; CORS already allows credentials). Set
+  ``ACEMUSIC_API_OAUTH_COOKIE_SAMESITE=none`` for that deployment.
+
 HTTP status choices (documented for callers):
 * unknown provider → ``400`` (client asked for something we don't support)
 * unconfigured provider credentials → ``503`` (server misconfiguration, retryable
@@ -121,7 +134,7 @@ def login(provider: str, request: Request, response: Response) -> LoginResponse:
         max_age=STATE_EXPIRE_MINUTES * 60,
         httponly=True,
         secure=settings.oauth_cookie_secure,
-        samesite="lax",
+        samesite=settings.oauth_cookie_samesite,
         path=_state_cookie_path(request),
     )
     return LoginResponse(authorization_url=auth_request.url)
