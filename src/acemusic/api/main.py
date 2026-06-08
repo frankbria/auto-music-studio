@@ -12,13 +12,15 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from acemusic import __version__
 
 from . import database
-from .routers import auth, health
+from .exceptions import HandleConflictError
+from .routers import auth, health, users
 from .settings import ApiSettings
 
 API_V1_PREFIX = "/api/v1"
@@ -93,6 +95,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # require a valid Bearer access token.
     app.include_router(health.router, prefix=API_V1_PREFIX)
     app.include_router(auth.router, prefix=API_V1_PREFIX)
+    app.include_router(users.router, prefix=API_V1_PREFIX)
+
+    # A handle collision surfaces from the service layer as a domain exception;
+    # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
+    @app.exception_handler(HandleConflictError)
+    async def _handle_conflict(_request: Request, _exc: HandleConflictError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": "Handle already taken"})
 
     return app
 
