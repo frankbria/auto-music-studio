@@ -25,6 +25,13 @@ means the client MUST preserve cookies between ``/login`` and ``/callback``:
   (``credentials: 'include'``; CORS already allows credentials). Set
   ``ACEMUSIC_API_OAUTH_COOKIE_SAMESITE=none`` for that deployment.
 
+Local development: a cross-origin **plain-HTTP** pair (e.g. ``localhost:3000`` →
+``localhost:8000``) cannot carry this cookie at all — ``SameSite=None`` needs
+``Secure`` and ``Secure`` needs HTTPS. This is a browser constraint, not a
+limitation of this code: any login-CSRF defense needs a secret the victim's
+browser holds, which over cross-origin HTTP is impossible. Run the SPA as a
+same-origin proxy to the API in dev (recommended) or serve both over HTTPS.
+
 HTTP status choices (documented for callers):
 * unknown provider → ``400`` (client asked for something we don't support)
 * unconfigured provider credentials → ``503`` (server misconfiguration, retryable
