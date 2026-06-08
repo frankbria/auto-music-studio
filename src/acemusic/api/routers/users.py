@@ -13,13 +13,22 @@ handle validator is reused from the service layer so the rules have one home.
 """
 
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import User
 from ..services import users as user_service
+
+# Free-text profile fields are stored verbatim and re-served on every
+# GET /users/me, so cap them: one PATCH must not be able to bloat the document
+# (and thus every later read). Handle has its own format rules (see service).
+DISPLAY_NAME_MAX_LENGTH = 100
+BIO_MAX_LENGTH = 500
+STYLE_TAG_MAX_LENGTH = 30
+STYLE_TAGS_MAX_ITEMS = 20
 
 # Router-level dependency gates every route; endpoints additionally take
 # ``current`` to read the identity. FastAPI caches the dependency, so
@@ -66,10 +75,16 @@ class UserProfileUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    display_name: str | None = None
+    display_name: Annotated[str, Field(max_length=DISPLAY_NAME_MAX_LENGTH)] | None = None
     handle: str | None = None
-    bio: str | None = None
-    style_tags: list[str] | None = None
+    bio: Annotated[str, Field(max_length=BIO_MAX_LENGTH)] | None = None
+    style_tags: (
+        Annotated[
+            list[Annotated[str, Field(max_length=STYLE_TAG_MAX_LENGTH)]],
+            Field(max_length=STYLE_TAGS_MAX_ITEMS),
+        ]
+        | None
+    ) = None
 
     @field_validator("handle")
     @classmethod

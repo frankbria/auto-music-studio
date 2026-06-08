@@ -100,6 +100,24 @@ class TestUpdateProfile:
         )
         assert resp.status_code == 422
 
+    async def test_oversized_bio_returns_422(self, client, settings):
+        user = await _make_user("big-bio@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"bio": "x" * 501},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
+    async def test_too_many_style_tags_returns_422(self, client, settings):
+        user = await _make_user("many-tags@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"style_tags": [f"tag{i}" for i in range(21)]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
     async def test_duplicate_handle_returns_409(self, client, settings):
         owner = await _make_user("owner@example.com")
         other = await _make_user("other@example.com")
