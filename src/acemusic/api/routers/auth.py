@@ -56,7 +56,9 @@ from ..auth.oauth import (
     build_authorization_request,
 )
 from ..auth.tokens import create_access_token, create_refresh_token
+from ..exceptions import EmailAlreadyRegisteredError
 from ..models import User
+from ..services import users as user_service
 from ..settings import ApiSettings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -180,37 +182,25 @@ async def callback(provider: str, body: CallbackRequest, request: Request, respo
             detail="The OAuth provider has not verified this email address.",
         )
 
-    user = await User.find_one(User.oauth_provider == info.provider, User.oauth_id == info.oauth_id)
-    if user is None:
-        # No account for this provider identity. The User model holds a single
-        # OAuth identity and email is unique-indexed, so if the verified address
-        # is already registered under another provider we cannot link a second
-        # identity yet: reject deterministically (409) rather than 500 on the
-        # index or silently create a duplicate. Multi-identity linking is tracked
-        # as future work (see PR "Known limitations").
-        if await User.find_one(User.email == info.email) is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This email is already registered with a different sign-in provider.",
-            )
-        user = User(
+    # Upsert the user for this verified OAuth identity (US-8.4 owns the service;
+    # it also seeds the profile display_name from the provider name on creation).
+    # The User model holds a single OAuth identity and email is unique-indexed, so
+    # an email already registered under another provider cannot be linked yet:
+    # reject deterministically (409) rather than 500 on the index or silently
+    # create a duplicate. Multi-identity linking is future work (see PR "Known
+    # limitations").
+    try:
+        user = await user_service.get_or_create_user(
             email=info.email,
-            name=info.name,
-            oauth_provider=info.provider,
+            provider=info.provider,
             oauth_id=info.oauth_id,
+            name=info.name,
         )
-        await user.insert()
-    else:
-        # Known identity. The provider may report a changed email; only apply it
-        # when the address is free (or already ours), otherwise keep our current
-        # email so the user still logs into their own account without violating
-        # the unique index.
-        email_owner = await User.find_one(User.email == info.email)
-        if email_owner is None or email_owner.id == user.id:
-            user.email = info.email
-            user.name = info.name
-            user.updated_at = datetime.now(timezone.utc)
-            await user.save()
+    except EmailAlreadyRegisteredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email is already registered with a different sign-in provider.",
+        ) from exc
 
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
