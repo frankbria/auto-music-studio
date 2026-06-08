@@ -21,11 +21,12 @@ from acemusic.api.auth.oauth import (
     GOOGLE_AUTHORIZE_URL,
     GOOGLE_TOKEN_URL,
     GOOGLE_USERINFO_URL,
+    AuthorizationRequest,
     OAuthError,
     OAuthUserInfo,
     UnknownProviderError,
+    build_authorization_request,
     exchange_code_for_user,
-    get_authorization_url,
     validate_state,
 )
 from acemusic.api.settings import ApiSettings
@@ -46,70 +47,101 @@ def _settings(**overrides) -> ApiSettings:
     return ApiSettings(**base)
 
 
+def _request(provider: str, settings: ApiSettings) -> AuthorizationRequest:
+    """Build the authorization request and return the (url, state_nonce) bundle."""
+    return build_authorization_request(provider, settings)
+
+
+def _state_of(req: AuthorizationRequest) -> str:
+    return parse_qs(urlparse(req.url).query)["state"][0]
+
+
 class TestAuthorizationUrl:
     def test_google_url_has_expected_params(self):
         settings = _settings()
-        url = get_authorization_url("google", settings)
-        parsed = urlparse(url)
-        assert url.startswith(GOOGLE_AUTHORIZE_URL)
+        req = _request("google", settings)
+        assert isinstance(req, AuthorizationRequest)
+        parsed = urlparse(req.url)
+        assert req.url.startswith(GOOGLE_AUTHORIZE_URL)
         qs = parse_qs(parsed.query)
         assert qs["client_id"] == ["google-id"]
         assert qs["redirect_uri"] == [settings.google_redirect_uri]
         assert qs["response_type"] == ["code"]
         assert qs["scope"] == ["openid email profile"]
         assert "state" in qs
+        # The raw client-bound nonce is returned separately for the cookie; it
+        # is never placed in the URL/state (only its hash is committed there).
+        assert req.state_nonce
+        assert req.state_nonce not in req.url
 
     def test_discord_url_has_expected_params(self):
         settings = _settings()
-        url = get_authorization_url("discord", settings)
-        parsed = urlparse(url)
-        assert url.startswith(DISCORD_AUTHORIZE_URL)
+        req = _request("discord", settings)
+        parsed = urlparse(req.url)
+        assert req.url.startswith(DISCORD_AUTHORIZE_URL)
         qs = parse_qs(parsed.query)
         assert qs["client_id"] == ["discord-id"]
         assert qs["redirect_uri"] == [settings.discord_redirect_uri]
         assert qs["response_type"] == ["code"]
         assert qs["scope"] == ["identify email"]
         assert "state" in qs
+        assert req.state_nonce
+
+    def test_each_request_has_a_unique_nonce(self):
+        settings = _settings()
+        first = _request("google", settings)
+        second = _request("google", settings)
+        assert first.state_nonce != second.state_nonce
 
     def test_unknown_provider_raises(self):
         with pytest.raises(UnknownProviderError):
-            get_authorization_url("github", _settings())
+            build_authorization_request("github", _settings())
 
     def test_missing_credentials_raises(self):
         settings = _settings(google_client_id=None)
         with pytest.raises(OAuthError):
-            get_authorization_url("google", settings)
+            build_authorization_request("google", settings)
 
 
 class TestStateRoundTrip:
-    def test_state_validates_for_correct_provider(self):
+    def test_state_validates_with_matching_nonce(self):
         settings = _settings()
-        url = get_authorization_url("google", settings)
-        state = parse_qs(urlparse(url).query)["state"][0]
-        assert validate_state(state, "google", settings) is True
+        req = _request("google", settings)
+        assert validate_state(_state_of(req), "google", settings, req.state_nonce) is True
+
+    def test_missing_nonce_rejected(self):
+        """A state replayed without the client's cookie nonce must fail (login CSRF)."""
+        settings = _settings()
+        req = _request("google", settings)
+        with pytest.raises(OAuthError):
+            validate_state(_state_of(req), "google", settings, None)
+
+    def test_wrong_nonce_rejected(self):
+        """A state bound to one client cannot be completed with a different nonce."""
+        settings = _settings()
+        req = _request("google", settings)
+        with pytest.raises(OAuthError):
+            validate_state(_state_of(req), "google", settings, "some-other-clients-nonce")
 
     def test_tampered_state_rejected(self):
         settings = _settings()
-        url = get_authorization_url("google", settings)
-        state = parse_qs(urlparse(url).query)["state"][0]
+        req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(state + "tampered", "google", settings)
+            validate_state(_state_of(req) + "tampered", "google", settings, req.state_nonce)
 
     def test_wrong_provider_rejected(self):
         settings = _settings()
-        url = get_authorization_url("google", settings)
-        state = parse_qs(urlparse(url).query)["state"][0]
+        req = _request("google", settings)
         with pytest.raises(OAuthError):
-            validate_state(state, "discord", settings)
+            validate_state(_state_of(req), "discord", settings, req.state_nonce)
 
     def test_expired_state_rejected(self):
         settings = _settings()
         with freeze_time("2026-01-01 12:00:00"):
-            url = get_authorization_url("google", settings)
-            state = parse_qs(urlparse(url).query)["state"][0]
+            req = _request("google", settings)
         with freeze_time("2026-01-01 12:30:00"):
             with pytest.raises(OAuthError):
-                validate_state(state, "google", settings)
+                validate_state(_state_of(req), "google", settings, req.state_nonce)
 
     def test_non_oauth_state_jwt_rejected(self):
         """A validly-signed JWT that is not an oauth_state token must be rejected."""
@@ -120,7 +152,7 @@ class TestStateRoundTrip:
             algorithm=settings.jwt_algorithm,
         )
         with pytest.raises(OAuthError):
-            validate_state(forged, "google", settings)
+            validate_state(forged, "google", settings, "nonce")
 
 
 class TestExchangeCodeForUser:

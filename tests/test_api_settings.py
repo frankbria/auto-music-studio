@@ -63,6 +63,7 @@ class TestAuthSettings:
         "ACEMUSIC_API_JWT_ALGORITHM",
         "ACEMUSIC_API_ACCESS_TOKEN_EXPIRE_MINUTES",
         "ACEMUSIC_API_REFRESH_TOKEN_EXPIRE_DAYS",
+        "ACEMUSIC_API_OAUTH_COOKIE_SECURE",
     )
 
     @pytest.fixture(autouse=True)
@@ -116,6 +117,15 @@ class TestAuthSettings:
         assert settings.jwt_algorithm == "HS512"
         assert settings.access_token_expire_minutes == 30
         assert settings.refresh_token_expire_days == 14
+
+    def test_oauth_cookie_secure_defaults_true(self):
+        """The OAuth state cookie (issue #110) is Secure by default for production."""
+        assert ApiSettings(_env_file=None).oauth_cookie_secure is True
+
+    def test_oauth_cookie_secure_overridable_for_http_dev(self, monkeypatch):
+        """Local/dev over plain HTTP can disable Secure so the cookie is returned."""
+        monkeypatch.setenv("ACEMUSIC_API_OAUTH_COOKIE_SECURE", "false")
+        assert ApiSettings(_env_file=None).oauth_cookie_secure is False
 
     @pytest.mark.parametrize("algorithm", ["HS256", "HS384", "HS512"])
     def test_jwt_algorithm_allows_hmac_family(self, monkeypatch, algorithm):

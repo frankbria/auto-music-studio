@@ -29,7 +29,13 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from ..auth import oauth, services
-from ..auth.oauth import OAuthError, UnknownProviderError, get_authorization_url
+from ..auth.oauth import (
+    STATE_COOKIE_NAME,
+    STATE_EXPIRE_MINUTES,
+    OAuthError,
+    UnknownProviderError,
+    build_authorization_request,
+)
 from ..auth.tokens import create_access_token, create_refresh_token
 from ..models import User
 from ..settings import ApiSettings
@@ -65,6 +71,20 @@ def _settings(request: Request) -> ApiSettings:
     return request.app.state.settings
 
 
+def _state_cookie_path(request: Request) -> str:
+    """Scope the state cookie to the auth prefix (e.g. ``/api/v1/auth``).
+
+    Derived from the request path so the router stays agnostic of the mount
+    prefix; ``/login`` and ``/callback`` resolve to the same path, so the cookie
+    set at login is sent to (and can be cleared by) the callback.
+    """
+    path = request.url.path
+    for marker in ("/login/", "/callback/"):
+        if marker in path:
+            return path.rsplit(marker, 1)[0] or "/"
+    return "/"
+
+
 def _mint_token_pair(user: User, settings: ApiSettings) -> tuple[str, str]:
     """Mint a fresh ``(access_token, refresh_token)`` pair for ``user``."""
     access = create_access_token(
@@ -78,11 +98,16 @@ def _mint_token_pair(user: User, settings: ApiSettings) -> tuple[str, str]:
 
 
 @router.post("/login/{provider}", response_model=LoginResponse)
-def login(provider: str, request: Request) -> LoginResponse:
-    """Return the provider's authorization URL for the client to redirect to."""
+def login(provider: str, request: Request, response: Response) -> LoginResponse:
+    """Return the provider's authorization URL for the client to redirect to.
+
+    Also sets the client-binding state cookie (issue #110): its raw nonce is
+    returned to the same client and re-checked at the callback, so a ``state``
+    minted here cannot be replayed in another client's callback.
+    """
     settings = _settings(request)
     try:
-        url = get_authorization_url(provider, settings)
+        auth_request = build_authorization_request(provider, settings)
     except UnknownProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OAuthError as exc:
@@ -91,20 +116,34 @@ def login(provider: str, request: Request) -> LoginResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"OAuth provider {provider!r} is not configured.",
         ) from exc
-    return LoginResponse(authorization_url=url)
+    response.set_cookie(
+        key=STATE_COOKIE_NAME,
+        value=auth_request.state_nonce,
+        max_age=STATE_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=settings.oauth_cookie_secure,
+        samesite="lax",
+        path=_state_cookie_path(request),
+    )
+    return LoginResponse(authorization_url=auth_request.url)
 
 
 @router.post("/callback/{provider}", response_model=TokenResponse)
-async def callback(provider: str, body: CallbackRequest, request: Request) -> TokenResponse:
+async def callback(provider: str, body: CallbackRequest, request: Request, response: Response) -> TokenResponse:
     """Complete the OAuth flow: validate state, exchange code, upsert user, mint tokens."""
     settings = _settings(request)
 
+    nonce = request.cookies.get(STATE_COOKIE_NAME)
     try:
-        oauth.validate_state(body.state, provider, settings)
+        oauth.validate_state(body.state, provider, settings, nonce)
     except UnknownProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OAuth state.") from exc
+
+    # Single-use: the state has served its purpose, so clear the cookie regardless
+    # of how the rest of the callback resolves.
+    response.delete_cookie(STATE_COOKIE_NAME, path=_state_cookie_path(request))
 
     try:
         info = await oauth.exchange_code_for_user(provider, body.code, settings)

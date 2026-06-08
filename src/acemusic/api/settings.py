@@ -63,6 +63,11 @@ class ApiSettings(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, ge=1)
     refresh_token_expire_days: int = Field(default=7, ge=1)
 
+    # Marks the OAuth ``state`` cookie (issue #110, login-CSRF binding) ``Secure``
+    # so it is only sent over HTTPS. Defaults to True for production; override to
+    # False for local/dev or test clients served over plain HTTP.
+    oauth_cookie_secure: bool = True
+
     @field_validator("jwt_algorithm")
     @classmethod
     def _check_jwt_algorithm(cls, value: str) -> str:

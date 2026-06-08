@@ -1,10 +1,20 @@
 """OAuth2 provider clients for Google and Discord (US-8.3, Step 5).
 
 The platform API is stateless — there is no session middleware — so CSRF
-protection cannot rely on a server-side session. Instead the ``state`` parameter
-is a short-lived signed JWT (``type="oauth_state"``) bound to the provider; the
-callback verifies it with :func:`validate_state`. This gives stateless,
-tamper-evident CSRF protection using the same ``jwt_secret_key`` as access tokens.
+protection cannot rely on a server-side session. The ``state`` parameter is a
+short-lived signed JWT (``type="oauth_state"``) bound to the provider; the
+callback verifies it with :func:`validate_state`.
+
+A signed ``state`` is tamper-evident but, on its own, **not bound to the client
+that started the flow** — anyone can mint one and replay it in a victim's
+callback (login CSRF / session fixation, issue #110). To close that, the state is
+bound to a per-client *nonce* using a stateless double-submit pattern:
+:func:`build_authorization_request` mints a high-entropy ``state_nonce``, commits
+only its SHA-256 into the signed state (the ``cnf`` claim), and returns the raw
+nonce so the route can set it in an HttpOnly+SameSite cookie. At the callback,
+:func:`validate_state` requires that cookie nonce to hash to the committed value.
+An attacker can neither forge the signed state nor read/set the victim's HttpOnly
+cookie, so a replayed state no longer validates.
 
 The authorization URL is built directly (deterministic, easy to assert) while the
 code-for-token exchange and the userinfo fetch use Authlib's
@@ -15,6 +25,9 @@ Provider differences (Google OIDC vs. Discord) are normalized to a single
 :class:`OAuthUserInfo` so callers never branch on the provider.
 """
 
+import hashlib
+import hmac
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -43,6 +56,10 @@ DISCORD_SCOPE = "identify email"
 STATE_TOKEN_TYPE = "oauth_state"
 #: ``state`` JWTs are short-lived: the round trip to the provider is seconds.
 STATE_EXPIRE_MINUTES = 10
+#: Cookie carrying the raw client-bound nonce whose hash is committed in ``state``.
+STATE_COOKIE_NAME = "oauth_state_nonce"
+#: Bytes of entropy for the state nonce (``secrets.token_urlsafe`` argument).
+STATE_NONCE_BYTES = 32
 
 SUPPORTED_PROVIDERS = ("google", "discord")
 
@@ -64,6 +81,20 @@ class OAuthUserInfo:
     email: str
     name: str
     email_verified: bool
+
+
+@dataclass
+class AuthorizationRequest:
+    """An authorization URL plus the raw nonce that binds its ``state`` to a client.
+
+    ``url`` is the provider authorization URL (the client redirects to it).
+    ``state_nonce`` is the high-entropy secret the caller must set in an
+    HttpOnly+SameSite cookie; only its SHA-256 is committed inside the signed
+    ``state``, so the URL never carries the nonce itself.
+    """
+
+    url: str
+    state_nonce: str
 
 
 def _provider_config(provider: str, settings: ApiSettings) -> dict:
@@ -107,42 +138,65 @@ def _require_secret(settings: ApiSettings) -> str:
     return settings.jwt_secret_key
 
 
-def _create_state(provider: str, settings: ApiSettings) -> str:
-    """Mint a short-lived signed JWT used as the CSRF ``state`` value."""
+def _hash_nonce(nonce: str) -> str:
+    """SHA-256 of the client-bound nonce, committed into the signed ``state``."""
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def _create_state(provider: str, nonce: str, settings: ApiSettings) -> str:
+    """Mint a short-lived signed JWT used as the CSRF ``state`` value.
+
+    The ``cnf`` (confirmation) claim binds the state to the client: it holds the
+    SHA-256 of ``nonce``, whose raw value the client returns via cookie.
+    """
     secret = _require_secret(settings)
     now = datetime.now(timezone.utc)
     payload = {
         "type": STATE_TOKEN_TYPE,
         "provider": provider,
+        "cnf": _hash_nonce(nonce),
         "iat": now,
         "exp": now + timedelta(minutes=STATE_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, secret, algorithm=settings.jwt_algorithm)
 
 
-def get_authorization_url(provider: str, settings: ApiSettings) -> str:
-    """Build the provider's authorization URL (with a signed ``state``).
+def build_authorization_request(provider: str, settings: ApiSettings) -> AuthorizationRequest:
+    """Build the provider authorization URL plus the client-binding state nonce.
+
+    Returns an :class:`AuthorizationRequest`; the caller redirects to ``.url`` and
+    must set ``.state_nonce`` in an HttpOnly+SameSite cookie so the callback can
+    prove the same client is completing the flow.
 
     Raises :class:`UnknownProviderError` for an unknown provider and
     :class:`OAuthError` if the provider's credentials are unconfigured.
     """
     config = _provider_config(provider, settings)
+    nonce = secrets.token_urlsafe(STATE_NONCE_BYTES)
     params = {
         "client_id": config["client_id"],
         "redirect_uri": config["redirect_uri"],
         "response_type": "code",
         "scope": config["scope"],
-        "state": _create_state(provider, settings),
+        "state": _create_state(provider, nonce, settings),
     }
-    return f"{config['authorize_url']}?{urlencode(params)}"
+    return AuthorizationRequest(
+        url=f"{config['authorize_url']}?{urlencode(params)}",
+        state_nonce=nonce,
+    )
 
 
-def validate_state(state: str, provider: str, settings: ApiSettings) -> bool:
-    """Verify the signed CSRF ``state`` for ``provider``.
+def validate_state(state: str, provider: str, settings: ApiSettings, nonce: str | None) -> bool:
+    """Verify the signed CSRF ``state`` for ``provider`` against the client ``nonce``.
+
+    ``nonce`` is the raw value the client returns from its state cookie; it must
+    hash to the ``cnf`` committed when the state was minted. A missing or
+    mismatched nonce means the caller is not the client that started the flow.
 
     Returns ``True`` on success; raises :class:`UnknownProviderError` for an
     unsupported provider, or :class:`OAuthError` if the state is expired,
-    tampered, the wrong token type, or for a different provider.
+    tampered, the wrong token type, for a different provider, or not bound to
+    this client.
     """
     if provider not in SUPPORTED_PROVIDERS:
         raise UnknownProviderError(f"Unsupported OAuth provider: {provider!r}")
@@ -156,6 +210,15 @@ def validate_state(state: str, provider: str, settings: ApiSettings) -> bool:
         raise OAuthError("Invalid OAuth state: not a state token.")
     if payload.get("provider") != provider:
         raise OAuthError("OAuth state provider mismatch.")
+
+    committed = payload.get("cnf")
+    if not committed:
+        raise OAuthError("OAuth state is not bound to a client.")
+    if not nonce:
+        raise OAuthError("Missing OAuth state cookie.")
+    # Constant-time compare so a mismatch can't be probed by timing.
+    if not hmac.compare_digest(committed, _hash_nonce(nonce)):
+        raise OAuthError("OAuth state does not match the initiating client.")
     return True
 
 
