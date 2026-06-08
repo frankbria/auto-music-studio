@@ -84,6 +84,22 @@ class TestLocalStorage:
         with pytest.raises(StorageError, match="escapes root"):
             backend.get_url(evil_key)
 
+    @pytest.mark.parametrize("empty_key", ["", "   "])
+    def test_empty_key_is_rejected(self, tmp_path: Path, empty_key: str):
+        from acemusic.storage import StorageError
+
+        backend = self._backend(tmp_path)
+        with pytest.raises(StorageError, match="non-empty"):
+            backend.upload(empty_key, b"data")
+
+    @pytest.mark.parametrize("root_key", [".", "clips/.."])
+    def test_root_referencing_key_is_rejected(self, tmp_path: Path, root_key: str):
+        from acemusic.storage import StorageError
+
+        backend = self._backend(tmp_path)
+        with pytest.raises(StorageError, match="must reference a file"):
+            backend.upload(root_key, b"data")
+
     def test_path_convention_round_trip(self, tmp_path: Path):
         backend = self._backend(tmp_path)
         backend.upload(SAMPLE_KEY, b"round-trip")
@@ -120,6 +136,16 @@ class TestS3Storage:
         assert kwargs["Key"] == SAMPLE_KEY
         assert kwargs["Body"] == b"audio"
 
+    def test_upload_sets_content_type_from_extension(self):
+        backend, client, _ = self._backend_and_client()
+        backend.upload(SAMPLE_KEY, b"audio")  # .mp3
+        assert client.put_object.call_args.kwargs["ContentType"] == "audio/mpeg"
+
+    def test_upload_unknown_extension_falls_back_to_octet_stream(self):
+        backend, client, _ = self._backend_and_client()
+        backend.upload("user/ws/clips/clip.weirdext", b"x")
+        assert client.put_object.call_args.kwargs["ContentType"] == "application/octet-stream"
+
     def test_download_returns_body_bytes(self):
         backend, client, _ = self._backend_and_client()
         body = MagicMock()
@@ -127,6 +153,29 @@ class TestS3Storage:
         client.get_object.return_value = {"Body": body}
         assert backend.download(SAMPLE_KEY) == b"downloaded"
         client.get_object.assert_called_once_with(Bucket="my-bucket", Key=SAMPLE_KEY)
+
+    def test_download_missing_key_raises_file_not_found(self):
+        backend, client, _ = self._backend_and_client()
+        err = Exception("not found")
+        err.response = {"Error": {"Code": "NoSuchKey"}}  # type: ignore[attr-defined]
+        client.get_object.side_effect = err
+        with pytest.raises(FileNotFoundError):
+            backend.download(SAMPLE_KEY)
+
+    def test_download_other_client_error_propagates(self):
+        backend, client, _ = self._backend_and_client()
+        err = Exception("access denied")
+        err.response = {"Error": {"Code": "AccessDenied"}}  # type: ignore[attr-defined]
+        client.get_object.side_effect = err
+        with pytest.raises(Exception, match="access denied"):
+            backend.download(SAMPLE_KEY)
+
+    def test_download_non_client_error_propagates(self):
+        # An exception with no ``response`` attribute is not an S3 not-found.
+        backend, client, _ = self._backend_and_client()
+        client.get_object.side_effect = RuntimeError("network down")
+        with pytest.raises(RuntimeError, match="network down"):
+            backend.download(SAMPLE_KEY)
 
     def test_delete_calls_delete_object(self):
         backend, client, _ = self._backend_and_client()
@@ -186,20 +235,20 @@ class TestGetStorageBackend:
             backend = storage.get_storage_backend()
         assert isinstance(backend, S3Storage)
 
-    def test_s3_without_bucket_raises_value_error(self, monkeypatch):
+    def test_s3_without_bucket_raises_storage_error(self, monkeypatch):
         from acemusic import storage
 
         monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "s3")
         monkeypatch.delenv("ACEMUSIC_S3_BUCKET", raising=False)
         with patch.object(storage, "boto3", MagicMock()):
-            with pytest.raises(ValueError, match="ACEMUSIC_S3_BUCKET"):
+            with pytest.raises(storage.StorageError, match="ACEMUSIC_S3_BUCKET"):
                 storage.get_storage_backend()
 
-    def test_unknown_backend_raises_value_error(self, monkeypatch):
+    def test_unknown_backend_raises_storage_error(self, monkeypatch):
         from acemusic import storage
 
         monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "ftp")
-        with pytest.raises(ValueError, match="ftp"):
+        with pytest.raises(storage.StorageError, match="ftp"):
             storage.get_storage_backend()
 
     def test_default_backend_is_local(self, monkeypatch):
@@ -209,3 +258,35 @@ class TestGetStorageBackend:
         monkeypatch.delenv("ACEMUSIC_STORAGE_BACKEND", raising=False)
         backend = storage.get_storage_backend()
         assert isinstance(backend, LocalStorage)
+
+
+# ---------------------------------------------------------------------------
+# Storage configuration (US-8.5)
+# ---------------------------------------------------------------------------
+
+
+class TestStorageConfig:
+    def test_invalid_url_expiry_raises_clear_error(self, monkeypatch):
+        from acemusic.config import load_config
+
+        monkeypatch.setenv("ACEMUSIC_S3_URL_EXPIRY", "not-a-number")
+        with pytest.raises(ValueError, match="ACEMUSIC_S3_URL_EXPIRY"):
+            load_config()
+
+    def test_non_positive_url_expiry_raises(self, monkeypatch):
+        from acemusic.config import load_config
+
+        monkeypatch.setenv("ACEMUSIC_S3_URL_EXPIRY", "0")
+        with pytest.raises(ValueError, match="positive"):
+            load_config()
+
+    def test_env_overrides_and_defaults(self, monkeypatch):
+        from acemusic.config import load_config
+
+        monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        monkeypatch.setenv("ACEMUSIC_S3_URL_EXPIRY", "120")
+        config = load_config()
+        assert config.storage_backend == "s3"
+        assert config.s3_bucket == "b"
+        assert config.s3_url_expiry == 120
