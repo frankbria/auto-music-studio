@@ -37,6 +37,13 @@ class StorageError(Exception):
     """Raised when a storage operation cannot be performed."""
 
 
+def _validate_key(path: str) -> str:
+    """Reject empty/whitespace keys so every backend honours one key contract."""
+    if not path or not path.strip():
+        raise StorageError("Storage key must be a non-empty path")
+    return path
+
+
 def _s3_error_code(exc: Exception) -> str | None:
     """Extract the S3 error code from a boto3 ClientError without importing it.
 
@@ -85,8 +92,7 @@ class LocalStorage(StorageBackend):
         # (absolute paths, ``..`` traversal, or an empty key that resolves to the
         # root itself). Keys derive from user/workspace identifiers, so this
         # guards against path-traversal access.
-        if not path or not path.strip():
-            raise StorageError("Storage key must be a non-empty path")
+        _validate_key(path)
         target = (self.root_dir / path).resolve()
         if target != self.root_dir and not target.is_relative_to(self.root_dir):
             raise StorageError(f"Storage key escapes root directory: {path!r}")
@@ -137,6 +143,7 @@ class S3Storage(StorageBackend):
         )
 
     def _key(self, path: str) -> str:
+        _validate_key(path)
         if self.prefix:
             return f"{self.prefix.rstrip('/')}/{path}"
         return path

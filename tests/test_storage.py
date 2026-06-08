@@ -212,6 +212,14 @@ class TestS3Storage:
         assert kwargs["endpoint_url"] == "http://minio:9000"
         assert kwargs["region_name"] == "us-east-1"
 
+    @pytest.mark.parametrize("empty_key", ["", "   "])
+    def test_empty_key_is_rejected(self, empty_key: str):
+        from acemusic import storage
+
+        backend, _, _ = self._backend_and_client()
+        with pytest.raises(storage.StorageError, match="non-empty"):
+            backend.upload(empty_key, b"data")
+
     def test_raises_clear_error_when_boto3_missing(self):
         from acemusic import storage
 
