@@ -1,0 +1,109 @@
+"""Job status endpoint (US-9.2), mounted under ``/api/v1/jobs``.
+
+``GET /api/v1/jobs/{job_id}/status`` returns a job's current lifecycle state so a
+client can poll while generation runs asynchronously. The route is owner-scoped:
+a job that does not exist *or* belongs to another user yields 404, so the
+endpoint never reveals the existence of another user's jobs.
+"""
+
+import asyncio
+import logging
+from datetime import datetime
+
+from beanie import PydanticObjectId
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from acemusic.storage import get_storage_backend
+
+from ..auth.dependencies import CurrentUser, get_current_user
+from ..models import Clip, Job, JobStatus
+from .generation import GenerationRequest, estimate_seconds
+
+logger = logging.getLogger(__name__)
+
+# Router-level dependency gates every route behind a valid Bearer token (mirrors
+# the generation router), so an unauthenticated request is rejected with 401.
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(get_current_user)])
+
+
+class JobStatusResponse(BaseModel):
+    """A job's current state. Result fields are populated by lifecycle phase.
+
+    ``response_model_exclude_none`` drops the optional fields until they apply:
+    ``clip_ids``/``audio_urls`` appear only when completed, ``error`` only when
+    failed.
+    """
+
+    job_id: str
+    status: JobStatus
+    created_at: datetime
+    estimated_time_seconds: int
+    clip_ids: list[str] | None = None
+    audio_urls: list[str] | None = None
+    error: str | None = None
+
+
+def _coerce_object_id(value: str) -> PydanticObjectId | None:
+    """Parse a path id, treating a malformed id as "no such job" (caller → 404)."""
+    try:
+        return PydanticObjectId(value)
+    except Exception:
+        return None
+
+
+def _estimate_for(job: Job) -> int:
+    """Re-derive the advisory estimate from the persisted request snapshot.
+
+    Reuses the generation router's heuristic so the status and create responses
+    agree. A snapshot that no longer validates (e.g. a schema change) falls back
+    to 0 rather than failing the status read.
+    """
+    try:
+        return estimate_seconds(GenerationRequest(**job.input_params))
+    except Exception:
+        return 0
+
+
+async def _resolve_audio_urls(clip_ids: list[str]) -> list[str]:
+    """Map a completed job's clip ids to retrievable audio URLs via storage."""
+    if not clip_ids:
+        return []
+    storage = get_storage_backend()
+    urls: list[str] = []
+    for clip_id in clip_ids:
+        clip = await Clip.get(clip_id)
+        if clip is None:
+            # The processor inserts clips atomically with the job result, so a
+            # missing one signals a data inconsistency worth surfacing.
+            logger.warning("Clip %s referenced by a completed job is missing", clip_id)
+            continue
+        # get_url may hit the network (S3 presign), so keep it off the event loop.
+        urls.append(await asyncio.to_thread(storage.get_url, clip.file_path))
+    return urls
+
+
+@router.get("/{job_id}/status", response_model=JobStatusResponse, response_model_exclude_none=True)
+async def get_job_status(
+    job_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> JobStatusResponse:
+    """Return the current status of ``job_id`` for its owner (404 otherwise)."""
+    oid = _coerce_object_id(job_id)
+    job = await Job.get(oid) if oid is not None else None
+    if job is None or str(job.user_id) != current.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+    response = JobStatusResponse(
+        job_id=str(job.id),
+        status=job.status,
+        created_at=job.created_at,
+        estimated_time_seconds=_estimate_for(job),
+    )
+    if job.status == JobStatus.COMPLETED:
+        clip_ids = list((job.result or {}).get("clip_ids", []))
+        response.clip_ids = clip_ids
+        response.audio_urls = await _resolve_audio_urls(clip_ids)
+    elif job.status == JobStatus.FAILED:
+        response.error = job.error
+    return response

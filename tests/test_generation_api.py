@@ -28,7 +28,14 @@ def _async_client(app) -> httpx.AsyncClient:
 @pytest.fixture
 def settings(mongo_db, mongo_settings) -> ApiSettings:
     # mongo_db initialises Beanie against the isolated DB on this test's loop.
-    return mongo_settings.model_copy(update={"jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx"})
+    # Disable the background processor (US-9.2): these tests assert jobs stay
+    # ``queued``, so a worker claiming them mid-test would make them flaky.
+    return mongo_settings.model_copy(
+        update={
+            "jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx",
+            "job_processor_enabled": False,
+        }
+    )
 
 
 @pytest.fixture

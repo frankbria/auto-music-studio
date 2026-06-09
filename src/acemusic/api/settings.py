@@ -69,6 +69,17 @@ class ApiSettings(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, ge=1)
     refresh_token_expire_days: int = Field(default=7, ge=1)
 
+    # Async job processor (US-9.2). The processor runs as a background task inside
+    # the API process, polling MongoDB for queued jobs. ``job_concurrency`` bounds
+    # how many run at once; ``job_poll_interval`` is the idle sleep between polls
+    # when the queue is empty; ``job_poll_timeout`` caps how long a single job
+    # waits for ACE-Step before it is failed. ``job_processor_enabled`` lets a
+    # deployment (or a test) run the API without the background worker.
+    job_concurrency: int = Field(default=2, ge=1)
+    job_poll_interval: float = Field(default=1.0, gt=0)
+    job_poll_timeout: float = Field(default=600.0, gt=0)
+    job_processor_enabled: bool = Field(default=True)
+
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
     # ``oauth_cookie_secure`` marks it Secure (HTTPS-only); keep True in

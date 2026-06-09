@@ -20,8 +20,9 @@ from acemusic import __version__
 
 from . import database
 from .exceptions import HandleConflictError
-from .routers import auth, generation, health, users
+from .routers import auth, generation, health, jobs, users
 from .settings import ApiSettings
+from .tasks.processor import JobProcessor
 
 API_V1_PREFIX = "/api/v1"
 
@@ -61,9 +62,25 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def lifespan(app_: FastAPI):
         client = await database.init_db(settings)
         app_.state.mongo_client = client
+        # Start the background job processor (US-9.2) once the DB is up. It polls
+        # for queued jobs and runs them in-process; disable it (or run a
+        # processor-less API) via ACEMUSIC_API_JOB_PROCESSOR_ENABLED=false. The
+        # try/finally wraps processor start too, so a start() failure still closes
+        # the DB client rather than leaking it.
+        processor: JobProcessor | None = None
         try:
+            if settings.job_processor_enabled:
+                processor = JobProcessor(
+                    concurrency=settings.job_concurrency,
+                    poll_interval=settings.job_poll_interval,
+                    poll_timeout=settings.job_poll_timeout,
+                )
+                await processor.start()
+            app_.state.job_processor = processor
             yield
         finally:
+            if processor is not None:
+                await processor.stop()
             await database.close_db(client)
 
     app = FastAPI(
@@ -97,6 +114,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(auth.router, prefix=API_V1_PREFIX)
     app.include_router(users.router, prefix=API_V1_PREFIX)
     app.include_router(generation.router, prefix=API_V1_PREFIX)
+    app.include_router(jobs.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.

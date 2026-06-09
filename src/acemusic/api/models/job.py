@@ -40,5 +40,9 @@ class Job(Document):
         name = "jobs"
         indexes = [
             IndexModel([("user_id", ASCENDING)]),
-            IndexModel([("status", ASCENDING)]),
+            # Serves the processor's claim/requeue queries (US-9.2): filter by
+            # (status, job_type) and sort by created_at, so a worker claims the
+            # oldest queued job from the index rather than scanning the
+            # collection. The (status) prefix also covers plain status lookups.
+            IndexModel([("status", ASCENDING), ("job_type", ASCENDING), ("created_at", ASCENDING)]),
         ]
