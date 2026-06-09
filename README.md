@@ -75,10 +75,23 @@ environment variables (see `.env.example`); cookie behavior is tuned via
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/v1/generate` | Submits a generation request and returns a `job_id` for async tracking (HTTP 202) |
+| `GET /api/v1/jobs/{id}/status` | Returns a job's current status; owner-scoped (404 for missing or other users' jobs) |
 
-The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), and `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`). The job is created with status `queued`; execution is handled asynchronously (US-9.2).
+The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), and `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`). The job is created with status `queued` and picked up by the async processor (US-9.2).
 
-Invalid parameters return 422 with field-level errors. The response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
+Invalid parameters return 422 with field-level errors. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
+
+The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
+
+#### Async job processor (US-9.2)
+
+A background processor runs inside the API process, polling MongoDB for `queued`
+jobs, forwarding them to ACE-Step, storing the audio via the storage abstraction,
+and creating clip records before marking the job `completed` (or `failed` with an
+error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
+`JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
+600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
+without the worker — recommended to run a single processor instance).
 
 ## Stem separation backends
 
