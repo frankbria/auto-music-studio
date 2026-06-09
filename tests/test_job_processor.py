@@ -7,6 +7,7 @@ HTTP client replaced by an in-process double (mirrors ``tests/test_generate.py``
 """
 
 import asyncio
+import os
 import threading
 import time
 
@@ -276,8 +277,6 @@ class TestLifecycle:
     async def test_partial_failure_rolls_back_stored_clips(self, mongo_db, tmp_path) -> None:
         # Second download fails after the first clip is already stored — the job
         # fails and the first clip's record AND file must be rolled back.
-        import os
-
         storage = LocalStorage(root_dir=tmp_path)
         fake = _FakeAceClient(audio_urls=["http://ace/a.wav", "http://ace/b.wav"], fail_download_after=1)
         proc = _make_processor(fake, storage)

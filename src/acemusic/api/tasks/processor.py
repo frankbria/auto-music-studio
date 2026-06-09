@@ -146,29 +146,34 @@ class JobProcessor:
         while self._running:
             # Acquire a slot *before* claiming: the claim flips status to
             # processing, so over-claiming would strand jobs with no worker.
+            # acquire() returns holding a permit, or raises (e.g. on cancellation)
+            # holding none — so a raise here leaks nothing. The path from here to
+            # the try below is synchronous, so the permit is never held across an
+            # unguarded suspension point; the finally then releases it on every
+            # path that doesn't hand it to a job task.
             await self._semaphore.acquire()
-            if not self._running:
-                self._semaphore.release()
-                break
+            slot_held = True
             try:
-                job = await self._claim_next_job()
-            except asyncio.CancelledError:
-                # Shutdown cancelled us mid-claim: release the slot we hold (the
-                # instance is discarded after stop(), but stay leak-free) and exit.
-                self._semaphore.release()
-                raise
-            except Exception:  # pragma: no cover - defensive: keep the loop alive
-                logger.exception("Failed to claim next job")
-                self._semaphore.release()
-                await asyncio.sleep(self._poll_interval)
-                continue
-            if job is None:
-                self._semaphore.release()
-                await asyncio.sleep(self._poll_interval)
-                continue
-            task = asyncio.create_task(self._process_and_release(job))
-            self._active.add(task)
-            task.add_done_callback(self._active.discard)
+                if not self._running:
+                    break
+                try:
+                    job = await self._claim_next_job()
+                except Exception:  # pragma: no cover - defensive: keep the loop alive
+                    logger.exception("Failed to claim next job")
+                    job = None
+                if job is None:
+                    # Release before the idle backoff so a freed slot stays usable.
+                    self._semaphore.release()
+                    slot_held = False
+                    await asyncio.sleep(self._poll_interval)
+                    continue
+                task = asyncio.create_task(self._process_and_release(job))
+                self._active.add(task)
+                task.add_done_callback(self._active.discard)
+                slot_held = False  # ownership of the permit passes to the job task
+            finally:
+                if slot_held:
+                    self._semaphore.release()
 
     async def _process_and_release(self, job: Job) -> None:
         try:
