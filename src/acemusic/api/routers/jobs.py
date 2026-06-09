@@ -7,6 +7,7 @@ endpoint never reveals the existence of another user's jobs.
 """
 
 import asyncio
+import logging
 from datetime import datetime
 
 from beanie import PydanticObjectId
@@ -18,6 +19,8 @@ from acemusic.storage import get_storage_backend
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
 from .generation import GenerationRequest, estimate_seconds
+
+logger = logging.getLogger(__name__)
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the generation router), so an unauthenticated request is rejected with 401.
@@ -71,6 +74,9 @@ async def _resolve_audio_urls(clip_ids: list[str]) -> list[str]:
     for clip_id in clip_ids:
         clip = await Clip.get(clip_id)
         if clip is None:
+            # The processor inserts clips atomically with the job result, so a
+            # missing one signals a data inconsistency worth surfacing.
+            logger.warning("Clip %s referenced by a completed job is missing", clip_id)
             continue
         # get_url may hit the network (S3 presign), so keep it off the event loop.
         urls.append(await asyncio.to_thread(storage.get_url, clip.file_path))

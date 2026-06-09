@@ -275,19 +275,43 @@ class JobProcessor:
         client: AceStepClient,
         audio_urls: list[str],
     ) -> list[str]:
-        """Download each result, store it, and create its Clip record."""
+        """Download each result, store it, and create its Clip record.
+
+        A failure partway through (download/upload/insert error on a later clip)
+        rolls back the clips and files already written, so a job that ends up
+        ``failed`` never leaves orphaned ``Clip`` rows or storage objects behind.
+        """
         storage = self._storage_factory()
         fmt = params.get("format") or "wav"
         clip_ids: list[str] = []
-        for url in audio_urls:
-            data = await asyncio.to_thread(client.download_audio, url)
-            clip_id = PydanticObjectId()
-            path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
-            await asyncio.to_thread(storage.upload, path, data)
-            clip = self._build_clip(job, params, clip_id, path, fmt)
-            await clip.insert()
-            clip_ids.append(str(clip_id))
+        stored: list[tuple[Clip, str]] = []
+        try:
+            for url in audio_urls:
+                data = await asyncio.to_thread(client.download_audio, url)
+                clip_id = PydanticObjectId()
+                path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
+                await asyncio.to_thread(storage.upload, path, data)
+                clip = self._build_clip(job, params, clip_id, path, fmt)
+                await clip.insert()
+                stored.append((clip, path))
+                clip_ids.append(str(clip_id))
+        except Exception:
+            await self._rollback_clips(storage, stored)
+            raise
         return clip_ids
+
+    @staticmethod
+    async def _rollback_clips(storage: StorageBackend, stored: list[tuple[Clip, str]]) -> None:
+        """Best-effort cleanup of clips/files written before a mid-batch failure."""
+        for clip, path in stored:
+            try:
+                await clip.delete()
+            except Exception:  # pragma: no cover - cleanup is best-effort
+                logger.exception("Failed to delete orphaned clip %s during rollback", clip.id)
+            try:
+                await asyncio.to_thread(storage.delete, path)
+            except Exception:  # pragma: no cover - cleanup is best-effort
+                logger.exception("Failed to delete orphaned storage object %s during rollback", path)
 
     @staticmethod
     def _build_submit_kwargs(params: dict[str, Any]) -> dict[str, Any]:
@@ -311,6 +335,8 @@ class JobProcessor:
         fmt: str,
     ) -> Clip:
         """Construct a Clip from a job's params (id pre-assigned to match the path)."""
+        # ``duration`` is the *requested* duration from the job params (ACE-Step
+        # honours it); we store it as the clip's duration metadata.
         # bpm may be the literal "auto"; Clip.bpm is an int, so persist only ints.
         bpm = params.get("bpm")
         style = params.get("style")

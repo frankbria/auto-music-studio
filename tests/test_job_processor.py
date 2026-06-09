@@ -54,6 +54,7 @@ class _FakeAceClient:
         error: str | None = None,
         pending_forever: bool = False,
         track: _ConcurrencyTracker | None = None,
+        fail_download_after: int | None = None,
     ) -> None:
         self._audio_urls = ["http://ace/a.wav", "http://ace/b.wav"] if audio_urls is None else audio_urls
         self._audio = audio
@@ -61,6 +62,8 @@ class _FakeAceClient:
         self._error = error
         self._pending_forever = pending_forever
         self._track = track
+        self._fail_download_after = fail_download_after
+        self._downloads = 0
         self.submitted: list[dict] = []
 
     def submit_task(self, **kwargs) -> str:
@@ -82,6 +85,9 @@ class _FakeAceClient:
                 self._track.exit()
 
     def download_audio(self, url: str, timeout: float = 120.0) -> bytes:
+        self._downloads += 1
+        if self._fail_download_after is not None and self._downloads > self._fail_download_after:
+            raise RuntimeError("download boom")
         return self._audio
 
 
@@ -266,6 +272,28 @@ class TestLifecycle:
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
         assert "no audio" in (refreshed.error or "").lower()
+
+    async def test_partial_failure_rolls_back_stored_clips(self, mongo_db, tmp_path) -> None:
+        # Second download fails after the first clip is already stored — the job
+        # fails and the first clip's record AND file must be rolled back.
+        import os
+
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/a.wav", "http://ace/b.wav"], fail_download_after=1)
+        proc = _make_processor(fake, storage)
+        job = await _enqueue()
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.FAILED))
+        finally:
+            await proc.stop()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert await Clip.count() == 0, "orphaned clip record not rolled back"
+        leftover = [f for _root, _dirs, files in os.walk(tmp_path) for f in files]
+        assert leftover == [], "orphaned storage file not rolled back"
 
     async def test_two_concurrent_jobs_complete_without_corruption(self, mongo_db, tmp_path) -> None:
         storage = LocalStorage(root_dir=tmp_path)

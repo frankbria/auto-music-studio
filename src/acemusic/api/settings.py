@@ -78,7 +78,7 @@ class ApiSettings(BaseSettings):
     job_concurrency: int = Field(default=2, ge=1)
     job_poll_interval: float = Field(default=1.0, gt=0)
     job_poll_timeout: float = Field(default=600.0, gt=0)
-    job_processor_enabled: bool = True
+    job_processor_enabled: bool = Field(default=True)
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
