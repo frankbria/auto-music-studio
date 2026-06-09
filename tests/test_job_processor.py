@@ -334,12 +334,14 @@ class TestClaim:
         proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path))
         job = await _enqueue()
 
-        first = await proc._claim_next_job()
-        second = await proc._claim_next_job()
+        # Two workers race for the same single queued job; the atomic
+        # find_one_and_update must hand it to exactly one of them.
+        first, second = await asyncio.gather(proc._claim_next_job(), proc._claim_next_job())
 
-        assert first is not None and str(first.id) == str(job.id)
-        assert first.status == JobStatus.PROCESSING
-        assert second is None
+        claimed = [r for r in (first, second) if r is not None]
+        assert len(claimed) == 1, "the same job was claimed by two workers"
+        assert str(claimed[0].id) == str(job.id)
+        assert claimed[0].status == JobStatus.PROCESSING
 
 
 @pytest.mark.integration

@@ -112,7 +112,12 @@ class TestStatusLifecycle:
 
         resp = await client.get(_status_url(str(job.id)), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
-        assert resp.json()["status"] == "processing"
+        body = resp.json()
+        assert body["status"] == "processing"
+        # Result fields apply only once terminal; they must be absent here.
+        assert "clip_ids" not in body
+        assert "audio_urls" not in body
+        assert "error" not in body
 
     async def test_completed_job_includes_clip_ids_and_audio_urls(
         self, client, settings, monkeypatch, tmp_path
@@ -154,6 +159,7 @@ class TestStatusLifecycle:
         assert body["status"] == "failed"
         assert body["error"] == "model overloaded"
         assert "clip_ids" not in body
+        assert "audio_urls" not in body
 
 
 @pytest.mark.integration
