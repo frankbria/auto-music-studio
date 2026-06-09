@@ -1,0 +1,356 @@
+"""Async job processor (US-9.2).
+
+A background worker that drives queued generation jobs to completion inside the
+FastAPI process. It polls MongoDB for ``status=queued`` jobs — a stateless,
+restart-safe design that mirrors how a future Celery/Redis swap would behave —
+atomically claims each, runs the ACE-Step generation, stores the audio via the
+storage abstraction, creates :class:`Clip` records, and transitions the job
+``queued -> processing -> completed | failed``.
+
+The ACE-Step client and storage backend are synchronous, so their blocking calls
+run in a worker thread (:func:`asyncio.to_thread`) to keep the event loop
+responsive. Concurrency is bounded by an :class:`asyncio.Semaphore`; :meth:`stop`
+cancels in-flight work for a graceful shutdown.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable
+from datetime import timedelta
+from functools import partial
+from typing import Any
+
+from beanie import PydanticObjectId
+from pymongo import ASCENDING, ReturnDocument
+
+from acemusic.client import AceStepClient
+from acemusic.config import load_config
+from acemusic.storage import StorageBackend, get_storage_backend
+
+from .. import database
+from ..models import Clip, Job, JobStatus
+from ..models.common import utcnow
+
+logger = logging.getLogger(__name__)
+
+# query_result already normalises ACE-Step's integer status codes to these.
+_TERMINAL_STATES = {"completed", "failed"}
+
+# input_params is the verbatim GenerationRequest snapshot. submit_task accepts a
+# focused subset; anything else (API-only fields) is ignored. prompt/duration/
+# format are mapped explicitly below.
+_SUBMIT_FIELDS = (
+    "style",
+    "lyrics",
+    "vocal_language",
+    "instrumental",
+    "bpm",
+    "key",
+    "time_signature",
+    "seed",
+    "inference_steps",
+    "weirdness",
+    "style_influence",
+    "thinking",
+    "model",
+    "mode",
+    "sound_type",
+)
+
+
+class JobProcessingError(Exception):
+    """A job could not be processed (ACE-Step failure, timeout, or no output)."""
+
+
+def _default_client_factory() -> AceStepClient:
+    """Build an ACE-Step client from the CLI config (env > .env > config.yaml)."""
+    config = load_config()
+    if not config.api_url:
+        raise JobProcessingError("ACE-Step base URL is not configured (set ACEMUSIC_BASE_URL).")
+    return AceStepClient(base_url=config.api_url, api_key=config.api_key)
+
+
+class JobProcessor:
+    """Background worker pool that processes queued generation jobs.
+
+    The ACE-Step client and storage backend are obtained through factories so
+    tests can inject in-process doubles; production uses the real config-driven
+    client and the configured storage backend.
+    """
+
+    def __init__(
+        self,
+        *,
+        concurrency: int = 2,
+        poll_interval: float = 1.0,
+        poll_timeout: float = 600.0,
+        ace_poll_interval: float = 2.0,
+        stale_after: float | None = None,
+        job_type: str = "generate",
+        client_factory: Callable[[], AceStepClient] | None = None,
+        storage_factory: Callable[[], StorageBackend] | None = None,
+    ) -> None:
+        self._concurrency = concurrency
+        self._semaphore = asyncio.Semaphore(concurrency)
+        self._poll_interval = poll_interval
+        self._poll_timeout = poll_timeout
+        self._ace_poll_interval = ace_poll_interval
+        # A job legitimately stays in `processing` for at most poll_timeout (its
+        # own worker fails it after that). Only re-queue jobs older than that
+        # window plus a margin, so a startup sweep never reclaims a job a live
+        # sibling process is still working — see _requeue_stale_jobs.
+        self._stale_after = stale_after if stale_after is not None else poll_timeout + 300.0
+        self._job_type = job_type
+        self._client_factory = client_factory or _default_client_factory
+        self._storage_factory = storage_factory or get_storage_backend
+        self._running = False
+        self._worker_task: asyncio.Task[None] | None = None
+        self._active: set[asyncio.Task[None]] = set()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    async def start(self) -> None:
+        """Re-queue stale jobs, then launch the polling worker. Idempotent."""
+        if self._running:
+            return
+        self._running = True
+        await self._requeue_stale_jobs()
+        self._worker_task = asyncio.create_task(self._run_worker())
+        logger.info("Job processor started (concurrency=%d)", self._concurrency)
+
+    async def stop(self) -> None:
+        """Stop polling and cancel any in-flight jobs, awaiting their unwind."""
+        self._running = False
+        if self._worker_task is not None:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+        active = list(self._active)
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+        self._active.clear()
+        logger.info("Job processor stopped")
+
+    # -- worker loop -------------------------------------------------------
+
+    async def _run_worker(self) -> None:
+        """Continuously claim and dispatch jobs, bounded by the semaphore."""
+        while self._running:
+            # Acquire a slot *before* claiming: the claim flips status to
+            # processing, so over-claiming would strand jobs with no worker.
+            await self._semaphore.acquire()
+            if not self._running:
+                self._semaphore.release()
+                break
+            try:
+                job = await self._claim_next_job()
+            except asyncio.CancelledError:
+                # Shutdown cancelled us mid-claim: release the slot we hold (the
+                # instance is discarded after stop(), but stay leak-free) and exit.
+                self._semaphore.release()
+                raise
+            except Exception:  # pragma: no cover - defensive: keep the loop alive
+                logger.exception("Failed to claim next job")
+                self._semaphore.release()
+                await asyncio.sleep(self._poll_interval)
+                continue
+            if job is None:
+                self._semaphore.release()
+                await asyncio.sleep(self._poll_interval)
+                continue
+            task = asyncio.create_task(self._process_and_release(job))
+            self._active.add(task)
+            task.add_done_callback(self._active.discard)
+
+    async def _process_and_release(self, job: Job) -> None:
+        try:
+            await self._process_job(job)
+        finally:
+            self._semaphore.release()
+
+    # -- job discovery -----------------------------------------------------
+
+    async def _claim_next_job(self) -> Job | None:
+        """Atomically claim the oldest queued job, or return None if there are none.
+
+        ``find_one_and_update`` is atomic at the document level, so two workers
+        racing for the same job are serialised by MongoDB — exactly one wins.
+        """
+        collection = database.get_database()[Job.Settings.name]
+        doc = await collection.find_one_and_update(
+            {"status": JobStatus.QUEUED.value, "job_type": self._job_type},
+            {"$set": {"status": JobStatus.PROCESSING.value, "started_at": utcnow()}},
+            sort=[("created_at", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        if doc is None:
+            return None
+        # Re-load through Beanie so the rest of the pipeline works with a typed
+        # Job (and its update helpers) rather than a raw BSON dict.
+        job = await Job.get(doc["_id"])
+        if job is None:  # pragma: no cover - claimed doc deleted out from under us
+            logger.error("Claimed job %s vanished before reload; skipping", doc["_id"])
+        return job
+
+    async def _requeue_stale_jobs(self) -> None:
+        """Reset *stale* ``processing`` jobs back to ``queued`` on startup.
+
+        A job left in ``processing`` longer than ``stale_after`` is orphaned: its
+        worker either crashed or was cancelled mid-generation, since a live worker
+        fails a job after ``poll_timeout``. Re-queue only those so they are retried
+        rather than stranded. Bounding by ``started_at`` keeps this safe when more
+        than one API process runs — a job a sibling is actively working (started
+        recently) is never reclaimed. (Running a single processor instance is still
+        the recommended deployment; this is the safety net.)
+        """
+        collection = database.get_database()[Job.Settings.name]
+        cutoff = utcnow() - timedelta(seconds=self._stale_after)
+        result = await collection.update_many(
+            {
+                "status": JobStatus.PROCESSING.value,
+                "job_type": self._job_type,
+                # ``started_at`` missing/None means a legacy/partial claim — also stale.
+                "$or": [{"started_at": {"$lt": cutoff}}, {"started_at": None}],
+            },
+            {"$set": {"status": JobStatus.QUEUED.value, "started_at": None}},
+        )
+        if result.modified_count:
+            logger.info("Re-queued %d stale processing job(s)", result.modified_count)
+
+    # -- single-job processing --------------------------------------------
+
+    async def _process_job(self, job: Job) -> None:
+        """Run one claimed job end-to-end, recording success or failure.
+
+        Cancellation (graceful shutdown) is re-raised, leaving the job in
+        ``processing`` so the next startup re-queues it. Any other error is
+        captured on the job as ``failed`` with its message.
+        """
+        try:
+            client = self._client_factory()
+            params = dict(job.input_params or {})
+
+            task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
+            result = await self._poll_until_complete(client, task_id)
+            if result.get("status") == "failed":
+                raise JobProcessingError(result.get("error") or "ACE-Step generation failed")
+
+            audio_urls = result.get("audio_urls") or []
+            if not audio_urls:
+                raise JobProcessingError("ACE-Step completed but returned no audio")
+
+            clip_ids = await self._store_clips(job, params, client, audio_urls)
+            await self._mark_completed(job, clip_ids)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any failure must land on the job record
+            logger.exception("Job %s failed", job.id)
+            await self._mark_failed(job, str(exc))
+
+    async def _poll_until_complete(self, client: AceStepClient, task_id: str) -> dict[str, Any]:
+        """Poll query_result until the task reaches a terminal state or times out."""
+        start = time.monotonic()
+        while True:
+            result = await asyncio.to_thread(client.query_result, task_id)
+            if result.get("status") in _TERMINAL_STATES:
+                return result
+            if time.monotonic() - start > self._poll_timeout:
+                raise JobProcessingError(
+                    f"Timed out after {self._poll_timeout:.0f}s waiting for ACE-Step task {task_id}"
+                )
+            await asyncio.sleep(self._ace_poll_interval)
+
+    async def _store_clips(
+        self,
+        job: Job,
+        params: dict[str, Any],
+        client: AceStepClient,
+        audio_urls: list[str],
+    ) -> list[str]:
+        """Download each result, store it, and create its Clip record."""
+        storage = self._storage_factory()
+        fmt = params.get("format") or "wav"
+        clip_ids: list[str] = []
+        for url in audio_urls:
+            data = await asyncio.to_thread(client.download_audio, url)
+            clip_id = PydanticObjectId()
+            path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
+            await asyncio.to_thread(storage.upload, path, data)
+            clip = self._build_clip(job, params, clip_id, path, fmt)
+            await clip.insert()
+            clip_ids.append(str(clip_id))
+        return clip_ids
+
+    @staticmethod
+    def _build_submit_kwargs(params: dict[str, Any]) -> dict[str, Any]:
+        """Map persisted job params onto ``AceStepClient.submit_task`` kwargs."""
+        kwargs: dict[str, Any] = {"prompt": params.get("prompt", "")}
+        if params.get("duration") is not None:
+            kwargs["audio_duration"] = params["duration"]
+        if params.get("format") is not None:
+            kwargs["format"] = params["format"]
+        for field in _SUBMIT_FIELDS:
+            if field in params:
+                kwargs[field] = params[field]
+        return kwargs
+
+    @staticmethod
+    def _build_clip(
+        job: Job,
+        params: dict[str, Any],
+        clip_id: PydanticObjectId,
+        path: str,
+        fmt: str,
+    ) -> Clip:
+        """Construct a Clip from a job's params (id pre-assigned to match the path)."""
+        # bpm may be the literal "auto"; Clip.bpm is an int, so persist only ints.
+        bpm = params.get("bpm")
+        style = params.get("style")
+        return Clip(
+            id=clip_id,
+            user_id=job.user_id,
+            workspace_id=job.workspace_id,
+            file_path=path,
+            format=fmt,
+            duration=params.get("duration"),
+            bpm=bpm if isinstance(bpm, int) else None,
+            key=params.get("key"),
+            style_tags=[style] if isinstance(style, str) and style else [],
+            lyrics=params.get("lyrics"),
+            vocal_language=params.get("vocal_language"),
+            model=params.get("model"),
+            seed=params.get("seed"),
+            inference_steps=params.get("inference_steps"),
+            generation_mode=params.get("mode"),
+        )
+
+    # -- status transitions ------------------------------------------------
+
+    async def _mark_completed(self, job: Job, clip_ids: list[str]) -> None:
+        await job.set(
+            {
+                Job.status: JobStatus.COMPLETED,
+                Job.result: {"clip_ids": clip_ids},
+                Job.completed_at: utcnow(),
+            }
+        )
+
+    async def _mark_failed(self, job: Job, error: str) -> None:
+        try:
+            await job.set(
+                {
+                    Job.status: JobStatus.FAILED,
+                    Job.error: error,
+                    Job.completed_at: utcnow(),
+                }
+            )
+        except Exception:  # pragma: no cover - last-ditch; never crash the worker
+            logger.exception("Failed to record failure for job %s", job.id)
