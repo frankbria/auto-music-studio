@@ -321,6 +321,7 @@ class TestClipAudioRangeRequests:
         resp = await client.get(_audio_url(str(clip.id)), headers=headers)
         assert resp.status_code == 416
         assert resp.headers["content-range"] == f"bytes */{len(wav_bytes)}"
+        assert resp.headers["accept-ranges"] == "bytes"
 
     async def test_invalid_range_header_serves_full_content(self, client, settings, local_storage, wav_bytes) -> None:
         user = await _make_user("clips-range5@example.com")

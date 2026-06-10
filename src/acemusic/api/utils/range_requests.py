@@ -16,11 +16,12 @@ _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
 
 def _unsatisfiable(content_length: int) -> HTTPException:
     # RFC 9110 §15.5.17: a 416 SHOULD carry the selected representation's
-    # length so the client can retry with a valid range.
+    # length so the client can retry with a valid range, and Accept-Ranges so
+    # it knows the bytes unit is understood (§14.3).
     return HTTPException(
         status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
         detail="Requested range not satisfiable.",
-        headers={"Content-Range": f"bytes */{content_length}"},
+        headers={"Content-Range": f"bytes */{content_length}", "Accept-Ranges": "bytes"},
     )
 
 

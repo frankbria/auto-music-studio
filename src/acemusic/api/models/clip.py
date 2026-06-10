@@ -32,10 +32,8 @@ class Clip(Document):
     inference_steps: int | None = None
     parent_clip_ids: list[PydanticObjectId] = Field(default_factory=list)
     generation_mode: str | None = None
-    # Visibility for cross-user audio access (US-9.3): private clips are only
-    # retrievable by their owner; public clips may be fetched by any
-    # authenticated user. Documents written before this field existed have no
-    # value stored and load as private.
+    # Cross-user audio access (US-9.3). Documents predating this field load as
+    # private.
     is_public: bool = False
     created_at: datetime = Field(default_factory=utcnow)
 
