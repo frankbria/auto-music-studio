@@ -67,11 +67,12 @@ async def get_clip_audio(
         serve_format = format
         converted = True
 
-    headers = {"Accept-Ranges": "bytes"}
+    # Byte ranges address the stored representation; conversion produces a
+    # different byte layout, so Range (and the Accept-Ranges advertisement)
+    # only applies to unconverted responses.
+    headers = {} if converted else {"Accept-Ranges": "bytes"}
     media_type = get_audio_content_type(serve_format)
 
-    # Byte ranges address the stored representation; conversion produces a
-    # different byte layout, so Range only applies to unconverted responses.
     range_header = request.headers.get("range")
     if range_header is not None and not converted:
         byte_range = parse_range_header(range_header, len(audio))

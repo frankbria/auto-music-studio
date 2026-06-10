@@ -61,6 +61,10 @@ class TestGetAudioContentType:
     def test_unknown_format_falls_back_to_octet_stream(self) -> None:
         assert get_audio_content_type("xyz") == "application/octet-stream"
 
+    @pytest.mark.parametrize("fmt", [None, "", "   "])
+    def test_missing_or_blank_format_falls_back_to_octet_stream(self, fmt: str | None) -> None:
+        assert get_audio_content_type(fmt) == "application/octet-stream"
+
 
 # ---------------------------------------------------------------------------
 # Range header parser — runs in CI
@@ -346,6 +350,9 @@ class TestClipAudioFormatConversion:
         # MP3 bitstream: either an ID3 tag or an MPEG frame-sync header.
         assert resp.content[:3] == b"ID3" or resp.content[0] == 0xFF
         assert int(resp.headers["content-length"]) == len(resp.content)
+        # Converted output does not honor byte ranges, so it must not
+        # advertise range support.
+        assert "accept-ranges" not in resp.headers
 
     async def test_same_format_as_native_serves_bytes_unchanged(
         self, client, settings, local_storage, wav_bytes

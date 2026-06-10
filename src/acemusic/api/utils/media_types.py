@@ -12,10 +12,13 @@ _AUDIO_CONTENT_TYPES = {
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
 
 
-def get_audio_content_type(format: str) -> str:
+def get_audio_content_type(format: str | None) -> str:
     """Return the MIME type for an audio ``format`` name (case-insensitive).
 
-    Unknown formats fall back to ``application/octet-stream`` so the endpoint
-    can always serve bytes even for formats added to storage before this map.
+    Unknown, blank, or missing formats fall back to ``application/octet-stream``
+    so the endpoint can always serve bytes even for formats added to storage
+    before this map.
     """
-    return _AUDIO_CONTENT_TYPES.get(format.lower(), DEFAULT_CONTENT_TYPE)
+    if not format:
+        return DEFAULT_CONTENT_TYPE
+    return _AUDIO_CONTENT_TYPES.get(format.strip().lower(), DEFAULT_CONTENT_TYPE)
