@@ -83,6 +83,19 @@ Invalid parameters return 422 with field-level errors. The create response inclu
 
 The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
+### Clips
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
+
+Supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`,
+unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via
+`?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte
+ranges are ignored for converted output). Access is owner-scoped: an unknown or
+malformed id returns `404`, another user's private clip returns `403`, and clips
+marked `is_public` are retrievable by any authenticated user.
+
 #### Async job processor (US-9.2)
 
 A background processor runs inside the API process, polling MongoDB for `queued`
