@@ -83,6 +83,16 @@ Invalid parameters return 422 with field-level errors. The create response inclu
 
 The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
+#### Async job processor (US-9.2)
+
+A background processor runs inside the API process, polling MongoDB for `queued`
+jobs, forwarding them to ACE-Step, storing the audio via the storage abstraction,
+and creating clip records before marking the job `completed` (or `failed` with an
+error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
+`JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
+600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
+without the worker — recommended to run a single processor instance).
+
 ### Clips
 
 | Endpoint | Purpose |
@@ -95,16 +105,6 @@ unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via
 ranges are ignored for converted output). Access is owner-scoped: an unknown or
 malformed id returns `404`, another user's private clip returns `403`, and clips
 marked `is_public` are retrievable by any authenticated user.
-
-#### Async job processor (US-9.2)
-
-A background processor runs inside the API process, polling MongoDB for `queued`
-jobs, forwarding them to ACE-Step, storing the audio via the storage abstraction,
-and creating clip records before marking the job `completed` (or `failed` with an
-error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
-`JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
-600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
-without the worker — recommended to run a single processor instance).
 
 ## Stem separation backends
 
