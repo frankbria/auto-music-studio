@@ -20,7 +20,7 @@ from acemusic import __version__
 
 from . import database
 from .exceptions import HandleConflictError
-from .routers import auth, generation, health, jobs, users
+from .routers import auth, clips, generation, health, jobs, users
 from .settings import ApiSettings
 from .tasks.processor import JobProcessor
 
@@ -115,6 +115,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(users.router, prefix=API_V1_PREFIX)
     app.include_router(generation.router, prefix=API_V1_PREFIX)
     app.include_router(jobs.router, prefix=API_V1_PREFIX)
+    app.include_router(clips.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
