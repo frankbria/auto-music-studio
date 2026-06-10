@@ -93,6 +93,19 @@ error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
 600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
 without the worker — recommended to run a single processor instance).
 
+### Clips
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
+
+Supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`,
+unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via
+`?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte
+ranges are ignored for converted output). Access is owner-scoped: an unknown or
+malformed id returns `404`, another user's private clip returns `403`, and clips
+marked `is_public` are retrievable by any authenticated user.
+
 ## Stem separation backends
 
 `acemusic stems <clip_id>` separates a clip into stems. Two engines are available
