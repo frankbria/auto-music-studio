@@ -20,6 +20,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip
 from acemusic.api.services import users as user_service
+from acemusic.api.services.audio_conversion import convert_audio_format
 from acemusic.api.settings import ApiSettings
 from acemusic.api.utils.media_types import get_audio_content_type
 from acemusic.api.utils.range_requests import parse_range_header
@@ -101,11 +102,41 @@ class TestParseRangeHeader:
             "bytes=0-99,200-299",  # multipart ranges unsupported — serve full body
             "items=0-99",  # unknown unit
             "bytes=",
+            "bytes=-",
             "garbage",
         ],
     )
     def test_invalid_or_unsupported_headers_are_ignored(self, header: str) -> None:
         assert parse_range_header(header, 1000) is None
+
+    def test_empty_content_is_never_range_served(self) -> None:
+        assert parse_range_header("bytes=0-99", 0) is None
+
+
+# ---------------------------------------------------------------------------
+# Conversion service — runs in CI except where ffmpeg is required
+# ---------------------------------------------------------------------------
+
+
+class TestConvertAudioFormat:
+    def test_unsupported_target_format_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported conversion format"):
+            convert_audio_format(b"\x00", "wav", "xm")
+
+    @requires_ffmpeg
+    def test_wav_to_flac_round_trip_preserves_duration(self, write_tone, tmp_path) -> None:
+        from pydub import AudioSegment
+
+        path = tmp_path / "tone.wav"
+        write_tone(path, duration_s=1.0)
+        flac_bytes = convert_audio_format(path.read_bytes(), "wav", "flac")
+        assert flac_bytes[:4] == b"fLaC"
+
+        wav_bytes = convert_audio_format(flac_bytes, "flac", "wav")
+        import io
+
+        segment = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
+        assert segment.duration_seconds == pytest.approx(1.0, abs=0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +363,15 @@ class TestClipAudioFormatConversion:
 
         resp = await client.get(_audio_url(str(clip.id)) + "?format=xm", headers=_auth_headers(user, settings))
         assert resp.status_code == 422
+
+    @requires_ffmpeg
+    async def test_undecodable_audio_returns_500(self, client, settings, local_storage) -> None:
+        user = await _make_user("clips-conv5@example.com")
+        clip = await _make_clip(user, b"this is not audio data", fmt="wav")
+
+        resp = await client.get(_audio_url(str(clip.id)) + "?format=mp3", headers=_auth_headers(user, settings))
+        assert resp.status_code == 500
+        assert "convert" in resp.json()["detail"].lower()
 
     @requires_ffmpeg
     async def test_range_header_is_ignored_for_converted_content(
