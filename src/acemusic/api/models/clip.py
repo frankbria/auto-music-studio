@@ -32,9 +32,7 @@ class Clip(Document):
     inference_steps: int | None = None
     parent_clip_ids: list[PydanticObjectId] = Field(default_factory=list)
     generation_mode: str | None = None
-    # Cross-user audio access (US-9.3). Documents predating this field load as
-    # private.
-    is_public: bool = False
+    is_public: bool = False  # documents predating US-9.3 load as private
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:
