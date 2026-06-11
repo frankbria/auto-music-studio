@@ -13,6 +13,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from ..services import users as user_service
 from ..settings import ApiSettings
 from .tokens import TokenExpiredError, TokenInvalidError, decode_access_token
 
@@ -71,6 +72,19 @@ def get_current_user(
     if credentials is None:
         raise _unauthorized("Not authenticated.")
     return _user_from_token(credentials.credentials, _settings(request))
+
+
+async def require_existing_user(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Like :func:`get_current_user`, but also require the account to still exist.
+
+    An access token outlives account deletion by up to its TTL; endpoints that
+    create or manage user-owned records resolve the user first so a stale token
+    gets a clean 404 instead of touching orphaned data (mirrors ``POST /generate``).
+    """
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return current
 
 
 def get_current_user_optional(

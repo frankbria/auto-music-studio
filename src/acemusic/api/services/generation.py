@@ -7,44 +7,17 @@ modules, so the router stays free of persistence concerns.
 """
 
 from beanie import PydanticObjectId
-from beanie.operators import Eq
-from pymongo.errors import DuplicateKeyError
 
-from ..models import Job, JobStatus, Workspace
+from ..models import Job, JobStatus
 from ..tasks import dispatch_job
 
+# get_or_create_default_workspace moved to the workspaces service (US-9.4); it is
+# re-exported here because generation still uses it as a lazy fallback for
+# accounts predating the registration-time bootstrap, and existing callers/tests
+# import it from this module.
+from .workspaces import DEFAULT_WORKSPACE_NAME, get_or_create_default_workspace  # noqa: F401
+
 GENERATE_JOB_TYPE = "generate"
-DEFAULT_WORKSPACE_NAME = "My Workspace"
-
-
-async def _find_default_workspace(user_id: PydanticObjectId) -> Workspace | None:
-    return await Workspace.find_one(Eq(Workspace.user_id, user_id), Eq(Workspace.is_default, True))
-
-
-async def get_or_create_default_workspace(user_id: PydanticObjectId) -> Workspace:
-    """Return the user's default workspace, creating it on first use.
-
-    A generation job must be attached to a workspace, but a freshly registered
-    account has none yet — workspaces are created lazily here rather than at
-    registration. The default workspace is created once and reused thereafter.
-
-    The create path is race-safe: the unique partial index on
-    ``(user_id, is_default=True)`` (see :class:`Workspace`) rejects a concurrent
-    second insert with ``DuplicateKeyError``, which we resolve by re-reading the
-    winner (mirroring ``users.get_or_create_user``).
-    """
-    workspace = await _find_default_workspace(user_id)
-    if workspace is not None:
-        return workspace
-    workspace = Workspace(name=DEFAULT_WORKSPACE_NAME, user_id=user_id, is_default=True)
-    try:
-        await workspace.insert()
-    except DuplicateKeyError:
-        existing = await _find_default_workspace(user_id)
-        if existing is None:
-            raise
-        return existing
-    return workspace
 
 
 async def create_generation_job(*, user_id: PydanticObjectId, params: dict) -> Job:

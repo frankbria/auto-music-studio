@@ -1,21 +1,30 @@
-"""Clip audio retrieval endpoint (US-9.3), mounted under ``/api/v1/clips``.
+"""Clip endpoints (US-9.3 audio retrieval, US-9.4 CRUD), mounted under ``/api/v1/clips``.
 
-``GET /api/v1/clips/{clip_id}/audio`` streams a clip's audio with the correct
-Content-Type, supports single byte-range requests (206 Partial Content) for
-seeking, and optionally converts to another format via ``?format=``. Access
-rules live in :func:`acemusic.api.services.clips.get_clip_for_audio_access`.
+* ``GET    /clips``           → paginated list with search/filter/sort (US-9.4)
+* ``GET    /clips/{id}``      → clip metadata (404 if missing/not owned)
+* ``PATCH  /clips/{id}``      → rename (title is the only writable field)
+* ``DELETE /clips/{id}``      → remove the record and its stored audio
+* ``GET    /clips/{id}/audio``→ stream audio, byte ranges + ``?format=`` (US-9.3)
+
+CRUD is owner-scoped; only the audio endpoint honors ``is_public``. Access and
+filter rules live in :mod:`acemusic.api.services.clips`.
 """
 
 import asyncio
 import logging
+import math
+from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..models import Clip
+from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access
 from ..utils.media_types import get_audio_content_type
@@ -23,9 +32,180 @@ from ..utils.range_requests import parse_range_header
 
 logger = logging.getLogger(__name__)
 
+# Titles are stored verbatim and re-served on every list; cap them so one PATCH
+# cannot bloat the document (mirrors the users router's field caps).
+CLIP_TITLE_MAX_LENGTH = 200
+PER_PAGE_DEFAULT = 20
+PER_PAGE_MAX = 100
+
 # Router-level dependency gates every route behind a valid Bearer token
 # (mirrors the jobs/generation routers), so unauthenticated requests get 401.
 router = APIRouter(prefix="/clips", tags=["clips"], dependencies=[Depends(get_current_user)])
+
+
+class ClipSearchParams(BaseModel):
+    """Query parameters for ``GET /clips`` (validated as one unit via Depends)."""
+
+    workspace_id: str | None = None
+    search: str | None = None
+    style: str | None = None
+    bpm_min: int | None = Field(default=None, ge=0)
+    bpm_max: int | None = Field(default=None, ge=0)
+    key: str | None = None
+    model: str | None = None
+    sort: Literal["newest", "oldest"] = "newest"
+    page: int = Field(default=1, ge=1)
+    per_page: int = Field(default=PER_PAGE_DEFAULT, ge=1, le=PER_PAGE_MAX)
+
+    @field_validator("search", "style")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        # `?search=` must mean "no filter"; an empty needle would otherwise
+        # become an empty regex that matches every clip with the field set.
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def _check_bpm_range(self) -> "ClipSearchParams":
+        # An inverted range can never match; reject it as the client error it
+        # is instead of silently returning an empty page.
+        if self.bpm_min is not None and self.bpm_max is not None and self.bpm_min > self.bpm_max:
+            raise ValueError("bpm_min must not be greater than bpm_max.")
+        return self
+
+
+class ClipUpdate(BaseModel):
+    """Rename payload. ``extra="forbid"`` rejects any non-title field with 422."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[str, Field(min_length=1, max_length=CLIP_TITLE_MAX_LENGTH)] | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _check_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("Clip title must not be blank.")
+        return value
+
+    @model_validator(mode="after")
+    def _reject_explicit_null(self) -> "ClipUpdate":
+        # An omitted title is a no-op; an explicit null is a malformed request
+        # (title has no "cleared" state) and must not masquerade as success.
+        if "title" in self.model_fields_set and self.title is None:
+            raise ValueError("title must be a non-empty string; omit the field to leave it unchanged.")
+        return self
+
+
+class ClipResponse(BaseModel):
+    # ``file_path`` is deliberately absent: storage keys are internal, and
+    # clients retrieve audio through ``GET /clips/{id}/audio``.
+    id: str
+    workspace_id: str
+    title: str | None
+    format: str | None
+    duration: float | None
+    bpm: int | None
+    key: str | None
+    style_tags: list[str]
+    lyrics: str | None
+    vocal_language: str | None
+    model: str | None
+    seed: int | None
+    inference_steps: int | None
+    parent_clip_ids: list[str]
+    generation_mode: str | None
+    is_public: bool
+    created_at: datetime
+
+    @classmethod
+    def from_clip(cls, clip: Clip) -> "ClipResponse":
+        return cls(
+            id=str(clip.id),
+            workspace_id=str(clip.workspace_id),
+            title=clip.title,
+            format=clip.format,
+            duration=clip.duration,
+            bpm=clip.bpm,
+            key=clip.key,
+            style_tags=clip.style_tags,
+            lyrics=clip.lyrics,
+            vocal_language=clip.vocal_language,
+            model=clip.model,
+            seed=clip.seed,
+            inference_steps=clip.inference_steps,
+            parent_clip_ids=[str(pid) for pid in clip.parent_clip_ids],
+            generation_mode=clip.generation_mode,
+            is_public=clip.is_public,
+            created_at=clip.created_at,
+        )
+
+
+class ClipListResponse(BaseModel):
+    clips: list[ClipResponse]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
+@router.get("", response_model=ClipListResponse)
+async def list_clips(
+    # Annotated[..., Query()] (not plain Depends) makes FastAPI validate the
+    # model as one unit, so the cross-field bpm validator surfaces as 422.
+    params: Annotated[ClipSearchParams, Query()],
+    current: CurrentUser = Depends(require_existing_user),
+) -> ClipListResponse:
+    items, total = await clip_service.list_clips(
+        current.user_id,
+        workspace_id=params.workspace_id,
+        search=params.search,
+        style=params.style,
+        bpm_min=params.bpm_min,
+        bpm_max=params.bpm_max,
+        key=params.key,
+        model=params.model,
+        sort=params.sort,
+        page=params.page,
+        per_page=params.per_page,
+    )
+    return ClipListResponse(
+        clips=[ClipResponse.from_clip(clip) for clip in items],
+        total=total,
+        page=params.page,
+        per_page=params.per_page,
+        total_pages=math.ceil(total / params.per_page),
+    )
+
+
+@router.get("/{clip_id}", response_model=ClipResponse)
+async def get_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> ClipResponse:
+    clip = await clip_service.get_owned_clip(clip_id, current.user_id)
+    return ClipResponse.from_clip(clip)
+
+
+@router.patch("/{clip_id}", response_model=ClipResponse)
+async def update_clip(
+    clip_id: str,
+    body: ClipUpdate,
+    current: CurrentUser = Depends(require_existing_user),
+) -> ClipResponse:
+    """Rename the clip; an empty body is a no-op returning the current state."""
+    if body.title is None:
+        clip = await clip_service.get_owned_clip(clip_id, current.user_id)
+    else:
+        clip = await clip_service.update_clip_title(clip_id, current.user_id, body.title)
+    return ClipResponse.from_clip(clip)
+
+
+@router.delete("/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> Response:
+    await clip_service.delete_clip(clip_id, current.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{clip_id}/audio")

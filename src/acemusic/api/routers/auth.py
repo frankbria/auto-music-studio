@@ -58,7 +58,7 @@ from ..auth.oauth import (
 from ..auth.tokens import create_access_token, create_refresh_token
 from ..exceptions import EmailAlreadyRegisteredError
 from ..models import User
-from ..services import users as user_service
+from ..services import users as user_service, workspaces as workspace_service
 from ..settings import ApiSettings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -201,6 +201,11 @@ async def callback(provider: str, body: CallbackRequest, request: Request, respo
             status_code=status.HTTP_409_CONFLICT,
             detail="This email is already registered with a different sign-in provider.",
         ) from exc
+
+    # Every account gets a default workspace at registration (US-9.4). The call
+    # is an idempotent get-or-create, so repeat logins are a cheap lookup and
+    # accounts predating this hook are backfilled on their next login.
+    await workspace_service.get_or_create_default_workspace(user.id)
 
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
