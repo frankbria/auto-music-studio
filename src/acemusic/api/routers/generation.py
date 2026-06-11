@@ -29,9 +29,6 @@ from acemusic.constants import (
     STYLE_INFLUENCE_MAX,
     STYLE_INFLUENCE_MIN,
     STYLE_MAX_LENGTH,
-    VALID_FORMATS,
-    VALID_MODELS,
-    VALID_TIME_SIGNATURES,
     VOCAL_LANGUAGE_MAX_LENGTH,
     WEIRDNESS_MAX,
     WEIRDNESS_MIN,
@@ -40,6 +37,7 @@ from acemusic.constants import (
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import PRESET_PARAM_FIELDS, Preset
 from ..services import generation as generation_service, presets as preset_service, users as user_service
+from ._validators import validate_format, validate_model, validate_time_signature
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -89,23 +87,17 @@ class GenerationRequest(BaseModel):
     @field_validator("format")
     @classmethod
     def _check_format(cls, value: str) -> str:
-        if value not in VALID_FORMATS:
-            raise ValueError(f"format must be one of {sorted(VALID_FORMATS)}")
-        return value
+        return validate_format(value)
 
     @field_validator("model")
     @classmethod
     def _check_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in VALID_MODELS:
-            raise ValueError(f"model must be one of {sorted(VALID_MODELS)}")
-        return value
+        return validate_model(value)
 
     @field_validator("time_signature")
     @classmethod
     def _check_time_signature(cls, value: str | None) -> str | None:
-        if value is not None and value not in VALID_TIME_SIGNATURES:
-            raise ValueError(f"time_signature must be one of {sorted(VALID_TIME_SIGNATURES)}")
-        return value
+        return validate_time_signature(value)
 
     @model_validator(mode="after")
     def _check_mode_constraints(self) -> "GenerationRequest":
