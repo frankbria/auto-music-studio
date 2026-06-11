@@ -42,6 +42,22 @@ FULL_PARAMS = {
 
 
 # ---------------------------------------------------------------------------
+# Model contract — runs in CI (no DB)
+# ---------------------------------------------------------------------------
+
+
+class TestPresetParamFieldsParity:
+    def test_param_fields_cover_every_non_identity_model_field(self) -> None:
+        """PRESET_PARAM_FIELDS drives the merge base, PresetResponse, and the
+        service dump; a Preset field missing from it would be silently ignored
+        at generation time. Lock the tuple to the model."""
+        from acemusic.api.models import PRESET_PARAM_FIELDS
+
+        identity_fields = {"id", "name", "user_id", "created_at", "updated_at", "revision_id"}
+        assert set(PRESET_PARAM_FIELDS) == set(Preset.model_fields) - identity_fields
+
+
+# ---------------------------------------------------------------------------
 # Auth gate — runs in CI (no DB)
 # ---------------------------------------------------------------------------
 
