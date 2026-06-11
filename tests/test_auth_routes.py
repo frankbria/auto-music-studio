@@ -250,6 +250,43 @@ class TestCallback:
         assert claims["sub"] == str(user.id)
         assert body["refresh_token"]
 
+    async def test_callback_creates_default_workspace_for_new_user(self, client, settings, monkeypatch):
+        """Registration bootstraps a default workspace (US-9.4)."""
+        from acemusic.api.models import Workspace
+        from acemusic.api.services.workspaces import DEFAULT_WORKSPACE_NAME
+
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(provider="google", oauth_id="g-ws", email="ws@example.com", name="W", email_verified=True),
+        )
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "auth-code", "state": _bind_state(client, "google", settings)},
+        )
+        assert resp.status_code == 200
+        user = await User.find_one(User.oauth_provider == "google", User.oauth_id == "g-ws")
+        workspaces = await Workspace.find(Workspace.user_id == user.id).to_list()
+        assert len(workspaces) == 1
+        assert workspaces[0].is_default is True
+        assert workspaces[0].name == DEFAULT_WORKSPACE_NAME
+
+    async def test_repeat_login_does_not_create_second_default_workspace(self, client, settings, monkeypatch):
+        from acemusic.api.models import Workspace
+
+        info = OAuthUserInfo(
+            provider="google", oauth_id="g-ws2", email="ws2@example.com", name="W", email_verified=True
+        )
+        for code in ("c1", "c2"):
+            _fake_exchange(monkeypatch, info)
+            resp = await client.post(
+                f"{API_V1_PREFIX}/auth/callback/google",
+                json={"code": code, "state": _bind_state(client, "google", settings)},
+            )
+            assert resp.status_code == 200
+        user = await User.find_one(User.oauth_provider == "google", User.oauth_id == "g-ws2")
+        workspaces = await Workspace.find(Workspace.user_id == user.id).to_list()
+        assert len(workspaces) == 1
+
     async def test_discord_callback_creates_user_and_returns_jwt(self, client, settings, monkeypatch):
         _fake_exchange(
             monkeypatch,
