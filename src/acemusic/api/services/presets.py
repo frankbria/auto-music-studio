@@ -12,14 +12,7 @@ from pymongo.errors import DuplicateKeyError
 
 from ..models import Preset
 from ..models.common import utcnow
-
-
-def _coerce_object_id(value: str) -> PydanticObjectId | None:
-    """Parse a path id, treating a malformed id as "no such preset" (→ 404)."""
-    try:
-        return PydanticObjectId(value)
-    except Exception:
-        return None
+from .common import coerce_object_id
 
 
 def _not_found() -> HTTPException:
@@ -54,7 +47,7 @@ async def list_presets(user_id: str) -> list[Preset]:
 
 async def get_preset(preset_id: str, user_id: str) -> Preset:
     """Return the preset if ``user_id`` owns it; 404 for unknown/malformed/not-owned ids."""
-    oid = _coerce_object_id(preset_id)
+    oid = coerce_object_id(preset_id)
     preset = await Preset.get(oid) if oid is not None else None
     if preset is None or str(preset.user_id) != user_id:
         raise _not_found()

@@ -30,11 +30,17 @@ from acemusic.constants import (
     BPM_MIN,
     DURATION_MAX,
     INFERENCE_STEPS_MAX,
+    KEY_MAX_LENGTH,
+    LYRICS_MAX_LENGTH,
+    SEED_MAX,
+    SEED_MIN,
     STYLE_INFLUENCE_MAX,
     STYLE_INFLUENCE_MIN,
+    STYLE_MAX_LENGTH,
     VALID_FORMATS,
     VALID_MODELS,
     VALID_TIME_SIGNATURES,
+    VOCAL_LANGUAGE_MAX_LENGTH,
     WEIRDNESS_MAX,
     WEIRDNESS_MIN,
 )
@@ -42,14 +48,6 @@ from acemusic.constants import (
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import PRESET_PARAM_FIELDS, Preset
 from ..services import presets as preset_service
-from .generation import (
-    _KEY_MAX_LENGTH,
-    _LYRICS_MAX_LENGTH,
-    _SEED_MAX,
-    _SEED_MIN,
-    _STYLE_MAX_LENGTH,
-    _VOCAL_LANGUAGE_MAX_LENGTH,
-)
 
 PRESET_NAME_MAX_LENGTH = 100
 
@@ -76,15 +74,15 @@ class _PresetParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
-    lyrics: Annotated[str, Field(max_length=_LYRICS_MAX_LENGTH)] | None = None
-    vocal_language: Annotated[str, Field(max_length=_VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
+    style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
+    lyrics: Annotated[str, Field(max_length=LYRICS_MAX_LENGTH)] | None = None
+    vocal_language: Annotated[str, Field(max_length=VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
     instrumental: bool | None = None
     bpm: Annotated[int, Field(ge=BPM_MIN, le=BPM_MAX)] | Literal["auto"] | None = None
-    key: Annotated[str, Field(max_length=_KEY_MAX_LENGTH)] | None = None
+    key: Annotated[str, Field(max_length=KEY_MAX_LENGTH)] | None = None
     time_signature: str | None = None
     duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
-    seed: Annotated[int, Field(ge=_SEED_MIN, le=_SEED_MAX)] | None = None
+    seed: Annotated[int, Field(ge=SEED_MIN, le=SEED_MAX)] | None = None
     inference_steps: Annotated[int, Field(gt=0, le=INFERENCE_STEPS_MAX)] | None = None
     model: str | None = None
     weirdness: Annotated[int, Field(ge=WEIRDNESS_MIN, le=WEIRDNESS_MAX)] | None = None

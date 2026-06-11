@@ -18,16 +18,9 @@ from acemusic.storage import get_storage_backend
 
 from ..models import Clip, Workspace
 from ..models.common import utcnow
+from .common import coerce_object_id
 
 DEFAULT_WORKSPACE_NAME = "My Workspace"
-
-
-def _coerce_object_id(value: str) -> PydanticObjectId | None:
-    """Parse a path id, treating a malformed id as "no such workspace" (→ 404)."""
-    try:
-        return PydanticObjectId(value)
-    except Exception:
-        return None
 
 
 def _not_found() -> HTTPException:
@@ -121,7 +114,7 @@ async def list_workspaces(user_id: str) -> list[tuple[Workspace, int]]:
 
 async def get_workspace(workspace_id: str, user_id: str) -> Workspace:
     """Return the workspace if ``user_id`` owns it; 404 for unknown/malformed/not-owned ids."""
-    oid = _coerce_object_id(workspace_id)
+    oid = coerce_object_id(workspace_id)
     workspace = await Workspace.get(oid) if oid is not None else None
     if workspace is None or str(workspace.user_id) != user_id:
         raise _not_found()

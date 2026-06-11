@@ -21,20 +21,21 @@ from acemusic.constants import (
     DURATION_MAX,
     DURATION_MIN,
     INFERENCE_STEPS_MAX,
+    KEY_MAX_LENGTH,
+    LYRICS_MAX_LENGTH,
+    PROMPT_MAX_LENGTH,
+    SEED_MAX,
+    SEED_MIN,
     STYLE_INFLUENCE_MAX,
     STYLE_INFLUENCE_MIN,
+    STYLE_MAX_LENGTH,
     VALID_FORMATS,
     VALID_MODELS,
     VALID_TIME_SIGNATURES,
+    VOCAL_LANGUAGE_MAX_LENGTH,
     WEIRDNESS_MAX,
     WEIRDNESS_MIN,
 )
-
-# Seeds are opaque values forwarded to the backend; bound them to MongoDB's
-# signed 64-bit integer range so an oversized value is a clean 422 rather than a
-# BSON-encoding 500 when the job is persisted.
-_SEED_MIN = -(2**63)
-_SEED_MAX = 2**63 - 1
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import PRESET_PARAM_FIELDS, Preset
@@ -44,17 +45,6 @@ from ..services import generation as generation_service, presets as preset_servi
 # short sound is roughly fixed. These are advisory hints returned to the client.
 _SONG_BASE_SECONDS = 30
 _SOUND_BASE_SECONDS = 15
-
-# Free-text fields are persisted verbatim in ``Job.input_params`` and re-read by
-# the worker, so cap them: a single request must not be able to bloat the jobs
-# document (or approach MongoDB's 16MB cap) and turn into a 500 (same rationale
-# as the profile caps in the users router). Lyrics get the most headroom since a
-# full song's words are legitimately long.
-_PROMPT_MAX_LENGTH = 2000
-_STYLE_MAX_LENGTH = 1000
-_LYRICS_MAX_LENGTH = 5000
-_VOCAL_LANGUAGE_MAX_LENGTH = 100
-_KEY_MAX_LENGTH = 50
 
 # Router-level dependency gates every route behind a valid Bearer token, so an
 # unauthenticated request is rejected with 401 before any handler runs.
@@ -75,18 +65,18 @@ class GenerationRequest(BaseModel):
     # request fields override preset values. Never forwarded to the job.
     preset_id: str | None = None
 
-    prompt: Annotated[str, Field(min_length=1, max_length=_PROMPT_MAX_LENGTH)]
-    style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
-    lyrics: Annotated[str, Field(max_length=_LYRICS_MAX_LENGTH)] | None = None
-    vocal_language: Annotated[str, Field(max_length=_VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
+    prompt: Annotated[str, Field(min_length=1, max_length=PROMPT_MAX_LENGTH)]
+    style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
+    lyrics: Annotated[str, Field(max_length=LYRICS_MAX_LENGTH)] | None = None
+    vocal_language: Annotated[str, Field(max_length=VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
     instrumental: bool = False
     bpm: Annotated[int, Field(ge=BPM_MIN, le=BPM_MAX)] | Literal["auto"] | None = None
-    key: Annotated[str, Field(max_length=_KEY_MAX_LENGTH)] | None = None
+    key: Annotated[str, Field(max_length=KEY_MAX_LENGTH)] | None = None
     time_signature: str | None = None
     # Upper bound and positivity hold for every mode; the 30s song floor is
     # enforced mode-aware below so short sounds (one-shots, loops) are allowed.
     duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
-    seed: Annotated[int, Field(ge=_SEED_MIN, le=_SEED_MAX)] | None = None
+    seed: Annotated[int, Field(ge=SEED_MIN, le=SEED_MAX)] | None = None
     inference_steps: Annotated[int, Field(gt=0, le=INFERENCE_STEPS_MAX)] | None = None
     model: str | None = None
     weirdness: Annotated[int, Field(ge=WEIRDNESS_MIN, le=WEIRDNESS_MAX)] = 50

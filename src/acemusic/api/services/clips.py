@@ -21,14 +21,7 @@ from acemusic.storage import get_storage_backend
 
 from ..models import Clip
 from . import workspaces as workspace_service
-
-
-def _coerce_object_id(value: str) -> PydanticObjectId | None:
-    """Parse a path id, treating a malformed id as "no such clip" (caller → 404)."""
-    try:
-        return PydanticObjectId(value)
-    except Exception:
-        return None
+from .common import coerce_object_id
 
 
 async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
@@ -38,7 +31,7 @@ async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
     clip. Unlike jobs (which 404 to hide existence), clips deliberately
     distinguish 403 so sharing flows can tell "ask the owner" from "gone".
     """
-    oid = _coerce_object_id(clip_id)
+    oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
     if clip is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
@@ -58,7 +51,7 @@ def _contains_regex(text: str) -> dict:
 
 async def get_owned_clip(clip_id: str, user_id: str) -> Clip:
     """Return the clip if ``user_id`` owns it; 404 for unknown/malformed/not-owned ids."""
-    oid = _coerce_object_id(clip_id)
+    oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
     if clip is None or str(clip.user_id) != user_id:
         raise _clip_not_found()
