@@ -58,8 +58,7 @@ from ..auth.oauth import (
 from ..auth.tokens import create_access_token, create_refresh_token
 from ..exceptions import EmailAlreadyRegisteredError
 from ..models import User
-from ..services import users as user_service
-from ..services import workspaces as workspace_service
+from ..services import users as user_service, workspaces as workspace_service
 from ..settings import ApiSettings
 
 router = APIRouter(prefix="/auth", tags=["auth"])

@@ -216,9 +216,7 @@ class TestListClips:
         clip_a = await _insert_clip(user, ws_a)
         await _insert_clip(user, ws_b)
 
-        resp = await client.get(
-            CLIPS_URL, params={"workspace_id": str(ws_a.id)}, headers=_auth_headers(user, settings)
-        )
+        resp = await client.get(CLIPS_URL, params={"workspace_id": str(ws_a.id)}, headers=_auth_headers(user, settings))
         body = resp.json()
         assert body["total"] == 1
         assert body["clips"][0]["id"] == str(clip_a.id)
@@ -276,9 +274,7 @@ class TestListClips:
         by_key = (await client.get(CLIPS_URL, params={"key": "C minor"}, headers=headers)).json()
         assert by_key["total"] == 2
 
-        both = (
-            await client.get(CLIPS_URL, params={"key": "C minor", "model": "ace-step-v1"}, headers=headers)
-        ).json()
+        both = (await client.get(CLIPS_URL, params={"key": "C minor", "model": "ace-step-v1"}, headers=headers)).json()
         assert both["total"] == 1
         assert both["clips"][0]["id"] == str(target.id)
 

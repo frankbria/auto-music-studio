@@ -71,9 +71,7 @@ async def get_or_create_default_workspace(user_id: PydanticObjectId) -> Workspac
         # (user_id, name) index: the user already owns a non-default workspace
         # named "My Workspace" (created via the API before this bootstrap ran).
         # Promote it rather than failing the login with a 500.
-        named = await Workspace.find_one(
-            Eq(Workspace.user_id, user_id), Eq(Workspace.name, DEFAULT_WORKSPACE_NAME)
-        )
+        named = await Workspace.find_one(Eq(Workspace.user_id, user_id), Eq(Workspace.name, DEFAULT_WORKSPACE_NAME))
         if named is None:
             raise
         named.is_default = True
