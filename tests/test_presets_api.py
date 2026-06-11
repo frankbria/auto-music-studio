@@ -32,6 +32,7 @@ FULL_PARAMS = {
     "duration": 60.0,
     "seed": 1234,
     "inference_steps": 32,
+    "model": "xl-base",
     "weirdness": 80,
     "style_influence": 20,
     "format": "flac",
@@ -174,6 +175,7 @@ class TestCreatePreset:
             {"name": "X", "bpm": 300},  # out of range
             {"name": "X", "weirdness": 101},
             {"name": "X", "format": "ogg"},  # not a valid format
+            {"name": "X", "model": "not-a-model"},
             {"name": "X", "time_signature": "13/8"},
             {"name": "X", "nope": True},  # unknown field
         ],
@@ -275,6 +277,16 @@ class TestUpdatePreset:
         body = resp.json()
         assert body["style"] is None
         assert body["bpm"] == 90
+
+    async def test_empty_body_is_noop_returning_current_state(self, client, settings) -> None:
+        user = await _make_user("preset-patch-empty@example.com")
+        preset = await _insert_preset(user, "Mine", bpm=90)
+        resp = await client.patch(f"{PRESETS_URL}/{preset.id}", json={}, headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "Mine"
+        assert body["bpm"] == 90
+        assert body["updated_at"] is None
 
     async def test_rename_returns_updated_preset(self, client, settings) -> None:
         user = await _make_user("preset-rename@example.com")
@@ -450,6 +462,20 @@ class TestGenerateWithPreset:
         job = await _get_job(resp.json()["job_id"])
         assert job.input_params["mode"] == "sound"
         assert job.input_params["sound_type"] == "loop"
+
+    async def test_preset_with_incomplete_sound_config_returns_422(self, client, settings) -> None:
+        # A preset may legally store mode="sound" without sound_type (cross-field
+        # rules are deferred to application time); a bare generate against it
+        # must then fail the merged validation.
+        user = await _make_user("gen-preset-incomplete@example.com")
+        preset = await _insert_preset(user, "SoundOnly", mode="sound")
+
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "x", "preset_id": str(preset.id)},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
 
     async def test_invalid_merged_params_return_422(self, client, settings) -> None:
         # Preset bpm + explicit one-shot request: the merged result violates

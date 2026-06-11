@@ -63,7 +63,12 @@ async def get_preset(preset_id: str, user_id: str) -> Preset:
 
 async def update_preset(preset_id: str, user_id: str, updates: dict) -> Preset:
     """Apply ``updates`` (explicitly-sent fields only, may include ``None`` to
-    clear a parameter). Raises 404 if not owned, 409 on a name collision."""
+    clear a parameter). Raises 404 if not owned, 409 on a name collision.
+
+    ``updates`` must come from a validated ``PresetUpdate`` dump — the setattr
+    loop trusts its keys, so a raw dict could reassign identity fields like
+    ``user_id`` (same contract as ``create_preset``).
+    """
     preset = await get_preset(preset_id, user_id)
     for field, value in updates.items():
         setattr(preset, field, value)
