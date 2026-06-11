@@ -22,6 +22,9 @@ class Workspace(Document):
         name = "workspaces"
         indexes = [
             IndexModel([("user_id", ASCENDING)]),
+            # Workspace names are unique per user (US-9.4): the API's create and
+            # rename paths rely on this index for race-safe 409s.
+            IndexModel([("user_id", ASCENDING), ("name", ASCENDING)], unique=True),
             # At most one default workspace per user. The partial filter scopes
             # uniqueness to ``is_default == True`` so a user may still hold many
             # non-default workspaces. This makes the lazy "get-or-create default"
