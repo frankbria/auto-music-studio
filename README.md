@@ -77,7 +77,7 @@ environment variables (see `.env.example`); cookie behavior is tuned via
 | `POST /api/v1/generate` | Submits a generation request and returns a `job_id` for async tracking (HTTP 202) |
 | `GET /api/v1/jobs/{id}/status` | Returns a job's current status; owner-scoped (404 for missing or other users' jobs) |
 
-The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), and `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`). The job is created with status `queued` and picked up by the async processor (US-9.2).
+The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`), and the optional `preset_id`. When `preset_id` is supplied the saved preset's parameters serve as defaults; any field explicitly included in the request overrides the preset value. The job is created with status `queued` and picked up by the async processor (US-9.2).
 
 Invalid parameters return 422 with field-level errors. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
 
@@ -118,6 +118,18 @@ A default workspace is created automatically when a new user registers (OAuth ca
 `GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
 
 All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
+
+### Presets
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/presets` | Create a preset (201; 409 on duplicate name) |
+| `GET /api/v1/presets` | List all presets for the authenticated user |
+| `GET /api/v1/presets/{id}` | Get a single preset (404 if missing or not owned) |
+| `PATCH /api/v1/presets/{id}` | Partially update a preset; sending `null` for a parameter clears it (409 on duplicate name; empty body is a no-op) |
+| `DELETE /api/v1/presets/{id}` | Delete a preset (204) |
+
+A preset is a named snapshot of generation parameters. Every creative field accepted by `POST /api/v1/generate` (except `prompt` and `preset_id`) can be saved in a preset; all fields are optional — a preset pins down only what the user chooses to fix. Preset names are unique per user. All endpoints are owner-scoped (404 for missing or another user's preset).
 
 ## Stem separation backends
 
