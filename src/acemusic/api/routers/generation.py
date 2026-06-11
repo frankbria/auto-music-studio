@@ -13,7 +13,7 @@ validation share one source of truth.
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from acemusic.constants import (
     BPM_MAX,
@@ -37,7 +37,8 @@ _SEED_MIN = -(2**63)
 _SEED_MAX = 2**63 - 1
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..services import generation as generation_service, users as user_service
+from ..models import PRESET_PARAM_FIELDS, Preset
+from ..services import generation as generation_service, presets as preset_service, users as user_service
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -69,6 +70,10 @@ class GenerationRequest(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    # US-9.5: apply a saved preset as parameter defaults; explicitly-sent
+    # request fields override preset values. Never forwarded to the job.
+    preset_id: str | None = None
 
     prompt: Annotated[str, Field(min_length=1, max_length=_PROMPT_MAX_LENGTH)]
     style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
@@ -114,6 +119,12 @@ class GenerationRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_mode_constraints(self) -> "GenerationRequest":
+        # With a preset in play the cross-field rules can only be judged on the
+        # MERGED parameter set (the preset may supply sound_type, duration, …),
+        # so they are deferred to _apply_preset's re-validation, where the
+        # merged model carries preset_id=None and these checks run.
+        if self.preset_id is not None:
+            return self
         # sound_type and mode are coupled: it is required for sounds and
         # meaningless for songs.
         if self.mode == "sound" and self.sound_type is None:
@@ -146,6 +157,24 @@ def estimate_seconds(request: GenerationRequest) -> int:
     return _SONG_BASE_SECONDS + int(duration)
 
 
+def _apply_preset(request: GenerationRequest, preset: Preset) -> GenerationRequest:
+    """Merge ``preset`` into ``request``: preset values are the base, fields the
+    client explicitly sent win (``model_fields_set``, so an explicit value equal
+    to a schema default still overrides). The merged set is re-validated as a
+    plain request (preset_id absent), which enforces the deferred cross-field
+    rules; a conflict surfaces as 422 just like any other invalid body.
+    """
+    base = {field: getattr(preset, field) for field in PRESET_PARAM_FIELDS if getattr(preset, field) is not None}
+    explicit = {field: getattr(request, field) for field in request.model_fields_set if field != "preset_id"}
+    try:
+        return GenerationRequest.model_validate({**base, **explicit})
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[{"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]} for error in exc.errors()],
+        ) from exc
+
+
 @router.post("", response_model=GenerationResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_generation(
     request: GenerationRequest,
@@ -162,8 +191,12 @@ async def create_generation(
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if request.preset_id is not None:
+        # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
+        preset = await preset_service.get_preset(request.preset_id, current.user_id)
+        request = _apply_preset(request, preset)
     job = await generation_service.create_generation_job(
         user_id=user.id,
-        params=request.model_dump(exclude_none=True),
+        params=request.model_dump(exclude_none=True, exclude={"preset_id"}),
     )
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))
