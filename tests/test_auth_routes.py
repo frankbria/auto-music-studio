@@ -526,8 +526,9 @@ class TestLogout:
 class TestRouteProtectionPattern:
     """Proves a router guarded by Depends(get_current_user) enforces auth.
 
-    No workspaces/clips routers exist yet, so we mount a representative protected
-    route under the v1 prefix on the real app to demonstrate the pattern.
+    Mounts a representative protected route under the v1 prefix on the real app
+    to test the dependency pattern in isolation from any production router
+    (which have their own auth-gate tests, e.g. tests/test_workspaces_api.py).
     """
 
     @pytest.fixture
