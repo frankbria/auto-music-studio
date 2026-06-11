@@ -93,18 +93,31 @@ error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
 600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
 without the worker — recommended to run a single processor instance).
 
+### Workspaces
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/workspaces` | Create a workspace (201; 409 on duplicate name) |
+| `GET /api/v1/workspaces` | List all workspaces for the authenticated user with per-workspace clip counts |
+| `GET /api/v1/workspaces/{id}` | Get a single workspace (404 if missing or not owned) |
+| `PATCH /api/v1/workspaces/{id}` | Rename a workspace (409 on duplicate name; empty body is a no-op) |
+| `DELETE /api/v1/workspaces/{id}` | Delete a workspace (409 if non-empty without `?force=true`; 400 if it is the last workspace) |
+
+A default workspace is created automatically when a new user registers (OAuth callback). The get-or-create call is idempotent, so subsequent logins are a cheap lookup and accounts created before this feature are backfilled on their next login.
+
 ### Clips
 
 | Endpoint | Purpose |
 | --- | --- |
+| `GET /api/v1/clips` | Paginated clip list with search, filter, and sort |
+| `GET /api/v1/clips/{id}` | Get clip metadata (404 if missing or not owned) |
+| `PATCH /api/v1/clips/{id}` | Rename a clip (`title` is the only writable field; empty body is a no-op) |
+| `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
 | `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
 
-Supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`,
-unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via
-`?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte
-ranges are ignored for converted output). Access is owner-scoped: an unknown or
-malformed id returns `404`, another user's private clip returns `403`, and clips
-marked `is_public` are retrievable by any authenticated user.
+`GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
+
+All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
 
 ## Stem separation backends
 
