@@ -8,6 +8,7 @@ The 401 auth-gate tests run in CI (no DB); the rest are ``integration`` and
 drive the real app with ``httpx.AsyncClient`` over a local MongoDB.
 """
 
+import itertools
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -100,7 +101,7 @@ async def _make_workspace(user, name: str = "WS") -> Workspace:
     return workspace
 
 
-_SEQ = {"n": 0}
+_SEQ = itertools.count(1)
 
 
 async def _insert_clip(
@@ -118,9 +119,8 @@ async def _insert_clip(
 ) -> Clip:
     # Monotonic created_at default keeps sort order deterministic across clips
     # inserted within the same millisecond.
-    _SEQ["n"] += 1
     if created_at is None:
-        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=_SEQ["n"])
+        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=next(_SEQ))
     clip_id = PydanticObjectId()
     file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.wav"
     if store_bytes is not None:
@@ -201,6 +201,18 @@ class TestListClips:
         user = await _make_user("clips-page-bad@example.com")
         resp = await client.get(CLIPS_URL, params=params, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
+
+    async def test_blank_search_and_style_filters_are_ignored(self, client, settings) -> None:
+        """`?search=` / `?style=` must behave as "no filter", not as a match-all regex."""
+        user = await _make_user("clips-blank-filter@example.com")
+        workspace = await _make_workspace(user)
+        await _insert_clip(user, workspace, title="Has Title", style_tags=["lofi"])
+        await _insert_clip(user, workspace)  # no title, no tags
+        headers = _auth_headers(user, settings)
+
+        plain = (await client.get(CLIPS_URL, headers=headers)).json()
+        blank = (await client.get(CLIPS_URL, params={"search": "", "style": "  "}, headers=headers)).json()
+        assert blank["total"] == plain["total"] == 2
 
     async def test_inverted_bpm_range_returns_422(self, client, settings) -> None:
         user = await _make_user("clips-bpm-inverted@example.com")
@@ -387,6 +399,20 @@ class TestUpdateClip:
 
         fetched = await Clip.get(clip.id)
         assert fetched.title == "New Title"
+
+    async def test_empty_body_is_noop_but_explicit_null_title_returns_422(self, client, settings) -> None:
+        user = await _make_user("clips-patch-null@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title="Keep")
+        headers = _auth_headers(user, settings)
+
+        noop = await client.patch(f"{CLIPS_URL}/{clip.id}", json={}, headers=headers)
+        assert noop.status_code == 200
+        assert noop.json()["title"] == "Keep"
+
+        explicit_null = await client.patch(f"{CLIPS_URL}/{clip.id}", json={"title": None}, headers=headers)
+        assert explicit_null.status_code == 422
+        assert (await Clip.get(clip.id)).title == "Keep"
 
     @pytest.mark.parametrize("payload", [{"title": ""}, {"title": "   "}, {"bpm": 90}, {"file_path": "x"}])
     async def test_blank_title_or_non_title_fields_return_422(self, client, settings, payload: dict) -> None:

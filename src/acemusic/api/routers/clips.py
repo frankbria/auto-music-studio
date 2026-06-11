@@ -57,6 +57,15 @@ class ClipSearchParams(BaseModel):
     page: int = Field(default=1, ge=1)
     per_page: int = Field(default=PER_PAGE_DEFAULT, ge=1, le=PER_PAGE_MAX)
 
+    @field_validator("search", "style")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        # `?search=` must mean "no filter"; an empty needle would otherwise
+        # become an empty regex that matches every clip with the field set.
+        if value is None:
+            return None
+        return value.strip() or None
+
     @model_validator(mode="after")
     def _check_bpm_range(self) -> "ClipSearchParams":
         # An inverted range can never match; reject it as the client error it
@@ -82,6 +91,14 @@ class ClipUpdate(BaseModel):
         if not value:
             raise ValueError("Clip title must not be blank.")
         return value
+
+    @model_validator(mode="after")
+    def _reject_explicit_null(self) -> "ClipUpdate":
+        # An omitted title is a no-op; an explicit null is a malformed request
+        # (title has no "cleared" state) and must not masquerade as success.
+        if "title" in self.model_fields_set and self.title is None:
+            raise ValueError("title must be a non-empty string; omit the field to leave it unchanged.")
+        return self
 
 
 class ClipResponse(BaseModel):

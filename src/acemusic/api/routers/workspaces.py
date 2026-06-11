@@ -47,7 +47,10 @@ class WorkspaceCreate(BaseModel):
 
     name: Annotated[str, Field(min_length=1, max_length=WORKSPACE_NAME_MAX_LENGTH)]
 
-    _check_name = field_validator("name")(_validate_name)
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        return _validate_name(value)
 
 
 class WorkspaceUpdate(BaseModel):
