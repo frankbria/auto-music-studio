@@ -13,7 +13,7 @@ validation share one source of truth.
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from acemusic.constants import (
     BPM_MAX,
@@ -21,39 +21,28 @@ from acemusic.constants import (
     DURATION_MAX,
     DURATION_MIN,
     INFERENCE_STEPS_MAX,
+    KEY_MAX_LENGTH,
+    LYRICS_MAX_LENGTH,
+    PROMPT_MAX_LENGTH,
+    SEED_MAX,
+    SEED_MIN,
     STYLE_INFLUENCE_MAX,
     STYLE_INFLUENCE_MIN,
-    VALID_FORMATS,
-    VALID_MODELS,
-    VALID_TIME_SIGNATURES,
+    STYLE_MAX_LENGTH,
+    VOCAL_LANGUAGE_MAX_LENGTH,
     WEIRDNESS_MAX,
     WEIRDNESS_MIN,
 )
 
-# Seeds are opaque values forwarded to the backend; bound them to MongoDB's
-# signed 64-bit integer range so an oversized value is a clean 422 rather than a
-# BSON-encoding 500 when the job is persisted.
-_SEED_MIN = -(2**63)
-_SEED_MAX = 2**63 - 1
-
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..services import generation as generation_service, users as user_service
+from ..models import PRESET_PARAM_FIELDS, Preset
+from ..services import generation as generation_service, presets as preset_service, users as user_service
+from ._validators import validate_format, validate_model, validate_time_signature
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
 _SONG_BASE_SECONDS = 30
 _SOUND_BASE_SECONDS = 15
-
-# Free-text fields are persisted verbatim in ``Job.input_params`` and re-read by
-# the worker, so cap them: a single request must not be able to bloat the jobs
-# document (or approach MongoDB's 16MB cap) and turn into a 500 (same rationale
-# as the profile caps in the users router). Lyrics get the most headroom since a
-# full song's words are legitimately long.
-_PROMPT_MAX_LENGTH = 2000
-_STYLE_MAX_LENGTH = 1000
-_LYRICS_MAX_LENGTH = 5000
-_VOCAL_LANGUAGE_MAX_LENGTH = 100
-_KEY_MAX_LENGTH = 50
 
 # Router-level dependency gates every route behind a valid Bearer token, so an
 # unauthenticated request is rejected with 401 before any handler runs.
@@ -70,18 +59,22 @@ class GenerationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: Annotated[str, Field(min_length=1, max_length=_PROMPT_MAX_LENGTH)]
-    style: Annotated[str, Field(max_length=_STYLE_MAX_LENGTH)] | None = None
-    lyrics: Annotated[str, Field(max_length=_LYRICS_MAX_LENGTH)] | None = None
-    vocal_language: Annotated[str, Field(max_length=_VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
+    # US-9.5: apply a saved preset as parameter defaults; explicitly-sent
+    # request fields override preset values. Never forwarded to the job.
+    preset_id: str | None = None
+
+    prompt: Annotated[str, Field(min_length=1, max_length=PROMPT_MAX_LENGTH)]
+    style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
+    lyrics: Annotated[str, Field(max_length=LYRICS_MAX_LENGTH)] | None = None
+    vocal_language: Annotated[str, Field(max_length=VOCAL_LANGUAGE_MAX_LENGTH)] | None = None
     instrumental: bool = False
     bpm: Annotated[int, Field(ge=BPM_MIN, le=BPM_MAX)] | Literal["auto"] | None = None
-    key: Annotated[str, Field(max_length=_KEY_MAX_LENGTH)] | None = None
+    key: Annotated[str, Field(max_length=KEY_MAX_LENGTH)] | None = None
     time_signature: str | None = None
     # Upper bound and positivity hold for every mode; the 30s song floor is
     # enforced mode-aware below so short sounds (one-shots, loops) are allowed.
     duration: Annotated[float, Field(gt=0, le=DURATION_MAX)] | None = None
-    seed: Annotated[int, Field(ge=_SEED_MIN, le=_SEED_MAX)] | None = None
+    seed: Annotated[int, Field(ge=SEED_MIN, le=SEED_MAX)] | None = None
     inference_steps: Annotated[int, Field(gt=0, le=INFERENCE_STEPS_MAX)] | None = None
     model: str | None = None
     weirdness: Annotated[int, Field(ge=WEIRDNESS_MIN, le=WEIRDNESS_MAX)] = 50
@@ -94,26 +87,26 @@ class GenerationRequest(BaseModel):
     @field_validator("format")
     @classmethod
     def _check_format(cls, value: str) -> str:
-        if value not in VALID_FORMATS:
-            raise ValueError(f"format must be one of {sorted(VALID_FORMATS)}")
-        return value
+        return validate_format(value)
 
     @field_validator("model")
     @classmethod
     def _check_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in VALID_MODELS:
-            raise ValueError(f"model must be one of {sorted(VALID_MODELS)}")
-        return value
+        return validate_model(value)
 
     @field_validator("time_signature")
     @classmethod
     def _check_time_signature(cls, value: str | None) -> str | None:
-        if value is not None and value not in VALID_TIME_SIGNATURES:
-            raise ValueError(f"time_signature must be one of {sorted(VALID_TIME_SIGNATURES)}")
-        return value
+        return validate_time_signature(value)
 
     @model_validator(mode="after")
     def _check_mode_constraints(self) -> "GenerationRequest":
+        # With a preset in play the cross-field rules can only be judged on the
+        # MERGED parameter set (the preset may supply sound_type, duration, …),
+        # so they are deferred to _apply_preset's re-validation, where the
+        # merged model carries preset_id=None and these checks run.
+        if self.preset_id is not None:
+            return self
         # sound_type and mode are coupled: it is required for sounds and
         # meaningless for songs.
         if self.mode == "sound" and self.sound_type is None:
@@ -146,6 +139,24 @@ def estimate_seconds(request: GenerationRequest) -> int:
     return _SONG_BASE_SECONDS + int(duration)
 
 
+def _apply_preset(request: GenerationRequest, preset: Preset) -> GenerationRequest:
+    """Merge ``preset`` into ``request``: preset values are the base, fields the
+    client explicitly sent win (``model_fields_set``, so an explicit value equal
+    to a schema default still overrides). The merged set is re-validated as a
+    plain request (preset_id absent), which enforces the deferred cross-field
+    rules; a conflict surfaces as 422 just like any other invalid body.
+    """
+    base = {field: getattr(preset, field) for field in PRESET_PARAM_FIELDS if getattr(preset, field) is not None}
+    explicit = {field: getattr(request, field) for field in request.model_fields_set if field != "preset_id"}
+    try:
+        return GenerationRequest.model_validate({**base, **explicit})
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[{"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]} for error in exc.errors()],
+        ) from exc
+
+
 @router.post("", response_model=GenerationResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_generation(
     request: GenerationRequest,
@@ -162,8 +173,12 @@ async def create_generation(
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if request.preset_id is not None:
+        # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
+        preset = await preset_service.get_preset(request.preset_id, current.user_id)
+        request = _apply_preset(request, preset)
     job = await generation_service.create_generation_job(
         user_id=user.id,
-        params=request.model_dump(exclude_none=True),
+        params=request.model_dump(exclude_none=True, exclude={"preset_id"}),
     )
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))

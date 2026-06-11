@@ -77,3 +77,20 @@ INFERENCE_STEPS_MAX = 500
 # Creation modes and the sound sub-types valid when ``mode == "sound"``.
 VALID_MODES: frozenset[str] = frozenset({"song", "sound"})
 VALID_SOUND_TYPES: frozenset[str] = frozenset({"one-shot", "loop"})
+
+# Free-text field caps, shared by the API's generation and preset schemas.
+# These fields are persisted verbatim (``Job.input_params``, preset documents)
+# and re-read by the worker, so cap them: a single request must not be able to
+# bloat a MongoDB document (16MB cap) and turn into a 500. Lyrics get the most
+# headroom since a full song's words are legitimately long.
+PROMPT_MAX_LENGTH = 2000
+STYLE_MAX_LENGTH = 1000
+LYRICS_MAX_LENGTH = 5000
+VOCAL_LANGUAGE_MAX_LENGTH = 100
+KEY_MAX_LENGTH = 50
+
+# Seeds are opaque values forwarded to the backend; bound them to MongoDB's
+# signed 64-bit integer range so an oversized value is a clean 422 rather than
+# a BSON-encoding 500 when persisted.
+SEED_MIN = -(2**63)
+SEED_MAX = 2**63 - 1

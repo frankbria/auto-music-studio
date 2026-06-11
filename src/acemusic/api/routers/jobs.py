@@ -10,7 +10,6 @@ import asyncio
 import logging
 from datetime import datetime
 
-from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -18,6 +17,7 @@ from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
+from ..services.common import coerce_object_id
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -42,14 +42,6 @@ class JobStatusResponse(BaseModel):
     clip_ids: list[str] | None = None
     audio_urls: list[str] | None = None
     error: str | None = None
-
-
-def _coerce_object_id(value: str) -> PydanticObjectId | None:
-    """Parse a path id, treating a malformed id as "no such job" (caller → 404)."""
-    try:
-        return PydanticObjectId(value)
-    except Exception:
-        return None
 
 
 def _estimate_for(job: Job) -> int:
@@ -89,7 +81,7 @@ async def get_job_status(
     current: CurrentUser = Depends(get_current_user),
 ) -> JobStatusResponse:
     """Return the current status of ``job_id`` for its owner (404 otherwise)."""
-    oid = _coerce_object_id(job_id)
+    oid = coerce_object_id(job_id)
     job = await Job.get(oid) if oid is not None else None
     if job is None or str(job.user_id) != current.user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
