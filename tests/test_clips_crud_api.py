@@ -202,6 +202,13 @@ class TestListClips:
         resp = await client.get(CLIPS_URL, params=params, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
+    async def test_inverted_bpm_range_returns_422(self, client, settings) -> None:
+        user = await _make_user("clips-bpm-inverted@example.com")
+        resp = await client.get(
+            CLIPS_URL, params={"bpm_min": 200, "bpm_max": 100}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 422
+
     async def test_filter_by_workspace(self, client, settings) -> None:
         user = await _make_user("clips-ws@example.com")
         ws_a = await _make_workspace(user, "A")

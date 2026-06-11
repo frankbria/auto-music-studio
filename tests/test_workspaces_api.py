@@ -337,3 +337,34 @@ class TestDeleteWorkspace:
         resp = await client.delete(f"{WORKSPACES_URL}/{workspace.id}", headers=_auth_headers(other, settings))
         assert resp.status_code == 404
         assert await Workspace.get(workspace.id) is not None
+
+
+@pytest.mark.integration
+class TestDefaultWorkspaceBootstrap:
+    """The get-or-create default bootstrap must coexist with the unique
+    (user_id, name) index: a user may already own a *non-default* workspace
+    named "My Workspace" (created via the API before the registration backfill
+    runs), and the bootstrap must promote it instead of 500ing on the index."""
+
+    async def test_existing_same_named_workspace_is_promoted_to_default(self, mongo_db) -> None:
+        from acemusic.api.services.workspaces import (
+            DEFAULT_WORKSPACE_NAME,
+            get_or_create_default_workspace,
+        )
+
+        user = await _make_user("ws-bootstrap-promote@example.com")
+        named = await _insert_workspace(user, DEFAULT_WORKSPACE_NAME)  # not default
+
+        result = await get_or_create_default_workspace(user.id)
+        assert result.id == named.id
+        assert result.is_default is True
+        assert (await Workspace.get(named.id)).is_default is True
+
+    async def test_existing_default_workspace_is_reused(self, mongo_db) -> None:
+        from acemusic.api.services.workspaces import get_or_create_default_workspace
+
+        user = await _make_user("ws-bootstrap-reuse@example.com")
+        existing = await _insert_workspace(user, "Custom Default", is_default=True)
+
+        result = await get_or_create_default_workspace(user.id)
+        assert result.id == existing.id

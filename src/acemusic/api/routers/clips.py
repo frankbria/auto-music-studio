@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from acemusic.storage import get_storage_backend
 
@@ -56,6 +56,14 @@ class ClipSearchParams(BaseModel):
     sort: Literal["newest", "oldest"] = "newest"
     page: int = Field(default=1, ge=1)
     per_page: int = Field(default=PER_PAGE_DEFAULT, ge=1, le=PER_PAGE_MAX)
+
+    @model_validator(mode="after")
+    def _check_bpm_range(self) -> "ClipSearchParams":
+        # An inverted range can never match; reject it as the client error it
+        # is instead of silently returning an empty page.
+        if self.bpm_min is not None and self.bpm_max is not None and self.bpm_min > self.bpm_max:
+            raise ValueError("bpm_min must not be greater than bpm_max.")
+        return self
 
 
 class ClipUpdate(BaseModel):
@@ -130,7 +138,9 @@ class ClipListResponse(BaseModel):
 
 @router.get("", response_model=ClipListResponse)
 async def list_clips(
-    params: ClipSearchParams = Depends(),
+    # Annotated[..., Query()] (not plain Depends) makes FastAPI validate the
+    # model as one unit, so the cross-field bpm validator surfaces as 422.
+    params: Annotated[ClipSearchParams, Query()],
     current: CurrentUser = Depends(get_current_user),
 ) -> ClipListResponse:
     items, total = await clip_service.list_clips(

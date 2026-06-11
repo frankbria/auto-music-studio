@@ -65,9 +65,29 @@ async def get_or_create_default_workspace(user_id: PydanticObjectId) -> Workspac
         await workspace.insert()
     except DuplicateKeyError:
         existing = await _find_default_workspace(user_id)
-        if existing is None:
+        if existing is not None:
+            return existing
+        # No default exists, so the collision came from the unique
+        # (user_id, name) index: the user already owns a non-default workspace
+        # named "My Workspace" (created via the API before this bootstrap ran).
+        # Promote it rather than failing the login with a 500.
+        named = await Workspace.find_one(
+            Eq(Workspace.user_id, user_id), Eq(Workspace.name, DEFAULT_WORKSPACE_NAME)
+        )
+        if named is None:
             raise
-        return existing
+        named.is_default = True
+        named.updated_at = utcnow()
+        try:
+            await named.save()
+        except DuplicateKeyError:
+            # Lost a race to a concurrent bootstrap; the winner holds the
+            # default flag now.
+            winner = await _find_default_workspace(user_id)
+            if winner is None:
+                raise
+            return winner
+        return named
     return workspace
 
 
