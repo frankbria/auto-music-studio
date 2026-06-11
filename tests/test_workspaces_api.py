@@ -340,6 +340,32 @@ class TestDeleteWorkspace:
 
 
 @pytest.mark.integration
+class TestMissingUser:
+    """Token valid, but the referenced user no longer exists (e.g. deleted).
+
+    Mirrors the generation endpoint's stale-token rule: resolve the user first
+    so a stale token gets a clean 404 instead of creating orphaned records.
+    """
+
+    def _orphan_headers(self, settings: ApiSettings) -> dict[str, str]:
+        token = create_access_token(
+            user_id=str(PydanticObjectId()),
+            email="ghost@example.com",
+            subscription_tier="free",
+            settings=settings,
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    async def test_create_returns_404(self, client, settings) -> None:
+        resp = await client.post(WORKSPACES_URL, json={"name": "Orphan"}, headers=self._orphan_headers(settings))
+        assert resp.status_code == 404
+
+    async def test_list_returns_404(self, client, settings) -> None:
+        resp = await client.get(WORKSPACES_URL, headers=self._orphan_headers(settings))
+        assert resp.status_code == 404
+
+
+@pytest.mark.integration
 class TestDefaultWorkspaceBootstrap:
     """The get-or-create default bootstrap must coexist with the unique
     (user_id, name) index: a user may already own a *non-default* workspace

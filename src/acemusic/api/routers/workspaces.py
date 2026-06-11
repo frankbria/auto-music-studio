@@ -20,7 +20,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Workspace
 from ..services import workspaces as workspace_service
 
@@ -91,14 +91,14 @@ class WorkspaceListResponse(BaseModel):
 @router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)
 async def create_workspace(
     body: WorkspaceCreate,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> WorkspaceResponse:
     workspace = await workspace_service.create_workspace(current.user_id, body.name)
     return WorkspaceResponse.from_workspace(workspace, clip_count=0)
 
 
 @router.get("", response_model=WorkspaceListResponse)
-async def list_workspaces(current: CurrentUser = Depends(get_current_user)) -> WorkspaceListResponse:
+async def list_workspaces(current: CurrentUser = Depends(require_existing_user)) -> WorkspaceListResponse:
     pairs = await workspace_service.list_workspaces(current.user_id)
     return WorkspaceListResponse(
         workspaces=[WorkspaceResponse.from_workspace(workspace, count) for workspace, count in pairs],
@@ -109,7 +109,7 @@ async def list_workspaces(current: CurrentUser = Depends(get_current_user)) -> W
 @router.get("/{workspace_id}", response_model=WorkspaceResponse)
 async def get_workspace(
     workspace_id: str,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> WorkspaceResponse:
     workspace = await workspace_service.get_workspace(workspace_id, current.user_id)
     clip_count = await workspace_service.count_clips(workspace)
@@ -120,7 +120,7 @@ async def get_workspace(
 async def update_workspace(
     workspace_id: str,
     body: WorkspaceUpdate,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> WorkspaceResponse:
     """Rename the workspace; an empty body is a no-op returning the current state."""
     if body.name is None:
@@ -138,7 +138,7 @@ async def delete_workspace(
         default=False,
         description="Required (true) to delete a workspace that still contains clips, along with those clips.",
     ),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> Response:
     await workspace_service.delete_workspace(workspace_id, current.user_id, force=force)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

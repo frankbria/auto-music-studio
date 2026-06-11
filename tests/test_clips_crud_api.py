@@ -303,6 +303,28 @@ class TestListClips:
 
 
 @pytest.mark.integration
+class TestMissingUser:
+    """Token valid, but the referenced user no longer exists (e.g. deleted).
+
+    Clip CRUD resolves the user first (like generation/users); the US-9.3 audio
+    endpoint keeps its own visibility rules and is unaffected.
+    """
+
+    def _orphan_headers(self, settings: ApiSettings) -> dict[str, str]:
+        token = create_access_token(
+            user_id=str(PydanticObjectId()),
+            email="ghost@example.com",
+            subscription_tier="free",
+            settings=settings,
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    async def test_list_returns_404(self, client, settings) -> None:
+        resp = await client.get(CLIPS_URL, headers=self._orphan_headers(settings))
+        assert resp.status_code == 404
+
+
+@pytest.mark.integration
 class TestGetClip:
     async def test_get_own_clip_returns_full_metadata(self, client, settings) -> None:
         user = await _make_user("clips-get@example.com")

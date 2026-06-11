@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Clip
 from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
@@ -141,7 +141,7 @@ async def list_clips(
     # Annotated[..., Query()] (not plain Depends) makes FastAPI validate the
     # model as one unit, so the cross-field bpm validator surfaces as 422.
     params: Annotated[ClipSearchParams, Query()],
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> ClipListResponse:
     items, total = await clip_service.list_clips(
         current.user_id,
@@ -166,7 +166,7 @@ async def list_clips(
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)
-async def get_clip(clip_id: str, current: CurrentUser = Depends(get_current_user)) -> ClipResponse:
+async def get_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> ClipResponse:
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     return ClipResponse.from_clip(clip)
 
@@ -175,7 +175,7 @@ async def get_clip(clip_id: str, current: CurrentUser = Depends(get_current_user
 async def update_clip(
     clip_id: str,
     body: ClipUpdate,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_existing_user),
 ) -> ClipResponse:
     """Rename the clip; an empty body is a no-op returning the current state."""
     if body.title is None:
@@ -186,7 +186,7 @@ async def update_clip(
 
 
 @router.delete("/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_clip(clip_id: str, current: CurrentUser = Depends(get_current_user)) -> Response:
+async def delete_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> Response:
     await clip_service.delete_clip(clip_id, current.user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
