@@ -52,6 +52,7 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | --- | --- |
 | `GET /api/v1/users/me` | Returns the authenticated user's full profile |
 | `PATCH /api/v1/users/me` | Partially updates the profile (`display_name`, `handle`, `bio`, `style_tags`); unset fields are left unchanged |
+| `GET /api/v1/users/me/credits` | Returns the authenticated user's current credit balance, subscription tier, and recent usage history (newest first, up to 50 entries) |
 
 Profile fields: `display_name` (user-editable name, 1–100 chars), `handle` (unique public identifier — alphanumeric + hyphens, 3–30 chars, must start and end with a letter or number; currently case-sensitive), `bio` (up to 500 chars), `style_tags` (up to 20 tags, 30 chars each). A duplicate handle returns `409 Conflict`; an invalid handle or unknown PATCH key returns `422`.
 
@@ -79,7 +80,7 @@ environment variables (see `.env.example`); cookie behavior is tuned via
 
 The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`), and the optional `preset_id`. When `preset_id` is supplied the saved preset's parameters serve as defaults; any field explicitly included in the request overrides the preset value. The job is created with status `queued` and picked up by the async processor (US-9.2).
 
-Invalid parameters return 422 with field-level errors. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
+Invalid parameters return 422 with field-level errors. If the user has insufficient credits for the requested mode (song costs 1.0 credit, sound costs 0.5), the request is rejected with `402 Payment Required` and a JSON body of `{"detail": {"error": "insufficient_credits", "balance": <current>, "required": <cost>}}`. New accounts start with 10.0 credits. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
 
 The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
