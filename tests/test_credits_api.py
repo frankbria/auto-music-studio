@@ -302,3 +302,35 @@ class TestNewUserDefaultBalance:
         resp = await client.get(CREDITS_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json()["balance"] == 10.0
+
+
+@pytest.mark.integration
+class TestLegacyUserWithoutBalanceField:
+    async def _strip_balance_field(self, user) -> None:
+        # Simulate a document created before US-9.6: no credits_balance field
+        # exists in MongoDB (Beanie only supplies the default at load time).
+        await User.get_pymongo_collection().update_one({"_id": user.id}, {"$unset": {"credits_balance": ""}})
+
+    async def test_generation_succeeds_and_deducts_from_default(self, client, settings):
+        user = await _make_user("credits-legacy@example.com")
+        await self._strip_balance_field(user)
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "a calm piano ballad"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        assert (await _reload(user)).credits_balance == 9.0
+
+    async def test_insufficient_path_still_402_after_backfill_spend(self, client, settings):
+        user = await _make_user("credits-legacy-poor@example.com")
+        await self._strip_balance_field(user)
+        headers = _auth_headers(user, settings)
+        first = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
+        assert first.status_code == 202
+        # Force the balance below a song's cost, then verify the normal 402 path.
+        user.credits_balance = 0.75
+        await user.save()
+        second = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
+        assert second.status_code == 402
+        assert second.json()["detail"]["balance"] == 0.75

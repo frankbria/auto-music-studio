@@ -10,6 +10,7 @@ from beanie import PydanticObjectId
 from pymongo import DESCENDING, ReturnDocument
 
 from ..models import CreditTransaction, User
+from ..models.user import DEFAULT_CREDITS_BALANCE
 
 SONG_COST = 1.0
 SOUND_COST = 0.5
@@ -37,11 +38,25 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
     Returns the balance *after* deduction, or ``None`` if the balance was
     insufficient (or the user does not exist).
     """
-    doc = await User.get_pymongo_collection().find_one_and_update(
+    collection = User.get_pymongo_collection()
+    update = (
         {"_id": user_id, "credits_balance": {"$gte": cost}},
         {"$inc": {"credits_balance": -cost}},
-        return_document=ReturnDocument.AFTER,
     )
+    doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
+    if doc is None:
+        # Documents predating US-9.6 have no credits_balance field, and a $gte
+        # range filter never matches an absent field — without a backfill every
+        # legacy account would be rejected while /users/me/credits shows the
+        # (Pydantic-level) default. Materialise the default and retry once.
+        # Concurrent backfills are harmless: $set of the same constant, gated
+        # on the field still being absent, is idempotent.
+        backfill = await collection.update_one(
+            {"_id": user_id, "credits_balance": {"$exists": False}},
+            {"$set": {"credits_balance": DEFAULT_CREDITS_BALANCE}},
+        )
+        if backfill.modified_count:
+            doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
     if doc is None:
         return None
     return doc["credits_balance"]
