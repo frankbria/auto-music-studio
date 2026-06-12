@@ -67,8 +67,6 @@ class JobProcessingError(Exception):
     """A job could not be processed (ACE-Step failure, timeout, or no output)."""
 
 
-# A handler runs one claimed job end-to-end and returns the dict stored as
-# ``job.result`` on success; any exception marks the job failed.
 JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
 
 

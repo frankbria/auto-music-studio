@@ -204,7 +204,6 @@ async def process_remaster_job(job: Job, storage: StorageBackend) -> dict[str, A
     }
 
 
-# Registered by JobProcessor as the default handlers for editing job types.
 EDIT_JOB_HANDLERS = {
     "crop": process_crop_job,
     "speed": process_speed_job,
