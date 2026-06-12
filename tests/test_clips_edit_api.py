@@ -326,6 +326,29 @@ class TestFormatGate:
 
 @pytest.mark.integration
 class TestRemasterValidation:
+    @pytest.mark.parametrize("target_lufs", [5.0, 0.0, -4.9, -70.1, -200.0])
+    async def test_out_of_range_target_lufs_returns_422(self, client, settings, target_lufs: float) -> None:
+        # Positive (or near-zero) loudness targets are physically nonsensical
+        # and would only drive the pipeline into the true-peak limiter.
+        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-{target_lufs}@example.com")
+        resp = await client.post(
+            _edit_url(clip.id, "remaster"),
+            json={"target_lufs": target_lufs},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+
+    @pytest.mark.parametrize("target_lufs", [-5.0, -14.0, -70.0])
+    async def test_in_range_target_lufs_is_accepted(self, client, settings, target_lufs: float) -> None:
+        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-ok-{target_lufs}@example.com")
+        resp = await client.post(
+            _edit_url(clip.id, "remaster"),
+            json={"target_lufs": target_lufs},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+
     async def test_extra_field_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("edit-remaster-extra@example.com")
         resp = await client.post(

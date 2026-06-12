@@ -83,7 +83,9 @@ class RemasterRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    target_lufs: float = -14.0
+    # Real-world targets run from broadcast (-23/-24) to loud masters (~-9);
+    # anything above -5 or below -70 is a client error, not a master.
+    target_lufs: float = Field(default=-14.0, ge=-70.0, le=-5.0)
 
 
 class EditJobResponse(BaseModel):

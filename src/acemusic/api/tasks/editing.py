@@ -28,6 +28,7 @@ from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
 from ..services.clips import native_format
+from ..services.editing import CROP_JOB_TYPE, REMASTER_JOB_TYPE, SPEED_JOB_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +203,7 @@ async def process_remaster_job(job: Job, storage: StorageBackend) -> dict[str, A
 
 
 EDIT_JOB_HANDLERS = {
-    "crop": process_crop_job,
-    "speed": process_speed_job,
-    "remaster": process_remaster_job,
+    CROP_JOB_TYPE: process_crop_job,
+    SPEED_JOB_TYPE: process_speed_job,
+    REMASTER_JOB_TYPE: process_remaster_job,
 }
