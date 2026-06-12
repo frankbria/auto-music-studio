@@ -14,6 +14,7 @@ import logging
 
 import httpx
 import pytest
+from beanie import PydanticObjectId
 from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
@@ -47,6 +48,22 @@ class TestGetCost:
     def test_unknown_mode_raises(self) -> None:
         with pytest.raises(ValueError):
             credits_service.get_cost("video")
+
+
+class TestNonPositiveCostGuard:
+    """Runs in CI (no DB): the guards raise before any database access. A
+    negative cost would otherwise mint credits ($inc of a positive amount
+    behind an always-true $gte filter) or silently deduct on refund."""
+
+    @pytest.mark.parametrize("cost", [0.0, -1.0])
+    async def test_deduct_rejects_non_positive_cost(self, cost: float) -> None:
+        with pytest.raises(ValueError):
+            await credits_service.deduct_credits(PydanticObjectId(), cost)
+
+    @pytest.mark.parametrize("cost", [0.0, -1.0])
+    async def test_refund_rejects_non_positive_cost(self, cost: float) -> None:
+        with pytest.raises(ValueError):
+            await credits_service.refund_credits(PydanticObjectId(), cost)
 
 
 def _async_client(app) -> httpx.AsyncClient:

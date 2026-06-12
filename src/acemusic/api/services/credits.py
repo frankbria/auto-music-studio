@@ -38,6 +38,10 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
     Returns the balance *after* deduction, or ``None`` if the balance was
     insufficient (or the user does not exist).
     """
+    # A non-positive cost would invert the operation: the $gte filter always
+    # matches and the $inc would *grant* credits. Reject at the boundary.
+    if cost <= 0:
+        raise ValueError("cost must be positive")
     collection = User.get_pymongo_collection()
     update = (
         {"_id": user_id, "credits_balance": {"$gte": cost}},
@@ -67,6 +71,9 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
 
 async def refund_credits(user_id: PydanticObjectId, cost: float) -> None:
     """Compensating credit for a deduction whose job never got queued."""
+    # Symmetric guard: a non-positive "refund" would silently deduct.
+    if cost <= 0:
+        raise ValueError("cost must be positive")
     await User.get_pymongo_collection().update_one(
         {"_id": user_id},
         {"$inc": {"credits_balance": cost}},
