@@ -8,6 +8,11 @@ from pymongo import ASCENDING, IndexModel
 
 from .common import utcnow
 
+# Starting balance for new accounts (US-9.6). No product spec exists yet — the
+# purchase/subscription flow is Layer 4 (Stage 26) — so this is a provisional
+# free allowance: enough for 10 songs or 20 sounds.
+DEFAULT_CREDITS_BALANCE = 10.0
+
 
 class User(Document):
     """A platform user. ``email`` is validated and uniquely indexed.
@@ -22,6 +27,9 @@ class User(Document):
     oauth_provider: str | None = None
     oauth_id: str | None = None
     subscription_tier: str = "free"
+    # US-9.6: deducted atomically at job-queue time (see services/credits.py).
+    # Documents predating the field load with the default starting balance.
+    credits_balance: float = DEFAULT_CREDITS_BALANCE
     # Profile fields (US-8.4). All optional so existing/OAuth-created users remain
     # valid; ``handle`` stays null until the user claims one.
     display_name: str | None = None

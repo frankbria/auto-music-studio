@@ -4,18 +4,20 @@
 """
 
 from .clip import Clip
+from .credit_transaction import CreditTransaction
 from .job import Job, JobStatus
 from .preset import PRESET_PARAM_FIELDS, Preset
 from .refresh_token import RefreshToken
 from .user import User
 from .workspace import Workspace
 
-ALL_MODELS = [User, Workspace, Clip, Job, RefreshToken, Preset]
+ALL_MODELS = [User, Workspace, Clip, Job, RefreshToken, Preset, CreditTransaction]
 
 __all__ = [
     "User",
     "Workspace",
     "Clip",
+    "CreditTransaction",
     "Job",
     "JobStatus",
     "RefreshToken",

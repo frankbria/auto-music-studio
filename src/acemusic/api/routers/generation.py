@@ -36,7 +36,12 @@ from acemusic.constants import (
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import PRESET_PARAM_FIELDS, Preset
-from ..services import generation as generation_service, presets as preset_service, users as user_service
+from ..services import (
+    credits as credits_service,
+    generation as generation_service,
+    presets as preset_service,
+    users as user_service,
+)
 from ._validators import validate_format, validate_model, validate_time_signature
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
@@ -177,8 +182,37 @@ async def create_generation(
         # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
         preset = await preset_service.get_preset(request.preset_id, current.user_id)
         request = _apply_preset(request, preset)
-    job = await generation_service.create_generation_job(
+    # US-9.6: credits are deducted atomically at queue time. Cost is judged on
+    # the merged request, since a preset may supply the mode. The atomic
+    # balance-conditioned deduction is the concurrency guard — two requests
+    # racing over the last credit cannot both pass.
+    cost = credits_service.get_cost(request.mode)
+    balance_after = await credits_service.deduct_credits(user.id, cost)
+    if balance_after is None:
+        # Re-read the balance for the error payload: the copy on ``user`` was
+        # loaded before the deduction attempt and may be stale under
+        # concurrent requests.
+        fresh = await user_service.get_user_by_id(user.id)
+        balance = fresh.credits_balance if fresh is not None else 0.0
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "insufficient_credits", "balance": balance, "required": cost},
+        )
+    try:
+        job = await generation_service.create_generation_job(
+            user_id=user.id,
+            params=request.model_dump(exclude_none=True, exclude={"preset_id"}),
+        )
+    except BaseException:
+        # The deduction already landed but no job exists — give the credit back
+        # rather than charging for work that will never run.
+        await credits_service.refund_credits(user.id, cost)
+        raise
+    await credits_service.record_transaction(
         user_id=user.id,
-        params=request.model_dump(exclude_none=True, exclude={"preset_id"}),
+        amount=-cost,
+        action_type=request.mode,
+        job_id=str(job.id),
+        balance_after=balance_after,
     )
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))
