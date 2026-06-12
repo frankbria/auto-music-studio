@@ -12,6 +12,7 @@ ever applies to the audio endpoint.
 
 import asyncio
 import re
+from pathlib import Path
 from typing import Literal
 
 from beanie import PydanticObjectId
@@ -42,6 +43,13 @@ async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
 
 def _clip_not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
+
+
+def native_format(clip: Clip) -> str:
+    """The clip's stored audio format: the ``format`` field, falling back to
+    the ``file_path`` suffix (legacy/imported documents may lack the field),
+    then to wav."""
+    return (clip.format or Path(clip.file_path).suffix.lstrip(".") or "wav").lower()
 
 
 def _contains_regex(text: str) -> dict:

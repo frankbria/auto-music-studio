@@ -93,6 +93,19 @@ class EditJobResponse(BaseModel):
     status: Literal["queued"] = "queued"
 
 
+def _require_wav(clip: Clip) -> None:
+    """422 unless the clip's audio is wav.
+
+    The editing pipeline can only round-trip wav: ``soundfile`` cannot write
+    PCM_16 mp3/aac/opus and pydub needs ffmpeg (absent on the server) for
+    compressed formats, so a non-wav job would only fail later in the worker
+    with an opaque library error.
+    """
+    fmt = clip_service.native_format(clip)
+    if fmt != "wav":
+        raise _unprocessable(f"unsupported format {fmt!r} for editing; currently only wav is supported.")
+
+
 def _require_duration_ms(clip: Clip) -> int:
     """The clip's duration in milliseconds, or 422 if the metadata is missing."""
     if clip.duration is None:
@@ -118,6 +131,7 @@ async def crop_clip(
 ) -> EditJobResponse:
     """Enqueue a crop of ``clip_id`` to ``[start, end]``; the original is preserved."""
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
+    _require_wav(clip)
     duration_ms = _require_duration_ms(clip)
 
     start_ms = parse_time_string(request.start)
@@ -157,6 +171,7 @@ async def speed_clip(
 ) -> EditJobResponse:
     """Enqueue a pitch-preserving time-stretch of ``clip_id``; the original is preserved."""
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
+    _require_wav(clip)
     # The derived clip's duration is source / multiplier, so the metadata must exist.
     _require_duration_ms(clip)
 
@@ -195,8 +210,6 @@ async def remaster_clip(
 ) -> EditJobResponse:
     """Enqueue a remaster of ``clip_id`` to ``target_lufs``; the original is preserved."""
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
-    fmt = (clip.format or "").lower()
-    if fmt != "wav":
-        raise _unprocessable(f"unsupported format {fmt!r} for remastering; currently only wav is supported.")
+    _require_wav(clip)
 
     return await _enqueue(clip, editing_service.REMASTER_JOB_TYPE, {"target_lufs": request.target_lufs})

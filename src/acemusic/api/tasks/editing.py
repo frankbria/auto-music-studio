@@ -27,16 +27,13 @@ from acemusic.audio import crop_audio, remaster_audio, time_stretch_audio
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
+from ..services.clips import native_format
 
 logger = logging.getLogger(__name__)
 
 
 class EditProcessingError(Exception):
     """An editing job could not be processed (missing source, audio failure)."""
-
-
-def _clip_format(clip: Clip) -> str:
-    return (clip.format or Path(clip.file_path).suffix.lstrip(".") or "wav").lower()
 
 
 async def _load_source_clip(job: Job) -> Clip:
@@ -71,7 +68,7 @@ async def _store_derived_clip(
     An insert failure deletes the just-uploaded object so a failed job never
     leaves an orphaned file behind (mirrors the generate path's rollback).
     """
-    fmt = _clip_format(source)
+    fmt = native_format(source)
     clip_id = PydanticObjectId()
     path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
     await asyncio.to_thread(storage.upload, path, data)
@@ -121,7 +118,7 @@ async def process_crop_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     start_ms, end_ms = params["start_ms"], params["end_ms"]
 
     with tempfile.TemporaryDirectory(prefix="acemusic-crop-") as tmp_dir:
-        workspace = _EditWorkspace(tmp_dir, _clip_format(source))
+        workspace = _EditWorkspace(tmp_dir, native_format(source))
         await _download_source(storage, source, workspace)
         await asyncio.to_thread(
             crop_audio,
@@ -151,7 +148,7 @@ async def process_speed_job(job: Job, storage: StorageBackend) -> dict[str, Any]
     multiplier = job.input_params["multiplier"]
 
     with tempfile.TemporaryDirectory(prefix="acemusic-speed-") as tmp_dir:
-        workspace = _EditWorkspace(tmp_dir, _clip_format(source))
+        workspace = _EditWorkspace(tmp_dir, native_format(source))
         await _download_source(storage, source, workspace)
         await asyncio.to_thread(
             time_stretch_audio,
@@ -178,7 +175,7 @@ async def process_remaster_job(job: Job, storage: StorageBackend) -> dict[str, A
     target_lufs = job.input_params["target_lufs"]
 
     with tempfile.TemporaryDirectory(prefix="acemusic-remaster-") as tmp_dir:
-        workspace = _EditWorkspace(tmp_dir, _clip_format(source))
+        workspace = _EditWorkspace(tmp_dir, native_format(source))
         await _download_source(storage, source, workspace)
         measurements = await asyncio.to_thread(
             remaster_audio,

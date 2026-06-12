@@ -107,11 +107,13 @@ async def _insert_clip(
     duration: float | None = 10.0,
     bpm: int | None = None,
     key: str | None = None,
-    fmt: str = "wav",
+    fmt: str | None = "wav",
     store_bytes: bytes | None = None,
 ) -> Clip:
     clip_id = PydanticObjectId()
-    file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.{fmt}"
+    # A None ``fmt`` exercises clips with no format metadata; the stored file
+    # is still a wav so the suffix fallback resolves it.
+    file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.{fmt or 'wav'}"
     if store_bytes is not None:
         get_storage_backend().upload(file_path, store_bytes)
     clip = Clip(
@@ -290,13 +292,40 @@ class TestSpeedValidation:
 
 
 @pytest.mark.integration
-class TestRemasterValidation:
-    async def test_non_wav_clip_returns_422(self, client, settings) -> None:
-        user, _, clip = await _user_with_clip("edit-remaster-mp3@example.com", fmt="mp3")
-        resp = await client.post(_edit_url(clip.id, "remaster"), json={}, headers=_auth_headers(user, settings))
+class TestFormatGate:
+    """All three operations only process wav sources (soundfile can't write
+    PCM_16 mp3/aac/opus and pydub needs ffmpeg for compressed formats), so a
+    non-wav clip must be rejected at request time, not fail in the worker."""
+
+    @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
+    @pytest.mark.parametrize("fmt", ["mp3", "aac", "opus", "flac"])
+    async def test_non_wav_clip_returns_422(self, client, settings, operation: str, fmt: str) -> None:
+        user, _, clip = await _user_with_clip(f"edit-fmt-{operation}-{fmt}@example.com", fmt=fmt, bpm=120)
+        resp = await client.post(
+            _edit_url(clip.id, operation),
+            json=VALID_BODIES[operation],
+            headers=_auth_headers(user, settings),
+        )
         assert resp.status_code == 422
+        assert fmt in resp.json()["detail"]
         assert await Job.count() == 0
 
+    @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
+    async def test_missing_format_falls_back_to_wav_suffix(self, client, settings, operation: str) -> None:
+        # Legacy/imported clip documents may have format=None while file_path
+        # still ends in .wav — the gate must use the suffix fallback, not 422.
+        user, _, clip = await _user_with_clip(f"edit-fmt-none-{operation}@example.com", fmt=None, bpm=120)
+        resp = await client.post(
+            _edit_url(clip.id, operation),
+            json=VALID_BODIES[operation],
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        assert await Job.count() == 1
+
+
+@pytest.mark.integration
+class TestRemasterValidation:
     async def test_extra_field_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("edit-remaster-extra@example.com")
         resp = await client.post(

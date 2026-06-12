@@ -14,7 +14,6 @@ import asyncio
 import logging
 import math
 from datetime import datetime
-from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -232,7 +231,7 @@ async def get_clip_audio(
         logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
 
-    native_format = (clip.format or Path(clip.file_path).suffix.lstrip(".") or "wav").lower()
+    native_format = clip_service.native_format(clip)
     serve_format = native_format
     converted = False
     if format is not None and format != native_format:
