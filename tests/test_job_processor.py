@@ -92,11 +92,11 @@ class _FakeAceClient:
         return self._audio
 
 
-async def _enqueue(input_params: dict | None = None) -> Job:
+async def _enqueue(input_params: dict | None = None, *, job_type: str = "generate") -> Job:
     job = Job(
         user_id=PydanticObjectId(),
         workspace_id=PydanticObjectId(),
-        job_type="generate",
+        job_type=job_type,
         status=JobStatus.QUEUED,
         input_params=input_params or {"prompt": "a calm piano ballad", "format": "wav"},
     )
@@ -113,7 +113,7 @@ async def _wait_until(predicate, *, timeout: float = 5.0, interval: float = 0.02
     return False
 
 
-def _make_processor(fake, storage, *, concurrency: int = 2, stale_after: float = 0.0) -> JobProcessor:
+def _make_processor(fake, storage, *, concurrency: int = 2, stale_after: float = 0.0, handlers=None) -> JobProcessor:
     # stale_after=0.0: any `processing` job is treated as immediately orphaned, so
     # the requeue-on-startup test is deterministic (production uses a real window).
     return JobProcessor(
@@ -124,6 +124,7 @@ def _make_processor(fake, storage, *, concurrency: int = 2, stale_after: float =
         stale_after=stale_after,
         client_factory=lambda: fake,
         storage_factory=lambda: storage,
+        handlers=handlers,
     )
 
 
@@ -417,6 +418,135 @@ class TestShutdownAndRequeue:
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.QUEUED
         assert refreshed.started_at is None
+
+
+# ---------------------------------------------------------------------------
+# Handler registry — dispatch by job_type (US-10.1, Step 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestHandlerRegistry:
+    async def test_custom_handler_processes_its_job_type(self, mongo_db, tmp_path) -> None:
+        seen: list[str] = []
+
+        async def echo_handler(job: Job) -> dict:
+            seen.append(job.job_type)
+            return {"echo": job.input_params["value"]}
+
+        proc = _make_processor(
+            _FakeAceClient(),
+            LocalStorage(root_dir=tmp_path),
+            handlers={"echo": echo_handler},
+        )
+        job = await _enqueue({"value": 42}, job_type="echo")
+
+        await proc.start()
+        try:
+            done = await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        assert done, "custom-typed job did not complete"
+        refreshed = await Job.get(job.id)
+        assert refreshed.result == {"echo": 42}
+        assert seen == ["echo"]
+
+    async def test_generate_jobs_still_route_to_generate_handler(self, mongo_db, tmp_path) -> None:
+        # The registry must not change generate behaviour: a generate job and a
+        # custom-typed job each reach their own handler.
+        async def noop_handler(job: Job) -> dict:
+            return {"handled": True}
+
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/a.wav"])
+        proc = _make_processor(fake, storage, handlers={"noop": noop_handler})
+        gen_job = await _enqueue()
+        noop_job = await _enqueue({"x": 1}, job_type="noop")
+
+        await proc.start()
+        try:
+            done = await _wait_until(lambda: _all_status([gen_job.id, noop_job.id], JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        assert done, "jobs did not complete"
+        refreshed_gen = await Job.get(gen_job.id)
+        assert refreshed_gen.result["clip_ids"], "generate handler did not produce clips"
+        refreshed_noop = await Job.get(noop_job.id)
+        assert refreshed_noop.result == {"handled": True}
+
+    async def test_unregistered_job_type_is_never_claimed(self, mongo_db, tmp_path) -> None:
+        proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path))
+        job = await _enqueue({"x": 1}, job_type="mystery")
+
+        await proc.start()
+        try:
+            claimed = await _wait_until(lambda: _is_status(job.id, JobStatus.PROCESSING), timeout=0.3)
+        finally:
+            await proc.stop()
+
+        assert not claimed, "a job with no registered handler was claimed"
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.QUEUED
+
+    async def test_handler_exception_marks_job_failed(self, mongo_db, tmp_path) -> None:
+        async def boom_handler(job: Job) -> dict:
+            raise RuntimeError("edit boom")
+
+        proc = _make_processor(
+            _FakeAceClient(),
+            LocalStorage(root_dir=tmp_path),
+            handlers={"boom": boom_handler},
+        )
+        job = await _enqueue({"x": 1}, job_type="boom")
+
+        await proc.start()
+        try:
+            done = await _wait_until(lambda: _is_status(job.id, JobStatus.FAILED))
+        finally:
+            await proc.stop()
+
+        assert done, "failing handler did not mark the job failed"
+        refreshed = await Job.get(job.id)
+        assert refreshed.error == "edit boom"
+
+    async def test_stale_requeue_covers_all_registered_types(self, mongo_db, tmp_path) -> None:
+        from acemusic.api.models.common import utcnow
+
+        async def noop_handler(job: Job) -> dict:  # pragma: no cover - never runs
+            return {}
+
+        proc = _make_processor(
+            _FakeAceClient(),
+            LocalStorage(root_dir=tmp_path),
+            stale_after=0.0,
+            handlers={"noop": noop_handler},
+        )
+        stale = Job(
+            user_id=PydanticObjectId(),
+            workspace_id=PydanticObjectId(),
+            job_type="noop",
+            status=JobStatus.PROCESSING,
+            started_at=utcnow(),
+            input_params={"x": 1},
+        )
+        await stale.insert()
+        unknown = Job(
+            user_id=PydanticObjectId(),
+            workspace_id=PydanticObjectId(),
+            job_type="mystery",
+            status=JobStatus.PROCESSING,
+            started_at=utcnow(),
+            input_params={"x": 1},
+        )
+        await unknown.insert()
+
+        await proc._requeue_stale_jobs()
+
+        assert (await Job.get(stale.id)).status == JobStatus.QUEUED
+        # A type this processor cannot run is left alone for whoever owns it.
+        assert (await Job.get(unknown.id)).status == JobStatus.PROCESSING
 
 
 # ---------------------------------------------------------------------------
