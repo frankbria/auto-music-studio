@@ -36,5 +36,12 @@ async def create_generation_job(*, user_id: PydanticObjectId, params: dict) -> J
         input_params=params,
     )
     await job.insert()
-    await dispatch_job(str(job.id))
+    try:
+        await dispatch_job(str(job.id))
+    except BaseException:
+        # Don't leave the job behind: the processor polls for QUEUED documents,
+        # so an orphan would still run even though the caller saw a failure
+        # (and, for generation, refunded the credits — US-9.6).
+        await job.delete()
+        raise
     return job

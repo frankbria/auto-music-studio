@@ -212,6 +212,25 @@ class TestRefundOnJobCreationFailure:
         assert (await _reload(user)).credits_balance == 10.0
         assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
 
+    async def test_no_orphaned_job_when_dispatch_fails_after_insert(self, client, settings, monkeypatch):
+        # Failure AFTER the job document is persisted: the job must not be left
+        # behind as QUEUED (the US-9.2 processor polls the collection and would
+        # run it for free once the refund lands).
+        async def _boom(_job_id):
+            raise RuntimeError("dispatch exploded")
+
+        monkeypatch.setattr("acemusic.api.services.generation.dispatch_job", _boom)
+        user = await _make_user("credits-dispatch@example.com", balance=10.0)
+        with pytest.raises(RuntimeError):
+            await client.post(
+                GENERATE_URL,
+                json={"prompt": "a calm piano ballad"},
+                headers=_auth_headers(user, settings),
+            )
+        assert (await _reload(user)).credits_balance == 10.0
+        assert await Job.find(Job.user_id == user.id).count() == 0
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+
 
 @pytest.mark.integration
 class TestCreditsEndpoint:

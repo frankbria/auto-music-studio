@@ -76,10 +76,14 @@ async def record_transaction(
 
 
 async def get_recent_transactions(user_id: PydanticObjectId, limit: int = HISTORY_LIMIT) -> list[CreditTransaction]:
-    """The user's most recent credit movements, newest first."""
+    """The user's most recent credit movements, newest first.
+
+    ``_id`` breaks ties: BSON datetimes have millisecond resolution, so two
+    movements in the same millisecond would otherwise sort unstably.
+    """
     return (
         await CreditTransaction.find(CreditTransaction.user_id == user_id)
-        .sort([("created_at", DESCENDING)])
+        .sort([("created_at", DESCENDING), ("_id", DESCENDING)])
         .limit(limit)
         .to_list()
     )
