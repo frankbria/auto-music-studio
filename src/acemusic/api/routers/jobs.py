@@ -18,9 +18,14 @@ from acemusic.storage import get_storage_backend
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
+from ..services.editing import EDIT_JOB_TYPES
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
+
+# Editing jobs (crop/speed/remaster, US-10.1) are quick local CPU work, so a
+# small flat estimate replaces the duration-scaled generation heuristic.
+_EDIT_ESTIMATE_SECONDS = 5
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the generation router), so an unauthenticated request is rejected with 401.
@@ -45,12 +50,17 @@ class JobStatusResponse(BaseModel):
 
 
 def _estimate_for(job: Job) -> int:
-    """Re-derive the advisory estimate from the persisted request snapshot.
+    """Advisory estimate per job type.
 
-    Reuses the generation router's heuristic so the status and create responses
-    agree. A snapshot that no longer validates (e.g. a schema change) falls back
-    to 0 rather than failing the status read.
+    Editing jobs get a flat per-type constant — their ``input_params`` are an
+    edit spec, not a :class:`GenerationRequest`, so the generation heuristic
+    would (mis)report them as 0. Generation jobs reuse the generation router's
+    heuristic so the status and create responses agree; a snapshot that no
+    longer validates (e.g. a schema change) falls back to 0 rather than failing
+    the status read.
     """
+    if job.job_type in EDIT_JOB_TYPES:
+        return _EDIT_ESTIMATE_SECONDS
     try:
         return estimate_seconds(GenerationRequest(**job.input_params))
     except Exception:

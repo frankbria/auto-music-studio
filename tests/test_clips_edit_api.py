@@ -8,7 +8,9 @@ The 401 auth-gate tests run in CI (no DB); the rest are ``integration`` and
 drive the real app with ``httpx.AsyncClient`` over a local MongoDB.
 """
 
+import asyncio
 import logging
+import time
 
 import httpx
 import pytest
@@ -20,8 +22,10 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
 from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
+from acemusic.storage import get_storage_backend
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
+JOBS_URL = f"{API_V1_PREFIX}/jobs"
 
 # Minimal valid bodies, used where the test target is not the payload itself.
 VALID_BODIES = {
@@ -104,13 +108,17 @@ async def _insert_clip(
     bpm: int | None = None,
     key: str | None = None,
     fmt: str = "wav",
+    store_bytes: bytes | None = None,
 ) -> Clip:
     clip_id = PydanticObjectId()
+    file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.{fmt}"
+    if store_bytes is not None:
+        get_storage_backend().upload(file_path, store_bytes)
     clip = Clip(
         id=clip_id,
         user_id=user.id,
         workspace_id=workspace.id,
-        file_path=f"{user.id}/{workspace.id}/clips/{clip_id}.{fmt}",
+        file_path=file_path,
         format=fmt,
         duration=duration,
         bpm=bpm,
@@ -443,3 +451,99 @@ class TestRemasterEnqueue:
 
         job = await _get_only_job()
         assert job.input_params["target_lufs"] == -16.0
+
+
+# ---------------------------------------------------------------------------
+# Job status compatibility + end-to-end lifecycle (Step 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestEditJobStatus:
+    @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
+    async def test_status_reports_positive_estimate_for_edit_jobs(self, client, settings, operation: str) -> None:
+        """GET /jobs/{id}/status must not choke on (or zero out) editing jobs."""
+        user, _, clip = await _user_with_clip(f"edit-status-{operation}@example.com", duration=10.0, bpm=120)
+
+        bodies = {"crop": {"start": "1s", "end": "5s"}, "speed": {"multiplier": 1.5}, "remaster": {}}
+        accepted = await client.post(
+            _edit_url(clip.id, operation), json=bodies[operation], headers=_auth_headers(user, settings)
+        )
+        assert accepted.status_code == 202
+        job_id = accepted.json()["job_id"]
+
+        resp = await client.get(f"{JOBS_URL}/{job_id}/status", headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "queued"
+        assert isinstance(body["estimated_time_seconds"], int)
+        # Editing is quick but not free; the estimate must be a real per-type
+        # value, not the generation heuristic's broken-snapshot fallback of 0.
+        assert body["estimated_time_seconds"] > 0
+
+
+@pytest.fixture
+def local_storage(monkeypatch, tmp_path):
+    """Point the storage backend at a throwaway local root."""
+    monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ACEMUSIC_STORAGE_LOCAL_ROOT", str(tmp_path / "storage"))
+    return tmp_path
+
+
+@pytest.mark.integration
+class TestEditLifecycleEndToEnd:
+    """AC4: each operation's job is trackable queued → completed via the API.
+
+    ``httpx.ASGITransport`` does not run the app lifespan, so the production
+    :class:`JobProcessor` is started directly with its default (env-driven)
+    storage backend — the same worker the lifespan would launch.
+    """
+
+    @pytest.mark.parametrize(
+        ("operation", "body", "expected_duration"),
+        [
+            ("crop", {"start": "0.5s", "end": "1.5s"}, 1.0),
+            ("speed", {"multiplier": 2.0}, 1.0),
+            ("remaster", {}, 2.0),
+        ],
+    )
+    async def test_edit_runs_to_completed_via_status_endpoint(
+        self, client, settings, local_storage, write_tone, operation: str, body: dict, expected_duration: float
+    ) -> None:
+        from acemusic.api.tasks.processor import JobProcessor
+
+        user = await _make_user(f"edit-e2e-{operation}@example.com")
+        workspace = await _make_workspace(user)
+        tone_path = local_storage / "tone.wav"
+        write_tone(tone_path, duration_s=2.0)
+        clip = await _insert_clip(user, workspace, duration=2.0, bpm=120, store_bytes=tone_path.read_bytes())
+        headers = _auth_headers(user, settings)
+
+        accepted = await client.post(_edit_url(clip.id, operation), json=body, headers=headers)
+        assert accepted.status_code == 202
+        assert accepted.json()["status"] == "queued"
+        job_id = accepted.json()["job_id"]
+
+        processor = JobProcessor(concurrency=1, poll_interval=0.05)
+        await processor.start()
+        try:
+            status_body = None
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                resp = await client.get(f"{JOBS_URL}/{job_id}/status", headers=headers)
+                assert resp.status_code == 200
+                status_body = resp.json()
+                assert status_body["status"] in {"queued", "processing", "completed"}, status_body.get("error")
+                if status_body["status"] == "completed":
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            await processor.stop()
+        assert status_body is not None and status_body["status"] == "completed", "job never completed"
+
+        assert len(status_body["clip_ids"]) == 1
+        assert len(status_body["audio_urls"]) == 1
+        new_clip = await Clip.get(PydanticObjectId(status_body["clip_ids"][0]))
+        assert new_clip.duration == pytest.approx(expected_duration)
+        assert new_clip.parent_clip_ids == [clip.id]
+        assert new_clip.generation_mode == operation
