@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–4 complete; Stage 6 in progress (US-6.1 extend, US-6.2 cover, US-6.3 repaint, US-6.4 mashup, US-6.5 sample, US-6.6 add-vocal/replace, and US-6.7 full-song implemented). CLI entry point, health check, basic generation, musical parameters, quality/speed tradeoffs, model selection, sound modes, workspace management, clip extension, cover-mode restyle, section repaint with crossfade blending, two-clip mashup with BPM alignment, loop sampling, vocal layering, section replacement, and full-song auto-extend all implemented.
+**Current progress:** Stages 1–9 complete on `main`; Stage 10 in progress (US-10.1 audio editing endpoints implemented). CLI foundation (Stages 1–7): generation, workspace management, audio processing, DAW export. Platform API (Stages 8–9): FastAPI with OAuth2 auth, async job queue, clip audio streaming, workspace/clip/preset CRUD, credit deduction. Audio editing API (US-10.1): crop, speed-adjust, and remaster endpoints enqueue async jobs that create derived clips with lineage tracking.
 
 ## Commands
 
@@ -112,7 +112,7 @@ src/acemusic/
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
     models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction
-    routers/        # Versioned routers mounted under /api/v1 (health, ...)
+    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, workspaces, presets)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
