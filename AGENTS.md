@@ -111,7 +111,7 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction
     routers/        # Versioned routers mounted under /api/v1 (health, ...)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)

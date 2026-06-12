@@ -19,8 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..models import User
-from ..services import users as user_service
+from ..models import CreditTransaction, User
+from ..services import credits as credits_service, users as user_service
 
 # Free-text profile fields are stored verbatim and re-served on every
 # GET /users/me, so cap them: one PATCH must not be able to bloat the document
@@ -112,6 +112,34 @@ class UserProfileUpdate(BaseModel):
         return cleaned
 
 
+class CreditTransactionEntry(BaseModel):
+    """One usage-history row (US-9.6)."""
+
+    amount: float
+    action_type: str
+    job_id: str
+    balance_after: float
+    created_at: datetime
+
+    @classmethod
+    def from_transaction(cls, txn: CreditTransaction) -> "CreditTransactionEntry":
+        return cls(
+            amount=txn.amount,
+            action_type=txn.action_type,
+            job_id=txn.job_id,
+            balance_after=txn.balance_after,
+            created_at=txn.created_at,
+        )
+
+
+class CreditsResponse(BaseModel):
+    """Current balance plus recent usage history, newest first (US-9.6)."""
+
+    balance: float
+    tier: str
+    history: list[CreditTransactionEntry]
+
+
 def _not_found() -> HTTPException:
     # An authenticated token whose user no longer exists (e.g. deleted account).
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
@@ -123,6 +151,24 @@ async def get_me(current: CurrentUser = Depends(get_current_user)) -> UserProfil
     if user is None:
         raise _not_found()
     return UserProfileResponse.from_user(user)
+
+
+@router.get("/me/credits", response_model=CreditsResponse)
+async def get_my_credits(current: CurrentUser = Depends(get_current_user)) -> CreditsResponse:
+    """The authenticated user's credit balance and recent usage history.
+
+    Balance and tier come from the user document (not the token claims), so the
+    response reflects deductions made since the token was issued.
+    """
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise _not_found()
+    transactions = await credits_service.get_recent_transactions(user.id)
+    return CreditsResponse(
+        balance=user.credits_balance,
+        tier=user.subscription_tier,
+        history=[CreditTransactionEntry.from_transaction(txn) for txn in transactions],
+    )
 
 
 @router.patch("/me", response_model=UserProfileResponse)
