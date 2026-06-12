@@ -91,7 +91,14 @@ async def get_or_create_user(*, email: str, provider: str, oauth_id: str, name: 
             await user.save()
         return user
 
-    if await User.find_one(User.email == email) is not None:
+    email_owner = await User.find_one(User.email == email)
+    if email_owner is not None:
+        # A concurrent first-login for the *same* identity may have inserted
+        # this row between the identity lookup above and here — that's the
+        # idempotent case, not a conflict (mirrors the DuplicateKeyError
+        # recovery below). Only a different identity owning the email is a 409.
+        if email_owner.oauth_provider == provider and email_owner.oauth_id == oauth_id:
+            return email_owner
         raise EmailAlreadyRegisteredError(email)
 
     user = User(

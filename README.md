@@ -84,11 +84,13 @@ Invalid parameters return 422 with field-level errors. If the user has insuffici
 
 The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
-#### Async job processor (US-9.2)
+#### Async job processor (US-9.2, US-10.1)
 
 A background processor runs inside the API process, polling MongoDB for `queued`
-jobs, forwarding them to ACE-Step, storing the audio via the storage abstraction,
-and creating clip records before marking the job `completed` (or `failed` with an
+jobs and dispatching them to the handler registered for their `job_type`. Generation
+jobs (`generate`) forward to ACE-Step, store the audio, and create clip records.
+Editing jobs (`crop`, `speed`, `remaster`) run local CPU operations via the audio
+processing library. All handlers mark the job `completed` (or `failed` with an
 error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
 `JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
 600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
@@ -119,6 +121,16 @@ A default workspace is created automatically when a new user registers (OAuth ca
 `GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
 
 All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
+
+### Audio Editing (US-10.1)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/clips/{id}/crop` | Trim a clip to `[start, end]` with optional fades and beat-snap; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/speed` | Time-stretch a clip by a `multiplier` (0.5–2.0) or to a `target_bpm`; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/remaster` | Loudness-normalise a clip to a `target_lufs` (default −14 LUFS); returns 202 + `job_id` |
+
+All three editing endpoints are non-destructive: the original clip is never modified. Each operation creates a new clip with `parent_clip_ids` and `generation_mode` set for lineage tracking, and tracks progress via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise). No credits are deducted — editing is local CPU work. Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`). The `speed` endpoint accepts either `multiplier` (direct rate) or `target_bpm` (requires BPM metadata on the source clip); exactly one must be provided.
 
 ### Presets
 

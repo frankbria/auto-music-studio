@@ -1,10 +1,11 @@
-"""Async job processor (US-9.2).
+"""Async job processor (US-9.2, generalised for multiple job types in US-10.1).
 
-A background worker that drives queued generation jobs to completion inside the
-FastAPI process. It polls MongoDB for ``status=queued`` jobs — a stateless,
+A background worker that drives queued jobs to completion inside the FastAPI
+process. It polls MongoDB for ``status=queued`` jobs — a stateless,
 restart-safe design that mirrors how a future Celery/Redis swap would behave —
-atomically claims each, runs the ACE-Step generation, stores the audio via the
-storage abstraction, creates :class:`Clip` records, and transitions the job
+atomically claims each, dispatches it to the handler registered for its
+``job_type`` (generation runs ACE-Step and stores the audio; editing handlers
+live in :mod:`acemusic.api.tasks.editing`), and transitions the job
 ``queued -> processing -> completed | failed``.
 
 The ACE-Step client and storage backend are synchronous, so their blocking calls
@@ -18,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from functools import partial
 from typing import Any
@@ -33,6 +34,7 @@ from acemusic.storage import StorageBackend, get_storage_backend
 from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
+from .editing import EDIT_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,9 @@ class JobProcessingError(Exception):
     """A job could not be processed (ACE-Step failure, timeout, or no output)."""
 
 
+JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
+
+
 def _default_client_factory() -> AceStepClient:
     """Build an ACE-Step client from the CLI config (env > .env > config.yaml)."""
     config = load_config()
@@ -74,11 +79,13 @@ def _default_client_factory() -> AceStepClient:
 
 
 class JobProcessor:
-    """Background worker pool that processes queued generation jobs.
+    """Background worker pool that processes queued jobs by ``job_type``.
 
-    The ACE-Step client and storage backend are obtained through factories so
-    tests can inject in-process doubles; production uses the real config-driven
-    client and the configured storage backend.
+    Each registered job_type maps to a handler; the built-in ``generate``
+    handler runs ACE-Step generations. The ACE-Step client and storage backend
+    are obtained through factories so tests can inject in-process doubles;
+    production uses the real config-driven client and the configured storage
+    backend.
     """
 
     def __init__(
@@ -89,9 +96,9 @@ class JobProcessor:
         poll_timeout: float = 600.0,
         ace_poll_interval: float = 2.0,
         stale_after: float | None = None,
-        job_type: str = "generate",
         client_factory: Callable[[], AceStepClient] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
+        handlers: dict[str, JobHandler] | None = None,
     ) -> None:
         self._concurrency = concurrency
         self._semaphore = asyncio.Semaphore(concurrency)
@@ -103,9 +110,16 @@ class JobProcessor:
         # window plus a margin, so a startup sweep never reclaims a job a live
         # sibling process is still working — see _requeue_stale_jobs.
         self._stale_after = stale_after if stale_after is not None else poll_timeout + 300.0
-        self._job_type = job_type
         self._client_factory = client_factory or _default_client_factory
         self._storage_factory = storage_factory or get_storage_backend
+        # Handler registry keyed by job_type: only registered types are claimed
+        # (and re-queued when stale), so jobs another deployment owns are left
+        # alone. ``handlers`` lets callers add or override entries.
+        self._handlers: dict[str, JobHandler] = {"generate": self._handle_generate}
+        for job_type, edit_handler in EDIT_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_edit_handler, edit_handler)
+        if handlers:
+            self._handlers.update(handlers)
         self._running = False
         self._worker_task: asyncio.Task[None] | None = None
         self._active: set[asyncio.Task[None]] = set()
@@ -191,7 +205,7 @@ class JobProcessor:
         """
         collection = database.get_database()[Job.Settings.name]
         doc = await collection.find_one_and_update(
-            {"status": JobStatus.QUEUED.value, "job_type": self._job_type},
+            {"status": JobStatus.QUEUED.value, "job_type": {"$in": list(self._handlers)}},
             {"$set": {"status": JobStatus.PROCESSING.value, "started_at": utcnow()}},
             sort=[("created_at", ASCENDING)],
             return_document=ReturnDocument.AFTER,
@@ -221,7 +235,7 @@ class JobProcessor:
         result = await collection.update_many(
             {
                 "status": JobStatus.PROCESSING.value,
-                "job_type": self._job_type,
+                "job_type": {"$in": list(self._handlers)},
                 # ``started_at`` missing/None means a legacy/partial claim — also stale.
                 "$or": [{"started_at": {"$lt": cutoff}}, {"started_at": None}],
             },
@@ -233,32 +247,43 @@ class JobProcessor:
     # -- single-job processing --------------------------------------------
 
     async def _process_job(self, job: Job) -> None:
-        """Run one claimed job end-to-end, recording success or failure.
+        """Dispatch one claimed job to its handler, recording success or failure.
 
         Cancellation (graceful shutdown) is re-raised, leaving the job in
         ``processing`` so the next startup re-queues it. Any other error is
-        captured on the job as ``failed`` with its message.
+        captured on the job as ``failed`` with its message. The claim query
+        filters on registered types, so the handler lookup cannot miss.
         """
         try:
-            client = self._client_factory()
-            params = dict(job.input_params or {})
-
-            task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
-            result = await self._poll_until_complete(client, task_id)
-            if result.get("status") == "failed":
-                raise JobProcessingError(result.get("error") or "ACE-Step generation failed")
-
-            audio_urls = result.get("audio_urls") or []
-            if not audio_urls:
-                raise JobProcessingError("ACE-Step completed but returned no audio")
-
-            clip_ids = await self._store_clips(job, params, client, audio_urls)
-            await self._mark_completed(job, clip_ids)
+            handler = self._handlers[job.job_type]
+            result = await handler(job)
+            await self._mark_completed(job, result)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - any failure must land on the job record
             logger.exception("Job %s failed", job.id)
             await self._mark_failed(job, str(exc))
+
+    async def _run_edit_handler(self, edit_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt an editing handler ``(job, storage) -> result`` to the registry."""
+        return await edit_handler(job, self._storage_factory())
+
+    async def _handle_generate(self, job: Job) -> dict[str, Any]:
+        """Run an ACE-Step generation job: submit, poll, store clips."""
+        client = self._client_factory()
+        params = dict(job.input_params or {})
+
+        task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
+        result = await self._poll_until_complete(client, task_id)
+        if result.get("status") == "failed":
+            raise JobProcessingError(result.get("error") or "ACE-Step generation failed")
+
+        audio_urls = result.get("audio_urls") or []
+        if not audio_urls:
+            raise JobProcessingError("ACE-Step completed but returned no audio")
+
+        clip_ids = await self._store_clips(job, params, client, audio_urls)
+        return {"clip_ids": clip_ids}
 
     async def _poll_until_complete(self, client: AceStepClient, task_id: str) -> dict[str, Any]:
         """Poll query_result until the task reaches a terminal state or times out."""
@@ -365,11 +390,11 @@ class JobProcessor:
 
     # -- status transitions ------------------------------------------------
 
-    async def _mark_completed(self, job: Job, clip_ids: list[str]) -> None:
+    async def _mark_completed(self, job: Job, result: dict[str, Any]) -> None:
         await job.set(
             {
                 Job.status: JobStatus.COMPLETED,
-                Job.result: {"clip_ids": clip_ids},
+                Job.result: result,
                 Job.completed_at: utcnow(),
             }
         )
