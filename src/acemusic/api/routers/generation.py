@@ -10,6 +10,7 @@ bounds and enumerations come from :mod:`acemusic.constants` so CLI and API
 validation share one source of truth.
 """
 
+import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -43,6 +44,8 @@ from ..services import (
     users as user_service,
 )
 from ._validators import validate_format, validate_model, validate_time_signature
+
+logger = logging.getLogger(__name__)
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -208,11 +211,18 @@ async def create_generation(
         # rather than charging for work that will never run.
         await credits_service.refund_credits(user.id, cost)
         raise
-    await credits_service.record_transaction(
-        user_id=user.id,
-        amount=-cost,
-        action_type=request.mode,
-        job_id=str(job.id),
-        balance_after=balance_after,
-    )
+    try:
+        await credits_service.record_transaction(
+            user_id=user.id,
+            amount=-cost,
+            action_type=request.mode,
+            job_id=str(job.id),
+            balance_after=balance_after,
+        )
+    except Exception:
+        # The charge is taken and the job is dispatched (possibly already
+        # claimed by the processor), so failing the request here would invite a
+        # retry that charges the user twice for work that is already running.
+        # The ledger row is best-effort history — log loudly and keep the 202.
+        logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))

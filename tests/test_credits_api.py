@@ -10,6 +10,7 @@ under concurrent requests, refund on job-creation failure, and the
 """
 
 import asyncio
+import logging
 
 import httpx
 import pytest
@@ -334,3 +335,65 @@ class TestLegacyUserWithoutBalanceField:
         second = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
         assert second.status_code == 402
         assert second.json()["detail"]["balance"] == 0.75
+
+    async def test_backfill_race_loser_still_deducts(self, client, settings, monkeypatch):
+        # A request can lose the backfill race: its own $exists backfill
+        # matches nothing because a concurrent winner already materialised the
+        # field. It must then retry the deduction against the now-present
+        # balance instead of reporting 402 with 10 credits available. The race
+        # is simulated deterministically by materialising the field just
+        # before this request's backfill update runs.
+        user = await _make_user("credits-legacy-race@example.com")
+        await self._strip_balance_field(user)
+
+        collection_cls = type(User.get_pymongo_collection())
+        real_update_one = collection_cls.update_one
+
+        async def race_winner_first(coll_self, filt, update, *args, **kwargs):
+            is_backfill = isinstance(filt.get("credits_balance"), dict) and "$exists" in filt["credits_balance"]
+            if is_backfill:
+                await real_update_one(
+                    coll_self,
+                    {"_id": user.id, "credits_balance": {"$exists": False}},
+                    {"$set": {"credits_balance": 10.0}},
+                )
+            return await real_update_one(coll_self, filt, update, *args, **kwargs)
+
+        monkeypatch.setattr(collection_cls, "update_one", race_winner_first)
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "a calm piano ballad"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        assert (await _reload(user)).credits_balance == 9.0
+
+
+@pytest.mark.integration
+class TestLedgerWriteFailure:
+    async def test_202_still_returned_when_ledger_insert_fails(self, client, settings, monkeypatch, caplog):
+        # The charge is taken and the job is queued (and possibly already
+        # claimed by the processor) before the ledger insert. A transient
+        # ledger failure must not surface as a 500 — the client would retry
+        # and be charged twice for work that is already running. The row is
+        # best-effort: log loudly, keep the 202 truthful.
+        async def _boom(**_kwargs):
+            raise RuntimeError("ledger exploded")
+
+        monkeypatch.setattr("acemusic.api.services.credits.record_transaction", _boom)
+        # The app pins acemusic logs to its own handler (propagate=False in
+        # _ensure_app_logging); caplog listens on the root logger, so re-enable
+        # propagation for this test only.
+        monkeypatch.setattr(logging.getLogger("acemusic"), "propagate", True)
+        user = await _make_user("credits-ledger-fail@example.com", balance=10.0)
+        with caplog.at_level(logging.ERROR, logger="acemusic.api.routers.generation"):
+            resp = await client.post(
+                GENERATE_URL,
+                json={"prompt": "a calm piano ballad"},
+                headers=_auth_headers(user, settings),
+            )
+        assert resp.status_code == 202
+        assert (await _reload(user)).credits_balance == 9.0
+        assert await Job.find(Job.user_id == user.id).count() == 1
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+        assert any("ledger" in rec.getMessage().lower() for rec in caplog.records if rec.levelno >= logging.ERROR)

@@ -51,12 +51,15 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
         # (Pydantic-level) default. Materialise the default and retry once.
         # Concurrent backfills are harmless: $set of the same constant, gated
         # on the field still being absent, is idempotent.
-        backfill = await collection.update_one(
+        await collection.update_one(
             {"_id": user_id, "credits_balance": {"$exists": False}},
             {"$set": {"credits_balance": DEFAULT_CREDITS_BALANCE}},
         )
-        if backfill.modified_count:
-            doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
+        # Retry unconditionally: a concurrent request may have won the backfill
+        # (our update matched nothing), yet the now-present balance can still
+        # cover this deduction. A genuinely insufficient balance just fails the
+        # retry the same way it failed the first attempt.
+        doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
     if doc is None:
         return None
     return doc["credits_balance"]
