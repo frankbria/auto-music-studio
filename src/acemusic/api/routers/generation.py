@@ -208,7 +208,8 @@ async def create_generation(
         )
     except BaseException:
         # The deduction already landed but no job exists — give the credit back
-        # rather than charging for work that will never run.
+        # rather than charging for work that will never run. BaseException (not
+        # Exception) on purpose: asyncio.CancelledError must also compensate.
         await credits_service.refund_credits(user.id, cost)
         raise
     try:

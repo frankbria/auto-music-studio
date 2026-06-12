@@ -204,6 +204,9 @@ class TestRefundOnJobCreationFailure:
 
         monkeypatch.setattr("acemusic.api.services.generation.create_generation_job", _boom)
         user = await _make_user("credits-refund@example.com", balance=10.0)
+        # ASGITransport re-raises unhandled server exceptions into the test
+        # (real clients would see a 500); the contract under test is the
+        # compensating refund, not the status code.
         with pytest.raises(RuntimeError):
             await client.post(
                 GENERATE_URL,
@@ -222,6 +225,9 @@ class TestRefundOnJobCreationFailure:
 
         monkeypatch.setattr("acemusic.api.services.generation.dispatch_job", _boom)
         user = await _make_user("credits-dispatch@example.com", balance=10.0)
+        # ASGITransport re-raises unhandled server exceptions into the test
+        # (real clients would see a 500); the contract under test is the
+        # cleanup, not the status code.
         with pytest.raises(RuntimeError):
             await client.post(
                 GENERATE_URL,

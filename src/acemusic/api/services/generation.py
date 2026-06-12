@@ -41,7 +41,8 @@ async def create_generation_job(*, user_id: PydanticObjectId, params: dict) -> J
     except BaseException:
         # Don't leave the job behind: the processor polls for QUEUED documents,
         # so an orphan would still run even though the caller saw a failure
-        # (and, for generation, refunded the credits — US-9.6).
+        # (and, for generation, refunded the credits — US-9.6). BaseException
+        # (not Exception) on purpose: asyncio.CancelledError must also clean up.
         await job.delete()
         raise
     return job
