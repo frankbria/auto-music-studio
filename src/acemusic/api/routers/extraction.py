@@ -138,10 +138,15 @@ async def get_stems(
     clip_id: str,
     current: CurrentUser = Depends(require_existing_user),
 ) -> StemsResult:
-    """Return the stem clip ids for ``clip_id`` (404 if not yet separated)."""
+    """Return the stem clip ids for ``clip_id`` (404 until the full set exists).
+
+    A partial set (the owner deleted one of the child stem clips) is treated as
+    "not separated", matching the POST cache check — the endpoint never reports a
+    separation that is missing required labels.
+    """
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     existing = await _existing_stems(clip)
-    if not existing:
+    if not _EXPECTED_STEM_LABELS.issubset({c.title for c in existing}):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No stems for this clip.")
     return _stems_result(clip, existing)
 

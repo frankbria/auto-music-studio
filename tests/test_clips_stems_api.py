@@ -245,6 +245,14 @@ class TestGetStems:
         resp = await client.get(_stems_url(clip.id), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
+    async def test_get_returns_404_for_partial_set(self, client, settings) -> None:
+        # A partial set (one stem child deleted) is reported as "not separated",
+        # matching the POST cache check — never a result missing required labels.
+        user, _, clip = await _user_with_clip("stems-get-partial@example.com")
+        await _insert_stem_children(clip, labels=["drums", "bass", "other"])  # missing vocals
+        resp = await client.get(_stems_url(clip.id), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
     async def test_get_returns_stem_ids_after_extraction(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("stems-get-ok@example.com")
         children = await _insert_stem_children(clip)
