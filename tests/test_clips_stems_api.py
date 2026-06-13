@@ -232,6 +232,19 @@ class TestStemsEnqueue:
         assert job.workspace_id == workspace.id
         assert job.input_params == {"clip_id": str(clip.id)}
 
+    async def test_double_submit_reuses_in_flight_job(self, client, settings) -> None:
+        # Two POSTs before the first completes must not create competing jobs —
+        # the second rides the queued one (idempotent per clip).
+        user, _, clip = await _user_with_clip("stems-dedup@example.com")
+        headers = _auth_headers(user, settings)
+
+        first = await client.post(_stems_url(clip.id), headers=headers)
+        second = await client.post(_stems_url(clip.id), headers=headers)
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert first.json()["job_id"] == second.json()["job_id"]
+        assert await Job.count() == 1
+
 
 # ---------------------------------------------------------------------------
 # GET — 404 when absent, results when present
