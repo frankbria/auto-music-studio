@@ -32,6 +32,11 @@ class Clip(Document):
     inference_steps: int | None = None
     parent_clip_ids: list[PydanticObjectId] = Field(default_factory=list)
     generation_mode: str | None = None
+    # Extracted MIDI artifacts (US-10.2), keyed label -> storage key. MIDI files
+    # are not clips, so the parent clip records them here; this is the cache and
+    # retrieval source (the storage backend offers no list/exists). None until a
+    # MIDI extraction job completes for this clip.
+    midi_paths: dict[str, str] | None = None
     is_public: bool = False  # documents predating US-9.3 load as private
     created_at: datetime = Field(default_factory=utcnow)
 

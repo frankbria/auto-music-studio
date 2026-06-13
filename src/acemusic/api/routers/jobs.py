@@ -19,6 +19,7 @@ from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
+from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 # Editing jobs (crop/speed/remaster, US-10.1) are quick local CPU work, so a
 # small flat estimate replaces the duration-scaled generation heuristic.
 _EDIT_ESTIMATE_SECONDS = 5
+
+# Extraction jobs (stems/MIDI, US-10.2) run heavy ML models (demucs / basic-pitch)
+# on CPU, so they take far longer than an edit; a flat minute-ish estimate is a
+# reasonable advisory floor without modelling per-clip duration.
+_EXTRACTION_ESTIMATE_SECONDS = 60
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the generation router), so an unauthenticated request is rejected with 401.
@@ -46,6 +52,9 @@ class JobStatusResponse(BaseModel):
     estimated_time_seconds: int
     clip_ids: list[str] | None = None
     audio_urls: list[str] | None = None
+    # MIDI extraction jobs (US-10.2) produce files, not clips; their results
+    # surface here as label -> download URL (resolved fresh, like ``audio_urls``).
+    midi_download_urls: dict[str, str] | None = None
     error: str | None = None
 
 
@@ -61,6 +70,8 @@ def _estimate_for(job: Job) -> int:
     """
     if job.job_type in EDIT_JOB_TYPES:
         return _EDIT_ESTIMATE_SECONDS
+    if job.job_type in EXTRACTION_JOB_TYPES:
+        return _EXTRACTION_ESTIMATE_SECONDS
     try:
         return estimate_seconds(GenerationRequest(**job.input_params))
     except Exception:
@@ -103,9 +114,13 @@ async def get_job_status(
         estimated_time_seconds=_estimate_for(job),
     )
     if job.status == JobStatus.COMPLETED:
-        clip_ids = list((job.result or {}).get("clip_ids", []))
-        response.clip_ids = clip_ids
-        response.audio_urls = await _resolve_audio_urls(clip_ids)
+        if job.job_type == MIDI_JOB_TYPE:
+            # MIDI jobs record ``midi_paths`` (label -> storage key), not clips.
+            response.midi_download_urls = await resolve_midi_urls((job.result or {}).get("midi_paths", {}))
+        else:
+            clip_ids = list((job.result or {}).get("clip_ids", []))
+            response.clip_ids = clip_ids
+            response.audio_urls = await _resolve_audio_urls(clip_ids)
     elif job.status == JobStatus.FAILED:
         response.error = job.error
     return response
