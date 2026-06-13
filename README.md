@@ -132,6 +132,17 @@ All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally
 
 All three editing endpoints are non-destructive: the original clip is never modified. Each operation creates a new clip with `parent_clip_ids` and `generation_mode` set for lineage tracking, and tracks progress via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise). No credits are deducted — editing is local CPU work. Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`). The `speed` endpoint accepts either `multiplier` (direct rate) or `target_bpm` (requires BPM metadata on the source clip); exactly one must be provided.
 
+### Stems & MIDI Extraction (US-10.2)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/clips/{id}/stems` | Separate a clip into `vocals`/`drums`/`bass`/`other`; returns 202 + `job_id` (or 200 with the existing stems on a cache hit) |
+| `GET /api/v1/clips/{id}/stems` | The 4 stem clip ids and labels once separated (404 until the full set exists) |
+| `POST /api/v1/clips/{id}/midi` | Extract `melody`/`chords`/`bass`/`drums` MIDI; returns 202 + `job_id` (or 200 with the existing files on a cache hit) |
+| `GET /api/v1/clips/{id}/midi` | Download URLs for the extracted `.mid` files (404 until extracted) |
+
+Both operations run as background jobs and are tracked via `GET /api/v1/jobs/{id}/status` — completed stems jobs surface `clip_ids`/`audio_urls`, completed MIDI jobs surface `midi_download_urls`. Stems become **four child clips** linked to the parent (`generation_mode="stems"`, same duration as the source); MIDI files are stored as objects (not clip records) and referenced from the parent clip's `midi_paths`. Requests are cache-first and idempotent per clip: re-requesting returns the existing results, and a second request while a job is in flight rides the existing job rather than enqueuing a duplicate. Only `wav` source clips are accepted (422 otherwise); no credits are deducted.
+
 ### Presets
 
 | Endpoint | Purpose |
