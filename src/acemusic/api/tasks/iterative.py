@@ -37,7 +37,7 @@ from typing import Any
 from beanie import PydanticObjectId
 from pydub import AudioSegment
 
-from acemusic.audio import combine_sample, crop_audio, crossfade_stitch
+from acemusic.audio import calculate_speed_multiplier, combine_sample, crop_audio, crossfade_stitch, time_stretch_audio
 from acemusic.client import AceStepClient
 from acemusic.storage import StorageBackend
 from acemusic.utils import parse_time_string
@@ -452,7 +452,7 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
         tmp_path = Path(tmp)
         primary_path = tmp_path / f"primary.{fmt}"
         await _download(storage, primary, primary_path)
-        ref_path = await _build_mashup_reference(storage, secondaries, tmp_path, fmt)
+        ref_path = await _build_mashup_reference(storage, secondaries, tmp_path, fmt, primary.bpm)
         data = await _submit_and_download(
             client,
             poll,
@@ -483,23 +483,50 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
     return {"clip_ids": [clip_id]}
 
 
-async def _build_mashup_reference(storage: StorageBackend, secondaries: list[Clip], tmp_path: Path, fmt: str) -> Path:
+async def _build_mashup_reference(
+    storage: StorageBackend, secondaries: list[Clip], tmp_path: Path, fmt: str, primary_bpm: int | None
+) -> Path:
     """Mix every secondary source into a single reference track (overlaid).
 
-    With one secondary this is just that clip; with several, they are layered so
-    the blend incorporates all of them. Written as ``fmt`` to ``tmp_path``.
+    Each secondary is BPM-aligned to ``primary_bpm`` before mixing (matching the
+    CLI mashup path), so mismatched tempos do not produce an off-beat reference.
+    With one secondary this is just that (aligned) clip; with several, they are
+    layered so the blend incorporates all of them. Written as ``fmt`` to ``tmp_path``.
     """
     mixed: AudioSegment | None = None
     for index, clip in enumerate(secondaries):
-        clip_path = tmp_path / f"secondary-{index}.{native_format(clip)}"
+        clip_fmt = native_format(clip)
+        clip_path = tmp_path / f"secondary-{index}.{clip_fmt}"
         await _download(storage, clip, clip_path)
-        segment = _decode(clip_path.read_bytes(), native_format(clip))
+        aligned_path = await _align_to_bpm(clip_path, clip.bpm, primary_bpm, tmp_path, index)
+        segment = _decode(aligned_path.read_bytes(), clip_fmt)
         mixed = segment if mixed is None else mixed.overlay(segment)
     ref_path = tmp_path / f"reference.{fmt}"
     # ``secondaries`` is guaranteed non-empty (the API requires >= 2 sources).
     assert mixed is not None
     mixed.export(ref_path, format=fmt)
     return ref_path
+
+
+async def _align_to_bpm(
+    src_path: Path, src_bpm: int | None, target_bpm: int | None, tmp_path: Path, index: int
+) -> Path:
+    """Time-stretch ``src_path`` to ``target_bpm``, or return it unchanged.
+
+    Skips alignment when either BPM is unknown/invalid or already equal, and
+    falls back to the original on a stretch failure (mirrors the CLI's
+    ``_align_clips_bpm``).
+    """
+    if not src_bpm or not target_bpm or src_bpm <= 0 or target_bpm <= 0 or src_bpm == target_bpm:
+        return src_path
+    rate = calculate_speed_multiplier(float(src_bpm), float(target_bpm))
+    aligned_path = tmp_path / f"aligned-{index}{src_path.suffix}"
+    try:
+        await asyncio.to_thread(time_stretch_audio, str(src_path), str(aligned_path), rate)
+    except Exception:
+        logger.warning("BPM alignment failed for %s; using the original clip", src_path, exc_info=True)
+        return src_path
+    return aligned_path
 
 
 # ---------------------------------------------------------------------------

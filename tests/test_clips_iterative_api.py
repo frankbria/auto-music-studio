@@ -339,6 +339,8 @@ class TestValidation:
         "operation,body",
         [
             ("extend", {"duration": "soon"}),  # unparseable time
+            ("extend", {"duration": "0s"}),  # zero-length no-op
+            ("extend", {"duration": "0"}),  # zero-length no-op (plain seconds)
             ("extend", {}),  # missing required duration
             ("extend", {"duration": "30s", "bogus": 1}),  # extra="forbid"
             ("cover", {}),  # missing required style
@@ -383,6 +385,19 @@ class TestValidation:
         )
         assert resp.status_code == 422
         assert await Job.count() == 0
+
+    async def test_extend_without_duration_metadata_returns_422_no_charge(self, client, settings) -> None:
+        # A clip with no duration metadata cannot be extended; the endpoint must
+        # reject it before charging rather than enqueue a guaranteed-failing job.
+        user, _, clip = await _user_with_clip("iter-extend-nodur@example.com", balance=10.0, duration=None)
+        resp = await client.post(
+            _op_url(clip.id, "extend"),
+            json={"duration": "30s"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+        assert (await _reload_user(user)).credits_balance == 10.0
 
     async def test_non_wav_source_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-nonwav@example.com", fmt="mp3")

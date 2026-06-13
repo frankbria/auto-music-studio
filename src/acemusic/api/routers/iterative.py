@@ -109,7 +109,11 @@ class ExtendRequest(BaseModel):
     @field_validator("duration")
     @classmethod
     def _check_duration(cls, value: str) -> str:
-        return _validate_time_string(value)
+        # A zero-length extend is a no-op repaint that still charges a credit;
+        # reject it (parse_time_string accepts "0"/"0s" as 0ms).
+        if parse_time_string(value) <= 0:
+            raise ValueError("duration must be greater than zero")
+        return value
 
     @field_validator("from_point")
     @classmethod
@@ -329,10 +333,12 @@ async def extend_clip(
 ) -> IterativeJobResponse:
     """Enqueue an extension of ``clip_id`` by ``duration``; the original is preserved."""
     clip = await _owned_wav_clip(clip_id, current.user_id)
-    if request.from_point != "end":
-        duration_ms = _require_duration_ms(clip)
-        if parse_time_string(request.from_point) > duration_ms:
-            raise _unprocessable(f"from_point ({request.from_point}) exceeds clip duration ({clip.duration:.1f}s).")
+    # The worker needs the source duration for every extend (it splices the new
+    # tail onto the existing audio), so require it before charging — otherwise a
+    # clip without duration metadata would deduct a credit then fail in the worker.
+    duration_ms = _require_duration_ms(clip)
+    if request.from_point != "end" and parse_time_string(request.from_point) > duration_ms:
+        raise _unprocessable(f"from_point ({request.from_point}) exceeds clip duration ({clip.duration:.1f}s).")
     params = {
         "clip_id": str(clip.id),
         "duration": request.duration,

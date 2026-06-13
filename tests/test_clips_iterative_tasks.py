@@ -315,6 +315,42 @@ class TestMashup:
         # All non-primary sources are mixed into the single reference track.
         assert client.submitted[0]["ref_audio_path"].endswith("reference.wav")
 
+    async def test_bpm_aligns_mismatched_secondary(self, storage, monkeypatch) -> None:
+        import shutil
+
+        job, primary = await _make_clip(storage, email="t-mashup-bpm@example.com", bpm=120)
+        sec_id = PydanticObjectId()
+        sec_path = f"{primary.user_id}/{primary.workspace_id}/clips/{sec_id}.wav"
+        storage.upload(sec_path, _wav_bytes(3.0, freq=550.0))
+        secondary = Clip(
+            id=sec_id,
+            user_id=primary.user_id,
+            workspace_id=primary.workspace_id,
+            file_path=sec_path,
+            format="wav",
+            duration=3.0,
+            bpm=90,  # different tempo → must be aligned to the primary's 120
+            key="C",
+            title="Slow",
+        )
+        await secondary.insert()
+        job.job_type = tasks.MASHUP_JOB_TYPE
+        job.input_params = {"clip_ids": [str(primary.id), str(secondary.id)], "blend_mode": "layered", "style": None}
+        client = FakeAce(_wav_bytes(3.0))
+
+        rates: list[float] = []
+
+        def fake_stretch(input_path, output_path, rate):
+            rates.append(rate)
+            shutil.copy(input_path, output_path)  # keep a readable wav for the overlay
+
+        monkeypatch.setattr(tasks, "time_stretch_audio", fake_stretch)
+
+        await tasks.process_mashup_job(job, storage=storage, client=client, poll=_make_poll())
+
+        # Secondary at 90 BPM aligned to the primary's 120: rate 120/90.
+        assert rates == [pytest.approx(120 / 90)]
+
 
 # ---------------------------------------------------------------------------
 # sample
