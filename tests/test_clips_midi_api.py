@@ -303,6 +303,26 @@ def local_storage(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
+class TestMidiCleanupOnClipDelete:
+    async def test_deleting_clip_removes_its_midi_objects(self, client, settings, local_storage) -> None:
+        # MIDI files live under their own keys (not file_path); deleting the
+        # parent clip must remove them too, not just the source audio.
+        user, workspace, clip = await _user_with_clip(
+            "midi-delete@example.com", store_bytes=b"RIFFsource"
+        )
+        storage = get_storage_backend()
+        key = f"{user.id}/{workspace.id}/clips/{clip.id}/midi/melody.mid"
+        storage.upload(key, b"MThd")
+        clip.midi_paths = {"melody": key}
+        await clip.save()
+
+        resp = await client.delete(f"{CLIPS_URL}/{clip.id}", headers=_auth_headers(user, settings))
+        assert resp.status_code == 204
+        with pytest.raises(FileNotFoundError):
+            storage.download(key)
+
+
+@pytest.mark.integration
 class TestMidiLifecycleEndToEnd:
     async def test_midi_runs_to_completed_and_stores_files_not_clips(
         self, client, settings, local_storage, write_tone, monkeypatch

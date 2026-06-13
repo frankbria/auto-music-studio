@@ -20,6 +20,7 @@ from beanie.operators import In
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
+from acemusic.stems_client import STEM_LABELS
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
@@ -27,6 +28,11 @@ from ..models import Clip
 from ..services import clips as clip_service, extraction as extraction_service
 
 logger = logging.getLogger(__name__)
+
+# A cached stem set counts as complete only when every label is present; if the
+# owner deleted one of the child clips, re-POSTing must re-run separation rather
+# than return a partial result.
+_EXPECTED_STEM_LABELS = frozenset(STEM_LABELS)
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the clips/editing routers), so unauthenticated requests get 401.
@@ -113,7 +119,7 @@ async def separate_stems(
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
 
     existing = await _existing_stems(clip)
-    if existing:
+    if _EXPECTED_STEM_LABELS.issubset({c.title for c in existing}):
         response.status_code = status.HTTP_200_OK
         return _stems_result(clip, existing)
 

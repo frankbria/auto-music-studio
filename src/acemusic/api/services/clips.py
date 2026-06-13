@@ -131,10 +131,18 @@ async def update_clip_title(clip_id: str, user_id: str, title: str) -> Clip:
 
 
 async def delete_clip(clip_id: str, user_id: str) -> None:
-    """Delete the clip record and its stored audio (idempotent on the object)."""
+    """Delete the clip record and its stored audio (idempotent on the object).
+
+    Also removes any extracted MIDI objects (US-10.2 ``midi_paths``), which live
+    under their own storage keys rather than ``file_path`` and would otherwise
+    be orphaned when the parent clip is deleted.
+    """
     clip = await get_owned_clip(clip_id, user_id)
+    storage = get_storage_backend()
     # delete() does file/network I/O via the sync backend; keep it off the
     # event loop. Storage goes first so a crash between the two steps leaves a
     # re-deletable record rather than an orphaned file.
-    await asyncio.to_thread(get_storage_backend().delete, clip.file_path)
+    await asyncio.to_thread(storage.delete, clip.file_path)
+    for midi_key in (clip.midi_paths or {}).values():
+        await asyncio.to_thread(storage.delete, midi_key)
     await clip.delete()

@@ -291,13 +291,23 @@ class TestStemsCache:
         assert await Job.count() == 0
 
     async def test_cache_hit_works_even_for_non_wav_source(self, client, settings) -> None:
-        # The cache check precedes the wav gate: an mp3 clip that already has
-        # stems still returns them rather than 422.
+        # The cache check precedes the wav gate: an mp3 clip that already has a
+        # *complete* stem set still returns it rather than 422.
         user, _, clip = await _user_with_clip("stems-cache-mp3@example.com", fmt="mp3")
         await _insert_stem_children(clip)
         resp = await client.post(_stems_url(clip.id), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert await Job.count() == 0
+
+    async def test_incomplete_cache_re_enqueues(self, client, settings) -> None:
+        # If the owner deleted one stem child, an incomplete set must not be
+        # served as a cache hit — re-POST enqueues a fresh separation (202).
+        user, _, clip = await _user_with_clip("stems-cache-partial@example.com")
+        await _insert_stem_children(clip, labels=["drums", "bass", "other"])  # missing vocals
+
+        resp = await client.post(_stems_url(clip.id), headers=_auth_headers(user, settings))
+        assert resp.status_code == 202
+        assert await Job.count() == 1
 
 
 # ---------------------------------------------------------------------------

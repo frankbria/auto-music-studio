@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from beanie import PydanticObjectId
+from beanie.operators import In
 
 from acemusic.midi_client import MIDI_OUTPUT_LABELS, MidiClient
 from acemusic.stems_client import STEM_LABELS, StemsClient
@@ -116,8 +117,27 @@ async def process_stems_job(job: Job, storage: StorageBackend) -> dict[str, Any]
     if not produced:
         raise ExtractionProcessingError(f"Stem separation produced no output for clip {source.id}")
 
+    # Re-extraction (only reached when the cached set is incomplete — a complete
+    # set short-circuits in the router) replaces any leftover stem children so
+    # the result is a single, complete set rather than a duplicated mix.
+    await _delete_existing_stems(source, storage)
+
     clip_ids = await _store_stem_clips(job, source, storage, produced)
     return {"clip_ids": clip_ids}
+
+
+async def _delete_existing_stems(source: Clip, storage: StorageBackend) -> None:
+    """Remove any prior stem children of ``source`` (clip docs + audio objects)."""
+    existing = await Clip.find(
+        In(Clip.parent_clip_ids, [source.id]),
+        Clip.generation_mode == STEMS_JOB_TYPE,
+    ).to_list()
+    for clip in existing:
+        try:
+            await asyncio.to_thread(storage.delete, clip.file_path)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.exception("Failed to delete stale stem object %s", clip.file_path)
+        await clip.delete()
 
 
 async def _store_stem_clips(
@@ -126,14 +146,21 @@ async def _store_stem_clips(
     storage: StorageBackend,
     produced: list[tuple[str, bytes]],
 ) -> list[str]:
-    """Upload each stem and insert its child Clip; roll back on any failure."""
+    """Upload each stem and insert its child Clip; roll back on any failure.
+
+    Uploaded paths are tracked the moment the upload returns — *before* the
+    insert — so a clip insert that fails after its object is already stored
+    still has that object cleaned up (not just the earlier, fully-stored ones).
+    """
     clip_ids: list[str] = []
-    stored: list[tuple[Clip, str]] = []
+    inserted: list[Clip] = []
+    uploaded_paths: list[str] = []
     try:
         for label, data in produced:
             clip_id = PydanticObjectId()
             path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.wav"
             await asyncio.to_thread(storage.upload, path, data)
+            uploaded_paths.append(path)
             clip = Clip(
                 id=clip_id,
                 user_id=job.user_id,
@@ -149,21 +176,22 @@ async def _store_stem_clips(
                 generation_mode=STEMS_JOB_TYPE,
             )
             await clip.insert()
-            stored.append((clip, path))
+            inserted.append(clip)
             clip_ids.append(str(clip_id))
     except Exception:
-        await _rollback_clips(storage, stored)
+        await _rollback_clips(storage, inserted, uploaded_paths)
         raise
     return clip_ids
 
 
-async def _rollback_clips(storage: StorageBackend, stored: list[tuple[Clip, str]]) -> None:
+async def _rollback_clips(storage: StorageBackend, inserted: list[Clip], uploaded_paths: list[str]) -> None:
     """Best-effort cleanup of stem clips/files written before a mid-batch failure."""
-    for clip, path in stored:
+    for clip in inserted:
         try:
             await clip.delete()
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.exception("Failed to delete orphaned stem clip %s during rollback", clip.id)
+    for path in uploaded_paths:
         try:
             await asyncio.to_thread(storage.delete, path)
         except Exception:  # pragma: no cover - cleanup is best-effort
@@ -197,8 +225,23 @@ async def process_midi_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     # source. Use a targeted ``$set`` rather than a full ``save()``: the job can
     # run for minutes, during which the owner may have edited the clip (e.g.
     # renamed it); a full-document save of our stale copy would clobber that.
-    await source.set({Clip.midi_paths: midi_paths})
+    # If the update fails, the uploaded files would be unreferenced — delete them
+    # so a failed job leaves no orphaned objects.
+    try:
+        await source.set({Clip.midi_paths: midi_paths})
+    except Exception:
+        await _delete_midi_objects(storage, midi_paths.values())
+        raise
     return {"midi_paths": midi_paths}
+
+
+async def _delete_midi_objects(storage: StorageBackend, paths) -> None:
+    """Best-effort removal of uploaded MIDI objects (rollback / clip deletion)."""
+    for path in paths:
+        try:
+            await asyncio.to_thread(storage.delete, path)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.exception("Failed to delete orphaned MIDI object %s", path)
 
 
 async def _store_midi_files(
@@ -215,11 +258,7 @@ async def _store_midi_files(
             await asyncio.to_thread(storage.upload, path, data)
             midi_paths[label] = path
     except Exception:
-        for path in midi_paths.values():
-            try:
-                await asyncio.to_thread(storage.delete, path)
-            except Exception:  # pragma: no cover - cleanup is best-effort
-                logger.exception("Failed to delete orphaned MIDI object %s during rollback", path)
+        await _delete_midi_objects(storage, list(midi_paths.values()))
         raise
     return midi_paths
 
