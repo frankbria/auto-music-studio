@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -235,7 +236,7 @@ async def process_midi_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     return {"midi_paths": midi_paths}
 
 
-async def _delete_midi_objects(storage: StorageBackend, paths) -> None:
+async def _delete_midi_objects(storage: StorageBackend, paths: Iterable[str]) -> None:
     """Best-effort removal of uploaded MIDI objects (rollback / clip deletion)."""
     for path in paths:
         try:
