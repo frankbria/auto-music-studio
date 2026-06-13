@@ -21,6 +21,12 @@ can be reproduced from its output; ``bpm``/``key``/``vocal_language`` are inheri
 from the primary source. A failure after the audio object is uploaded but before
 (or during) the clip insert rolls the object back, so a failed job leaves no
 orphaned storage objects or clip rows.
+
+The source audio is handed to ACE-Step as a worker-local ``src_audio_path``, so
+ACE-Step must run on the same host (or with shared-filesystem access) as the API
+worker — the same constraint the CLI iterative commands document. Remote /
+cross-container ACE-Step deployments are not yet supported (a deferred story);
+under such a deployment these jobs fail after the credit has been deducted.
 """
 
 from __future__ import annotations
@@ -58,6 +64,10 @@ logger = logging.getLogger(__name__)
 
 # Seam between the repaint window and the surrounding original audio.
 _REPAINT_CROSSFADE_MS = 50
+
+# Sentinel for "inherit the primary's key" so callers can distinguish that from an
+# explicit ``key=None`` override (a key-mismatched mashup is unconstrained).
+_INHERIT = "__inherit__"
 
 # Role-specific prompt prefixes for the sample endpoint (mirrors the CLI's
 # ``_ROLE_PROMPT_PREFIX``); kept here so the worker has no CLI/typer dependency.
@@ -141,8 +151,13 @@ async def _store_child_clip(
     primary: Clip,
     storage: StorageBackend,
     title: str | None = None,
+    key: str | None = _INHERIT,
 ) -> str:
     """Upload one output and insert its lineage-tagged child Clip.
+
+    ``key`` defaults to inheriting the primary's key; pass an explicit value
+    (including ``None``) to override — e.g. a key-mismatched mashup is generated
+    without a key constraint, so its child must not claim the primary's key.
 
     Rolls the uploaded object back if the insert fails, so a job that ends up
     ``failed`` never leaves an orphaned storage object behind (mirrors the
@@ -160,7 +175,7 @@ async def _store_child_clip(
         format=fmt,
         duration=duration,
         bpm=primary.bpm,
-        key=primary.key,
+        key=primary.key if key is _INHERIT else key,
         vocal_language=primary.vocal_language,
         parent_clip_ids=parent_ids,
         generation_mode=job.job_type,
@@ -487,6 +502,9 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
         parent_ids=[s.id for s in sources],
         primary=primary,
         storage=storage,
+        # Match what was generated: a key-mismatched mashup was submitted
+        # unconstrained, so its child must not claim the primary's key.
+        key=submitted_key,
     )
     return {"clip_ids": [clip_id]}
 
@@ -606,7 +624,9 @@ async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceSt
                     storage=storage,
                 )
                 clip_ids.append(clip_id)
-        except Exception:
+        except BaseException:
+            # BaseException (not Exception): a shutdown CancelledError must also
+            # roll back, else a requeued retry duplicates the stored children.
             await _rollback_children(storage, clip_ids)
             raise
     return {"clip_ids": clip_ids}

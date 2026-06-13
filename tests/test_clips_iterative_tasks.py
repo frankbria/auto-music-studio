@@ -306,8 +306,10 @@ class TestMashup:
         assert submitted["src_audio_path"].endswith(".wav")
         assert submitted["ref_audio_path"].endswith(".wav")
         assert submitted["blend_mode"] == "layered"
-        # Mismatched keys → no key constraint asserted.
+        # Mismatched keys → no key constraint asserted, and the child clip must
+        # not claim the primary's key (it was generated unconstrained).
         assert submitted["key"] is None
+        assert child.key is None
 
     async def test_three_sources_all_in_lineage(self, storage) -> None:
         job, primary = await _make_clip(storage, email="t-mashup3@example.com")
@@ -342,6 +344,8 @@ class TestMashup:
         child = await _child(result)
         # Every requested source is recorded — none silently dropped.
         assert child.parent_clip_ids == [primary.id, extra[0].id, extra[1].id]
+        # All keys match, so the child inherits the primary's key.
+        assert child.key == "C"
         # All non-primary sources are mixed into the single reference track.
         assert client.submitted[0]["ref_audio_path"].endswith("reference.wav")
 
