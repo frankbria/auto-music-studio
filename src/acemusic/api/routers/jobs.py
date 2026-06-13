@@ -20,6 +20,7 @@ from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
 from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
+from ..services.iterative import ITERATIVE_JOB_TYPES, SAMPLE_JOB_TYPE
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ _EDIT_ESTIMATE_SECONDS = 5
 # on CPU, so they take far longer than an edit; a flat minute-ish estimate is a
 # reasonable advisory floor without modelling per-clip duration.
 _EXTRACTION_ESTIMATE_SECONDS = 60
+
+# Iterative generation jobs (US-10.3) each run one ACE-Step task; the flat
+# estimate mirrors the iterative router's create-response heuristic so status
+# polling and the enqueue response agree (sample scales by num_clips).
+_ITERATIVE_ESTIMATE_SECONDS = 45
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the generation router), so an unauthenticated request is rejected with 401.
@@ -72,6 +78,10 @@ def _estimate_for(job: Job) -> int:
         return _EDIT_ESTIMATE_SECONDS
     if job.job_type in EXTRACTION_JOB_TYPES:
         return _EXTRACTION_ESTIMATE_SECONDS
+    if job.job_type in ITERATIVE_JOB_TYPES:
+        if job.job_type == SAMPLE_JOB_TYPE:
+            return _ITERATIVE_ESTIMATE_SECONDS * int((job.input_params or {}).get("num_clips", 1))
+        return _ITERATIVE_ESTIMATE_SECONDS
     try:
         return estimate_seconds(GenerationRequest(**job.input_params))
     except Exception:

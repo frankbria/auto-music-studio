@@ -283,6 +283,30 @@ class TestEnqueueSuccess:
         assert txns[0].amount == -1.0
         assert txns[0].action_type == "cover"
 
+    async def test_status_endpoint_reports_iterative_eta(self, client, settings) -> None:
+        # A queued iterative job keeps a real ETA when polled (not the 0 fallback).
+        user, _, clip = await _user_with_clip("iter-eta@example.com")
+        accepted = await client.post(
+            _op_url(clip.id, "cover"), json={"style": "jazz"}, headers=_auth_headers(user, settings)
+        )
+        assert accepted.status_code == 202
+        job_id = accepted.json()["job_id"]
+        status = await client.get(f"{API_V1_PREFIX}/jobs/{job_id}/status", headers=_auth_headers(user, settings))
+        assert status.status_code == 200
+        assert status.json()["estimated_time_seconds"] == 45
+
+    async def test_status_endpoint_scales_sample_eta(self, client, settings) -> None:
+        user, _, clip = await _user_with_clip("iter-eta-sample@example.com")
+        accepted = await client.post(
+            _op_url(clip.id, "sample"),
+            json={"start": "1s", "end": "3s", "role": "loop-bed", "prompt": "beat", "num_clips": 2},
+            headers=_auth_headers(user, settings),
+        )
+        assert accepted.status_code == 202
+        job_id = accepted.json()["job_id"]
+        status = await client.get(f"{API_V1_PREFIX}/jobs/{job_id}/status", headers=_auth_headers(user, settings))
+        assert status.json()["estimated_time_seconds"] == 90
+
     async def test_sample_cost_scales_with_num_clips(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-sample-cost@example.com", balance=10.0)
         resp = await client.post(
@@ -385,6 +409,20 @@ class TestValidation:
         )
         assert resp.status_code == 422
         assert await Job.count() == 0
+
+    @pytest.mark.parametrize("from_point", ["0s", "0", "20s"])
+    async def test_extend_from_point_out_of_range_returns_422(self, client, settings, from_point: str) -> None:
+        # 0 would trim to a zero-length prefix (worker error); past the end has no
+        # audio to continue from — both must be rejected before charging.
+        user, _, clip = await _user_with_clip("iter-extend-from@example.com", balance=10.0, duration=10.0)
+        resp = await client.post(
+            _op_url(clip.id, "extend"),
+            json={"duration": "5s", "from_point": from_point},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+        assert (await _reload_user(user)).credits_balance == 10.0
 
     async def test_extend_without_duration_metadata_returns_422_no_charge(self, client, settings) -> None:
         # A clip with no duration metadata cannot be extended; the endpoint must

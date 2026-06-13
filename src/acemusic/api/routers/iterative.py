@@ -337,8 +337,15 @@ async def extend_clip(
     # tail onto the existing audio), so require it before charging — otherwise a
     # clip without duration metadata would deduct a credit then fail in the worker.
     duration_ms = _require_duration_ms(clip)
-    if request.from_point != "end" and parse_time_string(request.from_point) > duration_ms:
-        raise _unprocessable(f"from_point ({request.from_point}) exceeds clip duration ({clip.duration:.1f}s).")
+    if request.from_point != "end":
+        # The splice point must fall strictly inside the clip: 0 makes the worker
+        # trim to a zero-length prefix (slice_audio raises), and past the end has
+        # no audio to continue from. Mirrors the CLI's ``0 < t <= duration`` rule.
+        from_ms = parse_time_string(request.from_point)
+        if not (0 < from_ms <= duration_ms):
+            raise _unprocessable(
+                f"from_point ({request.from_point}) must be within the clip (0 < t <= {clip.duration:.1f}s)."
+            )
     params = {
         "clip_id": str(clip.id),
         "duration": request.duration,
