@@ -13,7 +13,6 @@ of enqueuing a duplicate job. Otherwise they persist a queued
 non-generative local CPU work, so no credits are deducted.
 """
 
-import asyncio
 import logging
 
 from beanie.operators import In
@@ -21,7 +20,6 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from acemusic.stems_client import STEM_LABELS
-from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Clip
@@ -97,15 +95,8 @@ def _stems_result(parent: Clip, stems: list[Clip]) -> StemsResult:
 
 
 async def _midi_result(clip: Clip) -> MidiResult:
-    """Resolve the clip's stored MIDI keys to retrievable URLs at read time.
-
-    URLs are generated per request (S3 presigned URLs expire), so only the
-    storage keys are persisted on the clip.
-    """
-    storage = get_storage_backend()
-    urls: dict[str, str] = {}
-    for label, key in (clip.midi_paths or {}).items():
-        urls[label] = await asyncio.to_thread(storage.get_url, key)
+    """Resolve the clip's stored MIDI keys to retrievable URLs at read time."""
+    urls = await extraction_service.resolve_midi_urls(clip.midi_paths or {})
     return MidiResult(download_urls=urls, parent_clip_id=str(clip.id))
 
 
@@ -119,7 +110,7 @@ async def separate_stems(
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
 
     existing = await _existing_stems(clip)
-    if _EXPECTED_STEM_LABELS.issubset({c.title for c in existing}):
+    if _EXPECTED_STEM_LABELS.issubset({c.title or "" for c in existing}):
         response.status_code = status.HTTP_200_OK
         return _stems_result(clip, existing)
 
@@ -146,7 +137,7 @@ async def get_stems(
     """
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     existing = await _existing_stems(clip)
-    if not _EXPECTED_STEM_LABELS.issubset({c.title for c in existing}):
+    if not _EXPECTED_STEM_LABELS.issubset({c.title or "" for c in existing}):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No stems for this clip.")
     return _stems_result(clip, existing)
 

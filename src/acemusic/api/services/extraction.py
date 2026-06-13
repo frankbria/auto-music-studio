@@ -6,7 +6,11 @@ Kept transport-agnostic (plain exceptions, never ``HTTPException``) like the
 other service modules.
 """
 
+import asyncio
+
 from beanie import PydanticObjectId
+
+from acemusic.storage import get_storage_backend
 
 from ..models import Job, JobStatus
 from ..tasks import dispatch_job
@@ -19,6 +23,21 @@ EXTRACTION_JOB_TYPES = (STEMS_JOB_TYPE, MIDI_JOB_TYPE)
 # A job is still "in flight" (a worker may pick it up or already has) in these
 # states; a second request for the same clip rides it rather than competing.
 _ACTIVE_STATUSES = (JobStatus.QUEUED.value, JobStatus.PROCESSING.value)
+
+
+async def resolve_midi_urls(midi_paths: dict[str, str]) -> dict[str, str]:
+    """Resolve stored MIDI keys (label -> storage key) to retrievable URLs.
+
+    URLs are generated fresh per call (S3 presigned URLs expire) and the raw
+    keys are never exposed, mirroring how clip audio URLs are served. Shared by
+    the MIDI retrieval endpoint and the job-status endpoint.
+    """
+    storage = get_storage_backend()
+    urls: dict[str, str] = {}
+    for label, key in midi_paths.items():
+        # get_url may hit the network (S3 presign), so keep it off the event loop.
+        urls[label] = await asyncio.to_thread(storage.get_url, key)
+    return urls
 
 
 async def _find_active_job(job_type: str, clip_id: PydanticObjectId) -> Job | None:

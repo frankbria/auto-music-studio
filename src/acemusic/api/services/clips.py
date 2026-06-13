@@ -11,6 +11,7 @@ ever applies to the audio endpoint.
 """
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,8 @@ from acemusic.storage import get_storage_backend
 from ..models import Clip
 from . import workspaces as workspace_service
 from .common import coerce_object_id
+
+logger = logging.getLogger(__name__)
 
 
 async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
@@ -143,6 +146,12 @@ async def delete_clip(clip_id: str, user_id: str) -> None:
     # event loop. Storage goes first so a crash between the two steps leaves a
     # re-deletable record rather than an orphaned file.
     await asyncio.to_thread(storage.delete, clip.file_path)
+    # MIDI cleanup is best-effort per key: one failing delete must not strand the
+    # remaining objects or block the clip-record deletion (matches the defensive
+    # cleanup in the extraction task handlers).
     for midi_key in (clip.midi_paths or {}).values():
-        await asyncio.to_thread(storage.delete, midi_key)
+        try:
+            await asyncio.to_thread(storage.delete, midi_key)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.warning("Failed to delete MIDI object %s while deleting clip %s", midi_key, clip.id)
     await clip.delete()

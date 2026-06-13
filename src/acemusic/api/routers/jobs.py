@@ -19,7 +19,7 @@ from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
-from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE
+from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -78,21 +78,6 @@ def _estimate_for(job: Job) -> int:
         return 0
 
 
-async def _resolve_midi_urls(midi_paths: dict[str, str]) -> dict[str, str]:
-    """Map a completed MIDI job's stored keys to retrievable URLs via storage.
-
-    Keys are resolved fresh per request (S3 presigned URLs expire) and never
-    exposed raw, mirroring ``_resolve_audio_urls`` and the clip endpoints that
-    hide ``file_path``.
-    """
-    storage = get_storage_backend()
-    urls: dict[str, str] = {}
-    for label, key in midi_paths.items():
-        # get_url may hit the network (S3 presign), so keep it off the event loop.
-        urls[label] = await asyncio.to_thread(storage.get_url, key)
-    return urls
-
-
 async def _resolve_audio_urls(clip_ids: list[str]) -> list[str]:
     """Map a completed job's clip ids to retrievable audio URLs via storage."""
     if not clip_ids:
@@ -131,7 +116,7 @@ async def get_job_status(
     if job.status == JobStatus.COMPLETED:
         if job.job_type == MIDI_JOB_TYPE:
             # MIDI jobs record ``midi_paths`` (label -> storage key), not clips.
-            response.midi_download_urls = await _resolve_midi_urls((job.result or {}).get("midi_paths", {}))
+            response.midi_download_urls = await resolve_midi_urls((job.result or {}).get("midi_paths", {}))
         else:
             clip_ids = list((job.result or {}).get("clip_ids", []))
             response.clip_ids = clip_ids
