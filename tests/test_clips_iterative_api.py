@@ -424,13 +424,14 @@ class TestValidation:
         assert await Job.count() == 0
         assert (await _reload_user(user)).credits_balance == 10.0
 
-    async def test_extend_without_duration_metadata_returns_422_no_charge(self, client, settings) -> None:
-        # A clip with no duration metadata cannot be extended; the endpoint must
-        # reject it before charging rather than enqueue a guaranteed-failing job.
-        user, _, clip = await _user_with_clip("iter-extend-nodur@example.com", balance=10.0, duration=None)
+    @pytest.mark.parametrize("operation", CLIP_OPS)
+    async def test_without_duration_metadata_returns_422_no_charge(self, client, settings, operation: str) -> None:
+        # Every mode feeds the source duration to ACE-Step; a clip with no
+        # duration metadata must be rejected before charging, not enqueued.
+        user, _, clip = await _user_with_clip(f"iter-nodur-{operation}@example.com", balance=10.0, duration=None)
         resp = await client.post(
-            _op_url(clip.id, "extend"),
-            json={"duration": "30s"},
+            _op_url(clip.id, operation),
+            json=VALID_BODIES[operation],
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 422
@@ -486,6 +487,33 @@ class TestMashup:
         assert (await _reload_user(user)).credits_balance == 8.0
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
         assert txns[0].amount == -2.0
+
+    async def test_too_many_clips_returns_422(self, client, settings) -> None:
+        # The source list is capped to keep one request's work bounded.
+        user = await _make_user("iter-mashup-many@example.com", balance=10.0)
+        ws = await _make_workspace(user)
+        clips = [await _insert_clip(user, ws) for _ in range(9)]
+        resp = await client.post(
+            MASHUP_URL,
+            json={"clip_ids": [str(c.id) for c in clips]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+
+    async def test_no_duration_source_returns_422(self, client, settings) -> None:
+        user = await _make_user("iter-mashup-nodur@example.com", balance=10.0)
+        ws = await _make_workspace(user)
+        a = await _insert_clip(user, ws, duration=10.0)
+        b = await _insert_clip(user, ws, duration=None)
+        resp = await client.post(
+            MASHUP_URL,
+            json={"clip_ids": [str(a.id), str(b.id)]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+        assert (await _reload_user(user)).credits_balance == 10.0
 
     async def test_fewer_than_two_clips_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-mashup-one@example.com")

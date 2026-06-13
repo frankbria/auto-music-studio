@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 # sample scales with the number of clips it produces.
 _BASE_ESTIMATE_SECONDS = 45
 _MAX_SAMPLE_CLIPS = 4
+# Mashup does one DB lookup + download + mix per source at a flat 2-credit cost,
+# so cap the source list to keep a single request's DB/storage/CPU work bounded.
+_MAX_MASHUP_CLIPS = 8
 
 # Free-text fields are persisted verbatim in Job.input_params / Clip.generation_params,
 # so bound them (like the generation API) to keep a single oversized request from
@@ -209,7 +212,7 @@ class MashupRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    clip_ids: list[str] = Field(min_length=2)
+    clip_ids: list[str] = Field(min_length=2, max_length=_MAX_MASHUP_CLIPS)
     blend_mode: BlendMode = BlendMode.LAYERED
     style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
 
@@ -321,9 +324,16 @@ async def _enqueue_generation(
 
 
 async def _owned_wav_clip(clip_id: str, user_id: str) -> Clip:
-    """Resolve a source clip the user owns and gate it to wav (404 then 422)."""
+    """Resolve a source clip the user owns and gate it to wav with duration.
+
+    Every iterative mode feeds the source's duration to ACE-Step (as the target
+    ``audio_duration`` or to bound a range), so a clip without duration metadata
+    would be charged then fail or produce a duration-less derived clip — reject
+    it here (404 unknown/unowned, then 422 non-wav / no-duration).
+    """
     clip = await clip_service.get_owned_clip(clip_id, user_id)
     _require_wav(clip)
+    _require_duration_ms(clip)
     return clip
 
 
