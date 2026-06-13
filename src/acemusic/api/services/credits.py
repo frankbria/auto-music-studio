@@ -15,7 +15,13 @@ from ..models.user import DEFAULT_CREDITS_BALANCE
 SONG_COST = 1.0
 SOUND_COST = 0.5
 
-_COSTS = {"song": SONG_COST, "sound": SOUND_COST}
+# US-10.3: each iterative generation runs one ACE-Step (or ElevenLabs) job,
+# costing the same as a song generation. The ``sample`` endpoint multiplies this
+# base by ``num_clips`` in the router, since it produces several outputs.
+ITERATIVE_COST = 1.0
+ITERATIVE_MODES = ("extend", "cover", "remix", "repaint", "mashup", "sample", "add_vocal")
+
+_COSTS = {"song": SONG_COST, "sound": SOUND_COST, **{mode: ITERATIVE_COST for mode in ITERATIVE_MODES}}
 
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50

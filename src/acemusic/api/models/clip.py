@@ -32,6 +32,10 @@ class Clip(Document):
     inference_steps: int | None = None
     parent_clip_ids: list[PydanticObjectId] = Field(default_factory=list)
     generation_mode: str | None = None
+    # The request parameters that produced this clip (US-10.3 iterative
+    # generation), stored verbatim so an operation can be reproduced from its
+    # output. None for clips created before US-10.3 or by non-iterative paths.
+    generation_params: dict | None = None
     # Extracted MIDI artifacts (US-10.2), keyed label -> storage key. MIDI files
     # are not clips, so the parent clip records them here; this is the cache and
     # retrieval source (the storage backend offers no list/exists). None until a

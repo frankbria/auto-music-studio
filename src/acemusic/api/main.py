@@ -20,7 +20,19 @@ from acemusic import __version__
 
 from . import database
 from .exceptions import HandleConflictError
-from .routers import auth, clips, editing, extraction, generation, health, jobs, presets, users, workspaces
+from .routers import (
+    auth,
+    clips,
+    editing,
+    extraction,
+    generation,
+    health,
+    iterative,
+    jobs,
+    presets,
+    users,
+    workspaces,
+)
 from .settings import ApiSettings
 from .tasks.processor import JobProcessor
 
@@ -118,6 +130,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(clips.router, prefix=API_V1_PREFIX)
     app.include_router(editing.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
+    app.include_router(iterative.router, prefix=API_V1_PREFIX)
     app.include_router(workspaces.router, prefix=API_V1_PREFIX)
     app.include_router(presets.router, prefix=API_V1_PREFIX)
 
