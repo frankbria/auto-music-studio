@@ -138,6 +138,36 @@ class TestExtend:
         assert submitted["task_type"] == "repaint"
         assert submitted["repainting_start"] == pytest.approx(3.0)
         assert submitted["repainting_end"] == pytest.approx(5.0)
+        # from_point="end" sends the full source untrimmed.
+        assert submitted["src_audio_path"].endswith("source.wav")
+
+    async def test_mid_clip_extend_trims_source_to_prefix(self, storage, monkeypatch) -> None:
+        job, source = await _make_clip(storage, email="t-extend-mid@example.com", duration=3.0)
+        job.job_type = tasks.EXTEND_JOB_TYPE
+        job.input_params = {"clip_id": str(source.id), "duration": "2s", "from_point": "1s", "lyrics": None}
+        client = FakeAce(_wav_bytes(3.0))
+
+        import shutil
+
+        heads: list[float] = []
+
+        def fake_slice(input_path, head_seconds, output_path):
+            heads.append(head_seconds)
+            shutil.copy(input_path, output_path)
+            return output_path
+
+        monkeypatch.setattr(tasks, "slice_audio", fake_slice)
+
+        result = await tasks.process_extend_job(job, storage=storage, client=client, poll=_make_poll())
+
+        # Source trimmed to [0, from_point]; ACE-Step never sees the discarded tail.
+        assert heads == [pytest.approx(1.0)]
+        submitted = client.submitted[0]
+        assert submitted["src_audio_path"].endswith("trimmed.wav")
+        assert submitted["repainting_start"] == pytest.approx(1.0)
+        assert submitted["repainting_end"] == pytest.approx(3.0)
+        child = await _child(result)
+        assert child.duration == pytest.approx(3.0, abs=0.05)
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ from pydub import AudioSegment
 from acemusic.audio import calculate_speed_multiplier, combine_sample, crop_audio, crossfade_stitch, time_stretch_audio
 from acemusic.client import AceStepClient
 from acemusic.storage import StorageBackend
-from acemusic.utils import parse_time_string
+from acemusic.utils import parse_time_string, slice_audio
 
 from ..models import Clip, Job
 from ..services.clips import native_format
@@ -219,6 +219,14 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
     with tempfile.TemporaryDirectory(prefix="acemusic-extend-") as tmp:
         src_path = Path(tmp) / f"source.{fmt}"
         await _download(storage, source, src_path)
+        # When extending from a mid-clip point, trim the source to that prefix so
+        # ACE-Step continues from the splice and never sees the discarded tail
+        # (mirrors the CLI extend path's slice_audio step).
+        api_src = src_path
+        if from_point != "end" and from_s < source.duration:
+            trimmed = Path(tmp) / f"trimmed.{fmt}"
+            await asyncio.to_thread(slice_audio, src_path, from_s, trimmed)
+            api_src = trimmed
         data = await _submit_and_download(
             client,
             poll,
@@ -233,7 +241,7 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
                 "key": source.key,
                 "seed": source.seed,
                 "task_type": "repaint",
-                "src_audio_path": str(src_path.resolve()),
+                "src_audio_path": str(api_src.resolve()),
                 "repainting_start": from_s,
                 "repainting_end": target_duration,
             },
