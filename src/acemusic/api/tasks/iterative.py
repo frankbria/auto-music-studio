@@ -177,6 +177,23 @@ async def _store_child_clip(
     return str(clip_id)
 
 
+async def _rollback_children(storage: StorageBackend, clip_ids: list[str]) -> None:
+    """Best-effort removal of child clips (docs + audio objects) already stored.
+
+    Used by multi-output modes (sample) so a failure partway through the batch
+    does not leave earlier children behind for a job that ends up ``failed``.
+    """
+    for clip_id in clip_ids:
+        clip = await Clip.get(PydanticObjectId(clip_id))
+        if clip is None:  # pragma: no cover - already gone
+            continue
+        try:
+            await asyncio.to_thread(storage.delete, clip.file_path)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.exception("Failed to delete orphaned storage object %s during rollback", clip.file_path)
+        await clip.delete()
+
+
 def _decode(data: bytes, fmt: str) -> AudioSegment:
     """Decode audio bytes, passing ``format`` so pydub never shells out to ffprobe."""
     return AudioSegment.from_file(io.BytesIO(data), format=fmt)
@@ -409,31 +426,33 @@ async def process_repaint_job(job: Job, *, storage: StorageBackend, client: AceS
 
 
 async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
-    """Blend the first two sources via ACE-Step ``mashup``; lineage tracks all sources.
+    """Blend all sources via ACE-Step ``mashup``; lineage tracks every source.
 
-    ACE-Step's ``mashup`` takes one source plus one reference, so the primary
-    (``clip_ids[0]``) and the first secondary drive the audio. Every requested
-    clip is still recorded in ``parent_clip_ids``/``generation_params``.
+    ACE-Step's ``mashup`` takes one source plus one reference. The primary
+    (``clip_ids[0]``) is the source; the remaining clips are mixed down (overlaid)
+    into a single reference so every requested clip contributes to the blend
+    rather than being silently dropped. All sources are recorded in
+    ``parent_clip_ids``/``generation_params``.
     """
     params = dict(job.input_params or {})
     clip_ids: list[str] = params["clip_ids"]
     sources = [await _load_clip(cid) for cid in clip_ids]
-    primary, secondary = sources[0], sources[1]
+    primary, secondaries = sources[0], sources[1:]
     fmt = native_format(primary)
     style = params.get("style")
-    # Submit without a key constraint when the two keys disagree, rather than
-    # falsely asserting the primary's key (mirrors the CLI).
+    # Submit without a key constraint when any secondary's key disagrees with the
+    # primary, rather than falsely asserting the primary's key (mirrors the CLI).
     submitted_key = primary.key
-    if primary.key and secondary.key and primary.key != secondary.key:
+    if primary.key and any(s.key and s.key != primary.key for s in secondaries):
         submitted_key = None
-    titles = [t for t in (primary.title, secondary.title) if t]
+    titles = [t for t in (primary.title, *(s.title for s in secondaries)) if t]
     prompt = style or (f"mashup of {' and '.join(titles)}" if titles else "mashup")
 
     with tempfile.TemporaryDirectory(prefix="acemusic-mashup-") as tmp:
-        primary_path = Path(tmp) / f"primary.{fmt}"
-        secondary_path = Path(tmp) / f"secondary.{native_format(secondary)}"
+        tmp_path = Path(tmp)
+        primary_path = tmp_path / f"primary.{fmt}"
         await _download(storage, primary, primary_path)
-        await _download(storage, secondary, secondary_path)
+        ref_path = await _build_mashup_reference(storage, secondaries, tmp_path, fmt)
         data = await _submit_and_download(
             client,
             poll,
@@ -447,7 +466,7 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
                 "key": submitted_key,
                 "task_type": "mashup",
                 "src_audio_path": str(primary_path.resolve()),
-                "ref_audio_path": str(secondary_path.resolve()),
+                "ref_audio_path": str(ref_path.resolve()),
                 "blend_mode": params.get("blend_mode", "layered"),
             },
         )
@@ -462,6 +481,25 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
         storage=storage,
     )
     return {"clip_ids": [clip_id]}
+
+
+async def _build_mashup_reference(storage: StorageBackend, secondaries: list[Clip], tmp_path: Path, fmt: str) -> Path:
+    """Mix every secondary source into a single reference track (overlaid).
+
+    With one secondary this is just that clip; with several, they are layered so
+    the blend incorporates all of them. Written as ``fmt`` to ``tmp_path``.
+    """
+    mixed: AudioSegment | None = None
+    for index, clip in enumerate(secondaries):
+        clip_path = tmp_path / f"secondary-{index}.{native_format(clip)}"
+        await _download(storage, clip, clip_path)
+        segment = _decode(clip_path.read_bytes(), native_format(clip))
+        mixed = segment if mixed is None else mixed.overlay(segment)
+    ref_path = tmp_path / f"reference.{fmt}"
+    # ``secondaries`` is guaranteed non-empty (the API requires >= 2 sources).
+    assert mixed is not None
+    mixed.export(ref_path, format=fmt)
+    return ref_path
 
 
 # ---------------------------------------------------------------------------
@@ -479,9 +517,10 @@ def _build_sample_prompt(base_prompt: str, role: str, sample_duration_sec: float
 async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
     """Extract ``[start, end]``, generate ``num_clips`` tracks, combine each per role.
 
-    Only the ACE-Step backend is supported via the worker; the ``elevenlabs``
-    backend is recorded on the request but processed as ACE-Step (a documented
-    known limitation while the EL music path is wired into the worker).
+    Only the ACE-Step backend reaches the worker — the router rejects the
+    ``elevenlabs`` backend at enqueue time. Children are stored as the batch
+    progresses; a failure partway through rolls back the ones already created so
+    a ``failed`` job leaves no orphaned clips or storage objects behind.
     """
     params = dict(job.input_params or {})
     source = await _load_clip(params["clip_id"])
@@ -508,29 +547,33 @@ async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceSt
             {"prompt": prompt, "num_clips": num_clips, "format": fmt},
             expected=num_clips,
         )
-        for index, gen_bytes in enumerate(generated, start=1):
-            gen_path = tmp_path / f"generated-{index}.{fmt}"
-            gen_path.write_bytes(gen_bytes)
-            out_path = tmp_path / f"combined-{index}.{fmt}"
-            await asyncio.to_thread(
-                combine_sample,
-                sample_path=str(sample_path),
-                generated_path=str(gen_path),
-                output_path=str(out_path),
-                role=role,
-            )
-            combined = out_path.read_bytes()
-            duration = len(_decode(combined, fmt)) / 1000.0
-            clip_id = await _store_child_clip(
-                job,
-                data=combined,
-                fmt=fmt,
-                duration=duration,
-                parent_ids=[source.id],
-                primary=source,
-                storage=storage,
-            )
-            clip_ids.append(clip_id)
+        try:
+            for index, gen_bytes in enumerate(generated, start=1):
+                gen_path = tmp_path / f"generated-{index}.{fmt}"
+                gen_path.write_bytes(gen_bytes)
+                out_path = tmp_path / f"combined-{index}.{fmt}"
+                await asyncio.to_thread(
+                    combine_sample,
+                    sample_path=str(sample_path),
+                    generated_path=str(gen_path),
+                    output_path=str(out_path),
+                    role=role,
+                )
+                combined = out_path.read_bytes()
+                duration = len(_decode(combined, fmt)) / 1000.0
+                clip_id = await _store_child_clip(
+                    job,
+                    data=combined,
+                    fmt=fmt,
+                    duration=duration,
+                    parent_ids=[source.id],
+                    primary=source,
+                    storage=storage,
+                )
+                clip_ids.append(clip_id)
+        except Exception:
+            await _rollback_children(storage, clip_ids)
+            raise
     return {"clip_ids": clip_ids}
 
 

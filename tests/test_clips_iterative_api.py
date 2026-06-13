@@ -374,6 +374,16 @@ class TestValidation:
         resp = await client.post(_op_url(clip.id, operation), json=body, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
+    async def test_sample_elevenlabs_backend_rejected(self, client, settings) -> None:
+        user, _, clip = await _user_with_clip("iter-sample-el@example.com", duration=10.0)
+        resp = await client.post(
+            _op_url(clip.id, "sample"),
+            json={"start": "1s", "end": "3s", "role": "loop-bed", "prompt": "p", "backend": "elevenlabs"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+
     async def test_non_wav_source_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-nonwav@example.com", fmt="mp3")
         resp = await client.post(

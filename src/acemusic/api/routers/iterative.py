@@ -122,7 +122,12 @@ class ExtendRequest(BaseModel):
 
 
 class CoverRequest(BaseModel):
-    """Restyle a clip in a different genre/style."""
+    """Restyle a clip in a different genre/style.
+
+    ``voice_id`` is part of the API contract (US-10.3) but is not yet applied by
+    the ACE-Step backend, which has no voice-selection parameter — it is accepted
+    and recorded for forward compatibility, not honoured. (Known limitation.)
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -174,7 +179,12 @@ class SampleRequest(BaseModel):
 
 
 class AddVocalRequest(BaseModel):
-    """Layer vocals (``lyrics``) onto an existing clip."""
+    """Layer vocals (``lyrics``) onto an existing clip.
+
+    ``vocal_style`` maps to the ACE-Step style control; ``voice_id`` is recorded
+    for forward compatibility but not yet applied by the backend (no voice-
+    selection parameter). (Known limitation.)
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -420,6 +430,11 @@ async def sample_clip(
 ) -> IterativeJobResponse:
     """Enqueue a sample-and-build of ``clip_id``'s ``[start, end]`` range; original preserved."""
     clip = await _owned_wav_clip(clip_id, current.user_id)
+    # The worker only implements the ACE-Step backend; reject elevenlabs at
+    # enqueue rather than silently producing ace-step output (the enum keeps the
+    # value reserved for when the EL music path is wired into the worker).
+    if request.backend is GenerationBackend.ELEVENLABS:
+        raise _unprocessable("the 'elevenlabs' backend is not yet supported for sampling; use 'ace-step'.")
     duration_ms = _require_duration_ms(clip)
     start_ms = parse_time_string(request.start)
     end_ms = parse_time_string(request.end)

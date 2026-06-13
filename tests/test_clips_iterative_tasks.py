@@ -279,6 +279,42 @@ class TestMashup:
         # Mismatched keys → no key constraint asserted.
         assert submitted["key"] is None
 
+    async def test_three_sources_all_in_lineage(self, storage) -> None:
+        job, primary = await _make_clip(storage, email="t-mashup3@example.com")
+        extra = []
+        for i in range(2):
+            cid = PydanticObjectId()
+            path = f"{primary.user_id}/{primary.workspace_id}/clips/{cid}.wav"
+            storage.upload(path, _wav_bytes(3.0, freq=500.0 + 50 * i))
+            clip = Clip(
+                id=cid,
+                user_id=primary.user_id,
+                workspace_id=primary.workspace_id,
+                file_path=path,
+                format="wav",
+                duration=3.0,
+                bpm=120,
+                key="C",
+                title=f"Extra{i}",
+            )
+            await clip.insert()
+            extra.append(clip)
+        job.job_type = tasks.MASHUP_JOB_TYPE
+        job.input_params = {
+            "clip_ids": [str(primary.id), str(extra[0].id), str(extra[1].id)],
+            "blend_mode": "layered",
+            "style": None,
+        }
+        client = FakeAce(_wav_bytes(3.0))
+
+        result = await tasks.process_mashup_job(job, storage=storage, client=client, poll=_make_poll())
+
+        child = await _child(result)
+        # Every requested source is recorded — none silently dropped.
+        assert child.parent_clip_ids == [primary.id, extra[0].id, extra[1].id]
+        # All non-primary sources are mixed into the single reference track.
+        assert client.submitted[0]["ref_audio_path"].endswith("reference.wav")
+
 
 # ---------------------------------------------------------------------------
 # sample
@@ -309,6 +345,38 @@ class TestSample:
             assert child.parent_clip_ids == [source.id]
             assert child.duration and child.duration > 0
         assert client.submitted[0]["num_clips"] == 2
+
+    async def test_partial_failure_rolls_back_earlier_children(self, storage, monkeypatch) -> None:
+        job, source = await _make_clip(storage, email="t-sample-rollback@example.com", duration=3.0)
+        job.job_type = tasks.SAMPLE_JOB_TYPE
+        job.input_params = {
+            "clip_id": str(source.id),
+            "start_ms": 500,
+            "end_ms": 1500,
+            "role": "loop-bed",
+            "prompt": "make a beat",
+            "backend": "ace-step",
+            "num_clips": 3,
+        }
+        client = FakeAce(_wav_bytes(3.0))
+
+        # Fail on the second combine so the first child must be rolled back.
+        real_combine = tasks.combine_sample
+        calls = {"n": 0}
+
+        def flaky_combine(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("combine boom")
+            return real_combine(**kwargs)
+
+        monkeypatch.setattr(tasks, "combine_sample", flaky_combine)
+
+        before = await Clip.count()
+        with pytest.raises(RuntimeError):
+            await tasks.process_sample_job(job, storage=storage, client=client, poll=_make_poll())
+        # The first child (created before the failure) was rolled back.
+        assert await Clip.count() == before
 
 
 # ---------------------------------------------------------------------------
