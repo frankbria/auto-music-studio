@@ -410,6 +410,19 @@ class TestValidation:
         assert resp.status_code == 422
         assert await Job.count() == 0
 
+    async def test_extend_target_exceeding_max_duration_returns_422(self, client, settings) -> None:
+        # from_point(end=10s) + duration(9999s) far exceeds DURATION_MAX (240s);
+        # reject before charging so no oversized GPU job is queued.
+        user, _, clip = await _user_with_clip("iter-extend-toolong@example.com", balance=10.0, duration=10.0)
+        resp = await client.post(
+            _op_url(clip.id, "extend"),
+            json={"duration": "9999s"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+        assert (await _reload_user(user)).credits_balance == 10.0
+
     @pytest.mark.parametrize("from_point", ["0s", "0", "20s"])
     async def test_extend_from_point_out_of_range_returns_422(self, client, settings, from_point: str) -> None:
         # 0 would trim to a zero-length prefix (worker error); past the end has no

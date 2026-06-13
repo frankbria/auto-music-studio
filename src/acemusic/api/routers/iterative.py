@@ -30,7 +30,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from acemusic.constants import LYRICS_MAX_LENGTH, PROMPT_MAX_LENGTH, STYLE_MAX_LENGTH
+from acemusic.constants import DURATION_MAX, LYRICS_MAX_LENGTH, PROMPT_MAX_LENGTH, STYLE_MAX_LENGTH
 from acemusic.utils import parse_time_string
 
 from ..auth.dependencies import CurrentUser, get_current_user
@@ -354,6 +354,7 @@ async def extend_clip(
     # tail onto the existing audio), so require it before charging — otherwise a
     # clip without duration metadata would deduct a credit then fail in the worker.
     duration_ms = _require_duration_ms(clip)
+    from_ms = duration_ms
     if request.from_point != "end":
         # The splice point must fall strictly inside the clip: 0 makes the worker
         # trim to a zero-length prefix (slice_audio raises), and past the end has
@@ -363,6 +364,14 @@ async def extend_clip(
             raise _unprocessable(
                 f"from_point ({request.from_point}) must be within the clip (0 < t <= {clip.duration:.1f}s)."
             )
+    # The worker submits audio_duration = from_point + duration to ACE-Step;
+    # cap that target at the platform's generation maximum so an extend can't
+    # request an oversized GPU job at the flat one-credit cost.
+    target_s = (from_ms + parse_time_string(request.duration)) / 1000.0
+    if target_s > DURATION_MAX:
+        raise _unprocessable(
+            f"extended length ({target_s:.1f}s) exceeds the maximum generation duration ({DURATION_MAX:.0f}s)."
+        )
     params = {
         "clip_id": str(clip.id),
         "duration": request.duration,
