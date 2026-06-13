@@ -120,7 +120,7 @@ class JobProcessor:
         # Editing and extraction handlers share the same ``(job, storage)``
         # contract, so both are adapted onto the registry the same way.
         for job_type, storage_handler in {**EDIT_JOB_HANDLERS, **EXTRACTION_JOB_HANDLERS}.items():
-            self._handlers[job_type] = partial(self._run_edit_handler, storage_handler)
+            self._handlers[job_type] = partial(self._run_storage_handler, storage_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -267,7 +267,7 @@ class JobProcessor:
             logger.exception("Job %s failed", job.id)
             await self._mark_failed(job, str(exc))
 
-    async def _run_edit_handler(self, storage_handler: Any, job: Job) -> dict[str, Any]:
+    async def _run_storage_handler(self, storage_handler: Any, job: Job) -> dict[str, Any]:
         """Adapt a ``(job, storage) -> result`` handler (editing/extraction) to the registry."""
         return await storage_handler(job, self._storage_factory())
 
