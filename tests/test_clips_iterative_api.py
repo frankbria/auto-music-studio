@@ -437,6 +437,18 @@ class TestValidation:
         assert await Job.count() == 0
         assert (await _reload_user(user)).credits_balance == 10.0
 
+    async def test_oversized_free_text_returns_422(self, client, settings) -> None:
+        # Free-text fields are persisted verbatim; an unbounded string must be
+        # rejected (matches the generation API's caps) rather than bloating Mongo.
+        user, _, clip = await _user_with_clip("iter-oversized@example.com", duration=10.0)
+        resp = await client.post(
+            _op_url(clip.id, "cover"),
+            json={"style": "x" * 10_001},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+
     async def test_non_wav_source_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-nonwav@example.com", fmt="mp3")
         resp = await client.post(
@@ -470,6 +482,10 @@ class TestMashup:
         assert job.job_type == "mashup"
         assert job.input_params["clip_ids"] == [str(a.id), str(b.id)]
         assert job.workspace_id == a.workspace_id
+        # Mashup costs 2 credits per the documented pricing (blends >1 source).
+        assert (await _reload_user(user)).credits_balance == 8.0
+        txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        assert txns[0].amount == -2.0
 
     async def test_fewer_than_two_clips_returns_422(self, client, settings) -> None:
         user, _, clip = await _user_with_clip("iter-mashup-one@example.com")

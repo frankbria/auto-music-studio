@@ -30,6 +30,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from acemusic.constants import LYRICS_MAX_LENGTH, PROMPT_MAX_LENGTH, STYLE_MAX_LENGTH
 from acemusic.utils import parse_time_string
 
 from ..auth.dependencies import CurrentUser, get_current_user
@@ -48,6 +49,12 @@ logger = logging.getLogger(__name__)
 # sample scales with the number of clips it produces.
 _BASE_ESTIMATE_SECONDS = 45
 _MAX_SAMPLE_CLIPS = 4
+
+# Free-text fields are persisted verbatim in Job.input_params / Clip.generation_params,
+# so bound them (like the generation API) to keep a single oversized request from
+# bloating a Mongo document or exhausting memory. voice_id is an identifier, so a
+# small bound suffices; style/prompt/lyrics reuse the shared generation caps.
+_VOICE_ID_MAX_LENGTH = 128
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the editing/generation routers), so unauthenticated requests get 401. No
@@ -103,8 +110,8 @@ class ExtendRequest(BaseModel):
 
     duration: str
     from_point: str = "end"
-    style_override: str | None = None
-    lyrics: str | None = None
+    style_override: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
+    lyrics: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
 
     @field_validator("duration")
     @classmethod
@@ -135,9 +142,9 @@ class CoverRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    style: str = Field(min_length=1)
-    voice_id: str | None = None
-    lyrics_override: str | None = None
+    style: str = Field(min_length=1, max_length=STYLE_MAX_LENGTH)
+    voice_id: str | None = Field(default=None, max_length=_VOICE_ID_MAX_LENGTH)
+    lyrics_override: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
 
 
 class RemixRequest(BaseModel):
@@ -145,7 +152,7 @@ class RemixRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    style: str = Field(min_length=1)
+    style: str = Field(min_length=1, max_length=STYLE_MAX_LENGTH)
 
 
 class RepaintRequest(BaseModel):
@@ -155,8 +162,8 @@ class RepaintRequest(BaseModel):
 
     start: str
     end: str
-    prompt: str = Field(min_length=1)
-    style: str | None = None
+    prompt: str = Field(min_length=1, max_length=PROMPT_MAX_LENGTH)
+    style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
 
     @field_validator("start", "end")
     @classmethod
@@ -172,7 +179,7 @@ class SampleRequest(BaseModel):
     start: str
     end: str
     role: SampleRole
-    prompt: str = Field(min_length=1)
+    prompt: str = Field(min_length=1, max_length=PROMPT_MAX_LENGTH)
     backend: GenerationBackend = GenerationBackend.ACE_STEP
     num_clips: int = Field(default=1, ge=1, le=_MAX_SAMPLE_CLIPS)
 
@@ -192,9 +199,9 @@ class AddVocalRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lyrics: str = Field(min_length=1)
-    voice_id: str | None = None
-    vocal_style: str | None = None
+    lyrics: str = Field(min_length=1, max_length=LYRICS_MAX_LENGTH)
+    voice_id: str | None = Field(default=None, max_length=_VOICE_ID_MAX_LENGTH)
+    vocal_style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
 
 
 class MashupRequest(BaseModel):
@@ -204,7 +211,7 @@ class MashupRequest(BaseModel):
 
     clip_ids: list[str] = Field(min_length=2)
     blend_mode: BlendMode = BlendMode.LAYERED
-    style: str | None = None
+    style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
 
     @model_validator(mode="after")
     def _check_distinct(self) -> "MashupRequest":
