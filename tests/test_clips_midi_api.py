@@ -307,9 +307,7 @@ class TestMidiCleanupOnClipDelete:
     async def test_deleting_clip_removes_its_midi_objects(self, client, settings, local_storage) -> None:
         # MIDI files live under their own keys (not file_path); deleting the
         # parent clip must remove them too, not just the source audio.
-        user, workspace, clip = await _user_with_clip(
-            "midi-delete@example.com", store_bytes=b"RIFFsource"
-        )
+        user, workspace, clip = await _user_with_clip("midi-delete@example.com", store_bytes=b"RIFFsource")
         storage = get_storage_backend()
         key = f"{user.id}/{workspace.id}/clips/{clip.id}/midi/melody.mid"
         storage.upload(key, b"MThd")

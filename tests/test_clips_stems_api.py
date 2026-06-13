@@ -164,17 +164,13 @@ class TestClipNotFound:
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_unknown_clip_returns_404(self, client, settings, method: str) -> None:
         user = await _make_user(f"stems-404-{method}@example.com")
-        resp = await getattr(client, method)(
-            _stems_url(PydanticObjectId()), headers=_auth_headers(user, settings)
-        )
+        resp = await getattr(client, method)(_stems_url(PydanticObjectId()), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_malformed_id_returns_404(self, client, settings, method: str) -> None:
         user = await _make_user(f"stems-malformed-{method}@example.com")
-        resp = await getattr(client, method)(
-            _stems_url("not-an-object-id"), headers=_auth_headers(user, settings)
-        )
+        resp = await getattr(client, method)(_stems_url("not-an-object-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     @pytest.mark.parametrize("method", ["post", "get"])
