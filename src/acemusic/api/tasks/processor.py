@@ -35,6 +35,7 @@ from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
 from .editing import EDIT_JOB_HANDLERS
+from .extraction import EXTRACTION_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +117,10 @@ class JobProcessor:
         # (and re-queued when stale), so jobs another deployment owns are left
         # alone. ``handlers`` lets callers add or override entries.
         self._handlers: dict[str, JobHandler] = {"generate": self._handle_generate}
-        for job_type, edit_handler in EDIT_JOB_HANDLERS.items():
-            self._handlers[job_type] = partial(self._run_edit_handler, edit_handler)
+        # Editing and extraction handlers share the same ``(job, storage)``
+        # contract, so both are adapted onto the registry the same way.
+        for job_type, storage_handler in {**EDIT_JOB_HANDLERS, **EXTRACTION_JOB_HANDLERS}.items():
+            self._handlers[job_type] = partial(self._run_edit_handler, storage_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -264,9 +267,9 @@ class JobProcessor:
             logger.exception("Job %s failed", job.id)
             await self._mark_failed(job, str(exc))
 
-    async def _run_edit_handler(self, edit_handler: Any, job: Job) -> dict[str, Any]:
-        """Adapt an editing handler ``(job, storage) -> result`` to the registry."""
-        return await edit_handler(job, self._storage_factory())
+    async def _run_edit_handler(self, storage_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt a ``(job, storage) -> result`` handler (editing/extraction) to the registry."""
+        return await storage_handler(job, self._storage_factory())
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run an ACE-Step generation job: submit, poll, store clips."""
