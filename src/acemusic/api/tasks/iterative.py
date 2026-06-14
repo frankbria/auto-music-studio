@@ -555,7 +555,15 @@ async def _build_mashup_reference(
         await _download(storage, clip, clip_path)
         aligned_path = await _align_to_bpm(clip_path, clip.bpm, primary_bpm, tmp_path, index)
         segment = _decode(aligned_path.read_bytes(), clip_fmt)
-        mixed = segment if mixed is None else mixed.overlay(segment)
+        if mixed is None:
+            mixed = segment
+        elif len(segment) > len(mixed):
+            # overlay() keeps the *base* length, so always overlay the shorter
+            # onto the longer — otherwise a later, longer secondary's tail is
+            # silently truncated and that source wouldn't fully contribute.
+            mixed = segment.overlay(mixed)
+        else:
+            mixed = mixed.overlay(segment)
     ref_path = tmp_path / f"reference.{fmt}"
     # ``secondaries`` is guaranteed non-empty (the API requires >= 2 sources), but
     # raise explicitly rather than assert: asserts are stripped under ``python -O``,

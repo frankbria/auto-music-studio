@@ -357,6 +357,42 @@ class TestMashup:
         # All non-primary sources are mixed into the single reference track.
         assert client.submitted[0]["ref_audio_path"].endswith("reference.wav")
 
+    async def test_reference_keeps_longest_secondary(self, storage, tmp_path) -> None:
+        # A later, longer secondary must not be truncated to the first's length.
+        job, primary = await _make_clip(storage, email="t-mashup-len@example.com")
+        short_id, long_id = PydanticObjectId(), PydanticObjectId()
+        sp = f"{primary.user_id}/{primary.workspace_id}/clips/{short_id}.wav"
+        lp = f"{primary.user_id}/{primary.workspace_id}/clips/{long_id}.wav"
+        storage.upload(sp, _wav_bytes(2.0))
+        storage.upload(lp, _wav_bytes(5.0))
+        short = Clip(
+            id=short_id,
+            user_id=primary.user_id,
+            workspace_id=primary.workspace_id,
+            file_path=sp,
+            format="wav",
+            duration=2.0,
+            bpm=120,
+            key="C",
+        )
+        long_clip = Clip(
+            id=long_id,
+            user_id=primary.user_id,
+            workspace_id=primary.workspace_id,
+            file_path=lp,
+            format="wav",
+            duration=5.0,
+            bpm=120,
+            key="C",
+        )
+        await short.insert()
+        await long_clip.insert()
+
+        # Short secondary first, long one second — overlay must keep the 5s length.
+        ref = await tasks._build_mashup_reference(storage, [short, long_clip], tmp_path, "wav", 120)
+        seg = tasks._decode(ref.read_bytes(), "wav")
+        assert len(seg) >= 4900  # ~5s, not truncated to the 2s first secondary
+
     async def test_bpm_aligns_mismatched_secondary(self, storage, monkeypatch) -> None:
         import shutil
 
