@@ -123,6 +123,11 @@ def _source_prompt(clip: Clip, fallback: str) -> str:
     return clip.title or fallback
 
 
+def _style_tags(style: str | None) -> list[str] | None:
+    """Effective ``style_tags`` for a child: ``[style]`` when set, else inherit (None)."""
+    return [style] if style else None
+
+
 async def _submit_and_download(
     client: AceStepClient,
     poll: PollFn,
@@ -152,12 +157,18 @@ async def _store_child_clip(
     storage: StorageBackend,
     title: str | None = None,
     key: str | None = _INHERIT,
+    style_tags: list[str] | None = None,
+    lyrics: str | None = _INHERIT,
 ) -> str:
     """Upload one output and insert its lineage-tagged child Clip.
 
-    ``key`` defaults to inheriting the primary's key; pass an explicit value
+    ``key``/``lyrics`` default to inheriting the primary's; pass an explicit value
     (including ``None``) to override — e.g. a key-mismatched mashup is generated
     without a key constraint, so its child must not claim the primary's key.
+    ``style_tags``/``lyrics`` should carry the *effective* style/lyrics the clip
+    was generated with (not the source's), so a later chained operation reads the
+    right metadata via ``_source_prompt`` instead of falling back to a generic
+    prompt. ``style_tags=None`` inherits the primary's tags.
 
     Rolls the uploaded object back if the insert fails, so a job that ends up
     ``failed`` never leaves an orphaned storage object behind (mirrors the
@@ -176,6 +187,8 @@ async def _store_child_clip(
         duration=duration,
         bpm=primary.bpm,
         key=primary.key if key is _INHERIT else key,
+        style_tags=list(primary.style_tags) if style_tags is None else style_tags,
+        lyrics=primary.lyrics if lyrics is _INHERIT else lyrics,
         vocal_language=primary.vocal_language,
         parent_clip_ids=parent_ids,
         generation_mode=job.job_type,
@@ -261,6 +274,7 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
                 "repainting_end": target_duration,
             },
         )
+    extend_lyrics = params.get("lyrics")
     clip_id = await _store_child_clip(
         job,
         data=data[0],
@@ -269,6 +283,8 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
         parent_ids=[source.id],
         primary=source,
         storage=storage,
+        style_tags=_style_tags(params.get("style_override")),
+        lyrics=extend_lyrics if extend_lyrics is not None else _INHERIT,
     )
     return {"clip_ids": [clip_id]}
 
@@ -286,6 +302,7 @@ async def _process_restyle_job(
     params = dict(job.input_params or {})
     source = await _load_clip(params["clip_id"])
     fmt = native_format(source)
+    effective_lyrics = lyrics if lyrics is not None else source.lyrics
     with tempfile.TemporaryDirectory(prefix="acemusic-restyle-") as tmp:
         src_path = Path(tmp) / f"source.{fmt}"
         await _download(storage, source, src_path)
@@ -298,7 +315,7 @@ async def _process_restyle_job(
                 "audio_duration": source.duration,
                 "format": fmt,
                 "style": style,
-                "lyrics": lyrics if lyrics is not None else source.lyrics,
+                "lyrics": effective_lyrics,
                 "bpm": source.bpm,
                 "key": source.key,
                 "seed": source.seed,
@@ -314,6 +331,10 @@ async def _process_restyle_job(
         parent_ids=[source.id],
         primary=source,
         storage=storage,
+        # The restyle changed the style (and possibly lyrics); record the
+        # effective values so a chained op reads the new style, not the source's.
+        style_tags=[style],
+        lyrics=effective_lyrics,
     )
     return {"clip_ids": [clip_id]}
 
@@ -378,6 +399,9 @@ async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: Ac
         parent_ids=[source.id],
         primary=source,
         storage=storage,
+        # Record the vocal style and the added lyrics so they survive chaining.
+        style_tags=_style_tags(params.get("vocal_style")),
+        lyrics=params["lyrics"],
     )
     return {"clip_ids": [clip_id]}
 
@@ -439,6 +463,9 @@ async def process_repaint_job(job: Job, *, storage: StorageBackend, client: AceS
         parent_ids=[source.id],
         primary=source,
         storage=storage,
+        # A repaint may restyle the window; record the style when given, else
+        # inherit. Lyrics are unchanged, so inherit the source's.
+        style_tags=_style_tags(params.get("style")),
     )
     return {"clip_ids": [clip_id]}
 
@@ -505,6 +532,8 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
         # Match what was generated: a key-mismatched mashup was submitted
         # unconstrained, so its child must not claim the primary's key.
         key=submitted_key,
+        # Record the mashup style when given, else inherit the primary's tags.
+        style_tags=_style_tags(style),
     )
     return {"clip_ids": [clip_id]}
 
@@ -528,8 +557,11 @@ async def _build_mashup_reference(
         segment = _decode(aligned_path.read_bytes(), clip_fmt)
         mixed = segment if mixed is None else mixed.overlay(segment)
     ref_path = tmp_path / f"reference.{fmt}"
-    # ``secondaries`` is guaranteed non-empty (the API requires >= 2 sources).
-    assert mixed is not None
+    # ``secondaries`` is guaranteed non-empty (the API requires >= 2 sources), but
+    # raise explicitly rather than assert: asserts are stripped under ``python -O``,
+    # which would turn an unexpected empty list into an opaque AttributeError.
+    if mixed is None:
+        raise IterativeProcessingError("mashup has no secondary sources to build a reference from")
     mixed.export(ref_path, format=fmt)
     return ref_path
 

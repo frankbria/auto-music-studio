@@ -186,6 +186,9 @@ class TestRestyle:
 
         child = await _child(result)
         assert child.generation_mode == "cover"
+        # Effective style/lyrics are recorded so a chained op reads the new style.
+        assert child.style_tags == ["jazz"]
+        assert child.lyrics == "new words"
         submitted = client.submitted[0]
         assert submitted["task_type"] == "cover"
         assert submitted["lyrics"] == "new words"
@@ -203,6 +206,8 @@ class TestRestyle:
 
         child = await _child(result)
         assert child.generation_mode == "remix"
+        assert child.style_tags == ["house"]
+        assert child.lyrics == "original"  # remix preserves the source lyrics
         assert client.submitted[0]["task_type"] == "cover"
         assert client.submitted[0]["lyrics"] == "original"
 
@@ -216,6 +221,9 @@ class TestRestyle:
 
         child = await _child(result)
         assert child.generation_mode == "add_vocal"
+        # The added lyrics and vocal style are persisted on the child.
+        assert child.lyrics == "sing this"
+        assert child.style_tags == ["soulful"]
         submitted = client.submitted[0]
         assert submitted["task_type"] == "complete"
         assert submitted["lyrics"] == "sing this"
