@@ -18,7 +18,7 @@ import soundfile as sf
 from beanie import PydanticObjectId
 
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
+from acemusic.api.services import iterative as iterative_service, users as user_service
 from acemusic.api.tasks import iterative as tasks
 from acemusic.storage import LocalStorage
 
@@ -518,3 +518,32 @@ class TestFailures:
         client = FakeAce(_wav_bytes(3.0))
         with pytest.raises(tasks.IterativeProcessingError):
             await tasks.process_cover_job(job, storage=storage, client=client, poll=_make_poll())
+
+
+# ---------------------------------------------------------------------------
+# Service layer — create_iterative_job
+# ---------------------------------------------------------------------------
+
+
+class TestService:
+    async def test_unknown_job_type_raises(self, storage) -> None:
+        with pytest.raises(ValueError):
+            await iterative_service.create_iterative_job(
+                user_id=PydanticObjectId(), workspace_id=PydanticObjectId(), job_type="bogus", params={}
+            )
+
+    async def test_dispatch_failure_rolls_back_job(self, storage, monkeypatch) -> None:
+        async def boom(job_id: str) -> None:
+            raise RuntimeError("dispatch down")
+
+        monkeypatch.setattr(iterative_service, "dispatch_job", boom)
+        before = await Job.count()
+        with pytest.raises(RuntimeError):
+            await iterative_service.create_iterative_job(
+                user_id=PydanticObjectId(),
+                workspace_id=PydanticObjectId(),
+                job_type=iterative_service.COVER_JOB_TYPE,
+                params={"clip_id": "x"},
+            )
+        # The just-inserted job is deleted so the poller never runs an orphan.
+        assert await Job.count() == before
