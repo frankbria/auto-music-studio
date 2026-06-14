@@ -538,11 +538,14 @@ class TestMashup:
         assert resp.status_code == 422
         assert await Job.count() == 0
 
-    async def test_duplicate_clip_ids_returns_422(self, client, settings) -> None:
+    @pytest.mark.parametrize("second", [lambda c: str(c.id), lambda c: str(c.id).upper()])
+    async def test_duplicate_clip_ids_returns_422(self, client, settings, second) -> None:
+        # The same id — even in different hex casing (ObjectId is case-insensitive)
+        # — must be rejected as a duplicate source.
         user, _, clip = await _user_with_clip("iter-mashup-dup@example.com")
         resp = await client.post(
             MASHUP_URL,
-            json={"clip_ids": [str(clip.id), str(clip.id)]},
+            json={"clip_ids": [str(clip.id), second(clip)]},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 422

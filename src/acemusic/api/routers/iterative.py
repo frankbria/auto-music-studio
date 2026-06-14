@@ -27,6 +27,7 @@ import logging
 from enum import Enum
 from typing import Literal
 
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -218,7 +219,17 @@ class MashupRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_distinct(self) -> "MashupRequest":
-        if len(set(self.clip_ids)) != len(self.clip_ids):
+        # Normalise before comparing: ObjectId hex is case-insensitive, so the
+        # same id in different casing must still count as a duplicate (a raw
+        # string set would treat them as distinct and let it through).
+        def _norm(cid: str) -> str:
+            try:
+                return str(PydanticObjectId(cid))
+            except Exception:
+                return cid
+
+        normalized = [_norm(cid) for cid in self.clip_ids]
+        if len(set(normalized)) != len(normalized):
             raise ValueError("clip_ids must be distinct")
         return self
 
