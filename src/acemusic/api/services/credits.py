@@ -15,7 +15,20 @@ from ..models.user import DEFAULT_CREDITS_BALANCE
 SONG_COST = 1.0
 SOUND_COST = 0.5
 
-_COSTS = {"song": SONG_COST, "sound": SOUND_COST}
+# US-10.3: each single-source iterative generation runs one ACE-Step (or
+# ElevenLabs) job, costing the same as a song generation. The ``sample`` endpoint
+# multiplies this base by ``num_clips`` in the router (several outputs); mashup
+# costs 2 credits per the documented pricing (it blends multiple sources).
+ITERATIVE_COST = 1.0
+MASHUP_COST = 2.0
+_SINGLE_SOURCE_ITERATIVE_MODES = ("extend", "cover", "remix", "repaint", "sample", "add_vocal")
+
+_COSTS = {
+    "song": SONG_COST,
+    "sound": SOUND_COST,
+    "mashup": MASHUP_COST,
+    **{mode: ITERATIVE_COST for mode in _SINGLE_SOURCE_ITERATIVE_MODES},
+}
 
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50

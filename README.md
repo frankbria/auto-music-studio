@@ -84,13 +84,15 @@ Invalid parameters return 422 with field-level errors. If the user has insuffici
 
 The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
-#### Async job processor (US-9.2, US-10.1)
+#### Async job processor (US-9.2, US-10.1, US-10.3)
 
 A background processor runs inside the API process, polling MongoDB for `queued`
 jobs and dispatching them to the handler registered for their `job_type`. Generation
 jobs (`generate`) forward to ACE-Step, store the audio, and create clip records.
 Editing jobs (`crop`, `speed`, `remaster`) run local CPU operations via the audio
-processing library. All handlers mark the job `completed` (or `failed` with an
+processing library. Iterative generation jobs (`extend`, `cover`, `remix`, `repaint`,
+`sample`, `add_vocal`, `mashup`) run ACE-Step operations and create lineage-tagged child
+clips. All handlers mark the job `completed` (or `failed` with an
 error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
 `JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
 600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
@@ -142,6 +144,22 @@ All three editing endpoints are non-destructive: the original clip is never modi
 | `GET /api/v1/clips/{id}/midi` | Download URLs for the extracted `.mid` files (404 until extracted) |
 
 Both operations run as background jobs and are tracked via `GET /api/v1/jobs/{id}/status` — completed stems jobs surface `clip_ids`/`audio_urls`, completed MIDI jobs surface `midi_download_urls`. Stems become **four child clips** linked to the parent (`generation_mode="stems"`, same duration as the source); MIDI files are stored as objects (not clip records) and referenced from the parent clip's `midi_paths`. Requests are cache-first and idempotent per clip: re-requesting returns the existing results, and a second request while a job is in flight rides the existing job rather than enqueuing a duplicate. Only `wav` source clips are accepted (422 otherwise); no credits are deducted.
+
+### Iterative Generation (US-10.3)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/clips/{id}/extend` | Grow a clip by `duration` from `from_point` (default the end); returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/cover` | Restyle a clip in a new `style`; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/remix` | Style transfer to a new `style`; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/repaint` | Regenerate the `[start, end]` range from a `prompt`; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/sample` | Extract the `[start, end]` range and build `num_clips` tracks around it; returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/add-vocal` | Layer vocals onto a clip from `lyrics`; returns 202 + `job_id` |
+| `POST /api/v1/mashup` | Blend 2–8 owned clips into one; returns 202 + `job_id` |
+
+All iterative endpoints are credit-bearing generative operations (unlike editing/extraction). Credits are deducted at queue time; insufficient balance returns `402 Payment Required` with `{"error": "insufficient_credits", "balance": <current>, "required": <cost>}`. Credit costs: extend/cover/remix/repaint/add-vocal = 1 credit each; sample = 1 credit × `num_clips` (default 1, max 4); mashup = 2 credits.
+
+All endpoints are non-destructive: the original clip(s) are never modified. Each produces a new clip with `parent_clip_ids` and `generation_params` set for lineage tracking. Jobs are tracked via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise); clips without duration metadata are also rejected (422). Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`) matching the CLI commands.
 
 ### Presets
 

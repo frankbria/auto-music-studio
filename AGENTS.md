@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–9 complete on `main`; Stage 10 in progress (US-10.1 audio editing, US-10.2 stems/MIDI extraction endpoints implemented). CLI foundation (Stages 1–7): generation, workspace management, audio processing, DAW export. Platform API (Stages 8–9): FastAPI with OAuth2 auth, async job queue, clip audio streaming, workspace/clip/preset CRUD, credit deduction. Audio editing API (US-10.1): crop, speed-adjust, and remaster endpoints enqueue async jobs that create derived clips with lineage tracking. Stems/MIDI extraction API (US-10.2): stem separation (4 child clips) and MIDI extraction (files referenced via `Clip.midi_paths`) run as cache-first, idempotent async jobs.
+**Current progress:** Stages 1–9 complete on `main`; Stage 10 in progress (US-10.1 audio editing, US-10.2 stems/MIDI extraction, US-10.3 iterative generation endpoints implemented). CLI foundation (Stages 1–7): generation, workspace management, audio processing, DAW export. Platform API (Stages 8–9): FastAPI with OAuth2 auth, async job queue, clip audio streaming, workspace/clip/preset CRUD, credit deduction. Audio editing API (US-10.1): crop, speed-adjust, and remaster endpoints enqueue async jobs that create derived clips with lineage tracking. Stems/MIDI extraction API (US-10.2): stem separation (4 child clips) and MIDI extraction (files referenced via `Clip.midi_paths`) run as cache-first, idempotent async jobs. Iterative generation API (US-10.3): extend, cover, remix, repaint, sample, add-vocal, and mashup endpoints enqueue credit-bearing async jobs that create lineage-tagged child clips.
 
 ## Commands
 
@@ -112,7 +112,7 @@ src/acemusic/
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
     models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction
-    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets)
+    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API

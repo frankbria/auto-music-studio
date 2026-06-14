@@ -36,6 +36,7 @@ from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
 from .editing import EDIT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
+from .iterative import ITERATIVE_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,11 @@ class JobProcessor:
         # contract, so both are adapted onto the registry the same way.
         for job_type, storage_handler in {**EDIT_JOB_HANDLERS, **EXTRACTION_JOB_HANDLERS}.items():
             self._handlers[job_type] = partial(self._run_storage_handler, storage_handler)
+        # Iterative generation handlers (US-10.3) are generative: they need the
+        # ACE-Step client and the poll loop in addition to storage, so they are
+        # adapted through their own injecting wrapper.
+        for job_type, iterative_handler in ITERATIVE_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_iterative_handler, iterative_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -270,6 +276,15 @@ class JobProcessor:
     async def _run_storage_handler(self, storage_handler: Any, job: Job) -> dict[str, Any]:
         """Adapt a ``(job, storage) -> result`` handler (editing/extraction) to the registry."""
         return await storage_handler(job, self._storage_factory())
+
+    async def _run_iterative_handler(self, iterative_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt an iterative handler (US-10.3), injecting storage, the ACE-Step client and the poll loop."""
+        return await iterative_handler(
+            job,
+            storage=self._storage_factory(),
+            client=self._client_factory(),
+            poll=self._poll_until_complete,
+        )
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run an ACE-Step generation job: submit, poll, store clips."""
