@@ -334,17 +334,27 @@ async def _enqueue_generation(
     return IterativeJobResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds)
 
 
-async def _owned_wav_clip(clip_id: str, user_id: str) -> Clip:
+async def _owned_wav_clip(clip_id: str, user_id: str, *, cap_duration: bool = False) -> Clip:
     """Resolve a source clip the user owns and gate it to wav with duration.
 
     Every iterative mode feeds the source's duration to ACE-Step (as the target
     ``audio_duration`` or to bound a range), so a clip without duration metadata
     would be charged then fail or produce a duration-less derived clip — reject
     it here (404 unknown/unowned, then 422 non-wav / no-duration).
+
+    ``cap_duration`` additionally rejects a source longer than ``DURATION_MAX``:
+    the modes that submit ``source.duration`` verbatim as ``audio_duration``
+    (cover/remix/repaint/add-vocal/mashup) would otherwise charge then queue a
+    job that exceeds the generation cap. extend (which trims to a prefix) and
+    sample (which works on a bounded range) don't set this.
     """
     clip = await clip_service.get_owned_clip(clip_id, user_id)
     _require_wav(clip)
     _require_duration_ms(clip)
+    if cap_duration and clip.duration is not None and clip.duration > DURATION_MAX:
+        raise _unprocessable(
+            f"clip duration ({clip.duration:.1f}s) exceeds the maximum generation duration ({DURATION_MAX:.0f}s)."
+        )
     return clip
 
 
@@ -407,7 +417,7 @@ async def cover_clip(
     current: CurrentUser = Depends(get_current_user),
 ) -> IterativeJobResponse:
     """Enqueue a cover (restyle) of ``clip_id``; the original is preserved."""
-    clip = await _owned_wav_clip(clip_id, current.user_id)
+    clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
     params = {
         "clip_id": str(clip.id),
         "style": request.style,
@@ -431,7 +441,7 @@ async def remix_clip(
     current: CurrentUser = Depends(get_current_user),
 ) -> IterativeJobResponse:
     """Enqueue a remix (style transfer) of ``clip_id``; the original is preserved."""
-    clip = await _owned_wav_clip(clip_id, current.user_id)
+    clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
     params = {"clip_id": str(clip.id), "style": request.style}
     return await _enqueue_generation(
         user_id=current.user_id,
@@ -450,7 +460,7 @@ async def repaint_clip(
     current: CurrentUser = Depends(get_current_user),
 ) -> IterativeJobResponse:
     """Enqueue a repaint of ``clip_id``'s ``[start, end]`` range; the original is preserved."""
-    clip = await _owned_wav_clip(clip_id, current.user_id)
+    clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
     duration_ms = _require_duration_ms(clip)
     start_ms = parse_time_string(request.start)
     end_ms = parse_time_string(request.end)
@@ -517,7 +527,7 @@ async def add_vocal_clip(
     current: CurrentUser = Depends(get_current_user),
 ) -> IterativeJobResponse:
     """Enqueue a vocal layering onto ``clip_id``; the original is preserved."""
-    clip = await _owned_wav_clip(clip_id, current.user_id)
+    clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
     params = {
         "clip_id": str(clip.id),
         "lyrics": request.lyrics,
@@ -551,7 +561,7 @@ async def mashup_clips(
     """
     # Validate every source up front so an unknown/unowned/non-wav id fails the
     # whole request (404/422) before any credit is touched.
-    clips = [await _owned_wav_clip(clip_id, current.user_id) for clip_id in request.clip_ids]
+    clips = [await _owned_wav_clip(clip_id, current.user_id, cap_duration=True) for clip_id in request.clip_ids]
     primary = clips[0]
     params = {
         "clip_ids": [str(clip.id) for clip in clips],

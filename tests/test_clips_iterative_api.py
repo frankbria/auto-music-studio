@@ -451,6 +451,34 @@ class TestValidation:
         assert await Job.count() == 0
         assert (await _reload_user(user)).credits_balance == 10.0
 
+    @pytest.mark.parametrize("operation", ["cover", "remix", "repaint", "add-vocal"])
+    async def test_oversized_source_duration_returns_422_no_charge(self, client, settings, operation: str) -> None:
+        # Modes that submit source.duration as ACE-Step audio_duration must reject
+        # a source longer than the generation cap (240s) before charging.
+        user, _, clip = await _user_with_clip(f"iter-toolong-{operation}@example.com", balance=10.0, duration=480.0)
+        resp = await client.post(
+            _op_url(clip.id, operation),
+            json=VALID_BODIES[operation],
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert await Job.count() == 0
+        assert (await _reload_user(user)).credits_balance == 10.0
+
+    @pytest.mark.parametrize("operation", ["extend", "sample"])
+    async def test_oversized_source_allowed_for_trimming_modes(self, client, settings, operation: str) -> None:
+        # extend trims to a prefix and sample works on a bounded range, so an
+        # oversized source is fine as long as the request stays within the cap.
+        user, _, clip = await _user_with_clip(f"iter-long-ok-{operation}@example.com", balance=10.0, duration=480.0)
+        bodies = {
+            "extend": {"duration": "5s", "from_point": "10s"},
+            "sample": {"start": "1s", "end": "3s", "role": "loop-bed", "prompt": "beat"},
+        }
+        resp = await client.post(
+            _op_url(clip.id, operation), json=bodies[operation], headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 202
+
     async def test_oversized_free_text_returns_422(self, client, settings) -> None:
         # Free-text fields are persisted verbatim; an unbounded string must be
         # rejected (matches the generation API's caps) rather than bloating Mongo.
