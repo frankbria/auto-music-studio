@@ -237,6 +237,10 @@ async def get_children(clip_id: str, user_id: str) -> tuple[Clip, list[Clip]]:
     ``parent_clip_ids`` — covers single-source ops (extend/cover/remix/stems/…)
     and multi-source mashups alike. Owner-scoped like the rest of clip CRUD;
     newest-first for a stable, useful order.
+
+    Returns the full child set unpaginated: a clip's direct children are bounded
+    by how many times the user has derived from it. If a frequently-sampled clip
+    ever makes this unbounded, add pagination here (mirroring ``list_clips``).
     """
     clip = await get_owned_clip(clip_id, user_id)
     children = (

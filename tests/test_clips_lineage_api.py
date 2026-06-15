@@ -144,8 +144,8 @@ class TestLineage:
         assert resp.status_code == 200
         body = resp.json()
         assert body["clip_id"] == str(extended.id)
-        assert body["max_depth"] == MAX_LINEAGE_DEPTH
-        assert body["truncated"] is False
+        assert body["depth_limit"] == MAX_LINEAGE_DEPTH
+        assert body["depth_truncated"] is False
 
         by_depth = {n["depth"]: n for n in body["nodes"]}
         # depth 0 is the queried clip itself; depth 1 is its parent.
@@ -181,7 +181,7 @@ class TestLineage:
         resp = await client.get(f"{CLIPS_URL}/{clips[-1].id}/lineage", headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
-        assert body["truncated"] is False
+        assert body["depth_truncated"] is False
         # All six generations are present, each at its own depth.
         depth_by_id = {n["id"]: n["depth"] for n in body["nodes"]}
         assert depth_by_id[str(clips[-1].id)] == 0
@@ -214,7 +214,7 @@ class TestLineage:
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/lineage", headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
-        assert body["truncated"] is True
+        assert body["depth_truncated"] is True
         assert max(n["depth"] for n in body["nodes"]) == MAX_LINEAGE_DEPTH
 
     async def test_original_clip_has_empty_lineage(self, client, settings) -> None:
@@ -227,7 +227,7 @@ class TestLineage:
         body = resp.json()
         assert [n["id"] for n in body["nodes"]] == [str(clip.id)]
         assert body["nodes"][0]["depth"] == 0
-        assert body["truncated"] is False
+        assert body["depth_truncated"] is False
 
     async def test_twenty_level_chain_resolves_quickly(self, client, settings) -> None:
         """AC: lineage queries complete within 500ms for chains up to 20 levels deep."""

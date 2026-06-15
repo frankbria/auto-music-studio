@@ -177,12 +177,19 @@ class LineageNode(ClipSummary):
     # 0 is the queried clip; 1 its parents; 2 their parents; … (US-10.6).
     depth: int
 
+    @classmethod
+    def from_clip(cls, clip: Clip, depth: int) -> "LineageNode":
+        return cls(**ClipSummary.from_clip(clip).model_dump(), depth=depth)
+
 
 class ClipLineageResponse(BaseModel):
     clip_id: str
-    max_depth: int
-    # True when ancestors remain beyond ``max_depth`` (the tree was capped).
-    truncated: bool
+    # The depth cap that was applied (always ``MAX_LINEAGE_DEPTH``), not the
+    # deepest node returned — read ``nodes[*].depth`` for that.
+    depth_limit: int
+    # True when ancestors remain beyond ``depth_limit`` (the tree was capped).
+    # Ownership-filtered ancestors are excluded silently, not reflected here.
+    depth_truncated: bool
     nodes: list[LineageNode]
 
 
@@ -237,9 +244,9 @@ async def get_clip_lineage(clip_id: str, current: CurrentUser = Depends(require_
     subject, _ = nodes[0]
     return ClipLineageResponse(
         clip_id=str(subject.id),
-        max_depth=clip_service.MAX_LINEAGE_DEPTH,
-        truncated=truncated,
-        nodes=[LineageNode(**ClipSummary.from_clip(clip).model_dump(), depth=depth) for clip, depth in nodes],
+        depth_limit=clip_service.MAX_LINEAGE_DEPTH,
+        depth_truncated=truncated,
+        nodes=[LineageNode.from_clip(clip, depth) for clip, depth in nodes],
     )
 
 
