@@ -48,7 +48,8 @@ class TestIndexes:
 
         clip_idx = await db["clips"].index_information()
         indexed_fields = {meta["key"][0][0] for meta in clip_idx.values()}
-        assert {"workspace_id", "user_id", "created_at"} <= indexed_fields
+        # parent_clip_ids backs the US-10.6 children lookup.
+        assert {"workspace_id", "user_id", "created_at", "parent_clip_ids"} <= indexed_fields
 
 
 class TestUserCrud:

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from beanie import PydanticObjectId
+from beanie.operators import In
 from fastapi import HTTPException, status
 
 from acemusic.storage import get_storage_backend
@@ -26,6 +27,10 @@ from . import workspaces as workspace_service
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
+
+# US-10.6: cap ancestry traversal so a corrupt/cyclic graph can never walk
+# unboundedly. 50 levels is the documented maximum lineage depth.
+MAX_LINEAGE_DEPTH = 50
 
 
 async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
@@ -169,3 +174,81 @@ async def delete_clip(clip_id: str, user_id: str) -> None:
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.warning("Failed to delete MIDI object %s while deleting clip %s", midi_key, clip.id)
     await clip.delete()
+
+
+async def get_lineage(
+    clip_id: str,
+    user_id: str,
+    *,
+    max_depth: int = MAX_LINEAGE_DEPTH,
+) -> tuple[list[tuple[Clip, int]], bool]:
+    """Return the clip's ancestry tree as ``(clip, depth)`` pairs, plus a
+    ``truncated`` flag (US-10.6).
+
+    The subject clip is depth 0; its ``parent_clip_ids`` are depth 1, their
+    parents depth 2, and so on up to the original generation. Traversal walks the
+    graph breadth-first, resolving one whole depth level per query
+    (``In(Clip.id, …)``), so a 20-level chain costs ~20 indexed ``_id`` lookups
+    rather than one round-trip per node.
+
+    Ownership-scoped to ``user_id`` (matching CRUD): the subject 404s if not
+    owned, and an ancestor owned by someone else (e.g. a public clip derived
+    from) is simply absent from the tree rather than leaked. A ``visited`` set
+    collapses diamond lineage (shared ancestors via multi-parent mashups) to a
+    single node and guards against cycles. ``truncated`` is True when ancestors
+    remain beyond ``max_depth``.
+    """
+    subject = await get_owned_clip(clip_id, user_id)
+    owner = PydanticObjectId(user_id)
+
+    nodes: list[tuple[Clip, int]] = [(subject, 0)]
+    visited: set[PydanticObjectId] = {subject.id}
+    frontier: set[PydanticObjectId] = {pid for pid in subject.parent_clip_ids if pid not in visited}
+
+    truncated = False
+    depth = 1
+    while frontier:
+        if depth > max_depth:
+            # Ancestors still reachable past the cap — report it rather than
+            # silently dropping them.
+            truncated = True
+            break
+        level = await Clip.find(In(Clip.id, list(frontier)), Clip.user_id == owner).to_list()
+        # Stable ordering keeps the response deterministic regardless of how the
+        # database returns the batch (oldest first, then id as a tiebreak).
+        level.sort(key=lambda c: (c.created_at, c.id))
+        next_frontier: set[PydanticObjectId] = set()
+        for clip in level:
+            if clip.id in visited:
+                continue
+            visited.add(clip.id)
+            nodes.append((clip, depth))
+            next_frontier.update(pid for pid in clip.parent_clip_ids if pid not in visited)
+        frontier = next_frontier
+        depth += 1
+
+    return nodes, truncated
+
+
+async def get_children(clip_id: str, user_id: str) -> tuple[Clip, list[Clip]]:
+    """Return the clip plus the clips directly derived from it (US-10.6).
+
+    A child is any owned clip that lists ``clip_id`` among its
+    ``parent_clip_ids`` — covers single-source ops (extend/cover/remix/stems/…)
+    and multi-source mashups alike. Owner-scoped like the rest of clip CRUD;
+    newest-first for a stable, useful order.
+
+    Returns the full child set unpaginated: a clip's direct children are bounded
+    by how many times the user has derived from it. If a frequently-sampled clip
+    ever makes this unbounded, add pagination here (mirroring ``list_clips``).
+    """
+    clip = await get_owned_clip(clip_id, user_id)
+    children = (
+        await Clip.find(
+            In(Clip.parent_clip_ids, [clip.id]),
+            Clip.user_id == PydanticObjectId(user_id),
+        )
+        .sort(("created_at", -1), ("_id", -1))
+        .to_list()
+    )
+    return clip, children

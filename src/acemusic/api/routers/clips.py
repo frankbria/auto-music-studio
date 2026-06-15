@@ -152,6 +152,59 @@ class ClipListResponse(BaseModel):
     total_pages: int
 
 
+class ClipSummary(BaseModel):
+    """A node in a lineage/children response: enough to identify a clip and how
+    it was made, without the full metadata payload of ``ClipResponse``."""
+
+    id: str
+    title: str | None
+    generation_mode: str | None
+    parent_clip_ids: list[str]
+    created_at: datetime
+
+    @classmethod
+    def from_clip(cls, clip: Clip) -> "ClipSummary":
+        return cls(
+            id=str(clip.id),
+            title=clip.title,
+            generation_mode=clip.generation_mode,
+            parent_clip_ids=[str(pid) for pid in clip.parent_clip_ids],
+            created_at=clip.created_at,
+        )
+
+
+class LineageNode(ClipSummary):
+    """A lineage node: a clip summary plus its distance from the queried clip."""
+
+    # 0 is the queried clip; 1 its parents; 2 their parents; … (US-10.6).
+    depth: int
+
+    @classmethod
+    def from_clip(cls, clip: Clip, depth: int) -> "LineageNode":
+        return cls(**ClipSummary.from_clip(clip).model_dump(), depth=depth)
+
+
+class ClipLineageResponse(BaseModel):
+    """A clip's ancestry tree (US-10.6): the clip at depth 0 and its ancestors."""
+
+    clip_id: str
+    # The depth cap that was applied (always ``MAX_LINEAGE_DEPTH``), not the
+    # deepest node returned — read ``nodes[*].depth`` for that.
+    depth_limit: int
+    # True when ancestors remain beyond ``depth_limit`` (the tree was capped).
+    # Ownership-filtered ancestors are excluded silently, not reflected here.
+    depth_truncated: bool
+    nodes: list[LineageNode]
+
+
+class ClipChildrenResponse(BaseModel):
+    """The clips directly derived from a clip (US-10.6)."""
+
+    clip_id: str
+    total: int
+    children: list[ClipSummary]
+
+
 @router.get("", response_model=ClipListResponse)
 async def list_clips(
     # Annotated[..., Query()] (not plain Depends) makes FastAPI validate the
@@ -185,6 +238,35 @@ async def list_clips(
 async def get_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> ClipResponse:
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     return ClipResponse.from_clip(clip)
+
+
+@router.get("/{clip_id}/lineage", response_model=ClipLineageResponse)
+async def get_clip_lineage(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> ClipLineageResponse:
+    """Return the clip's full ancestry tree — parents, grandparents, … up to the
+    original generation (US-10.6), capped at ``MAX_LINEAGE_DEPTH`` levels."""
+    nodes, truncated = await clip_service.get_lineage(clip_id, current.user_id)
+    # nodes[0] is always the subject clip (depth 0); echo its normalized id so the
+    # response matches the children endpoint regardless of the path's id casing.
+    subject, _ = nodes[0]
+    return ClipLineageResponse(
+        clip_id=str(subject.id),
+        depth_limit=clip_service.MAX_LINEAGE_DEPTH,
+        depth_truncated=truncated,
+        nodes=[LineageNode.from_clip(clip, depth) for clip, depth in nodes],
+    )
+
+
+@router.get("/{clip_id}/children", response_model=ClipChildrenResponse)
+async def get_clip_children(
+    clip_id: str, current: CurrentUser = Depends(require_existing_user)
+) -> ClipChildrenResponse:
+    """Return the clips directly derived from this clip (US-10.6)."""
+    clip, children = await clip_service.get_children(clip_id, current.user_id)
+    return ClipChildrenResponse(
+        clip_id=str(clip.id),
+        total=len(children),
+        children=[ClipSummary.from_clip(child) for child in children],
+    )
 
 
 @router.patch("/{clip_id}", response_model=ClipResponse)
