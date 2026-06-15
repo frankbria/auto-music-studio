@@ -53,4 +53,7 @@ class Clip(Document):
             IndexModel([("workspace_id", ASCENDING), ("created_at", DESCENDING)]),
             IndexModel([("user_id", ASCENDING)]),
             IndexModel([("created_at", DESCENDING)]),
+            # Multikey index over the parent list powers the children lookup
+            # ("clips derived from this clip", US-10.6) without a collection scan.
+            IndexModel([("parent_clip_ids", ASCENDING)]),
         ]
