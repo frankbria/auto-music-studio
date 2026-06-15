@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from acemusic.constants import DURATION_MAX, LYRICS_MAX_LENGTH, PROMPT_MAX_LENGTH, STYLE_MAX_LENGTH
+from acemusic.song_structure import plan_sections
 from acemusic.utils import parse_time_string
 
 from ..auth.dependencies import CurrentUser, get_current_user
@@ -59,6 +60,13 @@ _MAX_MASHUP_CLIPS = 8
 # bloating a Mongo document or exhausting memory. voice_id is an identifier, so a
 # small bound suffices; style/prompt/lyrics reuse the shared generation caps.
 _VOICE_ID_MAX_LENGTH = 128
+
+# Full-song (US-10.4): the seed must be a short idea, not an already-long track —
+# the feature grows a clip *into* a song, so cap the seed and bound the section
+# count (each section is one paid ACE-Step extend, so an unbounded list would let
+# one request queue arbitrarily much GPU work).
+_FULL_SONG_MAX_SEED_SECONDS = 60.0
+_MAX_FULL_SONG_SECTIONS = 12
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the editing/generation routers), so unauthenticated requests get 401. No
@@ -206,6 +214,36 @@ class AddVocalRequest(BaseModel):
     lyrics: str = Field(min_length=1, max_length=LYRICS_MAX_LENGTH)
     voice_id: str | None = Field(default=None, max_length=_VOICE_ID_MAX_LENGTH)
     vocal_style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
+
+
+class FullSongRequest(BaseModel):
+    """Assemble a full song from a short seed by chaining one extend per section.
+
+    ``structure_plan`` overrides the canonical intro→outro section list; each name
+    must be a known section (validated against the seed at enqueue time). ``style``
+    anchors every section's conditioning, and ``lyrics`` (if given) is applied to
+    every section.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_duration: int = Field(default=210, gt=0)
+    structure_plan: list[str] | None = None
+    style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
+    lyrics: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
+
+    @field_validator("structure_plan")
+    @classmethod
+    def _check_structure_plan(cls, value: list[str] | None) -> list[str] | None:
+        # Section *names* are validated against the seed by plan_sections at
+        # enqueue time (router), where a clear 422 can be raised; here we only
+        # bound the shape (non-empty, within the section cap).
+        if value is not None:
+            if not value:
+                raise ValueError("structure_plan must not be empty")
+            if len(value) > _MAX_FULL_SONG_SECTIONS:
+                raise ValueError(f"structure_plan may have at most {_MAX_FULL_SONG_SECTIONS} sections")
+        return value
 
 
 class MashupRequest(BaseModel):
@@ -541,6 +579,62 @@ async def add_vocal_clip(
         params=params,
         cost=credits_service.get_cost(iterative_service.ADD_VOCAL_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
+    )
+
+
+@router.post("/clips/{clip_id}/full-song", response_model=IterativeJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def full_song(
+    clip_id: str,
+    request: FullSongRequest,
+    current: CurrentUser = Depends(get_current_user),
+) -> IterativeJobResponse:
+    """Enqueue a full-song assembly of ``clip_id``; the seed is preserved.
+
+    Grows a short seed into a ~target-duration song by chaining one paid extend
+    per planned section, so credits scale with the section count.
+    """
+    clip = await _owned_wav_clip(clip_id, current.user_id)
+    # _owned_wav_clip already 422s a clip without duration metadata; bind the
+    # value so the planner is well-typed (and stay defensive if that changes).
+    seed_duration = clip.duration
+    if seed_duration is None:
+        raise _unprocessable(f"Clip {clip.id} has no duration metadata; cannot plan a full song.")
+    # The seed is a short idea to grow *into* a song; an already-long clip is a
+    # misuse (and would blow past the per-section duration budget immediately).
+    if seed_duration >= _FULL_SONG_MAX_SEED_SECONDS:
+        raise _unprocessable(
+            f"full-song requires a seed shorter than {_FULL_SONG_MAX_SEED_SECONDS:.0f}s "
+            f"(clip is {seed_duration:.1f}s)."
+        )
+    # Each section's repaint submits audio_duration up to target_duration, so the
+    # whole song must fit the backend's generation cap.
+    if request.target_duration > DURATION_MAX:
+        raise _unprocessable(
+            f"target_duration ({request.target_duration}s) exceeds the maximum song length ({DURATION_MAX:.0f}s)."
+        )
+    # plan_sections enforces the remaining invariants against the actual seed:
+    # target must exceed the seed, and every structure_plan name must be known.
+    try:
+        sections = plan_sections(seed_duration, request.target_duration, structure=request.structure_plan)
+    except ValueError as exc:
+        raise _unprocessable(str(exc)) from exc
+    num_sections = len(sections)
+    params = {
+        "clip_id": str(clip.id),
+        "target_duration": request.target_duration,
+        "structure_plan": request.structure_plan,
+        "style": request.style,
+        "lyrics": request.lyrics,
+    }
+    # One paid extend per section (mirrors sample's per-output pricing).
+    cost = credits_service.get_cost(iterative_service.FULL_SONG_JOB_TYPE) * num_sections
+    return await _enqueue_generation(
+        user_id=current.user_id,
+        job_type=iterative_service.FULL_SONG_JOB_TYPE,
+        workspace_id=clip.workspace_id,
+        params=params,
+        cost=cost,
+        estimate_seconds=_BASE_ESTIMATE_SECONDS * num_sections,
     )
 
 

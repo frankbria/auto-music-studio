@@ -23,10 +23,16 @@ ITERATIVE_COST = 1.0
 MASHUP_COST = 2.0
 _SINGLE_SOURCE_ITERATIVE_MODES = ("extend", "cover", "remix", "repaint", "sample", "add_vocal")
 
+# US-10.4: full-song chains one extend per planned section, so ``full_song`` costs
+# ITERATIVE_COST *per section*; the router multiplies this base by the section
+# count (mirroring how ``sample`` multiplies by ``num_clips``).
+FULL_SONG_COST = ITERATIVE_COST
+
 _COSTS = {
     "song": SONG_COST,
     "sound": SOUND_COST,
     "mashup": MASHUP_COST,
+    "full_song": FULL_SONG_COST,
     **{mode: ITERATIVE_COST for mode in _SINGLE_SOURCE_ITERATIVE_MODES},
 }
 
