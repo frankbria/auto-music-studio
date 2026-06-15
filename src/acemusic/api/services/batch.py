@@ -13,6 +13,8 @@ other service modules: ownership is checked via the non-raising
 :func:`acemusic.api.services.clips.find_owned_clip`.
 """
 
+import logging
+
 from beanie import PydanticObjectId
 
 from ..models import BatchClipEntry, BatchJob
@@ -20,6 +22,8 @@ from . import clips as clip_service
 from .clips import native_format
 from .export import create_export_job
 from .extraction import STEMS_JOB_TYPE, create_extraction_job
+
+logger = logging.getLogger(__name__)
 
 BATCH_STEMS_OPERATION = "stems"
 BATCH_EXPORT_OPERATION = "export"
@@ -62,20 +66,28 @@ async def create_batch(
                 )
             )
             continue
-        if operation == BATCH_STEMS_OPERATION:
-            job = await create_extraction_job(
-                user_id=clip.user_id,
-                workspace_id=clip.workspace_id,
-                job_type=STEMS_JOB_TYPE,
-                clip_id=clip.id,
-            )
-        else:
-            job = await create_export_job(
-                user_id=clip.user_id,
-                workspace_id=clip.workspace_id,
-                clip_id=clip.id,
-                format=format,
-            )
+        # Isolate sub-job creation per clip: a failure here (e.g. a DB write
+        # error) must not abort the whole batch and orphan the sub-jobs already
+        # queued — record it as a failed entry and carry on (partial success).
+        try:
+            if operation == BATCH_STEMS_OPERATION:
+                job = await create_extraction_job(
+                    user_id=clip.user_id,
+                    workspace_id=clip.workspace_id,
+                    job_type=STEMS_JOB_TYPE,
+                    clip_id=clip.id,
+                )
+            else:
+                job = await create_export_job(
+                    user_id=clip.user_id,
+                    workspace_id=clip.workspace_id,
+                    clip_id=clip.id,
+                    format=format,
+                )
+        except Exception:
+            logger.exception("Failed to queue %s sub-job for clip %s", operation, clip_id)
+            entries.append(BatchClipEntry(clip_id=clip_id, error=f"Failed to queue {operation} job."))
+            continue
         entries.append(BatchClipEntry(clip_id=clip_id, job_id=str(job.id)))
 
     batch = BatchJob(

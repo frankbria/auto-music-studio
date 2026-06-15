@@ -265,6 +265,30 @@ class TestBatchStemsEnqueue:
         batch = await BatchJob.get(PydanticObjectId(resp.json()["batch_job_id"]))
         assert len(batch.entries) == 50
 
+    async def test_subjob_enqueue_failure_is_isolated(self, client, settings, monkeypatch) -> None:
+        # A failure creating a sub-job (e.g. a DB write error) must not abort the
+        # batch — it is recorded as a failed entry and the BatchJob still persists.
+        from acemusic.api.services import batch as batch_service
+
+        async def _boom(**kwargs):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(batch_service, "create_extraction_job", _boom)
+
+        user = await _make_user("batch-stems-enqueue-fail@example.com")
+        ws = await _make_workspace(user)
+        clip = await _insert_clip(user, ws)
+        headers = _auth_headers(user, settings)
+
+        resp = await client.post(_stems_url(), json={"clip_ids": [str(clip.id)]}, headers=headers)
+        assert resp.status_code == 202
+        assert resp.json()["sub_job_ids"] == []
+
+        body = (await client.get(_status_url(resp.json()["batch_job_id"]), headers=headers)).json()
+        assert body["overall_status"] == "failed"
+        assert body["sub_jobs"][0]["status"] == "failed"
+        assert "Failed to queue" in body["sub_jobs"][0]["error"]
+
 
 # --- status: ownership -----------------------------------------------------
 

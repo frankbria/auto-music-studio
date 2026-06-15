@@ -65,7 +65,7 @@ async def _download_source(storage: StorageBackend, source: Clip, dest: Path) ->
         data = await asyncio.to_thread(storage.download, source.file_path)
     except FileNotFoundError as exc:
         raise ExportProcessingError(f"Source clip {source.id} audio object {source.file_path!r} is missing") from exc
-    dest.write_bytes(data)
+    await asyncio.to_thread(dest.write_bytes, data)
 
 
 async def process_export_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
@@ -85,7 +85,7 @@ async def process_export_job(job: Job, storage: StorageBackend) -> dict[str, Any
         await _download_source(storage, source, input_path)
         dest_path = Path(tmp_dir) / f"export.{ext}"
         await asyncio.to_thread(export_audio, input_path, dest_path, fmt)
-        data = dest_path.read_bytes()
+        data = await asyncio.to_thread(dest_path.read_bytes)
 
     export_path = f"{job.user_id}/{job.workspace_id}/exports/{job.id}.{ext}"
     await asyncio.to_thread(storage.upload, export_path, data)
