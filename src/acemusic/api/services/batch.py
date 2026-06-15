@@ -50,8 +50,11 @@ async def create_batch(
         if clip is None:
             entries.append(BatchClipEntry(clip_id=clip_id, error="Clip not found."))
             continue
+        # Stems extraction (torchaudio / basic-pitch) needs a wav source; export
+        # transcodes through ffmpeg, which reads any supported format, so the
+        # wav-only gate applies to stems only (matches the single-clip endpoints).
         src_fmt = native_format(clip)
-        if src_fmt != "wav":
+        if operation == BATCH_STEMS_OPERATION and src_fmt != "wav":
             entries.append(
                 BatchClipEntry(
                     clip_id=clip_id,

@@ -397,3 +397,43 @@ class TestBatchExportLifecycle:
         storage = get_storage_backend()
         for job in jobs:
             assert storage.download((job.result or {})["export_path"]).startswith(b"FAKE-EXPORT-")
+
+    async def test_non_wav_clip_is_queued_for_export(self, client, settings) -> None:
+        # Unlike stems (wav-only), export transcodes any generated format, so an
+        # mp3 clip is queued — not recorded as a failed entry.
+        user = await _make_user("batch-export-nonwav@example.com")
+        ws = await _make_workspace(user)
+        mp3 = await _insert_clip(user, ws, fmt="mp3")
+
+        resp = await client.post(
+            _export_url(), json={"clip_ids": [str(mp3.id)], "format": "flac"}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 202
+        assert len(resp.json()["sub_job_ids"]) == 1
+        jobs = await Job.find(Job.job_type == "export").to_list()
+        assert len(jobs) == 1 and jobs[0].input_params["clip_id"] == str(mp3.id)
+
+    async def test_real_transcode_decodes_non_wav_source(self, client, settings, local_storage, write_tone) -> None:
+        # Proves the source-extension fix: a real mp3 source decodes through
+        # ffmpeg and exports to flac (uses the real export_audio, no stub).
+        from pydub import AudioSegment
+
+        user = await _make_user("batch-export-real-mp3@example.com")
+        ws = await _make_workspace(user)
+        tone_path = local_storage / "tone.wav"
+        write_tone(tone_path, duration_s=1.0)
+        mp3_path = local_storage / "tone.mp3"
+        AudioSegment.from_file(str(tone_path), format="wav").export(str(mp3_path), format="mp3")
+        clip = await _insert_clip(user, ws, fmt="mp3", store_bytes=mp3_path.read_bytes())
+        headers = _auth_headers(user, settings)
+
+        created = await client.post(_export_url(), json={"clip_ids": [str(clip.id)], "format": "flac"}, headers=headers)
+        batch_id = created.json()["batch_job_id"]
+
+        body = await _poll_batch(client, batch_id, headers)
+        assert body["overall_status"] == "completed", body
+        sub = body["sub_jobs"][0]
+        assert sub["status"] == "completed" and sub["download_url"]
+        job = (await Job.find(Job.job_type == "export").to_list())[0]
+        data = get_storage_backend().download((job.result or {})["export_path"])
+        assert data[:4] == b"fLaC"  # valid FLAC stream marker

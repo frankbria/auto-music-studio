@@ -12,9 +12,11 @@ The handler shares the editing/extraction ``(job, storage)`` contract, so the
 :class:`~acemusic.api.tasks.processor.JobProcessor` adapts it the same way. The
 source clip — bytes and document — is never modified.
 
-``export_audio`` requires ffmpeg to encode flac/mp3/24-bit wav; on a server
-without ffmpeg the job fails with a clear error (the source clips themselves are
-wav, matching the extraction endpoints' wav-only constraint).
+``export_audio`` requires ffmpeg to decode the source and encode the target
+(flac/mp3/24-bit wav); on a server without ffmpeg the job fails with a clear
+error. The source may be any format the API can generate (wav/flac/mp3/aac/opus)
+— ffmpeg reads them all — so the temp input keeps the source's real extension to
+give pydub the right decode hint.
 """
 
 from __future__ import annotations
@@ -73,16 +75,13 @@ async def process_export_job(job: Job, storage: StorageBackend) -> dict[str, Any
         raise ExportProcessingError(f"Unsupported export format: {fmt!r}. Expected one of {EXPORT_FORMATS}.")
 
     source = await _load_source_clip(job)
-    src_fmt = native_format(source)
-    if src_fmt != "wav":
-        # The transcode reads the source through pydub/ffmpeg, which needs ffmpeg
-        # for compressed inputs (absent on the server). Generated clips are wav;
-        # gate here so a bad job fails fast (mirrors the extraction endpoints).
-        raise ExportProcessingError(f"unsupported source format {src_fmt!r} for export; only wav is supported.")
+    src_ext = native_format(source)
 
     ext = _FORMAT_EXTENSIONS[fmt]
     with tempfile.TemporaryDirectory(prefix="acemusic-export-") as tmp_dir:
-        input_path = Path(tmp_dir) / "source.wav"
+        # Keep the source's real extension so export_audio's pydub decode hint
+        # (derived from the suffix) matches the actual format.
+        input_path = Path(tmp_dir) / f"source.{src_ext}"
         await _download_source(storage, source, input_path)
         dest_path = Path(tmp_dir) / f"export.{ext}"
         await asyncio.to_thread(export_audio, input_path, dest_path, fmt)
