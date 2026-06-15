@@ -416,6 +416,12 @@ class TestBatchExportLifecycle:
     async def test_real_transcode_decodes_non_wav_source(self, client, settings, local_storage, write_tone) -> None:
         # Proves the source-extension fix: a real mp3 source decodes through
         # ffmpeg and exports to flac (uses the real export_audio, no stub).
+        # Shells out to ffmpeg, which CI lacks — skip there (matches test_audio.py).
+        import shutil
+
+        if shutil.which("ffmpeg") is None:
+            pytest.skip("ffmpeg not installed; required for real transcode")
+
         from pydub import AudioSegment
 
         user = await _make_user("batch-export-real-mp3@example.com")

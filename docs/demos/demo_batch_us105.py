@@ -185,7 +185,9 @@ async def main() -> None:
                 data = storage.download(key)
                 marker = data[:4]
                 src_fmt = next(c.format for c in [wav_clip, mp3_clip] if str(c.id) == s["clip_id"])
-                print(f"  - {src_fmt:>3} source -> {s['status']}  {len(data)} bytes  marker={marker!r}  (fLaC = valid FLAC)")
+                print(
+                    f"  - {src_fmt:>3} source -> {s['status']}  {len(data)} bytes  marker={marker!r}  (fLaC = valid FLAC)"
+                )
             print(f"\nbatch operation field: {batch_doc.operation!r}, target format: {batch_doc.format!r}")
 
             print("\nAll acceptance criteria demonstrated against the live API.")
