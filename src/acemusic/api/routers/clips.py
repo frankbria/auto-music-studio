@@ -174,6 +174,8 @@ class ClipSummary(BaseModel):
 
 
 class LineageNode(ClipSummary):
+    """A lineage node: a clip summary plus its distance from the queried clip."""
+
     # 0 is the queried clip; 1 its parents; 2 their parents; … (US-10.6).
     depth: int
 
@@ -183,6 +185,8 @@ class LineageNode(ClipSummary):
 
 
 class ClipLineageResponse(BaseModel):
+    """A clip's ancestry tree (US-10.6): the clip at depth 0 and its ancestors."""
+
     clip_id: str
     # The depth cap that was applied (always ``MAX_LINEAGE_DEPTH``), not the
     # deepest node returned — read ``nodes[*].depth`` for that.
@@ -194,6 +198,8 @@ class ClipLineageResponse(BaseModel):
 
 
 class ClipChildrenResponse(BaseModel):
+    """The clips directly derived from a clip (US-10.6)."""
+
     clip_id: str
     total: int
     children: list[ClipSummary]
