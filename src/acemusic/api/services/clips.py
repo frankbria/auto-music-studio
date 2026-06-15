@@ -60,11 +60,25 @@ def _contains_regex(text: str) -> dict:
     return {"$regex": re.escape(text), "$options": "i"}
 
 
-async def get_owned_clip(clip_id: str, user_id: str) -> Clip:
-    """Return the clip if ``user_id`` owns it; 404 for unknown/malformed/not-owned ids."""
+async def find_owned_clip(clip_id: str, user_id: str) -> Clip | None:
+    """Return the clip if ``user_id`` owns it, else None (no raise).
+
+    The non-raising sibling of :func:`get_owned_clip`, for callers that must
+    handle an unknown/not-owned clip without aborting — e.g. batch processing
+    (US-10.5), which records a per-clip failure and continues rather than failing
+    the whole request.
+    """
     oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
     if clip is None or str(clip.user_id) != user_id:
+        return None
+    return clip
+
+
+async def get_owned_clip(clip_id: str, user_id: str) -> Clip:
+    """Return the clip if ``user_id`` owns it; 404 for unknown/malformed/not-owned ids."""
+    clip = await find_owned_clip(clip_id, user_id)
+    if clip is None:
         raise _clip_not_found()
     return clip
 

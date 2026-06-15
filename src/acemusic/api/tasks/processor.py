@@ -35,6 +35,7 @@ from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
 from .editing import EDIT_JOB_HANDLERS
+from .export import EXPORT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
 from .iterative import ITERATIVE_JOB_HANDLERS
 
@@ -118,9 +119,13 @@ class JobProcessor:
         # (and re-queued when stale), so jobs another deployment owns are left
         # alone. ``handlers`` lets callers add or override entries.
         self._handlers: dict[str, JobHandler] = {"generate": self._handle_generate}
-        # Editing and extraction handlers share the same ``(job, storage)``
-        # contract, so both are adapted onto the registry the same way.
-        for job_type, storage_handler in {**EDIT_JOB_HANDLERS, **EXTRACTION_JOB_HANDLERS}.items():
+        # Editing, extraction, and export handlers share the same ``(job, storage)``
+        # contract, so all are adapted onto the registry the same way.
+        for job_type, storage_handler in {
+            **EDIT_JOB_HANDLERS,
+            **EXTRACTION_JOB_HANDLERS,
+            **EXPORT_JOB_HANDLERS,
+        }.items():
             self._handlers[job_type] = partial(self._run_storage_handler, storage_handler)
         # Iterative generation handlers (US-10.3) are generative: they need the
         # ACE-Step client and the poll loop in addition to storage, so they are
