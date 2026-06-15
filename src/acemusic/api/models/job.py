@@ -32,6 +32,9 @@ class Job(Document):
     input_params: dict = Field(default_factory=dict)
     result: dict | None = None
     error: str | None = None
+    # Human-readable progress for long, multi-step jobs (US-10.4 full-song writes
+    # "Processing section N of M" per section). None for single-step jobs.
+    progress: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     completed_at: datetime | None = None

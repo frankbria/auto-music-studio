@@ -88,3 +88,40 @@ class TestPlanSections:
     def test_negative_target_raises(self):
         with pytest.raises(ValueError):
             plan_sections(seed_duration=30.0, target_duration=-10)
+
+
+class TestPlanSectionsCustomStructure:
+    """A caller may override the canonical structure (US-10.4 ``structure_plan``)."""
+
+    def test_custom_structure_is_honoured_in_order(self):
+        structure = ["intro", "verse", "chorus", "outro"]
+        sections = plan_sections(seed_duration=30.0, target_duration=210, structure=structure)
+        assert [s.name for s in sections] == structure
+
+    def test_custom_structure_durations_sum_to_remaining(self):
+        structure = ["verse", "chorus", "verse", "chorus"]
+        sections = plan_sections(seed_duration=30.0, target_duration=180, structure=structure)
+        total = sum(s.duration_s for s in sections)
+        assert total == pytest.approx(180 - 30, abs=0.5)
+
+    def test_custom_structure_uses_section_style_hints(self):
+        sections = plan_sections(seed_duration=20.0, target_duration=120, structure=["intro", "outro"])
+        assert sections[0].style_hint == SECTION_CONFIG["intro"][1]
+        assert sections[1].style_hint == SECTION_CONFIG["outro"][1]
+
+    def test_none_structure_falls_back_to_canonical(self):
+        sections = plan_sections(seed_duration=30.0, target_duration=210, structure=None)
+        assert [s.name for s in sections] == SONG_STRUCTURE
+
+    def test_unknown_section_name_raises(self):
+        with pytest.raises(ValueError, match="unknown section"):
+            plan_sections(seed_duration=30.0, target_duration=210, structure=["intro", "drop", "outro"])
+
+    def test_empty_structure_raises(self):
+        with pytest.raises(ValueError, match="at least one section"):
+            plan_sections(seed_duration=30.0, target_duration=210, structure=[])
+
+    def test_repeated_sections_each_get_a_slice(self):
+        sections = plan_sections(seed_duration=30.0, target_duration=210, structure=["chorus", "chorus"])
+        assert len(sections) == 2
+        assert all(s.duration_s > 0 for s in sections)

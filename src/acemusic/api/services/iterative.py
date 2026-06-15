@@ -22,6 +22,8 @@ REPAINT_JOB_TYPE = "repaint"
 MASHUP_JOB_TYPE = "mashup"
 SAMPLE_JOB_TYPE = "sample"
 ADD_VOCAL_JOB_TYPE = "add_vocal"
+# US-10.4: full-song assembly chains several extends into one long job.
+FULL_SONG_JOB_TYPE = "full_song"
 
 ITERATIVE_JOB_TYPES = (
     EXTEND_JOB_TYPE,
@@ -31,6 +33,7 @@ ITERATIVE_JOB_TYPES = (
     MASHUP_JOB_TYPE,
     SAMPLE_JOB_TYPE,
     ADD_VOCAL_JOB_TYPE,
+    FULL_SONG_JOB_TYPE,
 )
 
 

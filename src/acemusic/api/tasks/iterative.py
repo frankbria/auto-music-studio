@@ -45,15 +45,18 @@ from pydub import AudioSegment
 
 from acemusic.audio import calculate_speed_multiplier, combine_sample, crop_audio, crossfade_stitch, time_stretch_audio
 from acemusic.client import AceStepClient
+from acemusic.song_structure import plan_sections
 from acemusic.storage import StorageBackend
 from acemusic.utils import parse_time_string, slice_audio
 
 from ..models import Clip, Job
+from ..services import credits as credits_service
 from ..services.clips import native_format
 from ..services.iterative import (
     ADD_VOCAL_JOB_TYPE,
     COVER_JOB_TYPE,
     EXTEND_JOB_TYPE,
+    FULL_SONG_JOB_TYPE,
     MASHUP_JOB_TYPE,
     REMIX_JOB_TYPE,
     REPAINT_JOB_TYPE,
@@ -672,6 +675,135 @@ async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceSt
     return {"clip_ids": clip_ids}
 
 
+# ---------------------------------------------------------------------------
+# Full-song — chain one extend per planned section into a complete song
+# ---------------------------------------------------------------------------
+
+
+def _full_song_title(seed_title: str | None, section_name: str, *, is_final: bool) -> str | None:
+    """Title for a section clip: the final clip is the song, others are labelled.
+
+    Mirrors the CLI full-song titles ("<seed> (full song)" for the assembled
+    result, "<seed> - <section>" for the intermediate sections).
+    """
+    if not seed_title:
+        return None
+    return f"{seed_title} (full song)" if is_final else f"{seed_title} - {section_name}"
+
+
+async def process_full_song_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
+    """Grow the seed into a full song by chaining one ACE-Step ``repaint`` per section.
+
+    Plans a section list with :func:`plan_sections` (honouring an optional
+    ``structure_plan`` override), then extends the running track section by
+    section — each ``repaint`` continues from the previous result's tail and is
+    stored as a lineage-chained child clip (``generation_mode='full_song'``). The
+    style of every section anchors to the *seed*'s style (never the previous
+    section's) so hints don't compound, with the section's own ``style_hint``
+    appended for structural variety. ``job.progress`` is updated to
+    "Processing section N of M" before each section so a poller can track it.
+
+    Returns ``{"clip_ids": [<final assembled clip id>]}``. Sections committed
+    before a mid-chain failure are left in place as partial progress (mirroring
+    the CLI), so a ``failed`` job still exposes the work done so far.
+    """
+    params = dict(job.input_params or {})
+    seed = await _load_clip(params["clip_id"])
+    if seed.duration is None:
+        raise IterativeProcessingError(f"Seed clip {seed.id} has no duration metadata")
+    fmt = native_format(seed)
+    target_duration = float(params["target_duration"])
+    structure_plan = params.get("structure_plan")
+    sections = plan_sections(seed.duration, target_duration, structure=structure_plan)
+    total = len(sections)
+
+    base_style = params.get("style")
+    # Anchor every section to the seed's own style (joined tags), so a long chain
+    # doesn't drift as each section's hint would otherwise compound into the next.
+    # Resolved once: the anchor is loop-invariant; only the per-section hint varies.
+    base_style_tags = ", ".join(seed.style_tags) if seed.style_tags else None
+    base_style_resolved = base_style or base_style_tags
+    base_lyrics = params.get("lyrics")
+    effective_lyrics = base_lyrics if base_lyrics is not None else seed.lyrics
+    prompt = _source_prompt(seed, "continue the song")
+
+    parent_id = seed.id
+    running_duration = seed.duration
+    final_clip_id: str | None = None
+    completed = 0
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="acemusic-fullsong-") as tmp:
+            tmp_path = Path(tmp)
+            src_path = tmp_path / f"section-0.{fmt}"
+            await _download(storage, seed, src_path)
+
+            for index, section in enumerate(sections, start=1):
+                await job.set({Job.progress: f"Processing section {index} of {total}"})
+                repaint_end = running_duration + section.duration_s
+                section_style = ", ".join(part for part in (base_style_resolved, section.style_hint) if part)
+                data = await _submit_and_download(
+                    client,
+                    poll,
+                    {
+                        "prompt": prompt,
+                        "num_clips": 1,
+                        "audio_duration": repaint_end,
+                        "format": fmt,
+                        "style": section_style,
+                        "lyrics": effective_lyrics,
+                        "bpm": seed.bpm,
+                        "key": seed.key,
+                        "seed": seed.seed,
+                        "task_type": "repaint",
+                        "src_audio_path": str(src_path.resolve()),
+                        "repainting_start": running_duration,
+                        "repainting_end": repaint_end,
+                    },
+                )
+                clip_id = await _store_child_clip(
+                    job,
+                    data=data[0],
+                    fmt=fmt,
+                    duration=repaint_end,
+                    parent_ids=[parent_id],
+                    primary=seed,
+                    storage=storage,
+                    title=_full_song_title(seed.title, section.name, is_final=index == total),
+                    style_tags=[section_style],
+                    lyrics=effective_lyrics if effective_lyrics is not None else _INHERIT,
+                )
+                # Feed this section's audio into the next repaint and chain lineage.
+                src_path = tmp_path / f"section-{index}.{fmt}"
+                src_path.write_bytes(data[0])
+                parent_id = PydanticObjectId(clip_id)
+                running_duration = repaint_end
+                final_clip_id = clip_id
+                completed += 1
+    except BaseException:
+        # Credits were charged upfront at enqueue for every *planned* section, but
+        # the AC bills by extends *performed*: refund the sections we never reached
+        # so a mid-chain failure only charges for completed extends. The committed
+        # section clips are intentionally kept as partial progress (mirrors the CLI).
+        # BaseException (not Exception): a shutdown CancelledError must refund too.
+        unperformed = total - completed
+        if unperformed > 0:
+            try:
+                await credits_service.refund_credits(
+                    job.user_id, unperformed * credits_service.get_cost(FULL_SONG_JOB_TYPE)
+                )
+            except Exception:  # pragma: no cover - refund is best-effort; never mask the cause
+                logger.exception("Failed to refund %d unperformed full-song section(s) for job %s", unperformed, job.id)
+        raise
+
+    if final_clip_id is None:
+        # plan_sections guarantees a non-empty list (it raises on empty), so this
+        # is only reachable if that invariant is ever broken — fail loudly rather
+        # than return an invalid {"clip_ids": [None]} result.
+        raise IterativeProcessingError("Full-song planning produced no sections")
+    return {"clip_ids": [final_clip_id]}
+
+
 ITERATIVE_JOB_HANDLERS: dict[str, Callable[..., Awaitable[dict]]] = {
     EXTEND_JOB_TYPE: process_extend_job,
     COVER_JOB_TYPE: process_cover_job,
@@ -680,4 +812,5 @@ ITERATIVE_JOB_HANDLERS: dict[str, Callable[..., Awaitable[dict]]] = {
     MASHUP_JOB_TYPE: process_mashup_job,
     SAMPLE_JOB_TYPE: process_sample_job,
     ADD_VOCAL_JOB_TYPE: process_add_vocal_job,
+    FULL_SONG_JOB_TYPE: process_full_song_job,
 }

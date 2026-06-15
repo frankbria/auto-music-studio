@@ -42,11 +42,18 @@ class Section:
     style_hint: str
 
 
-def plan_sections(seed_duration: float, target_duration: int | float) -> list[Section]:
-    """Distribute (target_duration - seed_duration) across the seven canonical sections.
+def plan_sections(
+    seed_duration: float,
+    target_duration: int | float,
+    structure: list[str] | None = None,
+) -> list[Section]:
+    """Distribute (target_duration - seed_duration) across an ordered section list.
 
-    Returns sections in canonical order (intro → outro). Each section receives
-    a slice of the remaining time proportional to its configured weight.
+    ``structure`` defaults to the seven canonical sections (:data:`SONG_STRUCTURE`)
+    but may be overridden — e.g. the full-song API's ``structure_plan`` (US-10.4).
+    Every name must have a :data:`SECTION_CONFIG` entry. Returns sections in the
+    given order; each receives a slice of the remaining time proportional to its
+    configured weight.
 
     When there is enough headroom, each section is rounded up to
     MIN_SECTION_SECONDS so it produces an audible chunk. When the remainder is
@@ -55,16 +62,22 @@ def plan_sections(seed_duration: float, target_duration: int | float) -> list[Se
     overshoots ``target_duration``. Every section still gets a positive
     duration.
 
-    Raises ValueError if target_duration is non-positive or shorter than the
-    seed.
+    Raises ValueError if ``structure`` is empty or names an unknown section, or
+    if target_duration is non-positive or shorter than the seed.
     """
+    sections = SONG_STRUCTURE if structure is None else list(structure)
+    if not sections:
+        raise ValueError("structure must contain at least one section")
+    unknown = [name for name in sections if name not in SECTION_CONFIG]
+    if unknown:
+        raise ValueError(f"unknown section(s) {unknown}; valid sections are {sorted(SECTION_CONFIG)}")
     if target_duration <= 0:
         raise ValueError(f"target_duration must be positive, got {target_duration}")
     if target_duration <= seed_duration:
         raise ValueError(f"target_duration ({target_duration}s) must exceed seed_duration ({seed_duration}s)")
 
     remaining = float(target_duration) - float(seed_duration)
-    weights = [SECTION_CONFIG[name][0] for name in SONG_STRUCTURE]
+    weights = [SECTION_CONFIG[name][0] for name in sections]
     total_weight = sum(weights)
     raw_durations = [remaining * (w / total_weight) for w in weights]
 
@@ -77,5 +90,5 @@ def plan_sections(seed_duration: float, target_duration: int | float) -> list[Se
 
     return [
         Section(name=name, duration_s=duration, style_hint=SECTION_CONFIG[name][1])
-        for name, duration in zip(SONG_STRUCTURE, durations)
+        for name, duration in zip(sections, durations)
     ]

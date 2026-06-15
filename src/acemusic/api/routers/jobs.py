@@ -13,6 +13,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from acemusic.song_structure import SONG_STRUCTURE
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
@@ -20,7 +21,7 @@ from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
 from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
-from ..services.iterative import ITERATIVE_JOB_TYPES, SAMPLE_JOB_TYPE
+from ..services.iterative import FULL_SONG_JOB_TYPE, ITERATIVE_JOB_TYPES, SAMPLE_JOB_TYPE
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,9 @@ class JobStatusResponse(BaseModel):
     status: JobStatus
     created_at: datetime
     estimated_time_seconds: int
+    # Per-step progress for long multi-step jobs (US-10.4 full-song); only set
+    # while the job is queued/processing, dropped once it completes or fails.
+    progress: str | None = None
     clip_ids: list[str] | None = None
     audio_urls: list[str] | None = None
     # MIDI extraction jobs (US-10.2) produce files, not clips; their results
@@ -81,6 +85,11 @@ def _estimate_for(job: Job) -> int:
     if job.job_type in ITERATIVE_JOB_TYPES:
         if job.job_type == SAMPLE_JOB_TYPE:
             return _ITERATIVE_ESTIMATE_SECONDS * int((job.input_params or {}).get("num_clips", 1))
+        if job.job_type == FULL_SONG_JOB_TYPE:
+            # One extend per section; scale by the planned section count so the
+            # status estimate matches the enqueue response.
+            structure = (job.input_params or {}).get("structure_plan") or SONG_STRUCTURE
+            return _ITERATIVE_ESTIMATE_SECONDS * len(structure)
         return _ITERATIVE_ESTIMATE_SECONDS
     try:
         return estimate_seconds(GenerationRequest(**job.input_params))
@@ -123,6 +132,9 @@ async def get_job_status(
         created_at=job.created_at,
         estimated_time_seconds=_estimate_for(job),
     )
+    if job.status in (JobStatus.QUEUED, JobStatus.PROCESSING):
+        # Progress is in-flight state; a terminal job exposes its result/error instead.
+        response.progress = job.progress
     if job.status == JobStatus.COMPLETED:
         if job.job_type == MIDI_JOB_TYPE:
             # MIDI jobs record ``midi_paths`` (label -> storage key), not clips.
