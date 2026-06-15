@@ -161,6 +161,16 @@ All iterative endpoints are credit-bearing generative operations (unlike editing
 
 All endpoints are non-destructive: the original clip(s) are never modified. Each produces a new clip with `parent_clip_ids` and `generation_params` set for lineage tracking. Jobs are tracked via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise); clips without duration metadata are also rejected (422). Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`) matching the CLI commands.
 
+### Batch Processing (US-10.5)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/batch/stems` | Queue stem separation for many clips at once (`{clip_ids[]}`); returns 202 + `batch_job_id` and one `sub_job_id` per queued clip |
+| `POST /api/v1/batch/export` | Queue audio export of many clips to `format` (`{clip_ids[], format}`); returns 202 + `batch_job_id` and `sub_job_ids` |
+| `GET /api/v1/batch/{batch_id}/status` | Overall progress (`completed`/`processing`/`failed`/`partial_success`) with a per-clip breakdown (404 if missing or not owned) |
+
+Each request fans out into one sub-job per clip, tracked under a `BatchJob`. The 50-clip cap, an empty list, and duplicate ids each return 422. A clip that is unknown, not owned, or (for stems) non-`wav` is recorded as a **failed sub-job** rather than rejecting the whole request, so individual failures never halt the batch — the status reports `partial_success`. Stems sub-jobs reuse the single-clip stems job (wav only); export sub-jobs transcode any generated source (`wav`/`flac`/`mp3`/`aac`/`opus`) to a `wav`/`wav32`/`flac`/`mp3` target via ffmpeg and surface a `download_url` when complete. Like the single-clip extraction endpoints, these are non-generative local work, so **no credits are deducted**.
+
 ### Presets
 
 | Endpoint | Purpose |

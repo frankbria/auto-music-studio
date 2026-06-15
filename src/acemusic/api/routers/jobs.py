@@ -20,6 +20,7 @@ from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, Job, JobStatus
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
+from ..services.export import EXPORT_JOB_TYPES
 from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
 from ..services.iterative import FULL_SONG_JOB_TYPE, ITERATIVE_JOB_TYPES, SAMPLE_JOB_TYPE
 from .generation import GenerationRequest, estimate_seconds
@@ -78,7 +79,8 @@ def _estimate_for(job: Job) -> int:
     longer validates (e.g. a schema change) falls back to 0 rather than failing
     the status read.
     """
-    if job.job_type in EDIT_JOB_TYPES:
+    if job.job_type in EDIT_JOB_TYPES or job.job_type in EXPORT_JOB_TYPES:
+        # Export (US-10.5) is quick local transcode work, like an edit.
         return _EDIT_ESTIMATE_SECONDS
     if job.job_type in EXTRACTION_JOB_TYPES:
         return _EXTRACTION_ESTIMATE_SECONDS

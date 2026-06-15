@@ -22,6 +22,7 @@ from . import database
 from .exceptions import HandleConflictError
 from .routers import (
     auth,
+    batch,
     clips,
     editing,
     extraction,
@@ -131,6 +132,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(editing.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
     app.include_router(iterative.router, prefix=API_V1_PREFIX)
+    app.include_router(batch.router, prefix=API_V1_PREFIX)
     app.include_router(workspaces.router, prefix=API_V1_PREFIX)
     app.include_router(presets.router, prefix=API_V1_PREFIX)
 
