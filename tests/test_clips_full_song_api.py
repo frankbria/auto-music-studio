@@ -560,6 +560,24 @@ class TestFullSongHandler:
         children = await Clip.find(Clip.generation_mode == "full_song").to_list()
         assert len(children) == 2
 
+    async def test_mid_chain_failure_refunds_unperformed_sections(self, storage) -> None:
+        # Credits are charged upfront for the full planned count; a mid-chain
+        # failure refunds the sections never performed (4 planned − 2 done = 2).
+        user, workspace, clip = await self._seed(storage)
+        start = (await User.get(user.id)).credits_balance
+        job = await self._job(user, workspace, clip, structure_plan=["intro", "verse", "chorus", "outro"])
+        with pytest.raises(IterativeProcessingError, match="ace boom"):
+            await self._run(job, _FailingAce(_wav_bytes(2.0), fail_on=3), storage)
+        assert (await User.get(user.id)).credits_balance == start + 2.0
+
+    async def test_full_success_does_not_refund(self, storage) -> None:
+        # All sections completed → nothing to refund (the upfront charge stands).
+        user, workspace, clip = await self._seed(storage)
+        start = (await User.get(user.id)).credits_balance
+        job = await self._job(user, workspace, clip, structure_plan=["intro", "outro"])
+        await self._run(job, _RecordingAce(_wav_bytes(2.0)), storage)
+        assert (await User.get(user.id)).credits_balance == start
+
 
 # ---------------------------------------------------------------------------
 # End-to-end — endpoint → queued job → JobProcessor → completed clip
