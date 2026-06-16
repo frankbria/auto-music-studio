@@ -27,7 +27,7 @@ def _set_availability(monkeypatch, *, local: bool, remote: bool = False) -> None
     async def _local(url, timeout=routing.LOCAL_AVAILABILITY_TIMEOUT):
         return local
 
-    async def _remote():
+    async def _remote(settings=None):
         return remote
 
     monkeypatch.setattr(routing, "check_local_availability", _local)

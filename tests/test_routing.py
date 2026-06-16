@@ -27,7 +27,7 @@ def _set_availability(monkeypatch, *, local: bool, remote: bool) -> None:
     async def _local(url: str, timeout: float = routing.LOCAL_AVAILABILITY_TIMEOUT) -> bool:
         return local
 
-    async def _remote() -> bool:
+    async def _remote(settings=None) -> bool:
         return remote
 
     monkeypatch.setattr(routing, "check_local_availability", _local)
@@ -63,9 +63,38 @@ class TestCheckLocalAvailability:
 
 
 class TestCheckRemoteAvailability:
-    async def test_remote_is_unavailable_until_us_11_2(self):
-        # Until US-11.2 wires up RunPod, the remote probe degrades to unavailable.
-        assert await routing.check_remote_availability() is False
+    """RunPod readiness probe (US-11.2)."""
+
+    def _settings(self, **overrides):
+        from acemusic.api.settings import ApiSettings
+
+        base = dict(runpod_api_key="rp-key", runpod_endpoint_id="ep-1")
+        base.update(overrides)
+        return ApiSettings(_env_file=None, **base)
+
+    async def test_unavailable_when_runpod_not_configured(self):
+        # No credentials → remote routing disabled, regardless of any endpoint.
+        from acemusic.api.settings import ApiSettings
+
+        settings = ApiSettings(_env_file=None, runpod_api_key=None, runpod_endpoint_id=None)
+        assert await routing.check_remote_availability(settings) is False
+
+    async def test_available_when_configured_and_health_ok(self, monkeypatch):
+        monkeypatch.setattr(routing.RunPodClient, "health", lambda self, timeout=5.0: True)
+        assert await routing.check_remote_availability(self._settings()) is True
+
+    async def test_unavailable_when_health_probe_fails(self, monkeypatch):
+        monkeypatch.setattr(routing.RunPodClient, "health", lambda self, timeout=5.0: False)
+        assert await routing.check_remote_availability(self._settings()) is False
+
+    async def test_unavailable_when_probe_raises(self, monkeypatch):
+        # Any probe failure (not just RunPodError) must degrade to unavailable rather
+        # than surfacing a 500 from the routing engine.
+        def _boom(self, timeout=5.0):
+            raise RuntimeError("endpoint exploded")
+
+        monkeypatch.setattr(routing.RunPodClient, "health", _boom)
+        assert await routing.check_remote_availability(self._settings()) is False
 
 
 class TestLocalFirst:

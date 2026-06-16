@@ -8,14 +8,23 @@ Kept transport-agnostic (raises plain exceptions, never ``HTTPException``) like
 the other service modules, so the router stays free of routing concerns.
 """
 
+import asyncio
 from enum import Enum
 
 import httpx
+
+from ...runpod_client import RunPodClient
+from ..settings import ApiSettings
 
 # The local availability probe must be quick: the issue caps it at a 2-second
 # timeout so a down local server degrades to fallback/503 without stalling the
 # request.
 LOCAL_AVAILABILITY_TIMEOUT = 2.0
+
+# The remote (RunPod) readiness probe gets a slightly longer budget than the local
+# one — a serverless endpoint may be a touch slower to answer /health — but still
+# short enough that an unreachable remote degrades to fallback/503 promptly.
+REMOTE_AVAILABILITY_TIMEOUT = 5.0
 
 # ACE-Step exposes a lightweight stats endpoint used here purely as a health ping.
 LOCAL_STATS_PATH = "/v1/stats"
@@ -69,17 +78,31 @@ async def check_local_availability(url: str, timeout: float = LOCAL_AVAILABILITY
     return response.is_success
 
 
-async def check_remote_availability() -> bool:
-    """Return ``True`` if the remote RunPod endpoint is ready to accept work.
+async def check_remote_availability(settings: ApiSettings | None = None) -> bool:
+    """Return ``True`` if the remote RunPod endpoint is ready to accept work (US-11.2).
 
-    Stub that reports unavailable until US-11.2 wires up the RunPod serverless
-    client. It is a real (overridable) async function rather than an inline
-    constant so remote selection degrades safely in production — ``remote_only``
-    yields 503 and ``*_first`` falls back — while tests can exercise the
-    remote/fallback routing branches by patching it.
+    Remote routing is only available when RunPod is configured (both credentials set)
+    AND its ``/health`` endpoint answers — so a deployment without RunPod, or one
+    whose endpoint is down, degrades safely: ``remote_only`` yields 503 and ``*_first``
+    falls back to local. Any probe error counts as unavailable rather than surfacing a
+    500. ``settings`` is supplied by the router (which holds it on app state); a call
+    without it (``None``) is treated as "remote disabled" — we never read the
+    environment here, to avoid surprising request-time env/.env reads.
     """
-    # TODO(US-11.2): query the RunPod serverless endpoint status via the RunPod API.
-    return False
+    if settings is None or not settings.runpod_enabled:
+        return False
+    client = RunPodClient(
+        endpoint_id=settings.runpod_endpoint_id,
+        api_key=settings.runpod_api_key,
+        base_url=settings.runpod_base_url,
+    )
+    try:
+        return await asyncio.to_thread(client.health, REMOTE_AVAILABILITY_TIMEOUT)
+    except Exception:
+        # A readiness probe must never surface a 500: any failure (probe error,
+        # thread-pool exhaustion, a client constructed with bad config) means
+        # "not ready", so remote routing falls back / 503s rather than crashing.
+        return False
 
 
 def _effective_preference(request_target: str | None, preference: ComputePreference) -> ComputePreference:
@@ -104,6 +127,7 @@ async def resolve_compute_target(
     preference: ComputePreference,
     local_url: str,
     timeout: float = LOCAL_AVAILABILITY_TIMEOUT,
+    settings: ApiSettings | None = None,
 ) -> ComputeTarget:
     """Resolve which :class:`ComputeTarget` a generation should run on.
 
@@ -111,6 +135,9 @@ async def resolve_compute_target(
     live availability of each target. Raises :class:`ComputeUnavailableError`
     when the required target is down and no fallback is permitted (``*_only`` and
     explicit overrides) or when neither target is reachable (``*_first``).
+
+    ``settings`` is forwarded to the remote (RunPod) readiness probe so it can read
+    the configured credentials (US-11.2); the router supplies it from app state.
     """
     effective = _effective_preference(request_target, preference)
 
@@ -120,20 +147,20 @@ async def resolve_compute_target(
         raise ComputeUnavailableError(ComputeTarget.LOCAL, effective)
 
     if effective is ComputePreference.REMOTE_ONLY:
-        if await check_remote_availability():
+        if await check_remote_availability(settings):
             return ComputeTarget.REMOTE
         raise ComputeUnavailableError(ComputeTarget.REMOTE, effective)
 
     if effective is ComputePreference.LOCAL_FIRST:
         if await check_local_availability(local_url, timeout):
             return ComputeTarget.LOCAL
-        if await check_remote_availability():
+        if await check_remote_availability(settings):
             return ComputeTarget.REMOTE
         raise ComputeUnavailableError(ComputeTarget.LOCAL, effective)
 
     if effective is ComputePreference.REMOTE_FIRST:
         # Prefer remote, fall back to local.
-        if await check_remote_availability():
+        if await check_remote_availability(settings):
             return ComputeTarget.REMOTE
         if await check_local_availability(local_url, timeout):
             return ComputeTarget.LOCAL

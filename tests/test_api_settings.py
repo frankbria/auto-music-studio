@@ -197,3 +197,60 @@ class TestComputeRoutingSettings:
         monkeypatch.setenv("ACEMUSIC_API_LOCAL_URL", value)
         with pytest.raises(ValueError, match="local_url"):
             ApiSettings(_env_file=None)
+
+
+class TestRunPodSettings:
+    """RunPod serverless remote-routing configuration (US-11.2)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_runpod_env(self, monkeypatch):
+        for key in (
+            "ACEMUSIC_API_RUNPOD_API_KEY",
+            "ACEMUSIC_API_RUNPOD_ENDPOINT_ID",
+            "ACEMUSIC_API_RUNPOD_TIMEOUT",
+            "ACEMUSIC_API_RUNPOD_POLL_INTERVAL",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_defaults_are_unset_and_disabled(self):
+        settings = ApiSettings(_env_file=None)
+        assert settings.runpod_api_key is None
+        assert settings.runpod_endpoint_id is None
+        assert settings.runpod_timeout == 300.0
+        assert settings.runpod_poll_interval == 5.0
+        assert settings.runpod_enabled is False
+
+    def test_enabled_requires_both_credentials(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_API_KEY", "rp-key")
+        assert ApiSettings(_env_file=None).runpod_enabled is False
+
+        monkeypatch.delenv("ACEMUSIC_API_RUNPOD_API_KEY")
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_ENDPOINT_ID", "ep-1")
+        assert ApiSettings(_env_file=None).runpod_enabled is False
+
+    def test_enabled_when_both_credentials_set(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_API_KEY", "rp-key")
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_ENDPOINT_ID", "ep-1")
+        settings = ApiSettings(_env_file=None)
+        assert settings.runpod_enabled is True
+        assert settings.runpod_api_key == "rp-key"
+        assert settings.runpod_endpoint_id == "ep-1"
+
+    def test_timeout_and_poll_interval_from_env(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_TIMEOUT", "600")
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_POLL_INTERVAL", "10")
+        settings = ApiSettings(_env_file=None)
+        assert settings.runpod_timeout == 600.0
+        assert settings.runpod_poll_interval == 10.0
+
+    @pytest.mark.parametrize("value", ["0", "-1"])
+    def test_timeout_rejects_non_positive(self, monkeypatch, value):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_TIMEOUT", value)
+        with pytest.raises(ValueError, match="runpod_timeout"):
+            ApiSettings(_env_file=None)
+
+    @pytest.mark.parametrize("value", ["0", "-2"])
+    def test_poll_interval_rejects_non_positive(self, monkeypatch, value):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_POLL_INTERVAL", value)
+        with pytest.raises(ValueError, match="runpod_poll_interval"):
+            ApiSettings(_env_file=None)

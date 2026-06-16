@@ -91,6 +91,23 @@ class ApiSettings(BaseSettings):
     compute_preference: Literal["local_first", "remote_first", "local_only", "remote_only"] = "local_first"
     local_url: str = "http://localhost:8001"
 
+    # RunPod serverless remote routing (US-11.2). The credentials are optional: a
+    # deployment without them runs local-only — ``runpod_enabled`` is False, so the
+    # routing engine reports remote unavailable (``*_first`` falls back, ``remote_only``
+    # 503s) rather than crashing. ``runpod_timeout`` caps how long a remote job may run
+    # before it is failed; ``runpod_poll_interval`` is the gap between status polls,
+    # defaulted high to tolerate serverless cold starts without hammering the API.
+    runpod_api_key: str | None = None
+    runpod_endpoint_id: str | None = None
+    runpod_base_url: str = "https://api.runpod.ai/v2"
+    runpod_timeout: float = Field(default=300.0, gt=0)
+    runpod_poll_interval: float = Field(default=5.0, gt=0)
+
+    @property
+    def runpod_enabled(self) -> bool:
+        """True only when both RunPod credentials are configured (remote routing is usable)."""
+        return bool(self.runpod_api_key and self.runpod_endpoint_id)
+
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
     # ``oauth_cookie_secure`` marks it Secure (HTTPS-only); keep True in

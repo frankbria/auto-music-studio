@@ -92,11 +92,56 @@ class _FakeAceClient:
         return self._audio
 
 
-async def _enqueue(input_params: dict | None = None, *, job_type: str = "generate") -> Job:
+class _FakeRunPodClient:
+    """Synchronous RunPod stand-in mirroring the AceStep consumer interface."""
+
+    def __init__(
+        self,
+        *,
+        audio_urls=None,
+        audio: bytes = b"RUNPOD-WAV-BYTES",
+        status: str = "completed",
+        error: str | None = None,
+        pending_forever: bool = False,
+    ) -> None:
+        self._audio_urls = ["http://runpod/a.wav"] if audio_urls is None else audio_urls
+        self._audio = audio
+        self._status = status
+        self._error = error
+        self._pending_forever = pending_forever
+        self.submitted: list[dict] = []
+
+    def submit_task(self, **kwargs) -> str:
+        self.submitted.append(kwargs)
+        return "runpod-job-1"
+
+    def query_result(self, task_id: str, timeout: float = 10.0) -> dict:
+        if self._pending_forever:
+            time.sleep(0.01)
+            return {"status": "pending", "audio_urls": [], "error": None}
+        if self._status == "failed":
+            return {"status": "failed", "audio_urls": [], "error": self._error or "remote boom"}
+        return {"status": "completed", "audio_urls": list(self._audio_urls), "error": None}
+
+    def download_audio(self, url: str, timeout: float = 120.0) -> bytes:
+        return self._audio
+
+
+class _ExplodingClient:
+    """A client whose every call fails — used to prove the *other* backend ran."""
+
+    def submit_task(self, **kwargs) -> str:  # pragma: no cover - must never be called
+        raise AssertionError("wrong backend: local ACE-Step client was used for a remote job")
+
+
+async def _enqueue(
+    input_params: dict | None = None, *, job_type: str = "generate", compute_target: str | None = None
+) -> Job:
     job = Job(
         user_id=PydanticObjectId(),
         workspace_id=PydanticObjectId(),
         job_type=job_type,
+        compute_target=compute_target,
         status=JobStatus.QUEUED,
         input_params=input_params or {"prompt": "a calm piano ballad", "format": "wav"},
     )
@@ -113,7 +158,16 @@ async def _wait_until(predicate, *, timeout: float = 5.0, interval: float = 0.02
     return False
 
 
-def _make_processor(fake, storage, *, concurrency: int = 2, stale_after: float = 0.0, handlers=None) -> JobProcessor:
+def _make_processor(
+    fake,
+    storage,
+    *,
+    concurrency: int = 2,
+    stale_after: float = 0.0,
+    handlers=None,
+    runpod=None,
+    runpod_timeout: float = 5.0,
+) -> JobProcessor:
     # stale_after=0.0: any `processing` job is treated as immediately orphaned, so
     # the requeue-on-startup test is deterministic (production uses a real window).
     return JobProcessor(
@@ -123,6 +177,9 @@ def _make_processor(fake, storage, *, concurrency: int = 2, stale_after: float =
         ace_poll_interval=0.01,
         stale_after=stale_after,
         client_factory=lambda: fake,
+        runpod_client_factory=(lambda: runpod) if runpod is not None else None,
+        runpod_poll_interval=0.01,
+        runpod_timeout=runpod_timeout,
         storage_factory=lambda: storage,
         handlers=handlers,
     )
@@ -322,6 +379,100 @@ class TestLifecycle:
         assert len(ids_a) == 2 and len(ids_b) == 2
         assert ids_a.isdisjoint(ids_b), "clip ids leaked between jobs"
         assert await Clip.count() == 4
+
+
+@pytest.mark.integration
+class TestRemoteRunPod:
+    """Generation jobs routed to remote (RunPod) compute (US-11.2)."""
+
+    async def test_remote_job_runs_via_runpod_and_stores_clips(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        remote = _FakeRunPodClient(audio_urls=["http://runpod/a.wav", "http://runpod/b.wav"])
+        proc = _make_processor(_ExplodingClient(), storage, runpod=remote)
+        job = await _enqueue(compute_target="remote")
+
+        await proc.start()
+        try:
+            done = await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        assert done, "remote job did not reach completed"
+        # The remote client ran (the local _ExplodingClient would have failed the job).
+        assert remote.submitted, "RunPod client was not used for the remote job"
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.COMPLETED
+        assert len(refreshed.result["clip_ids"]) == 2
+        clips = await Clip.find(Clip.user_id == job.user_id).to_list()
+        assert len(clips) == 2
+        for clip in clips:
+            assert storage.download(clip.file_path) == b"RUNPOD-WAV-BYTES"
+
+    async def test_remote_failure_surfaces_error(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        remote = _FakeRunPodClient(status="failed", error="GPU OOM on worker")
+        proc = _make_processor(_ExplodingClient(), storage, runpod=remote)
+        job = await _enqueue(compute_target="remote")
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.FAILED))
+        finally:
+            await proc.stop()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert refreshed.error == "GPU OOM on worker"
+
+    async def test_remote_timeout_surfaces_error(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        remote = _FakeRunPodClient(pending_forever=True)
+        # Tiny runpod_timeout so the poll budget is exhausted quickly.
+        proc = _make_processor(_ExplodingClient(), storage, runpod=remote, runpod_timeout=0.05)
+        job = await _enqueue(compute_target="remote")
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.FAILED))
+        finally:
+            await proc.stop()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert "timed out" in (refreshed.error or "").lower()
+
+    async def test_remote_job_without_factory_fails_clearly(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        # runpod=None → no factory, but a job is still routed remote.
+        proc = _make_processor(_ExplodingClient(), storage, runpod=None)
+        job = await _enqueue(compute_target="remote")
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.FAILED))
+        finally:
+            await proc.stop()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.FAILED
+        assert "runpod is not configured" in (refreshed.error or "").lower()
+
+    async def test_local_job_still_uses_ace_step(self, mongo_db, tmp_path) -> None:
+        # A job with compute_target="local" must ignore the configured RunPod client.
+        storage = LocalStorage(root_dir=tmp_path)
+        local = _FakeAceClient(audio_urls=["http://ace/a.wav"])
+        remote = _FakeRunPodClient()
+        proc = _make_processor(local, storage, runpod=remote)
+        job = await _enqueue(compute_target="local")
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        assert local.submitted, "local ACE-Step client was not used for the local job"
+        assert remote.submitted == [], "RunPod client must not run a local job"
 
 
 @pytest.mark.integration

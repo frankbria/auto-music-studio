@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from acemusic import __version__
+from acemusic.runpod_client import RunPodClient
 
 from . import database
 from .exceptions import HandleConflictError
@@ -83,10 +84,23 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         processor: JobProcessor | None = None
         try:
             if settings.job_processor_enabled:
+                # Wire the RunPod backend (US-11.2) only when configured, so a
+                # local-only deployment runs unchanged; routing already reports
+                # remote unavailable when runpod_enabled is False.
+                runpod_factory = None
+                if settings.runpod_enabled:
+                    runpod_factory = lambda: RunPodClient(  # noqa: E731 - small closure over settings
+                        endpoint_id=settings.runpod_endpoint_id,
+                        api_key=settings.runpod_api_key,
+                        base_url=settings.runpod_base_url,
+                    )
                 processor = JobProcessor(
                     concurrency=settings.job_concurrency,
                     poll_interval=settings.job_poll_interval,
                     poll_timeout=settings.job_poll_timeout,
+                    runpod_client_factory=runpod_factory,
+                    runpod_timeout=settings.runpod_timeout,
+                    runpod_poll_interval=settings.runpod_poll_interval,
                 )
                 await processor.start()
             app_.state.job_processor = processor
