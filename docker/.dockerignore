@@ -1,0 +1,11 @@
+# Keep the build context tiny: the Dockerfile clones ACE-Step from GitHub at build
+# time, so the only file the build actually needs from this context is handler.py.
+.git
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+tests/
+docs/
+.github/

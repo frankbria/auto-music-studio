@@ -244,68 +244,68 @@ uv run python -c "from acestep import load_model; load_model('xl-sft')"
 
 ### 3.4 Serverless Handler Implementation
 
-```python
-# handler.py — RunPod serverless handler for ACE-Step-1.5
-import runpod
-import requests
-import subprocess
-import time
-import os
+The handler bridges RunPod's serverless interface to the ACE-Step REST API. The
+implementation lives at [`docker/handler.py`](docker/handler.py) and is covered by
+`tests/test_docker_handler.py`. It speaks the *real* ACE-Step 1.5 API contract (see
+`acemusic.client.AceStepClient`): responses are wrapped in a `{"data": ..., "code": 200}`
+envelope, `/query_result` takes `{"task_id_list": [...]}`, status is an integer
+(0=running, 1=succeeded, 2=failed), and `result` is a JSON string of
+`{"file": "/v1/audio?path=..."}` clips. It returns the `{"status", "audio_urls"}` shape
+the platform's `RunPodClient._extract_audio_urls` (US-11.2) consumes, so local and remote
+backends are interchangeable.
 
-# Start the ACE-Step API server as a subprocess
+```python
+# docker/handler.py — RunPod serverless handler for ACE-Step-1.5 (abridged)
+import json, os, subprocess, time
+import httpx
+
+API_BASE_URL = "http://localhost:8001"
+APP_DIR = "/app/ACE-Step-1.5"           # installed project (code + venv) — run from here
+MODEL_CACHE = "/workspace/models/.cache"  # Network Volume weights, via HF_HOME (§5.3)
+_STATUS_MAP = {0: "pending", 1: "completed", 2: "failed"}
 api_process = None
 
-def start_api_server():
-    """Start the ACE-Step-1.5 REST API server."""
+
+def start_api_server() -> bool:
+    """Spawn `uv run acestep-api` from the installed project and wait for /v1/stats.
+
+    Weights load from the Network Volume because HF_HOME points at the volume cache.
+    """
     global api_process
     if api_process is None or api_process.poll() is not None:
         env = os.environ.copy()
         env["ACESTEP_API_KEY"] = os.getenv("ACESTEP_API_KEY", "")
-        api_process = subprocess.Popen(
-            ["uv", "run", "acestep-api"],
-            cwd="/workspace/models/ACE-Step-1.5",
-            env=env
-        )
-        # Wait for server to be ready
-        for _ in range(30):
-            try:
-                r = requests.get("http://localhost:8001/v1/stats", timeout=2)
-                if r.status_code == 200:
-                    return True
-            except:
-                time.sleep(1)
+        env.setdefault("HF_HOME", MODEL_CACHE)
+        api_process = subprocess.Popen(["uv", "run", "acestep-api"], cwd=APP_DIR, env=env)
+    for _ in range(30):
+        try:
+            if httpx.get(f"{API_BASE_URL}/v1/stats", timeout=2.0).status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(1)
     return False
 
+
 def handler(event):
-    """Handle incoming generation requests."""
-    start_api_server()
+    """Proxy a RunPod event to the ACE-Step API; return {"status", "audio_urls"}."""
+    if not start_api_server():
+        return {"status": "failed", "error": "ACE-Step API server failed to start", "audio_urls": []}
+    input_data = (event or {}).get("input") or {}
+    # POST /release_task → unwrap data.task_id → poll /query_result with
+    # {"task_id_list": [id]} → map integer status → parse result JSON into audio URLs.
+    # (Full implementation with timeout + error handling in docker/handler.py.)
+    ...
 
-    input_data = event["input"]
 
-    # Forward to ACE-Step API
-    response = requests.post(
-        "http://localhost:8001/release_task",
-        json=input_data,
-        timeout=300
-    )
+if __name__ == "__main__":
+    import runpod
 
-    if response.status_code == 200:
-        result = response.json()
-        # Poll for completion
-        task_id = result.get("task_id")
-        while True:
-            status = requests.post(
-                "http://localhost:8001/query_result",
-                json={"task_ids": [task_id]}
-            ).json()
-            if status.get("completed"):
-                return status
-            time.sleep(1)
-    else:
-        return {"error": response.text}
-
-runpod.serverless.start({"handler": handler})
+    runpod.serverless.start({"handler": handler})
 ```
+
+> The handler returns the worker-local `/v1/audio?path=...` URLs. Delivering generated
+> audio across the internet (S3 upload / presigned URLs) is follow-up infrastructure.
 
 ### 3.5 GPU Tier Recommendations
 
