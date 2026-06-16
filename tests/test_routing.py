@@ -88,8 +88,10 @@ class TestCheckRemoteAvailability:
         assert await routing.check_remote_availability(self._settings()) is False
 
     async def test_unavailable_when_probe_raises(self, monkeypatch):
+        # Any probe failure (not just RunPodError) must degrade to unavailable rather
+        # than surfacing a 500 from the routing engine.
         def _boom(self, timeout=5.0):
-            raise routing.RunPodError("endpoint exploded")
+            raise RuntimeError("endpoint exploded")
 
         monkeypatch.setattr(routing.RunPodClient, "health", _boom)
         assert await routing.check_remote_availability(self._settings()) is False

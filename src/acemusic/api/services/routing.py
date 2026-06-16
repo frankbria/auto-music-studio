@@ -13,7 +13,7 @@ from enum import Enum
 
 import httpx
 
-from ...runpod_client import RunPodClient, RunPodError
+from ...runpod_client import RunPodClient
 from ..settings import ApiSettings
 
 # The local availability probe must be quick: the issue caps it at a 2-second
@@ -98,7 +98,10 @@ async def check_remote_availability(settings: ApiSettings | None = None) -> bool
     )
     try:
         return await asyncio.to_thread(client.health, REMOTE_AVAILABILITY_TIMEOUT)
-    except RunPodError:
+    except Exception:
+        # A readiness probe must never surface a 500: any failure (probe error,
+        # thread-pool exhaustion, a client constructed with bad config) means
+        # "not ready", so remote routing falls back / 503s rather than crashing.
         return False
 
 

@@ -363,7 +363,7 @@ class JobProcessor:
         self,
         job: Job,
         params: dict[str, Any],
-        client: AceStepClient,
+        client: AceStepClient | RunPodClient,
         audio_urls: list[str],
     ) -> list[str]:
         """Download each result, store it, and create its Clip record.

@@ -83,7 +83,13 @@ class RunPodClient:
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
     def _send_with_retry(
-        self, method: Callable[..., httpx.Response], url: str, *, timeout: float, **kwargs: Any
+        self,
+        method: Callable[..., httpx.Response],
+        url: str,
+        *,
+        timeout: float,
+        headers: dict | None = None,
+        **kwargs: Any,
     ) -> httpx.Response:
         """Issue an HTTP request, retrying on 5xx with exponential backoff.
 
@@ -92,9 +98,14 @@ class RunPodClient:
         not retried — they propagate so the caller maps them to
         :class:`RunPodConnectionError`. A 5xx that persists past the retry budget is
         returned so the caller surfaces it as a :class:`RunPodError` like any other.
+
+        ``headers`` defaults to the client's auth headers; callers fetching from a
+        pre-authorized URL (e.g. a presigned audio URL) pass ``{}`` to avoid leaking
+        the RunPod bearer token to an external host.
         """
+        request_headers = self._headers if headers is None else headers
         for attempt in range(_MAX_RETRIES + 1):
-            response = method(url, headers=self._headers, timeout=timeout, **kwargs)
+            response = method(url, headers=request_headers, timeout=timeout, **kwargs)
             if response.status_code >= 500 and attempt < _MAX_RETRIES:
                 time.sleep(_backoff_delay(attempt))
                 continue
@@ -167,12 +178,18 @@ class RunPodClient:
     def download_audio(self, url: str, timeout: float = 120.0) -> bytes:
         """Download raw audio bytes from a URL.
 
+        Transient 5xx responses are retried like the other operations — an audio-CDN
+        blip is as recoverable as a status-poll transient. No auth header is sent: the
+        URL comes from RunPod's own output and is already pre-authorized (typically a
+        presigned/public URL), so attaching the bearer token would only risk leaking
+        it to an external host.
+
         Raises:
             RunPodError: on HTTP error.
             RunPodConnectionError: on connection failure or timeout.
         """
         try:
-            response = httpx.get(url, headers=self._headers, timeout=timeout, follow_redirects=True)
+            response = self._send_with_retry(httpx.get, url, timeout=timeout, headers={}, follow_redirects=True)
             response.raise_for_status()
             return response.content
         except httpx.HTTPStatusError as exc:

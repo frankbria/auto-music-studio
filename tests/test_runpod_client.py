@@ -201,6 +201,21 @@ class TestDownloadAudio:
                 _client().download_audio("http://x/a.wav")
         assert exc.value.is_timeout is False
 
+    def test_does_not_send_auth_header_to_external_url(self):
+        # The audio URL is pre-authorized (presigned/public); the bearer token must
+        # not leak to an external host.
+        resp = _ok({}, content=b"WAV")
+        with patch("acemusic.runpod_client.httpx.get", return_value=resp) as mock_get:
+            _client().download_audio("https://cdn.example/a.wav")
+        assert mock_get.call_args.kwargs["headers"] == {}
+
+    def test_5xx_is_retried_then_recovers(self):
+        responses = [_err(503), _ok({}, content=b"WAV")]
+        with patch("acemusic.runpod_client.httpx.get", side_effect=responses) as mock_get:
+            with patch("acemusic.runpod_client.time.sleep"):
+                assert _client().download_audio("http://x/a.wav") == b"WAV"
+        assert mock_get.call_count == 2
+
 
 class TestOutputExtraction:
     def test_completed_with_no_output_yields_empty(self):
