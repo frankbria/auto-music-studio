@@ -209,10 +209,13 @@ async def create_generation(
             local_url=settings.local_url,
         )
     except ComputeUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(f"Compute target '{exc.target.value}' is unavailable " f"(preference: {exc.preference.value})."),
-        ) from exc
+        # Distinguish a request-pinned target from the server preference so the
+        # 503 doesn't report a synthetic "preference" the client never set.
+        if request.compute_target in ("local", "remote"):
+            detail = f"Requested compute target '{exc.target.value}' is unavailable."
+        else:
+            detail = f"Compute target '{exc.target.value}' is unavailable (preference: {exc.preference.value})."
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
     # US-9.6: credits are deducted atomically at queue time. Cost is judged on
     # the merged request, since a preset may supply the mode. The atomic
     # balance-conditioned deduction is the concurrency guard — two requests

@@ -392,6 +392,8 @@ class TestComputeRouting:
                 headers=_auth_headers(user, s),
             )
             assert resp.status_code == 503
+            # The 503 names the *requested* target, not a synthetic preference.
+            assert resp.json()["detail"] == "Requested compute target 'local' is unavailable."
 
     async def test_resolved_target_visible_in_job_status(self, monkeypatch, settings):
         _set_availability(monkeypatch, local=True, remote=False)

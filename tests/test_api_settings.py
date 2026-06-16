@@ -190,3 +190,10 @@ class TestComputeRoutingSettings:
     def test_local_url_from_env(self, monkeypatch):
         monkeypatch.setenv("ACEMUSIC_API_LOCAL_URL", "http://gpu-box:9000")
         assert ApiSettings(_env_file=None).local_url == "http://gpu-box:9000"
+
+    @pytest.mark.parametrize("value", ["localhost:8001", "ftp://host:1", "not a url", ""])
+    def test_local_url_rejects_malformed(self, monkeypatch, value):
+        """A scheme-less or non-http(s) value is rejected at startup, not at probe time."""
+        monkeypatch.setenv("ACEMUSIC_API_LOCAL_URL", value)
+        with pytest.raises(ValueError, match="local_url"):
+            ApiSettings(_env_file=None)
