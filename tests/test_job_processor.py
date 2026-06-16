@@ -352,6 +352,34 @@ class TestLifecycle:
         leftover = [f for _root, _dirs, files in os.walk(tmp_path) for f in files]
         assert leftover == [], "orphaned storage file not rolled back"
 
+    async def test_two_concurrent_jobs_complete_without_corruption(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        tracker = _ConcurrencyTracker()
+        fake = _FakeAceClient(audio_urls=["http://ace/a.wav", "http://ace/b.wav"], track=tracker)
+        proc = _make_processor(fake, storage, concurrency=2)
+        job_a = await _enqueue({"prompt": "first", "format": "wav"})
+        job_b = await _enqueue({"prompt": "second", "format": "wav"})
+
+        await proc.start()
+        try:
+            done = await _wait_until(
+                lambda: _all_status([job_a.id, job_b.id], JobStatus.COMPLETED),
+                timeout=8.0,
+            )
+        finally:
+            await proc.stop()
+
+        assert done, "both jobs did not complete"
+        assert tracker.max >= 2, "jobs did not actually run concurrently"
+
+        refreshed_a = await Job.get(job_a.id)
+        refreshed_b = await Job.get(job_b.id)
+        ids_a = set(refreshed_a.result["clip_ids"])
+        ids_b = set(refreshed_b.result["clip_ids"])
+        assert len(ids_a) == 2 and len(ids_b) == 2
+        assert ids_a.isdisjoint(ids_b), "clip ids leaked between jobs"
+        assert await Clip.count() == 4
+
 
 @pytest.mark.integration
 class TestRemoteRunPod:
@@ -445,34 +473,6 @@ class TestRemoteRunPod:
 
         assert local.submitted, "local ACE-Step client was not used for the local job"
         assert remote.submitted == [], "RunPod client must not run a local job"
-
-    async def test_two_concurrent_jobs_complete_without_corruption(self, mongo_db, tmp_path) -> None:
-        storage = LocalStorage(root_dir=tmp_path)
-        tracker = _ConcurrencyTracker()
-        fake = _FakeAceClient(audio_urls=["http://ace/a.wav", "http://ace/b.wav"], track=tracker)
-        proc = _make_processor(fake, storage, concurrency=2)
-        job_a = await _enqueue({"prompt": "first", "format": "wav"})
-        job_b = await _enqueue({"prompt": "second", "format": "wav"})
-
-        await proc.start()
-        try:
-            done = await _wait_until(
-                lambda: _all_status([job_a.id, job_b.id], JobStatus.COMPLETED),
-                timeout=8.0,
-            )
-        finally:
-            await proc.stop()
-
-        assert done, "both jobs did not complete"
-        assert tracker.max >= 2, "jobs did not actually run concurrently"
-
-        refreshed_a = await Job.get(job_a.id)
-        refreshed_b = await Job.get(job_b.id)
-        ids_a = set(refreshed_a.result["clip_ids"])
-        ids_b = set(refreshed_b.result["clip_ids"])
-        assert len(ids_a) == 2 and len(ids_b) == 2
-        assert ids_a.isdisjoint(ids_b), "clip ids leaked between jobs"
-        assert await Clip.count() == 4
 
 
 @pytest.mark.integration
