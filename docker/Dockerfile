@@ -34,6 +34,10 @@ RUN pip install --no-cache-dir runpod httpx
 # Serverless handler (bridges RunPod events to the local ACE-Step API).
 COPY handler.py /app/handler.py
 
+# Load model weights from the Network Volume cache, never from the image (§5.3). The
+# RunPod template may override this; the handler also defaults to it.
+ENV HF_HOME=/workspace/models/.cache
+
 EXPOSE 8001
 
 # Default: run the API server directly (used by pods and by the serverless handler,

@@ -260,18 +260,23 @@ import json, os, subprocess, time
 import httpx
 
 API_BASE_URL = "http://localhost:8001"
-MODEL_DIR = "/workspace/models/ACE-Step-1.5"
+APP_DIR = "/app/ACE-Step-1.5"           # installed project (code + venv) — run from here
+MODEL_CACHE = "/workspace/models/.cache"  # Network Volume weights, via HF_HOME (§5.3)
 _STATUS_MAP = {0: "pending", 1: "completed", 2: "failed"}
 api_process = None
 
 
 def start_api_server() -> bool:
-    """Spawn `uv run acestep-api` from the Network Volume and wait for /v1/stats."""
+    """Spawn `uv run acestep-api` from the installed project and wait for /v1/stats.
+
+    Weights load from the Network Volume because HF_HOME points at the volume cache.
+    """
     global api_process
     if api_process is None or api_process.poll() is not None:
         env = os.environ.copy()
         env["ACESTEP_API_KEY"] = os.getenv("ACESTEP_API_KEY", "")
-        api_process = subprocess.Popen(["uv", "run", "acestep-api"], cwd=MODEL_DIR, env=env)
+        env.setdefault("HF_HOME", MODEL_CACHE)
+        api_process = subprocess.Popen(["uv", "run", "acestep-api"], cwd=APP_DIR, env=env)
     for _ in range(30):
         try:
             if httpx.get(f"{API_BASE_URL}/v1/stats", timeout=2.0).status_code == 200:

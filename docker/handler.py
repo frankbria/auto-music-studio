@@ -2,9 +2,11 @@
 
 Bridges RunPod's serverless interface to the ACE-Step REST API. On the first
 invocation it spawns the ACE-Step API server (``uv run acestep-api``) as a
-subprocess that reads model weights from the Network Volume mounted at
-``/workspace/models/ACE-Step-1.5`` (weights are never baked into the image),
-waits for it to become healthy, then proxies each generation request:
+subprocess from the project installed in the image at ``/app/ACE-Step-1.5`` (so
+``uv run`` finds its ``pyproject.toml`` + venv), with ``HF_HOME`` pointed at the
+RunPod Network Volume so model *weights* load from the mount and are never baked
+into the image. It waits for the server to become healthy, then proxies each
+generation request:
 
     RunPod event → POST /release_task → poll POST /query_result → audio URLs
 
@@ -43,7 +45,15 @@ import time
 import httpx
 
 API_BASE_URL = "http://localhost:8001"
-MODEL_DIR = "/workspace/models/ACE-Step-1.5"
+
+# The ACE-Step project (code + uv venv) is installed in the image at build time. The
+# API server runs from here so ``uv run`` resolves the project's pyproject.toml + venv.
+APP_DIR = "/app/ACE-Step-1.5"
+
+# Model weights live on the RunPod Network Volume and are exposed to ACE-Step via
+# HF_HOME, so they load from the mount rather than the image (see model-deployment.md
+# §5.3). Used as the default when HF_HOME is not already set in the environment.
+MODEL_CACHE = "/workspace/models/.cache"
 
 # Health-check tuning: poll GET /v1/stats up to 30 times at 1s intervals while the
 # server loads models on cold start.
@@ -69,19 +79,23 @@ class HandlerError(Exception):
 def start_api_server() -> bool:
     """Start the ACE-Step API server subprocess if needed and wait until it is healthy.
 
-    Spawns ``uv run acestep-api`` from the Network Volume model dir (so weights load
-    from the mounted volume), forwarding ``ACESTEP_API_KEY``, then polls
-    ``GET /v1/stats`` until it answers 200. Returns ``True`` once healthy, ``False``
-    if the server never came up within the health-check budget. Reuses an
-    already-running process across warm invocations.
+    Spawns ``uv run acestep-api`` from the installed project dir (``APP_DIR``) so the
+    venv resolves, with ``HF_HOME`` defaulted to the Network Volume cache so weights
+    load from the mount. Forwards ``ACESTEP_API_KEY``, then polls ``GET /v1/stats``
+    until it answers 200. Returns ``True`` once healthy, ``False`` if the server never
+    came up within the health-check budget. Reuses an already-running process across
+    warm invocations.
     """
     global api_process
     if api_process is None or api_process.poll() is not None:
         env = os.environ.copy()
         env["ACESTEP_API_KEY"] = os.getenv("ACESTEP_API_KEY", "")
+        # Respect an explicitly-set HF_HOME (RunPod template / image ENV); otherwise
+        # point at the volume cache so weights come from the mount, not the image.
+        env.setdefault("HF_HOME", MODEL_CACHE)
         api_process = subprocess.Popen(
             ["uv", "run", "acestep-api"],
-            cwd=MODEL_DIR,
+            cwd=APP_DIR,
             env=env,
         )
 

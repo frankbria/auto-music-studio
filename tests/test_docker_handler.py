@@ -64,8 +64,9 @@ _RESULT_TWO_CLIPS = '[{"file": "/v1/audio?path=a.wav"}, {"file": "/v1/audio?path
 
 
 class TestStartApiServer:
-    def test_spawns_subprocess_from_volume_with_api_key(self, handler_mod, monkeypatch):
+    def test_spawns_from_app_dir_with_api_key_and_hf_home(self, handler_mod, monkeypatch):
         monkeypatch.setenv("ACESTEP_API_KEY", "secret-key")
+        monkeypatch.delenv("HF_HOME", raising=False)
         popen = MagicMock()
         popen.return_value.poll.return_value = None
         with (
@@ -76,8 +77,23 @@ class TestStartApiServer:
             assert handler_mod.start_api_server() is True
         args, kwargs = popen.call_args
         assert args[0] == ["uv", "run", "acestep-api"]
-        assert kwargs["cwd"] == handler_mod.MODEL_DIR
+        # Runs from the installed project (has the venv), NOT the weights volume.
+        assert kwargs["cwd"] == handler_mod.APP_DIR
         assert kwargs["env"]["ACESTEP_API_KEY"] == "secret-key"
+        # Weights load from the Network Volume cache via HF_HOME.
+        assert kwargs["env"]["HF_HOME"] == handler_mod.MODEL_CACHE
+
+    def test_respects_preset_hf_home(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("HF_HOME", "/custom/cache")
+        popen = MagicMock()
+        popen.return_value.poll.return_value = None
+        with (
+            patch.object(handler_mod.subprocess, "Popen", popen),
+            patch.object(handler_mod.httpx, "get", return_value=_resp({"data": {}})),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            handler_mod.start_api_server()
+        assert popen.call_args.kwargs["env"]["HF_HOME"] == "/custom/cache"
 
     def test_returns_false_when_never_healthy(self, handler_mod):
         with (
