@@ -111,6 +111,23 @@ default 5s) up to `RUNPOD_TIMEOUT` seconds (default 300), retries transient 5xx
 responses, and stores the returned clips exactly like a local job. `RUNPOD_BASE_URL`
 (default `https://api.runpod.ai/v2`) can point at a staging endpoint or proxy.
 
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/v1/compute/status` | Combined health of both compute targets, for a pre-flight check before generating (US-11.4) |
+
+The response carries `local`, `remote`, and `routing_preference`. `local`
+reports `available` plus best-effort `gpu_name`, `vram_total_mb`, `vram_used_mb`,
+`active_jobs`, and `loaded_models` (detail fields are `null` when the ACE-Step
+`/v1/stats` payload omits them). `remote` reports `available`, `provider`,
+`endpoint_id`, `active_workers`, `max_workers`, and `scaling_status`; an
+unconfigured RunPod returns `available: false` with `provider: null` (and makes
+no HTTP call), while a configured-but-unreachable endpoint keeps
+`provider: "runpod"` and `endpoint_id`. Both targets are probed in parallel,
+each bounded by `COMPUTE_STATUS_TIMEOUT` (default 3s), so the endpoint answers
+well within 5 seconds even when a target hangs — a down or unconfigured target is
+reported as unavailable, never a 5xx. `max_workers` is left `null` (RunPod's
+`/health` does not expose the configured ceiling).
+
 ### Workspaces
 
 | Endpoint | Purpose |

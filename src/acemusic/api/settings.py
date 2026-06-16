@@ -103,6 +103,13 @@ class ApiSettings(BaseSettings):
     runpod_timeout: float = Field(default=300.0, gt=0)
     runpod_poll_interval: float = Field(default=5.0, gt=0)
 
+    # Compute status endpoint (US-11.4). Per-target health-probe budget for
+    # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
+    # each bounded by this timeout, so the aggregate response stays well under the
+    # issue's 5-second ceiling even when one target hangs. Bounded ``< 5`` so a
+    # misconfiguration fails at startup rather than silently breaking that ceiling.
+    compute_status_timeout: float = Field(default=3.0, gt=0, lt=5.0)
+
     @property
     def runpod_enabled(self) -> bool:
         """True only when both RunPod credentials are configured (remote routing is usable)."""
