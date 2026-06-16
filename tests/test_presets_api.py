@@ -14,11 +14,24 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Job, Preset
-from acemusic.api.services import users as user_service
+from acemusic.api.services import routing, users as user_service
 from acemusic.api.settings import ApiSettings
 
 PRESETS_URL = f"{API_V1_PREFIX}/presets"
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
+
+
+@pytest.fixture(autouse=True)
+def _local_compute_available(monkeypatch):
+    """Make the generation router's routing probe (US-11.1) see a reachable local
+    backend, so preset-aware generation tests assert the merge/job contract
+    rather than 503ing on compute availability."""
+
+    async def _available(url, timeout=routing.LOCAL_AVAILABILITY_TIMEOUT):
+        return True
+
+    monkeypatch.setattr(routing, "check_local_availability", _available)
+
 
 # A representative full parameter snapshot used across tests.
 FULL_PARAMS = {

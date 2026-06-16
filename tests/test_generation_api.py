@@ -12,12 +12,37 @@ import pytest
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
+from acemusic.api.services import routing, users as user_service
 from acemusic.api.settings import ApiSettings
 
 pytestmark = pytest.mark.integration
 
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
+JOBS_URL = f"{API_V1_PREFIX}/jobs"
+
+
+def _set_availability(monkeypatch, *, local: bool, remote: bool = False) -> None:
+    """Stub the routing probes so endpoint tests control where a request routes."""
+
+    async def _local(url, timeout=routing.LOCAL_AVAILABILITY_TIMEOUT):
+        return local
+
+    async def _remote():
+        return remote
+
+    monkeypatch.setattr(routing, "check_local_availability", _local)
+    monkeypatch.setattr(routing, "check_remote_availability", _remote)
+
+
+@pytest.fixture(autouse=True)
+def _local_compute_available(monkeypatch):
+    """Default the routing probe (US-11.1) to a reachable local backend.
+
+    Most generation tests assert the job-creation contract, not compute
+    availability; without a stub they would 503 (no local server runs in CI).
+    Routing-specific tests below re-stub availability per case.
+    """
+    _set_availability(monkeypatch, local=True, remote=False)
 
 
 def _async_client(app) -> httpx.AsyncClient:
@@ -265,3 +290,131 @@ class TestStaleToken:
             headers=self._token_headers(str(ghost), settings),
         )
         assert await Workspace.find(Workspace.user_id == ghost).to_list() == []
+
+
+class TestComputeRouting:
+    """Compute routing engine (US-11.1).
+
+    Availability is stubbed (no ACE-Step/RunPod runs in CI); each test asserts
+    the routing decision the engine makes and how it surfaces on the job record
+    and status response.
+    """
+
+    @staticmethod
+    async def _client_for(settings: ApiSettings):
+        return _async_client(create_app(settings))
+
+    async def test_local_first_routes_local_when_available(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=False)
+        s = settings.model_copy(update={"compute_preference": "local_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-lf-local@example.com")
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 202
+            job = await Job.get(resp.json()["job_id"])
+            assert job.compute_target == "local"
+
+    async def test_local_first_falls_back_to_remote_when_local_down(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=False, remote=True)
+        s = settings.model_copy(update={"compute_preference": "local_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-lf-remote@example.com")
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 202
+            job = await Job.get(resp.json()["job_id"])
+            assert job.compute_target == "remote"
+
+    async def test_remote_first_routes_remote_when_available(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=True)
+        s = settings.model_copy(update={"compute_preference": "remote_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-rf-remote@example.com")
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 202
+            job = await Job.get(resp.json()["job_id"])
+            assert job.compute_target == "remote"
+
+    async def test_remote_first_falls_back_to_local_when_remote_down(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=False)
+        s = settings.model_copy(update={"compute_preference": "remote_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-rf-local@example.com")
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 202
+            job = await Job.get(resp.json()["job_id"])
+            assert job.compute_target == "local"
+
+    async def test_local_only_returns_503_when_local_unavailable(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=False, remote=True)
+        s = settings.model_copy(update={"compute_preference": "local_only"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-local-only@example.com")
+            before = user.credits_balance
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 503
+            assert "local" in resp.json()["detail"]
+            # No job created and no credit charged for an unavailable backend.
+            assert await Job.find(Job.user_id == user.id).to_list() == []
+            fresh = await user_service.get_user_by_id(str(user.id))
+            assert fresh.credits_balance == before
+
+    async def test_remote_only_returns_503_when_remote_unavailable(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=False)
+        s = settings.model_copy(update={"compute_preference": "remote_only"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-remote-only@example.com")
+            resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
+            assert resp.status_code == 503
+            assert "remote" in resp.json()["detail"]
+
+    async def test_per_request_local_overrides_remote_first_preference(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=True)
+        s = settings.model_copy(update={"compute_preference": "remote_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-override-local@example.com")
+            resp = await client.post(
+                GENERATE_URL,
+                json={"prompt": "x", "compute_target": "local"},
+                headers=_auth_headers(user, s),
+            )
+            assert resp.status_code == 202
+            job = await Job.get(resp.json()["job_id"])
+            assert job.compute_target == "local"
+
+    async def test_per_request_local_503s_when_local_down_no_fallback(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=False, remote=True)
+        s = settings.model_copy(update={"compute_preference": "local_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-override-local-down@example.com")
+            resp = await client.post(
+                GENERATE_URL,
+                json={"prompt": "x", "compute_target": "local"},
+                headers=_auth_headers(user, s),
+            )
+            assert resp.status_code == 503
+
+    async def test_resolved_target_visible_in_job_status(self, monkeypatch, settings):
+        _set_availability(monkeypatch, local=True, remote=False)
+        s = settings.model_copy(update={"compute_preference": "local_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-status@example.com")
+            headers = _auth_headers(user, s)
+            job_id = (await client.post(GENERATE_URL, json={"prompt": "x"}, headers=headers)).json()["job_id"]
+            status_resp = await client.get(f"{JOBS_URL}/{job_id}/status", headers=headers)
+            assert status_resp.status_code == 200
+            assert status_resp.json()["compute_target"] == "local"
+
+    async def test_compute_target_not_leaked_into_input_params(self, monkeypatch, settings):
+        # The routing hint is not a creative param; it must not pollute the job
+        # snapshot forwarded to the worker.
+        _set_availability(monkeypatch, local=True, remote=True)
+        s = settings.model_copy(update={"compute_preference": "remote_first"})
+        async with await self._client_for(s) as client:
+            user = await _make_user("route-no-leak@example.com")
+            resp = await client.post(
+                GENERATE_URL,
+                json={"prompt": "x", "compute_target": "local"},
+                headers=_auth_headers(user, s),
+            )
+            job = await Job.get(resp.json()["job_id"])
+            assert "compute_target" not in job.input_params

@@ -5,7 +5,7 @@ All API settings are namespaced under the ``ACEMUSIC_API_`` env prefix so they d
 not collide with CLI or ACE-Step server variables.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -79,6 +79,16 @@ class ApiSettings(BaseSettings):
     job_poll_interval: float = Field(default=1.0, gt=0)
     job_poll_timeout: float = Field(default=600.0, gt=0)
     job_processor_enabled: bool = Field(default=True)
+
+    # Compute routing (US-11.1). ``compute_preference`` selects where a generation
+    # runs when the request does not pin a ``compute_target``: ``*_first`` tries
+    # the named target then falls back to the other; ``*_only`` never falls back
+    # (a 503 surfaces when that target is down). ``local_url`` is the local
+    # ACE-Step base URL whose ``/v1/stats`` endpoint is the availability probe;
+    # it defaults to the conventional local port and is independent of the CLI's
+    # ACE-Step config (which drives actual job execution).
+    compute_preference: Literal["local_first", "remote_first", "local_only", "remote_only"] = "local_first"
+    local_url: str = "http://localhost:8001"
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.

@@ -58,6 +58,9 @@ class JobStatusResponse(BaseModel):
     status: JobStatus
     created_at: datetime
     estimated_time_seconds: int
+    # Resolved compute target (US-11.1: "local"/"remote"); present for routed
+    # generation jobs, dropped (None) for job types that do not route.
+    compute_target: str | None = None
     # Per-step progress for long multi-step jobs (US-10.4 full-song); only set
     # while the job is queued/processing, dropped once it completes or fails.
     progress: str | None = None
@@ -133,6 +136,7 @@ async def get_job_status(
         status=job.status,
         created_at=job.created_at,
         estimated_time_seconds=_estimate_for(job),
+        compute_target=job.compute_target,
     )
     if job.status in (JobStatus.QUEUED, JobStatus.PROCESSING):
         # Progress is in-flight state; a terminal job exposes its result/error instead.

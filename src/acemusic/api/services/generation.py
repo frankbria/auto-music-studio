@@ -20,18 +20,21 @@ from .workspaces import DEFAULT_WORKSPACE_NAME, get_or_create_default_workspace 
 GENERATE_JOB_TYPE = "generate"
 
 
-async def create_generation_job(*, user_id: PydanticObjectId, params: dict) -> Job:
+async def create_generation_job(*, user_id: PydanticObjectId, params: dict, compute_target: str | None = None) -> Job:
     """Persist a queued generation job for ``user_id`` and dispatch it.
 
     ``params`` is the validated request snapshot, stored verbatim in
     ``input_params`` so the worker (US-9.2) has the full creative spec regardless
-    of later schema changes. Returns the saved :class:`Job` (with its id).
+    of later schema changes. ``compute_target`` is the resolved routing target
+    (US-11.1: ``"local"``/``"remote"``), recorded on the job for auditability and
+    status reporting. Returns the saved :class:`Job` (with its id).
     """
     workspace = await get_or_create_default_workspace(user_id)
     job = Job(
         user_id=user_id,
         workspace_id=workspace.id,
         job_type=GENERATE_JOB_TYPE,
+        compute_target=compute_target,
         status=JobStatus.QUEUED,
         input_params=params,
     )

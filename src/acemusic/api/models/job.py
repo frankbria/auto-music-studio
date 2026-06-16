@@ -28,6 +28,10 @@ class Job(Document):
     user_id: PydanticObjectId
     workspace_id: PydanticObjectId
     job_type: str
+    # Resolved compute target for this job (US-11.1): "local" or "remote", set by
+    # the routing engine at enqueue time. None for jobs created before routing
+    # existed or by paths that do not route (e.g. edits/exports).
+    compute_target: str | None = None
     status: JobStatus = JobStatus.QUEUED
     input_params: dict = Field(default_factory=dict)
     result: dict | None = None
