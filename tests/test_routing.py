@@ -182,6 +182,15 @@ class TestPerRequestOverride:
         )
         assert target is ComputeTarget.LOCAL
 
+    async def test_unknown_request_target_raises_value_error(self, monkeypatch):
+        # The router's Literal guards this, but the service fails loudly rather
+        # than silently defaulting if ever called with a bad value directly.
+        _set_availability(monkeypatch, local=True, remote=True)
+        with pytest.raises(ValueError, match="unknown compute_target"):
+            await resolve_compute_target(
+                request_target="banana", preference=ComputePreference.LOCAL_FIRST, local_url=LOCAL_URL
+            )
+
 
 class TestEnums:
     def test_compute_preference_values_match_settings_literal(self):
