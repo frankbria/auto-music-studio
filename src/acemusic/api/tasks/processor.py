@@ -29,6 +29,7 @@ from pymongo import ASCENDING, ReturnDocument
 
 from acemusic.client import AceStepClient
 from acemusic.config import load_config
+from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
 
 from .. import database
@@ -100,6 +101,9 @@ class JobProcessor:
         ace_poll_interval: float = 2.0,
         stale_after: float | None = None,
         client_factory: Callable[[], AceStepClient] | None = None,
+        runpod_client_factory: Callable[[], RunPodClient] | None = None,
+        runpod_timeout: float = 300.0,
+        runpod_poll_interval: float = 5.0,
         storage_factory: Callable[[], StorageBackend] | None = None,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
@@ -108,6 +112,13 @@ class JobProcessor:
         self._poll_interval = poll_interval
         self._poll_timeout = poll_timeout
         self._ace_poll_interval = ace_poll_interval
+        # Remote (RunPod) generation (US-11.2). The factory is None unless RunPod is
+        # configured; a job routed to ``remote`` (US-11.1) without it fails loudly
+        # rather than silently running locally. The remote poll interval defaults
+        # higher than the local one to tolerate serverless cold starts.
+        self._runpod_client_factory = runpod_client_factory
+        self._runpod_timeout = runpod_timeout
+        self._runpod_poll_interval = runpod_poll_interval
         # A job legitimately stays in `processing` for at most poll_timeout (its
         # own worker fails it after that). Only re-queue jobs older than that
         # window plus a margin, so a startup sweep never reclaims a job a live
@@ -292,34 +303,61 @@ class JobProcessor:
         )
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
-        """Run an ACE-Step generation job: submit, poll, store clips."""
-        client = self._client_factory()
+        """Run a generation job — locally via ACE-Step or remotely via RunPod.
+
+        US-11.1 records the routing decision on ``job.compute_target``; US-11.2 acts
+        on it here. The two backends share an interface (``submit_task`` /
+        ``query_result`` / ``download_audio``) and the normalised result shape, so
+        only the client and the poll cadence/timeout differ between them.
+        """
         params = dict(job.input_params or {})
+        # "remote" is the Job.compute_target literal the routing engine (US-11.1) writes.
+        remote = job.compute_target == "remote"
+        if remote:
+            if self._runpod_client_factory is None:
+                raise JobProcessingError("Job routed to remote compute but RunPod is not configured")
+            client: AceStepClient | RunPodClient = self._runpod_client_factory()
+            poll_interval, timeout, backend = self._runpod_poll_interval, self._runpod_timeout, "RunPod"
+        else:
+            client = self._client_factory()
+            poll_interval, timeout, backend = self._ace_poll_interval, self._poll_timeout, "ACE-Step"
 
         task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
-        result = await self._poll_until_complete(client, task_id)
+        result = await self._poll_until_complete(client, task_id, poll_interval=poll_interval, timeout=timeout)
         if result.get("status") == "failed":
-            raise JobProcessingError(result.get("error") or "ACE-Step generation failed")
+            raise JobProcessingError(result.get("error") or f"{backend} generation failed")
 
         audio_urls = result.get("audio_urls") or []
         if not audio_urls:
-            raise JobProcessingError("ACE-Step completed but returned no audio")
+            raise JobProcessingError(f"{backend} completed but returned no audio")
 
         clip_ids = await self._store_clips(job, params, client, audio_urls)
         return {"clip_ids": clip_ids}
 
-    async def _poll_until_complete(self, client: AceStepClient, task_id: str) -> dict[str, Any]:
-        """Poll query_result until the task reaches a terminal state or times out."""
+    async def _poll_until_complete(
+        self,
+        client: AceStepClient | RunPodClient,
+        task_id: str,
+        *,
+        poll_interval: float | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Poll query_result until the task reaches a terminal state or times out.
+
+        ``poll_interval``/``timeout`` default to the local ACE-Step cadence so
+        existing callers (the iterative handlers) keep their behaviour; the remote
+        path passes RunPod's longer cadence/budget.
+        """
+        interval = poll_interval if poll_interval is not None else self._ace_poll_interval
+        budget = timeout if timeout is not None else self._poll_timeout
         start = time.monotonic()
         while True:
             result = await asyncio.to_thread(client.query_result, task_id)
             if result.get("status") in _TERMINAL_STATES:
                 return result
-            if time.monotonic() - start > self._poll_timeout:
-                raise JobProcessingError(
-                    f"Timed out after {self._poll_timeout:.0f}s waiting for ACE-Step task {task_id}"
-                )
-            await asyncio.sleep(self._ace_poll_interval)
+            if time.monotonic() - start > budget:
+                raise JobProcessingError(f"Timed out after {budget:.0f}s waiting for task {task_id}")
+            await asyncio.sleep(interval)
 
     async def _store_clips(
         self,

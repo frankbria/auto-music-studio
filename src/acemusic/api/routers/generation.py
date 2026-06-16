@@ -207,6 +207,7 @@ async def create_generation(
             request_target=request.compute_target,
             preference=ComputePreference(settings.compute_preference),
             local_url=settings.local_url,
+            settings=settings,
         )
     except ComputeUnavailableError as exc:
         # Distinguish a request-pinned target from the server preference so the
