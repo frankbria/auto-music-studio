@@ -146,6 +146,21 @@ class TestLocalStatus:
         assert status.loaded_models == ["base"]
 
     @respx.mock
+    async def test_zero_valued_vram_is_preserved_not_dropped(self):
+        # An idle GPU reports vram_used_mb: 0 — a valid zero, not "missing".
+        respx.get(STATS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"vram_total_mb": 24564, "vram_used_mb": 0, "jobs": {"running": 0}}},
+            )
+        )
+        status = await get_local_status(LOCAL_URL, timeout=3.0)
+        assert status.available is True
+        assert status.vram_used_mb == 0
+        assert status.vram_total_mb == 24564
+        assert status.active_jobs == 0
+
+    @respx.mock
     async def test_unavailable_on_connection_error(self):
         respx.get(STATS_URL).mock(side_effect=httpx.ConnectError("refused"))
         status = await get_local_status(LOCAL_URL, timeout=3.0)

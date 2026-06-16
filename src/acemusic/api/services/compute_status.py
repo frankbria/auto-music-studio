@@ -71,6 +71,14 @@ def _as_int(value: Any) -> int | None:
     return None
 
 
+def _coalesce(*values: Any) -> Any:
+    """Return the first non-``None`` value — preserves a valid ``0`` that ``or`` would drop."""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _parse_local_stats(payload: Any) -> dict[str, Any]:
     """Extract GPU/VRAM/jobs/models from a (loosely-typed) ``/v1/stats`` body.
 
@@ -89,8 +97,8 @@ def _parse_local_stats(payload: Any) -> dict[str, Any]:
     gpu_name = data.get("gpu_name") or gpu_obj.get("name")
     if gpu_name is None and isinstance(gpu, str):
         gpu_name = gpu
-    vram_total = data.get("vram_total_mb") or gpu_obj.get("vram_total_mb") or gpu_obj.get("memory_total_mb")
-    vram_used = data.get("vram_used_mb") or gpu_obj.get("vram_used_mb") or gpu_obj.get("memory_used_mb")
+    vram_total = _coalesce(data.get("vram_total_mb"), gpu_obj.get("vram_total_mb"), gpu_obj.get("memory_total_mb"))
+    vram_used = _coalesce(data.get("vram_used_mb"), gpu_obj.get("vram_used_mb"), gpu_obj.get("memory_used_mb"))
 
     # active_jobs: prefer the nested running count, fall back to a flat field.
     jobs = data.get("jobs")
