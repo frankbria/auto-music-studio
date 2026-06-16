@@ -311,3 +311,23 @@ class TestAggregation:
         assert elapsed < 5.0
         assert result.local.available is False
         assert result.remote.available is False
+
+    @respx.mock
+    async def test_responds_quickly_when_runpod_configured_and_hanging(self, monkeypatch):
+        # The 5s-ceiling guarantee is only fully exercised when RunPod IS configured
+        # and its /health hangs: the bounded asyncio.wait_for must cut the probe off.
+        respx.get(STATS_URL).mock(side_effect=httpx.ConnectError("refused"))
+
+        def _hang(self, timeout=5.0):
+            time.sleep(1.0)  # outlives the 0.2s probe budget below
+            return {"workers": {"running": 1}}
+
+        monkeypatch.setattr(compute_status.RunPodClient, "health_details", _hang)
+        settings = _settings(runpod_api_key="rp-key", runpod_endpoint_id="ep-1", compute_status_timeout=0.2)
+        start = time.monotonic()
+        result = await get_compute_status(settings)
+        elapsed = time.monotonic() - start
+        # wait_for(0.2) cuts the hanging probe off well before its 1s sleep.
+        assert elapsed < 1.0
+        assert result.remote.available is False
+        assert result.remote.provider == "runpod"

@@ -146,11 +146,14 @@ def _parse_remote_workers(health: dict[str, Any], endpoint_id: str) -> RemoteCom
     """Turn a RunPod ``/health`` body into a populated :class:`RemoteComputeStatus`."""
     workers = health.get("workers")
     workers = workers if isinstance(workers, dict) else {}
+    # ``or 0`` is safe for these scaling-signal counts (only used in > 0 comparisons).
     initializing = _as_int(workers.get("initializing")) or 0
     throttled = _as_int(workers.get("throttled")) or 0
-    running = _as_int(workers.get("running"))
     ready = _as_int(workers.get("ready")) or 0
     idle = _as_int(workers.get("idle")) or 0
+    # ``running`` is surfaced as ``active_workers`` — keep None-vs-0 distinguishable
+    # (0 active workers is a real reading, not "unknown"), so do NOT add ``or 0`` here.
+    running = _as_int(workers.get("running"))
 
     # /health reports live worker states but not the endpoint's configured ceiling,
     # so max_workers stays None (it would need RunPod's GraphQL API).
