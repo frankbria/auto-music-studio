@@ -236,7 +236,7 @@ async def create_generation(
         job = await generation_service.create_generation_job(
             user_id=user.id,
             params=request.model_dump(exclude_none=True, exclude={"preset_id", "compute_target"}),
-            compute_target=resolved_target.value,
+            compute_target=resolved_target,
         )
     except BaseException:
         # The deduction already landed but no job exists — give the credit back
