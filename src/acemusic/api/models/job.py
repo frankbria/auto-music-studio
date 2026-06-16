@@ -7,6 +7,7 @@ job-queue contract used by the Generation API (US-9.2):
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from beanie import Document, PydanticObjectId
 from pydantic import Field
@@ -30,8 +31,9 @@ class Job(Document):
     job_type: str
     # Resolved compute target for this job (US-11.1): "local" or "remote", set by
     # the routing engine at enqueue time. None for jobs created before routing
-    # existed or by paths that do not route (e.g. edits/exports).
-    compute_target: str | None = None
+    # existed or by paths that do not route (e.g. edits/exports). Constrained to
+    # lock the document/API contract — only the routing engine writes it.
+    compute_target: Literal["local", "remote"] | None = None
     status: JobStatus = JobStatus.QUEUED
     input_params: dict = Field(default_factory=dict)
     result: dict | None = None

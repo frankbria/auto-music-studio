@@ -9,6 +9,7 @@ endpoint never reveals the existence of another user's jobs.
 import asyncio
 import logging
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -60,7 +61,7 @@ class JobStatusResponse(BaseModel):
     estimated_time_seconds: int
     # Resolved compute target (US-11.1: "local"/"remote"); present for routed
     # generation jobs, dropped (None) for job types that do not route.
-    compute_target: str | None = None
+    compute_target: Literal["local", "remote"] | None = None
     # Per-step progress for long multi-step jobs (US-10.4 full-song); only set
     # while the job is queued/processing, dropped once it completes or fails.
     progress: str | None = None

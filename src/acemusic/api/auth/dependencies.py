@@ -30,8 +30,17 @@ class CurrentUser(BaseModel):
     subscription_tier: str
 
 
-def _settings(request: Request) -> ApiSettings:
+def get_settings(request: Request) -> ApiSettings:
+    """FastAPI dependency exposing the app's :class:`ApiSettings`.
+
+    Public so any router can depend on settings without reaching into a private
+    symbol (``Depends(get_settings)``).
+    """
     return request.app.state.settings
+
+
+# Backwards-compatible private alias for this module's internal call sites.
+_settings = get_settings
 
 
 def _unauthorized(detail: str) -> HTTPException:

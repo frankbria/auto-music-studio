@@ -35,7 +35,7 @@ from acemusic.constants import (
     WEIRDNESS_MIN,
 )
 
-from ..auth.dependencies import CurrentUser, _settings, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, get_settings
 from ..models import PRESET_PARAM_FIELDS, Preset
 from ..services import (
     credits as credits_service,
@@ -183,7 +183,7 @@ def _apply_preset(request: GenerationRequest, preset: Preset) -> GenerationReque
 async def create_generation(
     request: GenerationRequest,
     current: CurrentUser = Depends(get_current_user),
-    settings: ApiSettings = Depends(_settings),
+    settings: ApiSettings = Depends(get_settings),
 ) -> GenerationResponse:
     """Validate the request, persist a queued job, and return its id.
 

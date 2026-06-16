@@ -131,9 +131,14 @@ async def resolve_compute_target(
             return ComputeTarget.REMOTE
         raise ComputeUnavailableError(ComputeTarget.LOCAL, effective)
 
-    # REMOTE_FIRST: prefer remote, fall back to local.
-    if await check_remote_availability():
-        return ComputeTarget.REMOTE
-    if await check_local_availability(local_url, timeout):
-        return ComputeTarget.LOCAL
-    raise ComputeUnavailableError(ComputeTarget.REMOTE, effective)
+    if effective is ComputePreference.REMOTE_FIRST:
+        # Prefer remote, fall back to local.
+        if await check_remote_availability():
+            return ComputeTarget.REMOTE
+        if await check_local_availability(local_url, timeout):
+            return ComputeTarget.LOCAL
+        raise ComputeUnavailableError(ComputeTarget.REMOTE, effective)
+
+    # Unreachable: every ComputePreference member is handled above. Explicit so a
+    # future enum addition fails loudly instead of silently returning None.
+    raise ValueError(f"unhandled compute preference {effective!r}")  # pragma: no cover
