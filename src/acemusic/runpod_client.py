@@ -212,6 +212,27 @@ class RunPodClient:
             return False
         return response.is_success
 
+    def health_details(self, timeout: float = 5.0) -> dict | None:
+        """Return the parsed ``GET /health`` body, or ``None`` when unreachable.
+
+        Richer companion to :meth:`health` for the compute status endpoint (US-11.4),
+        which needs RunPod's worker/scaling detail — not just a reachable/not bool.
+        RunPod answers with ``{"jobs": {...}, "workers": {...}}``. Any connection
+        error, non-2xx, or unparseable body yields ``None`` so the caller reports
+        the endpoint unavailable rather than surfacing a 500.
+        """
+        try:
+            response = httpx.get(f"{self.base_url}/health", headers=self._headers, timeout=timeout)
+        except httpx.RequestError:
+            return None
+        if not response.is_success:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        return body if isinstance(body, dict) else None
+
 
 def _extract_audio_urls(output: Any) -> list[str]:
     """Pull audio URLs out of a RunPod ``output`` payload.
