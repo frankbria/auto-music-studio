@@ -20,11 +20,23 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import CreditTransaction, Job, User
-from acemusic.api.services import credits as credits_service, users as user_service
+from acemusic.api.services import credits as credits_service, routing, users as user_service
 from acemusic.api.settings import ApiSettings
 
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
 CREDITS_URL = f"{API_V1_PREFIX}/users/me/credits"
+
+
+@pytest.fixture(autouse=True)
+def _local_compute_available(monkeypatch):
+    """Make the generation router's routing probe (US-11.1) see a reachable local
+    backend, so these credit tests exercise the deduction/refund contract rather
+    than 503ing on compute availability."""
+
+    async def _available(url, timeout=routing.LOCAL_AVAILABILITY_TIMEOUT):
+        return True
+
+    monkeypatch.setattr(routing, "check_local_availability", _available)
 
 
 class TestAuthGate:

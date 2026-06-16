@@ -161,3 +161,39 @@ class TestAuthSettings:
         monkeypatch.setenv("ACEMUSIC_API_JWT_ALGORITHM", algorithm)
         with pytest.raises(ValueError, match="jwt_algorithm"):
             ApiSettings(_env_file=None)
+
+
+class TestComputeRoutingSettings:
+    """Compute routing configuration (US-11.1)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_routing_env(self, monkeypatch):
+        for key in ("ACEMUSIC_API_COMPUTE_PREFERENCE", "ACEMUSIC_API_LOCAL_URL"):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_defaults(self):
+        """Compute defaults to local-first against the conventional local port."""
+        settings = ApiSettings(_env_file=None)
+        assert settings.compute_preference == "local_first"
+        assert settings.local_url == "http://localhost:8001"
+
+    @pytest.mark.parametrize("preference", ["local_first", "remote_first", "local_only", "remote_only"])
+    def test_compute_preference_accepts_each_mode(self, monkeypatch, preference):
+        monkeypatch.setenv("ACEMUSIC_API_COMPUTE_PREFERENCE", preference)
+        assert ApiSettings(_env_file=None).compute_preference == preference
+
+    def test_compute_preference_rejects_unknown(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_COMPUTE_PREFERENCE", "bogus")
+        with pytest.raises(ValueError, match="compute_preference"):
+            ApiSettings(_env_file=None)
+
+    def test_local_url_from_env(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_LOCAL_URL", "http://gpu-box:9000")
+        assert ApiSettings(_env_file=None).local_url == "http://gpu-box:9000"
+
+    @pytest.mark.parametrize("value", ["localhost:8001", "ftp://host:1", "not a url", ""])
+    def test_local_url_rejects_malformed(self, monkeypatch, value):
+        """A scheme-less or non-http(s) value is rejected at startup, not at probe time."""
+        monkeypatch.setenv("ACEMUSIC_API_LOCAL_URL", value)
+        with pytest.raises(ValueError, match="local_url"):
+            ApiSettings(_env_file=None)

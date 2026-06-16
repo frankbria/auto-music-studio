@@ -78,11 +78,11 @@ environment variables (see `.env.example`); cookie behavior is tuned via
 | `POST /api/v1/generate` | Submits a generation request and returns a `job_id` for async tracking (HTTP 202) |
 | `GET /api/v1/jobs/{id}/status` | Returns a job's current status; owner-scoped (404 for missing or other users' jobs) |
 
-The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`), and the optional `preset_id`. When `preset_id` is supplied the saved preset's parameters serve as defaults; any field explicitly included in the request overrides the preset value. The job is created with status `queued` and picked up by the async processor (US-9.2).
+The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`), the optional `preset_id`, and the optional `compute_target` (`auto`|`local`|`remote`). When `preset_id` is supplied the saved preset's parameters serve as defaults; any field explicitly included in the request overrides the preset value. `compute_target` overrides the server's configured `ACEMUSIC_API_COMPUTE_PREFERENCE` for that request: `auto` (or omitting the field) defers to the server preference with fallback, `local`/`remote` pin the target with no fallback and return `503 Service Unavailable` if that target is unreachable. The job is created with status `queued` and picked up by the async processor (US-9.2).
 
 Invalid parameters return 422 with field-level errors. If the user has insufficient credits for the requested mode (song costs 1.0 credit, sound costs 0.5), the request is rejected with `402 Payment Required` and a JSON body of `{"detail": {"error": "insufficient_credits", "balance": <current>, "required": <cost>}}`. New accounts start with 10.0 credits. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
 
-The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, and `estimated_time_seconds`. Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
+The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, `estimated_time_seconds`, and `compute_target` (`"local"`/`"remote"`, present for routed generation jobs, omitted for edits/exports). Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
 
 #### Async job processor (US-9.2, US-10.1, US-10.3)
 
@@ -95,8 +95,11 @@ processing library. Iterative generation jobs (`extend`, `cover`, `remix`, `repa
 clips. All handlers mark the job `completed` (or `failed` with an
 error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
 `JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
-600), and `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
-without the worker — recommended to run a single processor instance).
+600), `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
+without the worker — recommended to run a single processor instance),
+`COMPUTE_PREFERENCE` (`local_first`/`remote_first`/`local_only`/`remote_only`,
+default `local_first`), and `LOCAL_URL` (local ACE-Step probe URL, default
+`http://localhost:8001`).
 
 ### Workspaces
 

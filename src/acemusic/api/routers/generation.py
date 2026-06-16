@@ -35,14 +35,17 @@ from acemusic.constants import (
     WEIRDNESS_MIN,
 )
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, get_settings
 from ..models import PRESET_PARAM_FIELDS, Preset
 from ..services import (
     credits as credits_service,
     generation as generation_service,
     presets as preset_service,
+    routing as routing_service,
     users as user_service,
 )
+from ..services.routing import ComputePreference, ComputeUnavailableError
+from ..settings import ApiSettings
 from ._validators import validate_format, validate_model, validate_time_signature
 
 logger = logging.getLogger(__name__)
@@ -70,6 +73,12 @@ class GenerationRequest(BaseModel):
     # US-9.5: apply a saved preset as parameter defaults; explicitly-sent
     # request fields override preset values. Never forwarded to the job.
     preset_id: str | None = None
+
+    # US-11.1: per-request compute routing override. ``None`` and ``"auto"`` both
+    # defer to the server's configured ``compute_preference`` (with fallback);
+    # ``"local"``/``"remote"`` pin the target with no fallback. This is a routing
+    # hint, not a creative param — never forwarded to the job's input_params.
+    compute_target: Literal["auto", "local", "remote"] | None = None
 
     prompt: Annotated[str, Field(min_length=1, max_length=PROMPT_MAX_LENGTH)]
     style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
@@ -165,10 +174,16 @@ def _apply_preset(request: GenerationRequest, preset: Preset) -> GenerationReque
         ) from exc
 
 
-@router.post("", response_model=GenerationResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "",
+    response_model=GenerationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Compute target unavailable"}},
+)
 async def create_generation(
     request: GenerationRequest,
     current: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(get_settings),
 ) -> GenerationResponse:
     """Validate the request, persist a queued job, and return its id.
 
@@ -185,6 +200,22 @@ async def create_generation(
         # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
         preset = await preset_service.get_preset(request.preset_id, current.user_id)
         request = _apply_preset(request, preset)
+    # US-11.1: pick the compute target BEFORE charging credits, so an unavailable
+    # backend yields a clean 503 without ever touching the balance.
+    try:
+        resolved_target = await routing_service.resolve_compute_target(
+            request_target=request.compute_target,
+            preference=ComputePreference(settings.compute_preference),
+            local_url=settings.local_url,
+        )
+    except ComputeUnavailableError as exc:
+        # Distinguish a request-pinned target from the server preference so the
+        # 503 doesn't report a synthetic "preference" the client never set.
+        if request.compute_target in ("local", "remote"):
+            detail = f"Requested compute target '{exc.target.value}' is unavailable."
+        else:
+            detail = f"Compute target '{exc.target.value}' is unavailable (preference: {exc.preference.value})."
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
     # US-9.6: credits are deducted atomically at queue time. Cost is judged on
     # the merged request, since a preset may supply the mode. The atomic
     # balance-conditioned deduction is the concurrency guard — two requests
@@ -204,7 +235,8 @@ async def create_generation(
     try:
         job = await generation_service.create_generation_job(
             user_id=user.id,
-            params=request.model_dump(exclude_none=True, exclude={"preset_id"}),
+            params=request.model_dump(exclude_none=True, exclude={"preset_id", "compute_target"}),
+            compute_target=resolved_target,
         )
     except BaseException:
         # The deduction already landed but no job exists — give the credit back

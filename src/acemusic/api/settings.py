@@ -5,7 +5,8 @@ All API settings are namespaced under the ``ACEMUSIC_API_`` env prefix so they d
 not collide with CLI or ACE-Step server variables.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -80,6 +81,16 @@ class ApiSettings(BaseSettings):
     job_poll_timeout: float = Field(default=600.0, gt=0)
     job_processor_enabled: bool = Field(default=True)
 
+    # Compute routing (US-11.1). ``compute_preference`` selects where a generation
+    # runs when the request does not pin a ``compute_target``: ``*_first`` tries
+    # the named target then falls back to the other; ``*_only`` never falls back
+    # (a 503 surfaces when that target is down). ``local_url`` is the local
+    # ACE-Step base URL whose ``/v1/stats`` endpoint is the availability probe;
+    # it defaults to the conventional local port and is independent of the CLI's
+    # ACE-Step config (which drives actual job execution).
+    compute_preference: Literal["local_first", "remote_first", "local_only", "remote_only"] = "local_first"
+    local_url: str = "http://localhost:8001"
+
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
     # ``oauth_cookie_secure`` marks it Secure (HTTPS-only); keep True in
@@ -90,6 +101,21 @@ class ApiSettings(BaseSettings):
     # cross-site callback.
     oauth_cookie_secure: bool = True
     oauth_cookie_samesite: str = "lax"
+
+    @field_validator("local_url")
+    @classmethod
+    def _check_local_url(cls, value: str) -> str:
+        """Reject a malformed local_url at startup, not at probe time.
+
+        Without a scheme/host the availability probe would raise an
+        ``httpx.InvalidURL`` (not an ``httpx.HTTPError``, so it escapes the
+        probe's catch) and surface as a 500. Validating here turns a
+        misconfiguration into a clear startup error instead.
+        """
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"local_url {value!r} must be an absolute http(s):// URL")
+        return value.strip()
 
     @field_validator("oauth_cookie_samesite")
     @classmethod
