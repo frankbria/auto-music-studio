@@ -139,6 +139,8 @@ async def _store_master_clip(
     try:
         await clip.insert()
     except BaseException:
+        # BaseException (not Exception): a shutdown CancelledError must also clean up
+        # the just-uploaded object, else a requeued retry leaves it orphaned.
         try:
             await asyncio.to_thread(storage.delete, path)
         except Exception:  # pragma: no cover - cleanup is best-effort
@@ -203,8 +205,10 @@ async def process_mastering_job(job: Job, *, storage: StorageBackend, client: Do
         destination = f"dlb://{source.id}-{job.id}-master.{fmt}"
         outputs = [master_output_config(profile, target_lufs, destination)]
         dolby_job_id = await asyncio.to_thread(client.submit_preview, input_url, outputs)
-        await asyncio.to_thread(client.wait_for_completion, dolby_job_id)
-        results = await asyncio.to_thread(client.get_results, dolby_job_id)
+        status_payload = await asyncio.to_thread(client.wait_for_completion, dolby_job_id)
+        # Pass the already-polled terminal payload so get_results reuses it instead
+        # of issuing a second status request for the same job.
+        results = await asyncio.to_thread(client.get_results, dolby_job_id, status_payload)
     except DolbyError as exc:
         raise MasteringProcessingError(f"Dolby mastering failed: {exc}") from exc
 

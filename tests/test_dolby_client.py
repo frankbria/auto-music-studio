@@ -277,6 +277,15 @@ class TestResults:
         assert metrics["stereo"] == {"width": 0.8, "balance": -0.1}
         assert results["outputs"] == [{"destination": "dlb://out-1.wav", "preview": "dlb://preview-1.wav"}]
 
+    def test_get_results_reuses_passed_status_payload(self) -> None:
+        # When the caller already polled, get_results must not re-fetch status.
+        client = _client()
+        client._token, client._token_expiry = "tok", 1e12
+        with patch("acemusic.dolby_client.httpx.get") as mock_get:
+            results = client.get_results("job-1", status_payload=_SUCCESS_RESULT | {"status": "success"})
+        mock_get.assert_not_called()
+        assert results["metrics"]["loudness"] == -14.1
+
     def test_get_results_when_not_complete_raises(self) -> None:
         client = _client()
         client._token, client._token_expiry = "tok", 1e12

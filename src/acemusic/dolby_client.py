@@ -318,7 +318,7 @@ class DolbyClient:
 
     # -- results -----------------------------------------------------------
 
-    def get_results(self, job_id: str) -> dict[str, Any]:
+    def get_results(self, job_id: str, status_payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return the mastering metrics and output handles for completed ``job_id``.
 
         Reads the terminal status payload and extracts a stable, BSON-safe shape::
@@ -328,10 +328,14 @@ class DolbyClient:
               "outputs": [{"destination": "dlb://…", "preview": "dlb://…"}, …],
             }
 
-        Defensive parsing: missing fields degrade to ``None``/empty rather than
-        raising, since the exact Dolby payload varies by job.
+        ``status_payload`` may be passed by a caller that already polled (e.g. the
+        return value of :meth:`wait_for_completion`) to avoid a redundant network
+        round-trip; it is fetched fresh only when omitted. Defensive parsing:
+        missing fields degrade to ``None``/empty rather than raising, since the
+        exact Dolby payload varies by job.
         """
-        status_payload = self.get_status(job_id)
+        if status_payload is None:
+            status_payload = self.get_status(job_id)
         if status_payload["status"] not in _SUCCESS_STATES:
             raise DolbyError(f"Dolby mastering job {job_id} is not complete (status={status_payload['status']!r})")
         result = status_payload.get("result")
@@ -407,6 +411,8 @@ def _parse_outputs(result: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         destination = entry.get("destination") or entry.get("url")
+        # When Dolby omits a distinct preview handle, the final destination URL is
+        # the auditionable output, so alias preview -> destination deliberately.
         preview = entry.get("preview") or destination
         if destination or preview:
             outputs.append({"destination": destination, "preview": preview})

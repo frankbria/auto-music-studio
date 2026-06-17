@@ -78,7 +78,7 @@ class FakeDolby:
         self._maybe_fail("wait")
         return {"status": "success"}
 
-    def get_results(self, job_id: str) -> dict:
+    def get_results(self, job_id: str, status_payload: dict | None = None) -> dict:
         self._maybe_fail("results")
         return {
             "metrics": _METRICS,
