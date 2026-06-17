@@ -53,9 +53,7 @@ class TestEnsureVolumeIdempotency:
         list_route = respx.get(VOLUMES_URL).mock(return_value=httpx.Response(200, json=EXISTING_VOLUMES))
         create_route = respx.post(VOLUMES_URL).mock(return_value=httpx.Response(200, json={}))
 
-        volume, created = rp.ensure_volume(
-            _client(), name="ace-step-models", size_gb=100, data_center_id="EU-RO-1"
-        )
+        volume, created = rp.ensure_volume(_client(), name="ace-step-models", size_gb=100, data_center_id="EU-RO-1")
 
         assert created is False
         assert volume["id"] == "vol-existing"
@@ -69,9 +67,7 @@ class TestEnsureVolumeIdempotency:
         created_volume = {"id": "vol-new", "name": "ace-step-models", "size": 100, "dataCenterId": "EU-RO-1"}
         create_route = respx.post(VOLUMES_URL).mock(return_value=httpx.Response(200, json=created_volume))
 
-        volume, created = rp.ensure_volume(
-            _client(), name="ace-step-models", size_gb=100, data_center_id="EU-RO-1"
-        )
+        volume, created = rp.ensure_volume(_client(), name="ace-step-models", size_gb=100, data_center_id="EU-RO-1")
 
         assert created is True
         assert volume["id"] == "vol-new"
