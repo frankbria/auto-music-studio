@@ -113,6 +113,14 @@ class ApiSettings(BaseSettings):
     runpod_network_volume_id: str | None = None
     runpod_rest_base_url: str = "https://rest.runpod.io/v1"
 
+    # Dolby.io Music Mastering (US-12.2). The credentials are optional: a
+    # deployment without them runs with mastering disabled — ``dolby_enabled`` is
+    # False, so the mastering worker fails a claimed job with a clear "not
+    # configured" error rather than crashing the app. Both an app key and secret
+    # are required (Dolby.io exchanges them for a short-lived bearer token).
+    dolby_api_key: str | None = None
+    dolby_api_secret: str | None = None
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
@@ -124,6 +132,11 @@ class ApiSettings(BaseSettings):
     def runpod_enabled(self) -> bool:
         """True only when both RunPod credentials are configured (remote routing is usable)."""
         return bool(self.runpod_api_key and self.runpod_endpoint_id)
+
+    @property
+    def dolby_enabled(self) -> bool:
+        """True only when both Dolby.io credentials are configured (mastering is usable)."""
+        return bool(self.dolby_api_key and self.dolby_api_secret)
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
