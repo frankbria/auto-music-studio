@@ -24,6 +24,7 @@ from ..services.editing import EDIT_JOB_TYPES
 from ..services.export import EXPORT_JOB_TYPES
 from ..services.extraction import EXTRACTION_JOB_TYPES, MIDI_JOB_TYPE, resolve_midi_urls
 from ..services.iterative import FULL_SONG_JOB_TYPE, ITERATIVE_JOB_TYPES, SAMPLE_JOB_TYPE
+from ..services.mastering import MASTERING_JOB_TYPE
 from .generation import GenerationRequest, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,11 @@ _EXTRACTION_ESTIMATE_SECONDS = 60
 # estimate mirrors the iterative router's create-response heuristic so status
 # polling and the enqueue response agree (sample scales by num_clips).
 _ITERATIVE_ESTIMATE_SECONDS = 45
+
+# Mastering jobs (US-12.2) round-trip audio through Dolby.io (upload, master,
+# poll, download), so a flat estimate in the minute range is a reasonable
+# advisory floor — like extraction, the heavy work is out-of-process.
+_MASTERING_ESTIMATE_SECONDS = 60
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the generation router), so an unauthenticated request is rejected with 401.
@@ -70,6 +76,9 @@ class JobStatusResponse(BaseModel):
     # MIDI extraction jobs (US-10.2) produce files, not clips; their results
     # surface here as label -> download URL (resolved fresh, like ``audio_urls``).
     midi_download_urls: dict[str, str] | None = None
+    # Mastering jobs (US-12.2) carry their loudness/EQ/stereo analysis here; only
+    # set for completed mastering jobs, dropped (None) for every other type.
+    metrics: dict | None = None
     error: str | None = None
 
 
@@ -88,6 +97,8 @@ def _estimate_for(job: Job) -> int:
         return _EDIT_ESTIMATE_SECONDS
     if job.job_type in EXTRACTION_JOB_TYPES:
         return _EXTRACTION_ESTIMATE_SECONDS
+    if job.job_type == MASTERING_JOB_TYPE:
+        return _MASTERING_ESTIMATE_SECONDS
     if job.job_type in ITERATIVE_JOB_TYPES:
         if job.job_type == SAMPLE_JOB_TYPE:
             return _ITERATIVE_ESTIMATE_SECONDS * int((job.input_params or {}).get("num_clips", 1))
@@ -150,6 +161,11 @@ async def get_job_status(
             clip_ids = list((job.result or {}).get("clip_ids", []))
             response.clip_ids = clip_ids
             response.audio_urls = await _resolve_audio_urls(clip_ids)
+            # Mastering jobs (US-12.2) attach loudness/EQ/stereo metrics to their
+            # result; surface them so the mastered output can be evaluated.
+            metrics = (job.result or {}).get("metrics")
+            if metrics is not None:
+                response.metrics = metrics
     elif job.status == JobStatus.FAILED:
         response.error = job.error
     return response

@@ -29,6 +29,7 @@ from pymongo import ASCENDING, ReturnDocument
 
 from acemusic.client import AceStepClient
 from acemusic.config import load_config
+from acemusic.dolby_client import DolbyClient
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
 
@@ -39,6 +40,7 @@ from .editing import EDIT_JOB_HANDLERS
 from .export import EXPORT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
 from .iterative import ITERATIVE_JOB_HANDLERS
+from .mastering import MASTERING_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,7 @@ class JobProcessor:
         runpod_client_factory: Callable[[], RunPodClient] | None = None,
         runpod_timeout: float = 300.0,
         runpod_poll_interval: float = 5.0,
+        dolby_client_factory: Callable[[], DolbyClient | None] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
@@ -119,6 +122,10 @@ class JobProcessor:
         self._runpod_client_factory = runpod_client_factory
         self._runpod_timeout = runpod_timeout
         self._runpod_poll_interval = runpod_poll_interval
+        # Dolby.io mastering (US-12.2). The factory returns None when credentials
+        # are absent; the mastering handler then fails a claimed job with a clear
+        # message rather than crashing, so a Dolby-less deployment degrades cleanly.
+        self._dolby_client_factory = dolby_client_factory
         # A job legitimately stays in `processing` for at most poll_timeout (its
         # own worker fails it after that). Only re-queue jobs older than that
         # window plus a margin, so a startup sweep never reclaims a job a live
@@ -143,6 +150,10 @@ class JobProcessor:
         # adapted through their own injecting wrapper.
         for job_type, iterative_handler in ITERATIVE_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_iterative_handler, iterative_handler)
+        # Mastering handlers (US-12.2) need storage plus the Dolby client (or None
+        # when unconfigured), so they get their own injecting wrapper.
+        for job_type, mastering_handler in MASTERING_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_mastering_handler, mastering_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -301,6 +312,11 @@ class JobProcessor:
             client=self._client_factory(),
             poll=self._poll_until_complete,
         )
+
+    async def _run_mastering_handler(self, mastering_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt a mastering handler (US-12.2), injecting storage and the Dolby client (or None)."""
+        client = self._dolby_client_factory() if self._dolby_client_factory is not None else None
+        return await mastering_handler(job, storage=self._storage_factory(), client=client)
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run a generation job — locally via ACE-Step or remotely via RunPod.
