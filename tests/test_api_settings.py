@@ -209,6 +209,8 @@ class TestRunPodSettings:
             "ACEMUSIC_API_RUNPOD_ENDPOINT_ID",
             "ACEMUSIC_API_RUNPOD_TIMEOUT",
             "ACEMUSIC_API_RUNPOD_POLL_INTERVAL",
+            "ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID",
+            "ACEMUSIC_API_RUNPOD_REST_BASE_URL",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -254,3 +256,39 @@ class TestRunPodSettings:
         monkeypatch.setenv("ACEMUSIC_API_RUNPOD_POLL_INTERVAL", value)
         with pytest.raises(ValueError, match="runpod_poll_interval"):
             ApiSettings(_env_file=None)
+
+
+class TestRunPodVolumeSettings:
+    """RunPod Network Volume configuration (US-11.5).
+
+    The serverless credentials (US-11.2) drive job routing; the volume id names
+    the persisted weights volume those workers mount, so it is configured
+    separately and the volume-info endpoint reads it to look the volume up.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_volume_env(self, monkeypatch):
+        for key in (
+            "ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID",
+            "ACEMUSIC_API_RUNPOD_REST_BASE_URL",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_volume_id_defaults_to_none(self):
+        """No volume is configured until the setup script provisions one."""
+        assert ApiSettings(_env_file=None).runpod_network_volume_id is None
+
+    def test_rest_base_url_default(self):
+        """The volume-management REST API is distinct from the serverless base URL."""
+        settings = ApiSettings(_env_file=None)
+        assert settings.runpod_rest_base_url == "https://rest.runpod.io/v1"
+        # The serverless base URL (US-11.2) is a separate endpoint and untouched.
+        assert settings.runpod_base_url == "https://api.runpod.ai/v2"
+
+    def test_volume_id_from_env(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID", "vol-abc123")
+        assert ApiSettings(_env_file=None).runpod_network_volume_id == "vol-abc123"
+
+    def test_rest_base_url_from_env(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_RUNPOD_REST_BASE_URL", "https://staging.runpod.io/v1")
+        assert ApiSettings(_env_file=None).runpod_rest_base_url == "https://staging.runpod.io/v1"

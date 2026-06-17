@@ -212,6 +212,24 @@ runpod.stop_pod("pod_id")
 
 **One-time setup — model weights persist indefinitely.**
 
+Use the `scripts/runpod-setup.py` script (US-11.5) to automate the provisioning
+steps below. The script creates the volume, spins up a temporary pod, downloads
+model weights, stops the pod, and prints the volume id to paste into
+`ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID` in `.env`. It is idempotent — re-running
+detects the existing volume and skips creation.
+
+```bash
+# Automated one-time setup (RUNPOD_API_KEY must be set in the environment).
+# Add --dry-run first to preview the cost estimate and plan without spending.
+uv run python scripts/runpod-setup.py \
+  --region US-TX-3 \
+  --size 30
+# → prints: ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID=vol_abc123
+# Paste that id into ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID in .env
+```
+
+Manual equivalent (for reference):
+
 ```bash
 # 1. Create a Network Volume in RunPod dashboard (or via API)
 #    Region: US-TX-3 (or wherever you want pods)
