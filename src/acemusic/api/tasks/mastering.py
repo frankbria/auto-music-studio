@@ -31,6 +31,7 @@ from acemusic.dolby_client import DolbyClient, DolbyError, master_output_config
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
+from ..services import credits as credits_service
 from ..services.clips import native_format
 from ..services.mastering import MASTERING_JOB_TYPE
 
@@ -46,6 +47,25 @@ _SUPPORTED_SERVICE = "dolby"
 
 class MasteringProcessingError(Exception):
     """A mastering job could not be processed (missing source, creds, or Dolby failure)."""
+
+
+async def _refund_unperformed(job: Job, service: str) -> None:
+    """Refund the credits charged at enqueue when no mastering work was performed.
+
+    The submission endpoint (US-12.1) charges per service up front. When the worker
+    rejects a job before any Dolby work begins — an unsupported service, or a
+    deployment with no Dolby credentials — the user must not be left paying for a
+    master that was never produced. Best-effort (mirrors the full-song refund): a
+    refund failure is logged but never masks the original processing error.
+    """
+    try:
+        cost = credits_service.get_mastering_cost(service)
+    except ValueError:  # pragma: no cover - service already validated by the router
+        return
+    try:
+        await credits_service.refund_credits(job.user_id, cost)
+    except Exception:  # pragma: no cover - refund is best-effort; never mask the cause
+        logger.exception("Failed to refund mastering job %s after a pre-flight rejection", job.id)
 
 
 def get_dolby_client(settings: "ApiSettings") -> DolbyClient | None:
@@ -151,11 +171,15 @@ async def process_mastering_job(job: Job, *, storage: StorageBackend, client: Do
     """
     params = dict(job.input_params or {})
     service = params.get("service", _SUPPORTED_SERVICE)
+    # Pre-flight rejections refund the credits charged at enqueue (US-12.1): no
+    # Dolby work is performed, so the user must not pay for the failed job.
     if service != _SUPPORTED_SERVICE:
+        await _refund_unperformed(job, service)
         raise MasteringProcessingError(
             f"Mastering service {service!r} is not yet implemented; only {_SUPPORTED_SERVICE!r} is available"
         )
     if client is None:
+        await _refund_unperformed(job, service)
         raise MasteringProcessingError(
             "Dolby.io mastering is not configured: set ACEMUSIC_API_DOLBY_API_KEY and ACEMUSIC_API_DOLBY_API_SECRET"
         )
@@ -171,9 +195,12 @@ async def process_mastering_job(job: Job, *, storage: StorageBackend, client: Do
 
     source_bytes = await _download_source(storage, source)
 
+    # Key Dolby's input/output objects by *job* id, not just the source clip, so
+    # concurrent masters (or a retry) on the same clip never overwrite or download
+    # each other's audio.
     try:
-        input_url = await asyncio.to_thread(client.upload, source_bytes, f"{source.id}.{fmt}")
-        destination = f"dlb://{source.id}-master.{fmt}"
+        input_url = await asyncio.to_thread(client.upload, source_bytes, f"{source.id}-{job.id}.{fmt}")
+        destination = f"dlb://{source.id}-{job.id}-master.{fmt}"
         outputs = [master_output_config(profile, target_lufs, destination)]
         dolby_job_id = await asyncio.to_thread(client.submit_preview, input_url, outputs)
         await asyncio.to_thread(client.wait_for_completion, dolby_job_id)

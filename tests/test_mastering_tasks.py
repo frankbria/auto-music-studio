@@ -66,6 +66,7 @@ class FakeDolby:
 
     def upload(self, audio_bytes: bytes, filename: str) -> str:
         self._maybe_fail("upload")
+        self.upload_filename = filename
         return f"dlb://{filename}"
 
     def submit_preview(self, input_url: str, outputs: list[dict]) -> str:
@@ -195,6 +196,16 @@ class TestSuccess:
         result = await tasks.process_mastering_job(job, storage=storage, client=client)
         assert len(result["clip_ids"]) == 3
 
+    async def test_dolby_keys_are_unique_per_job(self, storage) -> None:
+        # The input/output keys carry the job id so concurrent masters on the same
+        # clip never collide (codex review P2).
+        job, source = await _make_clip(storage, email="master-keys@example.com")
+        client = FakeDolby(output=_wav_bytes(3.0))
+        await tasks.process_mastering_job(job, storage=storage, client=client)
+        assert str(job.id) in client.upload_filename
+        assert str(job.id) in client.submitted_outputs[0]["destination"]
+        assert str(source.id) in client.upload_filename
+
 
 class TestGracefulDegradation:
     async def test_missing_client_raises_clear_error(self, storage) -> None:
@@ -208,6 +219,31 @@ class TestGracefulDegradation:
         client = FakeDolby(output=_wav_bytes(3.0))
         with pytest.raises(tasks.MasteringProcessingError, match="not yet implemented"):
             await tasks.process_mastering_job(job, storage=storage, client=client)
+
+    async def test_unsupported_service_refunds_charged_credits(self, storage) -> None:
+        # The router charges per service up front; a pre-flight rejection must
+        # refund so the user is not left paying for a failed job (codex review P2).
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(storage, email="master-refund-landr@example.com")
+        job.input_params = {**job.input_params, "service": "landr"}
+        cost = credits_service.get_mastering_cost("landr")
+        before = await credits_service.deduct_credits(job.user_id, cost)
+        with pytest.raises(tasks.MasteringProcessingError):
+            await tasks.process_mastering_job(job, storage=storage, client=FakeDolby(output=_wav_bytes(3.0)))
+        user = await user_service.get_user_by_id(str(job.user_id))
+        assert user.credits_balance == before + cost
+
+    async def test_missing_client_refunds_charged_credits(self, storage) -> None:
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(storage, email="master-refund-nocreds@example.com")
+        cost = credits_service.get_mastering_cost("dolby")
+        before = await credits_service.deduct_credits(job.user_id, cost)
+        with pytest.raises(tasks.MasteringProcessingError, match="not configured"):
+            await tasks.process_mastering_job(job, storage=storage, client=None)
+        user = await user_service.get_user_by_id(str(job.user_id))
+        assert user.credits_balance == before + cost
 
 
 class TestErrorHandling:
