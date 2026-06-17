@@ -75,6 +75,9 @@ class MasteringJobResponse(BaseModel):
 @router.post("/jobs", response_model=MasteringJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_mastering_job(
     request: MasteringRequest,
+    # The router-level dependency already gates auth; declaring it here too gives
+    # the handler the resolved CurrentUser. FastAPI dedupes by callable per
+    # request, so get_current_user runs once (mirrors the iterative router).
     current: CurrentUser = Depends(get_current_user),
 ) -> MasteringJobResponse:
     """Validate the clip, charge credits, and enqueue a queued mastering job.

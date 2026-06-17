@@ -105,8 +105,8 @@ async def _user_with_clip(email: str, *, balance: float | None = None):
     return user, workspace, clip
 
 
-def _reload(user):
-    return user_service.get_user_by_id(str(user.id))
+async def _reload(user):
+    return await user_service.get_user_by_id(str(user.id))
 
 
 # ---------------------------------------------------------------------------
