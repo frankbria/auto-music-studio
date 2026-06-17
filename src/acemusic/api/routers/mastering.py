@@ -106,15 +106,19 @@ async def create_mastering_job(
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
         )
 
-    target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
-    params = {
-        "clip_id": str(clip.id),
-        "profile": request.profile,
-        "service": request.service,
-        "format": request.format,
-        "target_lufs": target_lufs,
-    }
     try:
+        # Everything after the deduction lives inside the refund guard so the
+        # "charged ⇒ either a job exists or the credit is returned" invariant
+        # holds structurally, not just because resolve_target_lufs happens to be
+        # unreachable today (the Literal profile is Pydantic-validated upstream).
+        target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
+        params = {
+            "clip_id": str(clip.id),
+            "profile": request.profile,
+            "service": request.service,
+            "format": request.format,
+            "target_lufs": target_lufs,
+        }
         job = await mastering_service.create_mastering_job(
             user_id=user.id,
             workspace_id=clip.workspace_id,
