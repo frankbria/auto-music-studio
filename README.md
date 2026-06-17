@@ -102,18 +102,25 @@ default `local_first`), and `LOCAL_URL` (local ACE-Step probe URL, default
 `http://localhost:8001`).
 
 Remote generation runs on a RunPod serverless endpoint (US-11.2). Set
-`RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` (both required) to enable it; remote
+`ACEMUSIC_API_RUNPOD_API_KEY` and `ACEMUSIC_API_RUNPOD_ENDPOINT_ID` (both required) to enable it; remote
 routing is reported available only when both are set and the endpoint's `/health`
 answers, so an unconfigured or down endpoint degrades safely (`*_first` falls back
 to local, `*_only` returns 503) rather than crashing. A remote-routed job submits to
-the endpoint, polls with a cold-start-tolerant cadence (`RUNPOD_POLL_INTERVAL`,
-default 5s) up to `RUNPOD_TIMEOUT` seconds (default 300), retries transient 5xx
-responses, and stores the returned clips exactly like a local job. `RUNPOD_BASE_URL`
+the endpoint, polls with a cold-start-tolerant cadence (`ACEMUSIC_API_RUNPOD_POLL_INTERVAL`,
+default 5s) up to `ACEMUSIC_API_RUNPOD_TIMEOUT` seconds (default 300), retries transient 5xx
+responses, and stores the returned clips exactly like a local job. `ACEMUSIC_API_RUNPOD_BASE_URL`
 (default `https://api.runpod.ai/v2`) can point at a staging endpoint or proxy.
+
+The RunPod Network Volume — which holds model weights so each worker skips the
+download — is provisioned once by running `scripts/runpod-setup.py` (US-11.5).
+After the script runs, paste the printed volume id into
+`ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID` in `.env`. Until that variable is set,
+`GET /api/v1/compute/remote/volume` returns 503.
 
 | Method & path | Purpose |
 | --- | --- |
 | `GET /api/v1/compute/status` | Combined health of both compute targets, for a pre-flight check before generating (US-11.4) |
+| `GET /api/v1/compute/remote/volume` | Metadata (size, used, region) for the configured RunPod Network Volume (US-11.5) |
 
 The response carries `local`, `remote`, and `routing_preference`. `local`
 reports `available` plus best-effort `gpu_name`, `vram_total_mb`, `vram_used_mb`,
