@@ -42,6 +42,9 @@ class VolumeInfoResponse(BaseModel):
     size_gb: int
     used_gb: int | None = None
     region: str
+    # ``True`` means "the configured volume was found on RunPod". RunPod's REST API
+    # does not report a per-volume health/degraded state, so this is the only
+    # signal available today; the field is kept for forward-compatibility.
     available: bool
 
 
@@ -81,21 +84,32 @@ async def get_remote_volume(settings: ApiSettings) -> VolumeInfoResponse:
     unreachable or returns a non-2xx, and :class:`VolumeNotFoundError` when the
     configured id is absent from the returned list.
     """
+    # Name only the field(s) actually missing so the remediation step is accurate
+    # (an operator who set the key but not the volume id shouldn't be told to set both).
+    missing = [
+        name
+        for name, value in (
+            ("ACEMUSIC_API_RUNPOD_API_KEY", settings.runpod_api_key),
+            ("ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID", settings.runpod_network_volume_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise VolumeNotConfiguredError(
+            "RunPod is not configured: set " + " and ".join(missing) + " (run scripts/runpod-setup.py)."
+        )
     api_key = settings.runpod_api_key
     volume_id = settings.runpod_network_volume_id
-    if not api_key or not volume_id:
-        raise VolumeNotConfiguredError(
-            "RunPod is not configured: set ACEMUSIC_API_RUNPOD_API_KEY and "
-            "ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID (run scripts/runpod-setup.py)."
-        )
 
     url = f"{settings.runpod_rest_base_url.rstrip('/')}{NETWORK_VOLUMES_PATH}"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
+        # raise_for_status + json() stay inside the context manager for unambiguous
+        # lifetime (httpx has already buffered the body for a non-streaming GET).
         async with httpx.AsyncClient(timeout=VOLUME_REQUEST_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        volumes = _extract_volumes(response.json())
+            response.raise_for_status()
+            volumes = _extract_volumes(response.json())
     except (httpx.HTTPError, ValueError) as exc:
         raise VolumeUpstreamError(f"RunPod volume lookup failed: {exc}") from exc
 

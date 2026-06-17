@@ -7,6 +7,7 @@ respx — no real RunPod account, pod, or GPU is ever touched.
 """
 
 import importlib.util
+import json
 from pathlib import Path
 
 import httpx
@@ -74,8 +75,6 @@ class TestEnsureVolumeIdempotency:
         assert create_route.called
         sent = create_route.calls.last.request
         assert sent.headers["Authorization"] == "Bearer rp-key"
-        import json
-
         body = json.loads(sent.content)
         assert body == {"name": "ace-step-models", "size": 100, "dataCenterId": "EU-RO-1"}
 
@@ -88,6 +87,8 @@ class TestPodPayload:
             gpu_type="NVIDIA GeForce RTX 4090",
             download_cmd=["bash", "-lc", "echo hi"],
             name="ace-step-weights-download",
+            data_center_id="EU-RO-1",
+            container_disk_gb=80,
         )
         assert payload["networkVolumeId"] == "vol-1"
         assert payload["imageName"] == "frankbria/ace-step:latest"
@@ -95,6 +96,9 @@ class TestPodPayload:
         assert payload["dockerStartCmd"] == ["bash", "-lc", "echo hi"]
         # Volume must mount where the image expects model weights (HF_HOME lives here).
         assert payload["volumeMountPath"] == "/workspace"
+        # The pod must be pinned to the volume's data center to be able to attach it.
+        assert payload["dataCenterIds"] == ["EU-RO-1"]
+        assert payload["containerDiskInGb"] == 80
 
 
 class TestPodFinishedDetection:
@@ -221,3 +225,7 @@ class TestCliParsing:
         assert args.region == "US-OR-1"
         assert args.volume_name == "weights"
         assert args.dry_run is True
+
+    def test_container_disk_flag(self):
+        assert rp.parse_args([]).container_disk == 50
+        assert rp.parse_args(["--container-disk", "120"]).container_disk == 120

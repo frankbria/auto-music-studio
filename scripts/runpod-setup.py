@@ -75,6 +75,7 @@ CONTAINER_DISK_GB = 50
 
 # Approximate RunPod network-volume storage rate (USD per GB per month). Published
 # pricing changes; this is a planning estimate shown before any spend, not a quote.
+# Last verified: 2026-06-16.
 STORAGE_RATE_USD_PER_GB_MONTH = 0.07
 
 # Pod statuses that mean the one-shot download command has finished.
@@ -194,16 +195,30 @@ def ensure_volume(client: RunPodRestClient, name: str, size_gb: int, data_center
     return created, True
 
 
-def build_download_pod_payload(volume_id: str, image: str, gpu_type: str, download_cmd: list[str], name: str) -> dict:
-    """Build the POST /pods body for the temporary weight-download pod."""
+def build_download_pod_payload(
+    volume_id: str,
+    image: str,
+    gpu_type: str,
+    download_cmd: list[str],
+    name: str,
+    data_center_id: str,
+    container_disk_gb: int = CONTAINER_DISK_GB,
+) -> dict:
+    """Build the POST /pods body for the temporary weight-download pod.
+
+    The pod is pinned to ``data_center_id`` — a network volume lives in exactly one
+    data center, and a pod can only attach a volume in the same one, so placing the
+    pod elsewhere would fail to mount it.
+    """
     return {
         "name": name,
         "imageName": image,
         "gpuTypeIds": [gpu_type],
         "gpuCount": 1,
+        "dataCenterIds": [data_center_id],
         "networkVolumeId": volume_id,
         "volumeMountPath": VOLUME_MOUNT_PATH,
-        "containerDiskInGb": CONTAINER_DISK_GB,
+        "containerDiskInGb": container_disk_gb,
         "dockerStartCmd": download_cmd,
     }
 
@@ -222,17 +237,27 @@ def pod_is_finished(pod: dict) -> bool:
 
 
 def wait_for_pod_finish(
-    client: RunPodRestClient, pod_id: str, timeout: float, poll_interval: float, sleep=time.sleep
+    client: RunPodRestClient,
+    pod_id: str,
+    timeout: float,
+    poll_interval: float,
+    sleep=time.sleep,
+    on_poll=None,
 ) -> bool:
     """Poll the pod until its download command finishes or ``timeout`` elapses.
 
     Returns True if the pod reached a terminal status, False on timeout. ``sleep``
-    is injectable so tests can drive the loop without real delays.
+    is injectable so tests can drive the loop without real delays; ``on_poll`` (if
+    given) is called with the elapsed seconds after each non-terminal poll so a
+    long download (20-40 min) shows progress instead of hanging silently.
     """
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     while time.monotonic() < deadline:
         if pod_is_finished(client.get_pod(pod_id)):
             return True
+        if on_poll is not None:
+            on_poll(time.monotonic() - start)
         sleep(poll_interval)
     return False
 
@@ -257,6 +282,7 @@ def run_setup(
     poll_interval: float,
     dry_run: bool,
     assume_yes: bool,
+    container_disk_gb: int = CONTAINER_DISK_GB,
 ) -> int:
     """Orchestrate the one-time setup. Returns a process exit code (0 = success)."""
     monthly = estimate_storage_cost_usd_per_month(size_gb)
@@ -298,6 +324,8 @@ def run_setup(
             gpu_type=gpu_type,
             download_cmd=download_cmd,
             name=f"{volume_name}-weights-download",
+            data_center_id=region,
+            container_disk_gb=container_disk_gb,
         )
         pod = client.create_pod(payload)
         pod_id = pod.get("id")
@@ -305,7 +333,13 @@ def run_setup(
             print("ERROR: RunPod did not return a pod id.", file=sys.stderr)
             return 1
         print(f"Launched temporary download pod: {pod_id}. Waiting for weights to download...")
-        finished = wait_for_pod_finish(client, pod_id, timeout=timeout, poll_interval=poll_interval)
+        finished = wait_for_pod_finish(
+            client,
+            pod_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_poll=lambda elapsed: print(f"  ...still downloading ({elapsed:.0f}s elapsed)"),
+        )
         if not finished:
             print(
                 f"ERROR: download pod {pod_id} did not finish within {timeout:.0f}s. "
@@ -345,8 +379,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--region", default=DEFAULT_REGION, help="RunPod data center id for the volume.")
     parser.add_argument("--size", type=int, default=DEFAULT_SIZE_GB, help="Volume size in GB.")
     parser.add_argument("--volume-name", default=DEFAULT_VOLUME_NAME, help="Volume name (used for idempotency).")
-    parser.add_argument("--image", default=DEFAULT_IMAGE, help="Worker image to run in the temporary pod.")
+    parser.add_argument(
+        "--image",
+        default=DEFAULT_IMAGE,
+        help="Worker image to run in the temporary pod. Pin to a digest/tag (not ':latest') for reproducible runs.",
+    )
     parser.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, help="GPU type id for the temporary download pod.")
+    parser.add_argument(
+        "--container-disk",
+        type=int,
+        default=CONTAINER_DISK_GB,
+        help="Container scratch disk (GB) for the temporary pod; raise for heavier custom images.",
+    )
     parser.add_argument(
         "--download-cmd",
         default=None,
@@ -380,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         poll_interval=args.poll_interval,
         dry_run=args.dry_run,
         assume_yes=args.yes,
+        container_disk_gb=args.container_disk,
     )
 
 
