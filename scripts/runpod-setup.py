@@ -83,16 +83,24 @@ _TERMINAL_POD_STATUSES = {"EXITED", "TERMINATED", "STOPPED"}
 # Default one-shot download: start the ACE-Step API (which pulls weights into
 # HF_HOME on the mounted volume), wait until it is healthy, then exit so the pod
 # stops. Override with --download-cmd if your image downloads weights differently.
+#
+# Crucially, this FAILS LOUDLY: if the server never becomes healthy (bad image,
+# crash, OOM, or a failed weight download) the loop falls through with ``ready=0``
+# and the script exits non-zero *without* printing the success marker — so a pod
+# that never populated the volume is not mistaken for a successful run.
 _DEFAULT_DOWNLOAD_SCRIPT = (
     "set -e; "
     "export HF_HOME=/workspace/models/.cache; "
-    "mkdir -p \"$HF_HOME\"; "
+    'mkdir -p "$HF_HOME"; '
     "cd /app/ACE-Step-1.5; "
     "uv run acestep-api & SERVER_PID=$!; "
+    "ready=0; "
     "for i in $(seq 1 180); do "
-    'curl -sf http://localhost:8001/v1/stats && break || sleep 10; '
+    "if curl -sf http://localhost:8001/v1/stats; then ready=1; break; fi; "
+    "sleep 10; "
     "done; "
-    "kill \"$SERVER_PID\" 2>/dev/null || true; "
+    'kill "$SERVER_PID" 2>/dev/null || true; '
+    'if [ "$ready" -ne 1 ]; then echo "ACE_STEP_WEIGHTS_FAILED: server never became healthy" >&2; exit 1; fi; '
     "echo ACE_STEP_WEIGHTS_READY"
 )
 DEFAULT_DOWNLOAD_CMD = ["bash", "-lc", _DEFAULT_DOWNLOAD_SCRIPT]
@@ -173,9 +181,7 @@ def find_volume_by_name(client: RunPodRestClient, name: str) -> dict | None:
     return None
 
 
-def ensure_volume(
-    client: RunPodRestClient, name: str, size_gb: int, data_center_id: str
-) -> tuple[dict, bool]:
+def ensure_volume(client: RunPodRestClient, name: str, size_gb: int, data_center_id: str) -> tuple[dict, bool]:
     """Find-or-create the named volume. Returns ``(volume, created)``.
 
     Idempotent: an existing volume with the same name is reused (never duplicated),
@@ -188,9 +194,7 @@ def ensure_volume(
     return created, True
 
 
-def build_download_pod_payload(
-    volume_id: str, image: str, gpu_type: str, download_cmd: list[str], name: str
-) -> dict:
+def build_download_pod_payload(volume_id: str, image: str, gpu_type: str, download_cmd: list[str], name: str) -> dict:
     """Build the POST /pods body for the temporary weight-download pod."""
     return {
         "name": name,
@@ -309,13 +313,17 @@ def run_setup(
                 file=sys.stderr,
             )
             return 1
-        print("Weight download complete.")
+        print("Download pod finished.")
     finally:
         # Always clean up the temporary pod; the VOLUME is intentionally left intact.
         if pod_id:
             _cleanup_pod(client, pod_id)
 
-    print("\nDone. Configure your API environment with:")
+    # Completion is detected from the pod reaching a terminal state; RunPod's REST
+    # API does not reliably surface the container exit code, so confirm the pod log
+    # shows the success marker before trusting the volume (the default command
+    # prints ACE_STEP_WEIGHTS_READY on success and exits non-zero on failure).
+    print("\nDone. Verify the pod log shows 'ACE_STEP_WEIGHTS_READY', then configure your API environment with:")
     print(f"  ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID={volume_id}")
     return 0
 
@@ -344,9 +352,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override the weight-download command (run via 'bash -lc'). Defaults to warming the HF cache.",
     )
-    parser.add_argument(
-        "--timeout", type=float, default=3600.0, help="Max seconds to wait for the download to finish."
-    )
+    parser.add_argument("--timeout", type=float, default=3600.0, help="Max seconds to wait for the download to finish.")
     parser.add_argument("--poll-interval", type=float, default=15.0, help="Seconds between pod-status polls.")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan and cost estimate; make no changes.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
