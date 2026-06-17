@@ -36,6 +36,18 @@ _COSTS = {
     **{mode: ITERATIVE_COST for mode in _SINGLE_SOURCE_ITERATIVE_MODES},
 }
 
+# US-12.1: mastering is billed per external service, tiered within the
+# documented 2-5 credit band by perceived service value (Dolby is the default).
+MASTERING_DOLBY_COST = 3.0
+MASTERING_LANDR_COST = 2.0
+MASTERING_BAKUAGE_COST = 5.0
+
+_MASTERING_COSTS = {
+    "dolby": MASTERING_DOLBY_COST,
+    "landr": MASTERING_LANDR_COST,
+    "bakuage": MASTERING_BAKUAGE_COST,
+}
+
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50
 
@@ -46,6 +58,14 @@ def get_cost(mode: str) -> float:
         return _COSTS[mode]
     except KeyError:
         raise ValueError(f"Unknown generation mode: {mode!r}") from None
+
+
+def get_mastering_cost(service: str) -> float:
+    """Credit cost of one mastering job on ``service``. Raises for unknown services."""
+    try:
+        return _MASTERING_COSTS[service]
+    except KeyError:
+        raise ValueError(f"Unknown mastering service: {service!r}") from None
 
 
 async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None:
