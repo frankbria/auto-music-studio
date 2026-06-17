@@ -103,6 +103,16 @@ class ApiSettings(BaseSettings):
     runpod_timeout: float = Field(default=300.0, gt=0)
     runpod_poll_interval: float = Field(default=5.0, gt=0)
 
+    # RunPod Network Volume (US-11.5). ``runpod_network_volume_id`` names the
+    # persisted weights volume that ``scripts/runpod-setup.py`` provisions once and
+    # every serverless worker mounts; it is what ``GET /compute/remote/volume`` looks
+    # up. It stays None on deployments that have not run the setup script (the
+    # endpoint then 503s rather than crashing). ``runpod_rest_base_url`` is RunPod's
+    # *management* REST API (volumes/pods) — a different host from the serverless
+    # ``runpod_base_url`` above — overridable only to point at a staging proxy.
+    runpod_network_volume_id: str | None = None
+    runpod_rest_base_url: str = "https://rest.runpod.io/v1"
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
