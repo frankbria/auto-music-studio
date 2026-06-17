@@ -120,11 +120,17 @@ class TestGetRemoteVolumeService:
     @respx.mock
     async def test_uses_configured_rest_base_url(self):
         staging = "https://staging.runpod.io/v1"
-        route = respx.get(f"{staging}/networkvolumes").mock(
-            return_value=httpx.Response(200, json=SAMPLE_VOLUMES)
-        )
+        route = respx.get(f"{staging}/networkvolumes").mock(return_value=httpx.Response(200, json=SAMPLE_VOLUMES))
         await get_remote_volume(_settings(runpod_rest_base_url=staging))
         assert route.called
+
+    @respx.mock
+    async def test_tolerates_dict_wrapped_volume_list(self):
+        # Defensive: if RunPod ever wraps the array in a pagination envelope, the
+        # configured volume is still found rather than silently 404ing.
+        respx.get(VOLUMES_URL).mock(return_value=httpx.Response(200, json={"networkVolumes": SAMPLE_VOLUMES}))
+        result = await get_remote_volume(_settings())
+        assert result.id == "vol-abc123"
 
 
 class TestVolumeEndpoint:
