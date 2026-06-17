@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
+from acemusic.api.services import mastering as mastering_service, users as user_service
 from acemusic.api.settings import ApiSettings
 
 MASTERING_URL = f"{API_V1_PREFIX}/mastering/jobs"
@@ -301,3 +301,35 @@ class TestClipOwnership:
             headers=_auth_headers(intruder, settings),
         )
         assert resp.status_code == 404
+        # The IDOR path must not charge the intruder (no credit leak).
+        assert (await _reload(intruder)).credits_balance == 10.0
+
+
+# ---------------------------------------------------------------------------
+# Job-creation failure — credit is refunded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestJobCreationFailure:
+    async def test_credit_refunded_when_job_creation_raises(self, client, settings, monkeypatch) -> None:
+        # If the deduction lands but the job never gets created, the router must
+        # give the credit back rather than charge for work that will never run.
+        user, _ws, clip = await _user_with_clip("master-refund@example.com", balance=10.0)
+
+        async def _boom(**_kwargs):
+            raise RuntimeError("job store down")
+
+        monkeypatch.setattr(mastering_service, "create_mastering_job", _boom)
+        # The ASGI test transport re-raises app exceptions; the refund happens in
+        # the router's ``except`` before the error propagates.
+        with pytest.raises(RuntimeError):
+            await client.post(
+                MASTERING_URL,
+                json={"clip_id": str(clip.id), "profile": "streaming"},
+                headers=_auth_headers(user, settings),
+            )
+        # Deducted (dolby=3) then refunded back to the original balance.
+        assert (await _reload(user)).credits_balance == 10.0
+        assert await Job.find(Job.user_id == user.id).count() == 0
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
