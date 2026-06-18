@@ -26,7 +26,6 @@ Fallback policy (see ``tasks/todo.md`` for the rationale):
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
 
 from acemusic.mastering_protocol import MasteringError, MasteringOutput, MasteringService
 
@@ -45,23 +44,6 @@ class ServiceNotConfiguredError(Exception):
     handler can refund the credits charged at enqueue (no mastering work was
     performed) and report a clear "not configured" failure rather than retrying.
     """
-
-
-# A narrow callable type for the master entrypoint, so the orchestrator doesn't
-# import each concrete client. ``MasteringService`` (the runtime-checkable
-# Protocol) is the public contract; this alias documents the dispatch surface.
-@runtime_checkable
-class _MasterCallable(Protocol):
-    service: str
-
-    def master(
-        self,
-        audio_bytes: bytes,
-        filename: str,
-        profile: str,
-        target_lufs: float,
-        output_format: str,
-    ) -> MasteringOutput: ...
 
 
 class MasteringOrchestrator:
