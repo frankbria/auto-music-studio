@@ -92,4 +92,9 @@ async def rollback_clips(storage: StorageBackend, clip_ids: list[str]) -> None:
             await asyncio.to_thread(storage.delete, clip.file_path)
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.exception("Failed to delete orphaned storage object %s during rollback", clip.file_path)
-        await clip.delete()
+        try:
+            await clip.delete()
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            # Best-effort: a delete error here must not mask the original job failure
+            # (callers re-raise that after rollback returns).
+            logger.exception("Failed to delete orphaned clip doc %s during rollback", clip_id)
