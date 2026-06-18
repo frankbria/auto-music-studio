@@ -536,7 +536,8 @@ class TestService:
         async def boom(job_id: str) -> None:
             raise RuntimeError("dispatch down")
 
-        monkeypatch.setattr(iterative_service, "dispatch_job", boom)
+        # Dispatch now lives in the shared job factory (US-0.1), so patch it there.
+        monkeypatch.setattr("acemusic.api.services.jobs.dispatch_job", boom)
         before = await Job.count()
         with pytest.raises(RuntimeError):
             await iterative_service.create_iterative_job(

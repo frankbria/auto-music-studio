@@ -13,7 +13,7 @@ from beanie import PydanticObjectId
 from acemusic.storage import get_storage_backend
 
 from ..models import Job, JobStatus
-from ..tasks import dispatch_job
+from .jobs import create_job
 
 STEMS_JOB_TYPE = "stems"
 MIDI_JOB_TYPE = "midi"
@@ -75,21 +75,9 @@ async def create_extraction_job(
     active = await _find_active_job(job_type, clip_id)
     if active is not None:
         return active
-    job = Job(
+    return await create_job(
         user_id=user_id,
         workspace_id=workspace_id,
         job_type=job_type,
-        status=JobStatus.QUEUED,
-        input_params={"clip_id": str(clip_id)},
+        params={"clip_id": str(clip_id)},
     )
-    await job.insert()
-    try:
-        await dispatch_job(str(job.id))
-    except BaseException:
-        # Don't leave the job behind: the processor polls for QUEUED documents,
-        # so an orphan would still run even though the caller saw a failure.
-        # BaseException (not Exception) on purpose: asyncio.CancelledError must
-        # also clean up (mirrors create_edit_job).
-        await job.delete()
-        raise
-    return job
