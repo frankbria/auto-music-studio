@@ -268,7 +268,7 @@ class TestRepaint:
         client = FakeAce(_wav_bytes(1.0))  # far shorter than end_ms
 
         before = await Clip.count()
-        with pytest.raises(tasks.IterativeProcessingError):
+        with pytest.raises(tasks.JobProcessingError):
             await tasks.process_repaint_job(job, storage=storage, client=client, poll=_make_poll())
         assert await Clip.count() == before  # no orphan child
 
@@ -506,7 +506,7 @@ class TestFailures:
         client = FakeAce(_wav_bytes(3.0))
 
         before = await Clip.count()
-        with pytest.raises(tasks.IterativeProcessingError):
+        with pytest.raises(tasks.JobProcessingError):
             await tasks.process_cover_job(job, storage=storage, client=client, poll=_make_poll("failed", "boom"))
         assert await Clip.count() == before
 
@@ -516,7 +516,7 @@ class TestFailures:
         job.job_type = tasks.COVER_JOB_TYPE
         job.input_params = {"clip_id": str(source.id), "style": "jazz", "lyrics_override": None}
         client = FakeAce(_wav_bytes(3.0))
-        with pytest.raises(tasks.IterativeProcessingError):
+        with pytest.raises(tasks.JobProcessingError):
             await tasks.process_cover_job(job, storage=storage, client=client, poll=_make_poll())
 
 

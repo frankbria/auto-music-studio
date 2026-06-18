@@ -16,7 +16,6 @@ propagate and the processor marks the job failed.
 from __future__ import annotations
 
 import asyncio
-import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -29,30 +28,7 @@ from acemusic.storage import StorageBackend
 from ..models import Clip, Job
 from ..services.clips import native_format
 from ..services.editing import CROP_JOB_TYPE, REMASTER_JOB_TYPE, SPEED_JOB_TYPE
-
-logger = logging.getLogger(__name__)
-
-
-class EditProcessingError(Exception):
-    """An editing job could not be processed (missing source, audio failure)."""
-
-
-async def _load_source_clip(job: Job) -> Clip:
-    """Resolve the job's source clip, or fail the job with a clear error.
-
-    The clip may legitimately vanish between enqueue and processing (the owner
-    can DELETE it while the job is queued), so a miss is a job failure, not a
-    crash.
-    """
-    clip_id = (job.input_params or {}).get("clip_id")
-    try:
-        oid = PydanticObjectId(clip_id)
-    except Exception as exc:
-        raise EditProcessingError(f"Job has an invalid source clip id: {clip_id!r}") from exc
-    clip = await Clip.get(oid)
-    if clip is None:
-        raise EditProcessingError(f"Source clip {clip_id} no longer exists")
-    return clip
+from .common import download_clip, load_source_clip, store_clip
 
 
 async def _store_derived_clip(
@@ -64,20 +40,14 @@ async def _store_derived_clip(
     duration: float | None,
     bpm: int | None,
 ) -> Clip:
-    """Upload the edited audio and insert its Clip record (id matches the key).
-
-    An insert failure deletes the just-uploaded object so a failed job never
-    leaves an orphaned file behind (mirrors the generate path's rollback).
-    """
+    """Upload the edited audio and insert its Clip record (id matches the key)."""
     fmt = native_format(source)
     clip_id = PydanticObjectId()
-    path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
-    await asyncio.to_thread(storage.upload, path, data)
     clip = Clip(
         id=clip_id,
         user_id=job.user_id,
         workspace_id=job.workspace_id,
-        file_path=path,
+        file_path=f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}",
         format=fmt,
         duration=duration,
         bpm=bpm,
@@ -85,15 +55,7 @@ async def _store_derived_clip(
         parent_clip_ids=[source.id],
         generation_mode=job.job_type,
     )
-    try:
-        await clip.insert()
-    except BaseException:
-        try:
-            await asyncio.to_thread(storage.delete, path)
-        except Exception:  # pragma: no cover - cleanup is best-effort
-            logger.exception("Failed to delete orphaned storage object %s during rollback", path)
-        raise
-    return clip
+    return await store_clip(storage, clip, data)
 
 
 class _EditWorkspace:
@@ -105,16 +67,12 @@ class _EditWorkspace:
 
 
 async def _download_source(storage: StorageBackend, source: Clip, workspace: _EditWorkspace) -> None:
-    try:
-        data = await asyncio.to_thread(storage.download, source.file_path)
-    except FileNotFoundError as exc:
-        raise EditProcessingError(f"Source clip {source.id} audio object {source.file_path!r} is missing") from exc
-    workspace.input_path.write_bytes(data)
+    workspace.input_path.write_bytes(await download_clip(storage, source))
 
 
 async def process_crop_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     """Trim the source to ``[start_ms, end_ms]`` (with optional fades)."""
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
     params = job.input_params
     start_ms, end_ms = params["start_ms"], params["end_ms"]
 
@@ -145,7 +103,7 @@ async def process_crop_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
 
 async def process_speed_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     """Time-stretch the source by the resolved ``multiplier`` (pitch preserved)."""
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
     multiplier = job.input_params["multiplier"]
 
     with tempfile.TemporaryDirectory(prefix="acemusic-speed-") as tmp_dir:
@@ -172,7 +130,7 @@ async def process_speed_job(job: Job, storage: StorageBackend) -> dict[str, Any]
 
 async def process_remaster_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     """Loudness-normalise the source to ``target_lufs`` (full remaster pipeline)."""
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
     target_lufs = job.input_params["target_lufs"]
 
     with tempfile.TemporaryDirectory(prefix="acemusic-remaster-") as tmp_dir:

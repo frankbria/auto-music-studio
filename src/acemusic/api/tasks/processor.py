@@ -36,6 +36,7 @@ from acemusic.storage import StorageBackend, get_storage_backend
 from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
+from .common import JobProcessingError
 from .editing import EDIT_JOB_HANDLERS
 from .export import EXPORT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
@@ -67,10 +68,6 @@ _SUBMIT_FIELDS = (
     "mode",
     "sound_type",
 )
-
-
-class JobProcessingError(Exception):
-    """A job could not be processed (ACE-Step failure, timeout, or no output)."""
 
 
 JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
