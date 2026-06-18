@@ -8,6 +8,8 @@ job-type constants) and delegates here. Kept transport-agnostic (plain
 exceptions, never ``HTTPException``) like the other service modules.
 """
 
+from typing import Any
+
 from beanie import PydanticObjectId
 
 from ..models import Job, JobStatus
@@ -20,7 +22,7 @@ async def create_job(
     user_id: PydanticObjectId,
     workspace_id: PydanticObjectId,
     job_type: str,
-    params: dict,
+    params: dict[str, Any],
     valid_types: tuple[str, ...] | None = None,
     compute_target: ComputeTarget | None = None,
 ) -> Job:
@@ -37,7 +39,7 @@ async def create_job(
     purpose — ``asyncio.CancelledError`` must also clean up.
     """
     if valid_types is not None and job_type not in valid_types:
-        raise ValueError(f"Unknown job type: {job_type!r}")
+        raise ValueError(f"Unknown job type {job_type!r}; expected one of {valid_types}")
     job = Job(
         user_id=user_id,
         workspace_id=workspace_id,
