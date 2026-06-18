@@ -168,12 +168,11 @@ async def process_mastering_job(
             fmt,
             requested_service=service,
         )
-    except ServiceNotConfiguredError as exc:
-        # Defensive: master_with_fallback raises this only for an unconfigured
-        # *requested* service, which the pre-flight get_client already caught.
-        await _refund_unperformed(job, service)
-        raise JobProcessingError(str(exc)) from exc
     except Exception as exc:
+        # The pre-flight get_client already handled the unconfigured-requested
+        # case (with a refund); any failure reaching here is a backend error from
+        # a configured service that exhausted its fallback chain, so the job fails
+        # without a refund (mirrors the existing runtime-failure behaviour).
         raise JobProcessingError(f"Mastering failed: {exc}") from exc
 
     clip_id = await _store_master_clip(job, source, storage, output.audio_bytes, fmt)
