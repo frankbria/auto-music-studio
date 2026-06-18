@@ -361,3 +361,66 @@ class TestOutputConfig:
         assert cfg["destination"] == "dlb://out.wav"
         assert cfg["master"]["loudness"]["target_level"] == -18.0
         assert cfg["master"]["content"]["type"] == "music"
+
+
+# ---------------------------------------------------------------------------
+# High-level master() entrypoint (US-12.3 shared interface)
+# ---------------------------------------------------------------------------
+
+
+class TestMasterEntrypoint:
+    """The single master() call wraps upload -> submit -> poll -> results -> download."""
+
+    def test_master_returns_normalized_output(self) -> None:
+        from acemusic.mastering_protocol import MasteringOutput, MasteringService
+
+        client = _client()
+        client._token, client._token_expiry = "tok", 1e12
+        # upload POST /input -> presigned url; PUT bytes; submit; status(success, w/ result); download.
+        upload_resp = _resp(json_data={"url": "https://put.example/dst"})
+        put_resp = _resp(status_code=200)
+        submit_resp = _resp(json_data={"job_id": "job-1"})
+        # get_results reads metrics + outputs from status_payload["result"], no extra call.
+        status_resp = _resp(
+            json_data={
+                "status": "Success",
+                "result": {
+                    "audio": {
+                        "loudness": {"measured": -14.0},
+                        "eq": {"bands": [float(i) for i in range(16)]},
+                        "stereo": {"width": 0.5, "balance": 0.0},
+                    },
+                    "outputs": [{"destination": "dlb://out.wav", "preview": "dlb://out.wav"}],
+                },
+            }
+        )
+        download_resp = _resp(content=b"MASTERED")
+        with (
+            patch("acemusic.dolby_client.httpx.post", side_effect=[upload_resp, submit_resp]),
+            patch("acemusic.dolby_client.httpx.put", return_value=put_resp),
+            patch("acemusic.dolby_client.httpx.get", side_effect=[status_resp, download_resp]),
+            patch("acemusic.dolby_client.time.sleep"),
+        ):
+            out = client.master(FAKE_AUDIO, "clip-1-job-1.wav", "streaming", -14.0, "wav")
+        assert isinstance(out, MasteringOutput)
+        assert out.audio_bytes == b"MASTERED"
+        assert out.service == "dolby"
+        assert out.metrics["loudness"] == -14.0
+        # DolbyClient conforms to the shared protocol.
+        assert isinstance(client, MasteringService)
+
+    def test_master_propagates_dolby_error(self) -> None:
+        client = _client()
+        client._token, client._token_expiry = "tok", 1e12
+        with (
+            patch("acemusic.dolby_client.httpx.post", return_value=_resp(status_code=500)),
+            patch("acemusic.dolby_client.httpx.put"),
+            patch("acemusic.dolby_client.time.sleep"),
+        ):
+            with pytest.raises(DolbyError):
+                client.master(FAKE_AUDIO, "f.wav", "streaming", -14.0, "wav")
+
+    def test_dolby_error_is_mastering_error_subclass(self) -> None:
+        from acemusic.mastering_protocol import MasteringError
+
+        assert issubclass(DolbyError, MasteringError)

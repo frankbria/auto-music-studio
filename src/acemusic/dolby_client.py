@@ -28,6 +28,8 @@ from typing import Any, Callable
 
 import httpx
 
+from acemusic.mastering_protocol import MasteringError, MasteringOutput
+
 # Auth lives on api.dolby.io; the Media (mastering/input/output) endpoints live on
 # api.dolby.com — two distinct hosts, mirroring Dolby.io's published API surface.
 _AUTH_URL = "https://api.dolby.io/v1/auth/token"
@@ -75,8 +77,13 @@ _SUCCESS_STATES = {"success"}
 _FAILURE_STATES = {"failed", "cancelled"}
 
 
-class DolbyError(Exception):
-    """Raised when the Dolby.io API returns an error or is unreachable."""
+class DolbyError(MasteringError):
+    """Raised when the Dolby.io API returns an error or is unreachable.
+
+    Subclasses :class:`~acemusic.mastering_protocol.MasteringError` so the
+    mastering orchestrator can catch every backend's failure through one common
+    base when deciding whether to fall back to another service (US-12.3).
+    """
 
 
 def master_output_config(profile: str, target_lufs: float, destination: str) -> dict[str, Any]:
@@ -114,6 +121,9 @@ def _as_float(value: Any) -> float | None:
 
 class DolbyClient:
     """Synchronous client for the Dolby.io Music Mastering workflow."""
+
+    # Canonical service name used for dispatch and result attribution (US-12.3).
+    service = "dolby"
 
     def __init__(self, api_key: str, api_secret: str) -> None:
         """Initialise with the Dolby.io app key/secret used to mint bearer tokens."""
@@ -375,6 +385,40 @@ class DolbyClient:
             raise DolbyError(f"Dolby download failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise DolbyError(f"Dolby download failed: {exc}") from exc
+
+    # -- high-level entrypoint (US-12.3 shared interface) -----------------
+
+    def master(
+        self,
+        audio_bytes: bytes,
+        filename: str,
+        profile: str,
+        target_lufs: float,
+        output_format: str,
+    ) -> MasteringOutput:
+        """Run the full Dolby mastering workflow and return a normalized output.
+
+        Wraps the granular upload -> submit -> poll -> results -> download flow
+        behind the single :meth:`~acemusic.mastering_protocol.MasteringService`
+        entrypoint so the orchestrator can treat Dolby.io, LANDR and Bakuage
+        interchangeably. A single output variant is requested (multi-preview A/B
+        comparison is US-12.4's concern); its mastered audio and metrics are
+        returned in the shared :class:`MasteringOutput` shape.
+
+        ``filename`` carries the job id (supplied by the caller) so concurrent
+        masters on the same clip never collide on Dolby's input/output keys.
+        """
+        input_url = self.upload(audio_bytes, filename)
+        destination = f"dlb://{filename.rsplit('/', 1)[-1].rsplit('.', 1)[0]}-master.{output_format}"
+        outputs = [master_output_config(profile, target_lufs, destination)]
+        job_id = self.submit_preview(input_url, outputs)
+        status_payload = self.wait_for_completion(job_id)
+        results = self.get_results(job_id, status_payload)
+        preview_handles = [out.get("preview") for out in results.get("outputs", []) if out.get("preview")]
+        if not preview_handles:
+            raise DolbyError("Dolby mastering completed but returned no preview outputs")
+        audio = self.download(preview_handles[0])
+        return MasteringOutput(audio_bytes=audio, metrics=results.get("metrics", {}), service=self.service)
 
 
 def _parse_metrics(result: dict[str, Any]) -> dict[str, Any]:
