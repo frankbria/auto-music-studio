@@ -8,8 +8,8 @@ modules, so the router stays free of persistence concerns.
 
 from beanie import PydanticObjectId
 
-from ..models import Job, JobStatus
-from ..tasks import dispatch_job
+from ..models import Job
+from .jobs import create_job
 from .routing import ComputeTarget
 
 # get_or_create_default_workspace moved to the workspaces service (US-9.4); it is
@@ -33,22 +33,10 @@ async def create_generation_job(
     status reporting. Returns the saved :class:`Job` (with its id).
     """
     workspace = await get_or_create_default_workspace(user_id)
-    job = Job(
+    return await create_job(
         user_id=user_id,
         workspace_id=workspace.id,
         job_type=GENERATE_JOB_TYPE,
-        compute_target=compute_target.value if compute_target is not None else None,
-        status=JobStatus.QUEUED,
-        input_params=params,
+        params=params,
+        compute_target=compute_target,
     )
-    await job.insert()
-    try:
-        await dispatch_job(str(job.id))
-    except BaseException:
-        # Don't leave the job behind: the processor polls for QUEUED documents,
-        # so an orphan would still run even though the caller saw a failure
-        # (and, for generation, refunded the credits — US-9.6). BaseException
-        # (not Exception) on purpose: asyncio.CancelledError must also clean up.
-        await job.delete()
-        raise
-    return job

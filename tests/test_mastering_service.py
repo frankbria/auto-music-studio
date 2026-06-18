@@ -95,7 +95,8 @@ class TestCreateMasteringJob:
         async def _boom(_job_id: str) -> None:
             raise RuntimeError("dispatch down")
 
-        monkeypatch.setattr(mastering_service, "dispatch_job", _boom)
+        # Dispatch now lives in the shared job factory (US-0.1), so patch it there.
+        monkeypatch.setattr("acemusic.api.services.jobs.dispatch_job", _boom)
         before = await Job.find_all().count()
         with pytest.raises(RuntimeError):
             await mastering_service.create_mastering_job(

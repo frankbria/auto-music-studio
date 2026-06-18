@@ -8,8 +8,8 @@ other service modules.
 
 from beanie import PydanticObjectId
 
-from ..models import Job, JobStatus
-from ..tasks import dispatch_job
+from ..models import Job
+from .jobs import create_job
 
 CROP_JOB_TYPE = "crop"
 SPEED_JOB_TYPE = "speed"
@@ -33,23 +33,10 @@ async def create_edit_job(
     clip's workspace — the derived clip lands next to its parent. Returns the
     saved :class:`Job` (with its id).
     """
-    if job_type not in EDIT_JOB_TYPES:
-        raise ValueError(f"Unknown edit job type: {job_type!r}")
-    job = Job(
+    return await create_job(
         user_id=user_id,
         workspace_id=workspace_id,
         job_type=job_type,
-        status=JobStatus.QUEUED,
-        input_params=params,
+        params=params,
+        valid_types=EDIT_JOB_TYPES,
     )
-    await job.insert()
-    try:
-        await dispatch_job(str(job.id))
-    except BaseException:
-        # Don't leave the job behind: the processor polls for QUEUED documents,
-        # so an orphan would still run even though the caller saw a failure.
-        # BaseException (not Exception) on purpose: asyncio.CancelledError must
-        # also clean up (mirrors create_generation_job).
-        await job.delete()
-        raise
-    return job

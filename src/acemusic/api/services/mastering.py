@@ -13,8 +13,8 @@ mastering jobs queued until the processing ticket wires up a handler.
 
 from beanie import PydanticObjectId
 
-from ..models import Job, JobStatus
-from ..tasks import dispatch_job
+from ..models import Job
+from .jobs import create_job
 
 MASTERING_JOB_TYPE = "mastering"
 
@@ -61,21 +61,9 @@ async def create_mastering_job(
     request. ``workspace_id`` is the source clip's workspace — the master lands
     next to its parent. Returns the saved :class:`Job` (with its id).
     """
-    job = Job(
+    return await create_job(
         user_id=user_id,
         workspace_id=workspace_id,
         job_type=MASTERING_JOB_TYPE,
-        status=JobStatus.QUEUED,
-        input_params=params,
+        params=params,
     )
-    await job.insert()
-    try:
-        await dispatch_job(str(job.id))
-    except BaseException:
-        # Don't leave the job behind: the processor polls for QUEUED documents,
-        # so an orphan would still run even though the caller saw a failure.
-        # BaseException (not Exception) on purpose: asyncio.CancelledError must
-        # also clean up (mirrors create_edit_job).
-        await job.delete()
-        raise
-    return job

@@ -252,7 +252,8 @@ class TestRefundOnJobCreationFailure:
         async def _boom(_job_id):
             raise RuntimeError("dispatch exploded")
 
-        monkeypatch.setattr("acemusic.api.services.generation.dispatch_job", _boom)
+        # Dispatch now lives in the shared job factory (US-0.1), so patch it there.
+        monkeypatch.setattr("acemusic.api.services.jobs.dispatch_job", _boom)
         user = await _make_user("credits-dispatch@example.com", balance=10.0)
         # ASGITransport re-raises unhandled server exceptions into the test
         # (real clients would see a 500); the contract under test is the
