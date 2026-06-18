@@ -29,7 +29,7 @@ from pymongo import ASCENDING, ReturnDocument
 
 from acemusic.client import AceStepClient
 from acemusic.config import load_config
-from acemusic.dolby_client import DolbyClient
+from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
 
@@ -103,7 +103,7 @@ class JobProcessor:
         runpod_client_factory: Callable[[], RunPodClient] | None = None,
         runpod_timeout: float = 300.0,
         runpod_poll_interval: float = 5.0,
-        dolby_client_factory: Callable[[], DolbyClient | None] | None = None,
+        mastering_orchestrator_factory: Callable[[], MasteringOrchestrator] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
@@ -119,10 +119,11 @@ class JobProcessor:
         self._runpod_client_factory = runpod_client_factory
         self._runpod_timeout = runpod_timeout
         self._runpod_poll_interval = runpod_poll_interval
-        # Dolby.io mastering (US-12.2). The factory returns None when credentials
-        # are absent; the mastering handler then fails a claimed job with a clear
-        # message rather than crashing, so a Dolby-less deployment degrades cleanly.
-        self._dolby_client_factory = dolby_client_factory
+        # Mastering orchestrator (US-12.3). The factory builds the orchestrator
+        # from the configured backends (Dolby/LANDR/Bakuage); None only when no
+        # mastering credentials are set at all, in which case the mastering handler
+        # fails a claimed job with a clear message rather than crashing.
+        self._mastering_orchestrator_factory = mastering_orchestrator_factory
         # A job legitimately stays in `processing` for at most poll_timeout (its
         # own worker fails it after that). Only re-queue jobs older than that
         # window plus a margin, so a startup sweep never reclaims a job a live
@@ -147,8 +148,9 @@ class JobProcessor:
         # adapted through their own injecting wrapper.
         for job_type, iterative_handler in ITERATIVE_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_iterative_handler, iterative_handler)
-        # Mastering handlers (US-12.2) need storage plus the Dolby client (or None
-        # when unconfigured), so they get their own injecting wrapper.
+        # Mastering handlers (US-12.2 / US-12.3) need storage plus the mastering
+        # orchestrator (which selects and falls back across Dolby/LANDR/Bakuage),
+        # so they get their own injecting wrapper.
         for job_type, mastering_handler in MASTERING_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_mastering_handler, mastering_handler)
         if handlers:
@@ -311,9 +313,13 @@ class JobProcessor:
         )
 
     async def _run_mastering_handler(self, mastering_handler: Any, job: Job) -> dict[str, Any]:
-        """Adapt a mastering handler (US-12.2), injecting storage and the Dolby client (or None)."""
-        client = self._dolby_client_factory() if self._dolby_client_factory is not None else None
-        return await mastering_handler(job, storage=self._storage_factory(), client=client)
+        """Adapt a mastering handler (US-12.2/US-12.3), injecting storage and the orchestrator."""
+        if self._mastering_orchestrator_factory is None:
+            raise JobProcessingError(
+                "Mastering is not configured: this processor has no mastering orchestrator factory"
+            )
+        orchestrator = self._mastering_orchestrator_factory()
+        return await mastering_handler(job, storage=self._storage_factory(), orchestrator=orchestrator)
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run a generation job — locally via ACE-Step or remotely via RunPod.

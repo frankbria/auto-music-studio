@@ -1,22 +1,28 @@
-"""Mastering job handler (US-12.2): Dolby.io Music Mastering integration.
+"""Mastering job handler (US-12.2 + US-12.3 fallback integrations).
 
-Runs one claimed mastering :class:`~acemusic.api.models.job.Job` end to end against
-Dolby.io: load the source clip, download its audio from our storage, upload it to
-Dolby's input storage, submit a master *preview* job, poll to completion, read the
-mastering metrics (loudness / EQ / stereo image), download each mastered preview,
-and store it back as a lineage-tagged child :class:`~acemusic.api.models.clip.Clip`.
+Runs one claimed mastering :class:`~acemusic.api.models.job.Job` end to end:
+load the source clip, download its audio from our storage, hand it to the
+:class:`~acemusic.mastering_orchestrator.MasteringOrchestrator` which runs the
+requested backend (Dolby.io / LANDR / Bakuage) and falls back across the
+configured services on failure, then store the mastered audio back as a
+lineage-tagged child :class:`~acemusic.api.models.clip.Clip`.
 
-Each mastered preview becomes a derived clip (``generation_mode="mastering"``,
-``parent_clip_ids=[source]``) so it is immediately auditionable through the existing
+The mastered clip (``generation_mode="mastering"``,
+``parent_clip_ids=[source]``) is immediately auditionable through the existing
 job-status endpoint, which resolves audio URLs from ``result["clip_ids"]``. The
-A/B selection / approval UX is a separate story (US-12.4). The mastering metrics
-ride along in ``result["metrics"]`` so the status endpoint can surface them.
+mastering metrics ride along in ``result["metrics"]`` and the backend that
+actually ran in ``result["service"]`` (which may differ from the requested
+service when a fallback succeeded). The A/B selection / approval UX is a
+separate story (US-12.4).
 
-Like the iterative handlers, this needs an external client in addition to storage,
-so :class:`~acemusic.api.tasks.processor.JobProcessor` adapts it onto the registry
-through ``_run_mastering_handler`` which injects ``storage`` and the Dolby client
-(``None`` when credentials are absent — the handler then fails the job with a clear
-"not configured" message rather than crashing the app).
+Each backend implements the shared
+:class:`~acemusic.mastering_protocol.MasteringService` contract behind a single
+``master()`` entrypoint, so this handler is backend-agnostic: it only knows the
+orchestrator's ``master_with_fallback`` call. An explicitly requested service
+that is not configured raises :class:`ServiceNotConfiguredError`, which the
+handler turns into a refunded pre-flight rejection (no mastering work performed,
+so the user must not pay). Like the iterative handlers, the orchestrator needs
+to be injected alongside storage.
 """
 
 from __future__ import annotations
@@ -27,33 +33,30 @@ from typing import TYPE_CHECKING, Any
 
 from beanie import PydanticObjectId
 
-from acemusic.dolby_client import DolbyClient, DolbyError, master_output_config
+from acemusic.mastering_orchestrator import MasteringOrchestrator, ServiceNotConfiguredError
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
 from ..services import credits as credits_service
 from ..services.clips import native_format
 from ..services.mastering import MASTERING_JOB_TYPE
-from .common import JobProcessingError, download_clip, load_source_clip, rollback_clips, store_clip
+from .common import JobProcessingError, download_clip, load_source_clip, store_clip
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
 
-# US-12.2 implements the Dolby.io backend only; ``landr``/``bakuage`` are accepted
-# by the submission endpoint (US-12.1) but handled by later stories.
-_SUPPORTED_SERVICE = "dolby"
-
 
 async def _refund_unperformed(job: Job, service: str) -> None:
     """Refund the credits charged at enqueue when no mastering work was performed.
 
     The submission endpoint (US-12.1) charges per service up front. When the worker
-    rejects a job before any Dolby work begins — an unsupported service, or a
-    deployment with no Dolby credentials — the user must not be left paying for a
-    master that was never produced. Best-effort (mirrors the full-song refund): a
-    refund failure is logged but never masks the original processing error.
+    rejects a job before any mastering work begins — a service requested without
+    configured credentials, or a deployment with no mastering backend at all — the
+    user must not be left paying for a master that was never produced. Best-effort
+    (mirrors the full-song refund): a refund failure is logged but never masks the
+    original processing error.
     """
     try:
         cost = credits_service.get_mastering_cost(service)
@@ -65,17 +68,28 @@ async def _refund_unperformed(job: Job, service: str) -> None:
         logger.exception("Failed to refund mastering job %s after a pre-flight rejection", job.id)
 
 
-def get_dolby_client(settings: "ApiSettings") -> DolbyClient | None:
-    """Build a :class:`DolbyClient` from settings, or ``None`` when creds are absent.
+def get_mastering_orchestrator(settings: "ApiSettings") -> MasteringOrchestrator:
+    """Build the :class:`MasteringOrchestrator` from the configured backends.
 
-    Returning ``None`` (rather than raising) lets the processor register the
-    handler unconditionally: a mastering job submitted on a Dolby-less deployment
-    is claimed and fails with a clear message, satisfying the "missing credentials
-    disable the service (not crash the app)" requirement.
+    Only services whose credentials are present are wired in, so the orchestrator's
+    fallback chain naturally skips unconfigured backends. A deployment with no
+    mastering credentials at all yields an empty orchestrator; the handler then
+    fails a claimed job with a clear "not configured" message rather than crashing.
     """
-    if not settings.dolby_enabled:
-        return None
-    return DolbyClient(api_key=settings.dolby_api_key, api_secret=settings.dolby_api_secret)
+    clients: dict[str, Any] = {}
+    if settings.dolby_enabled:
+        from acemusic.dolby_client import DolbyClient
+
+        clients["dolby"] = DolbyClient(api_key=settings.dolby_api_key, api_secret=settings.dolby_api_secret)
+    if settings.landr_enabled:
+        from acemusic.landr_client import LandrClient
+
+        clients["landr"] = LandrClient(api_key=settings.landr_api_key, api_secret=settings.landr_api_secret)
+    if settings.bakuage_enabled:
+        from acemusic.bakuage_client import BakuageClient
+
+        clients["bakuage"] = BakuageClient(api_key=settings.bakuage_api_key)
+    return MasteringOrchestrator(clients)
 
 
 async def _store_master_clip(
@@ -85,7 +99,7 @@ async def _store_master_clip(
     data: bytes,
     fmt: str,
 ) -> str:
-    """Upload one mastered preview and insert its lineage-tagged child Clip."""
+    """Upload the mastered audio and insert its lineage-tagged child Clip."""
     clip_id = PydanticObjectId()
     clip = Clip(
         id=clip_id,
@@ -106,29 +120,29 @@ async def _store_master_clip(
     return str(clip_id)
 
 
-async def process_mastering_job(job: Job, *, storage: StorageBackend, client: DolbyClient | None) -> dict[str, Any]:
-    """Master the source clip via Dolby.io and store each preview as a child clip.
+async def process_mastering_job(
+    job: Job, *, storage: StorageBackend, orchestrator: MasteringOrchestrator
+) -> dict[str, Any]:
+    """Master the source clip via the orchestrator and store the result as a child clip.
 
-    Returns ``{"clip_ids": [...], "metrics": {...}, "service": "dolby",
-    "target_lufs": <float>}``. ``metrics`` is the loudness / EQ / stereo analysis
-    from Dolby. Raises :class:`JobProcessingError` (which the processor records
-    as the job's failure) when the service is unsupported, credentials are missing,
-    or Dolby reports an error.
+    Returns ``{"clip_ids": [<id>], "metrics": {...}, "service": <str>,
+    "target_lufs": <float>}``. ``service`` is the backend that actually ran
+    (which may differ from the requested service when a fallback succeeded).
+    Raises :class:`JobProcessingError` (recorded as the job's failure) when the
+    requested service is not configured, no backend is configured at all, or
+    every backend in the fallback chain reports an error.
     """
     params = dict(job.input_params or {})
-    service = params.get("service", _SUPPORTED_SERVICE)
+    service = params.get("service", "dolby")
+
     # Pre-flight rejections refund the credits charged at enqueue (US-12.1): no
-    # Dolby work is performed, so the user must not pay for the failed job.
-    if service != _SUPPORTED_SERVICE:
+    # mastering work is performed, so the user must not pay for the failed job.
+    try:
+        orchestrator.get_client(service)
+    except ServiceNotConfiguredError as exc:
         await _refund_unperformed(job, service)
-        raise JobProcessingError(
-            f"Mastering service {service!r} is not yet implemented; only {_SUPPORTED_SERVICE!r} is available"
-        )
-    if client is None:
-        await _refund_unperformed(job, service)
-        raise JobProcessingError(
-            "Dolby.io mastering is not configured: set ACEMUSIC_API_DOLBY_API_KEY and ACEMUSIC_API_DOLBY_API_SECRET"
-        )
+        hint = _configuration_hint()
+        raise JobProcessingError(f"{exc} {hint}") from exc
 
     source = await load_source_clip(job)
     # target_lufs is resolved and stored by the submission endpoint (US-12.1); a
@@ -141,45 +155,47 @@ async def process_mastering_job(job: Job, *, storage: StorageBackend, client: Do
 
     source_bytes = await download_clip(storage, source)
 
-    # Key Dolby's input/output objects by *job* id, not just the source clip, so
-    # concurrent masters (or a retry) on the same clip never overwrite or download
-    # each other's audio.
+    # Key the upload by *job* id, not just the source clip, so concurrent masters
+    # (or a retry) on the same clip never overwrite or download each other's audio.
+    filename = f"{source.id}-{job.id}.{fmt}"
     try:
-        input_url = await asyncio.to_thread(client.upload, source_bytes, f"{source.id}-{job.id}.{fmt}")
-        destination = f"dlb://{source.id}-{job.id}-master.{fmt}"
-        outputs = [master_output_config(profile, target_lufs, destination)]
-        dolby_job_id = await asyncio.to_thread(client.submit_preview, input_url, outputs)
-        status_payload = await asyncio.to_thread(client.wait_for_completion, dolby_job_id)
-        # Pass the already-polled terminal payload so get_results reuses it instead
-        # of issuing a second status request for the same job.
-        results = await asyncio.to_thread(client.get_results, dolby_job_id, status_payload)
-    except DolbyError as exc:
-        raise JobProcessingError(f"Dolby mastering failed: {exc}") from exc
+        output = await asyncio.to_thread(
+            orchestrator.master_with_fallback,
+            source_bytes,
+            filename,
+            profile,
+            target_lufs,
+            fmt,
+            requested_service=service,
+        )
+    except ServiceNotConfiguredError as exc:
+        # Defensive: master_with_fallback raises this only for an unconfigured
+        # *requested* service, which the pre-flight get_client already caught.
+        await _refund_unperformed(job, service)
+        raise JobProcessingError(str(exc)) from exc
+    except Exception as exc:
+        raise JobProcessingError(f"Mastering failed: {exc}") from exc
 
-    preview_handles = [out.get("preview") for out in results.get("outputs", []) if out.get("preview")]
-    if not preview_handles:
-        raise JobProcessingError("Dolby mastering completed but returned no preview outputs")
-
-    clip_ids: list[str] = []
-    try:
-        for handle in preview_handles:
-            try:
-                preview_bytes = await asyncio.to_thread(client.download, handle)
-            except DolbyError as exc:
-                raise JobProcessingError(f"Dolby preview download failed: {exc}") from exc
-            clip_ids.append(await _store_master_clip(job, source, storage, preview_bytes, fmt))
-    except BaseException:
-        # BaseException (not Exception): a shutdown CancelledError must also roll
-        # back, else a requeued retry duplicates the stored previews.
-        await rollback_clips(storage, clip_ids)
-        raise
+    clip_id = await _store_master_clip(job, source, storage, output.audio_bytes, fmt)
+    if output.service != service:
+        logger.info("Mastering job %s fell back from %s to %s", job.id, service, output.service)
 
     return {
-        "clip_ids": clip_ids,
-        "service": service,
+        "clip_ids": [clip_id],
+        "service": output.service,
         "target_lufs": target_lufs,
-        "metrics": results.get("metrics", {}),
+        "metrics": output.metrics,
     }
+
+
+def _configuration_hint() -> str:
+    """A human-readable hint naming the mastering env vars, for error messages."""
+    return (
+        "Set mastering credentials to enable a backend: "
+        "ACEMUSIC_API_DOLBY_API_KEY + ACEMUSIC_API_DOLBY_API_SECRET (Dolby.io), "
+        "ACEMUSIC_API_LANDR_API_KEY + ACEMUSIC_API_LANDR_API_SECRET (LANDR), or "
+        "ACEMUSIC_API_BAKUAGE_API_KEY (Bakuage)."
+    )
 
 
 MASTERING_JOB_HANDLERS = {MASTERING_JOB_TYPE: process_mastering_job}
