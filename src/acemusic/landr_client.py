@@ -327,6 +327,7 @@ class LandrClient:
         profile: str,
         target_lufs: float,
         output_format: str,
+        timeout: float | None = None,
     ) -> MasteringOutput:
         """Run the full LANDR mastering workflow and return a normalized output.
 
@@ -334,11 +335,11 @@ class LandrClient:
         :meth:`~acemusic.mastering_protocol.MasteringService.master` entrypoint.
         LANDR reports fewer metrics than Dolby (loudness, optional EQ); the
         metrics dict is built defensively so missing fields degrade to ``None``
-        rather than raising.
+        rather than raising. ``timeout`` caps the poll phase (defaults to 600s).
         """
         audio_id = self.upload(audio_bytes, filename)
         job_id = self.submit(audio_id, profile, target_lufs, output_format)
-        status_payload = self.wait_for_completion(job_id)
+        status_payload = self.wait_for_completion(job_id, timeout=timeout if timeout is not None else 600.0)
         audio = self.download(job_id)
         return MasteringOutput(audio_bytes=audio, metrics=_parse_metrics(status_payload), service=self.service)
 

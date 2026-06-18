@@ -238,6 +238,7 @@ class BakuageClient:
         profile: str,
         target_lufs: float,
         output_format: str,
+        timeout: float | None = None,
     ) -> MasteringOutput:
         """Run the full Bakuage mastering workflow and return a normalized output.
 
@@ -245,9 +246,10 @@ class BakuageClient:
         :meth:`~acemusic.mastering_protocol.MasteringService.master` entrypoint.
         Bakuage reports fewer metrics than Dolby (loudness only); the metrics dict
         is built defensively so missing fields degrade to ``None`` / empty.
+        ``timeout`` caps the poll phase (defaults to 600s).
         """
         job_id = self.create_mastering(audio_bytes, filename, profile, target_lufs, output_format)
-        status_payload = self.wait_for_completion(job_id)
+        status_payload = self.wait_for_completion(job_id, timeout=timeout if timeout is not None else 600.0)
         audio = self.download(job_id)
         return MasteringOutput(audio_bytes=audio, metrics=_parse_metrics(status_payload), service=self.service)
 

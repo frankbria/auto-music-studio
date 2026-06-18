@@ -395,6 +395,7 @@ class DolbyClient:
         profile: str,
         target_lufs: float,
         output_format: str,
+        timeout: float | None = None,
     ) -> MasteringOutput:
         """Run the full Dolby mastering workflow and return a normalized output.
 
@@ -407,12 +408,13 @@ class DolbyClient:
 
         ``filename`` carries the job id (supplied by the caller) so concurrent
         masters on the same clip never collide on Dolby's input/output keys.
+        ``timeout`` caps the poll phase (defaults to 600s when ``None``).
         """
         input_url = self.upload(audio_bytes, filename)
         destination = f"dlb://{filename.rsplit('/', 1)[-1].rsplit('.', 1)[0]}-master.{output_format}"
         outputs = [master_output_config(profile, target_lufs, destination)]
         job_id = self.submit_preview(input_url, outputs)
-        status_payload = self.wait_for_completion(job_id)
+        status_payload = self.wait_for_completion(job_id, timeout=timeout if timeout is not None else 600.0)
         results = self.get_results(job_id, status_payload)
         preview_handles = [out.get("preview") for out in results.get("outputs", []) if out.get("preview")]
         if not preview_handles:

@@ -37,7 +37,7 @@ from acemusic.mastering_orchestrator import MasteringOrchestrator, ServiceNotCon
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
-from ..services import credits as credits_service
+from ..services import credits as credits_service, users as user_service
 from ..services.clips import native_format
 from ..services.mastering import MASTERING_JOB_TYPE
 from .common import JobProcessingError, download_clip, load_source_clip, store_clip
@@ -66,6 +66,59 @@ async def _refund_unperformed(job: Job, service: str) -> None:
         await credits_service.refund_credits(job.user_id, cost)
     except Exception:  # pragma: no cover - refund is best-effort; never mask the cause
         logger.exception("Failed to refund mastering job %s after a pre-flight rejection", job.id)
+
+
+async def _reconcile_fallback_credits(job: Job, requested_service: str, actual_service: str) -> None:
+    """Reconcile the pre-charged credits to the cost of the service that actually ran.
+
+    The router (US-12.1) charges the *requested* service at enqueue. When the
+    orchestrator falls back to a differently-priced backend, the user would
+    otherwise be left over- or under-charged relative to the work performed. This
+    adjusts the balance so the final charge equals ``get_mastering_cost(actual)``:
+    a cheaper fallback refunds the difference; a pricier fallback charges the
+    difference (best-effort — an insufficient balance for the top-up is logged,
+    not fatal, since the master is already complete and the job must not fail
+    over a few credits). Best-effort overall: a ledger failure is logged, never
+    masks the mastering result.
+    """
+    if actual_service == requested_service:
+        return
+    try:
+        charged = credits_service.get_mastering_cost(requested_service)
+        actual = credits_service.get_mastering_cost(actual_service)
+    except ValueError:  # pragma: no cover - both services are validated upstream
+        return
+    diff = actual - charged  # >0: undercharged (top up); <0: overcharged (refund)
+    if diff == 0:
+        return
+    try:
+        if diff > 0:
+            balance_after = await credits_service.deduct_credits(job.user_id, diff)
+            if balance_after is None:
+                logger.warning(
+                    "Mastering job %s fell back to pricier %s (+%.1f credits) but the user has "
+                    "insufficient balance for the top-up; result retained.",
+                    job.id,
+                    actual_service,
+                    diff,
+                )
+                return
+        else:
+            await credits_service.refund_credits(job.user_id, -diff)
+            user = await user_service.get_user_by_id(str(job.user_id))
+            balance_after = user.credits_balance if user is not None else 0.0
+        # amount sign matches the router's convention: negative for a charge,
+        # positive for a refund. ``-diff`` is negative when diff>0 (top-up) and
+        # positive when diff<0 (refund).
+        await credits_service.record_transaction(
+            user_id=job.user_id,
+            amount=-diff,
+            action_type=MASTERING_JOB_TYPE,
+            job_id=str(job.id),
+            balance_after=balance_after,
+        )
+    except Exception:  # pragma: no cover - reconciliation is best-effort
+        logger.exception("Failed to reconcile mastering credits for job %s", job.id)
 
 
 def get_mastering_orchestrator(settings: "ApiSettings") -> MasteringOrchestrator:
@@ -178,6 +231,9 @@ async def process_mastering_job(
     clip_id = await _store_master_clip(job, source, storage, output.audio_bytes, fmt)
     if output.service != service:
         logger.info("Mastering job %s fell back from %s to %s", job.id, service, output.service)
+        # The router charged the requested service at enqueue; reconcile to the
+        # actual service's cost so the user pays for the work performed (codex P1).
+        await _reconcile_fallback_credits(job, service, output.service)
 
     return {
         "clip_ids": [clip_id],

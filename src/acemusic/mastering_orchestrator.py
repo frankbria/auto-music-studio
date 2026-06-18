@@ -26,6 +26,7 @@ Fallback policy (see ``tasks/todo.md`` for the rationale):
 from __future__ import annotations
 
 import logging
+import time
 
 from acemusic.mastering_protocol import MasteringError, MasteringOutput, MasteringService
 
@@ -35,6 +36,12 @@ logger = logging.getLogger(__name__)
 # -> Bakuage (cost-effective open API, US-12.3). The chain honours this order for
 # fallback candidates regardless of which service was requested.
 DEFAULT_FALLBACK_ORDER: tuple[str, ...] = ("dolby", "landr", "bakuage")
+
+# Overall deadline for one mastering run's full fallback chain. The processor's
+# stale-job threshold defaults to poll_timeout (600s) + 300s = 900s; bounding the
+# whole chain to 600s keeps a multi-backend run comfortably inside that window so
+# a restart-driven re-queue cannot duplicate a still-live job (codex review P2).
+DEFAULT_TOTAL_TIMEOUT_S: float = 600.0
 
 
 class ServiceNotConfiguredError(Exception):
@@ -96,13 +103,20 @@ class MasteringOrchestrator:
         output_format: str,
         *,
         requested_service: str,
+        total_timeout: float = DEFAULT_TOTAL_TIMEOUT_S,
     ) -> MasteringOutput:
         """Master ``audio_bytes`` via the requested service, falling back on failure.
 
         Raises :class:`ServiceNotConfiguredError` if the requested service has no
         configured client (no silent substitution). Raises the last
         :class:`~acemusic.mastering_protocol.MasteringError` if every service in
-        the chain fails.
+        the chain fails (or the overall deadline elapsed before another attempt).
+
+        ``total_timeout`` bounds the *whole* fallback chain: each backend is given
+        the time remaining on the deadline as its poll budget, so a chain of
+        hanging backends cannot run many minutes past the processor's stale-job
+        window (which would let a second processor re-queue and duplicate the
+        job). The default fits within the processor's default stale threshold.
         """
         if not self.is_service_available(requested_service):
             raise ServiceNotConfiguredError(
@@ -111,11 +125,30 @@ class MasteringOrchestrator:
             )
 
         chain = self._fallback_chain(requested_service)
+        deadline = time.monotonic() + total_timeout
         last_error: MasteringError | None = None
         for index, svc in enumerate(chain):
+            if index == 0:
+                # The requested service always gets a full attempt with the whole
+                # budget; only *fallback* attempts are gated by remaining time.
+                remaining_budget = total_timeout
+            else:
+                remaining_budget = deadline - time.monotonic()
+                if remaining_budget <= 0:
+                    # Deadline exhausted by earlier attempts: stop starting
+                    # fallbacks so the chain cannot run far past the processor's
+                    # stale-job window (which would duplicate the job on restart).
+                    logger.error(
+                        "Mastering fallback deadline (%.0fs) elapsed before trying %s; no further attempts",
+                        total_timeout,
+                        svc,
+                    )
+                    break
             client = self._clients[svc]
             try:
-                output = client.master(audio_bytes, filename, profile, target_lufs, output_format)
+                output = client.master(
+                    audio_bytes, filename, profile, target_lufs, output_format, timeout=remaining_budget
+                )
             except MasteringError as exc:
                 last_error = exc
                 remaining = len(chain) - index - 1
@@ -132,6 +165,10 @@ class MasteringOrchestrator:
             if svc != requested_service:
                 logger.info("Mastering fell back from %s to %s", requested_service, svc)
             return output
-        # Every configured service failed; propagate the last backend error.
-        assert last_error is not None  # pragma: no cover - chain is non-empty here
+        # Every configured service failed (or the deadline elapsed); propagate.
+        if last_error is None:
+            # Deadline elapsed before any backend raised an error.
+            raise MasteringError(
+                f"Mastering fallback deadline ({total_timeout:.0f}s) elapsed before any backend completed"
+            )
         raise last_error

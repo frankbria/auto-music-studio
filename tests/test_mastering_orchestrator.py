@@ -31,6 +31,7 @@ class FakeService:
         self._audio = audio
         self._fail = fail
         self.calls = 0
+        self.last_timeout: float | None = None
 
     def master(
         self,
@@ -39,8 +40,10 @@ class FakeService:
         profile: str,
         target_lufs: float,
         output_format: str,
+        timeout: float | None = None,
     ) -> MasteringOutput:
         self.calls += 1
+        self.last_timeout = timeout
         if self._fail:
             raise MasteringError(f"{self.service} unavailable")
         return MasteringOutput(audio_bytes=self._audio, metrics={"loudness": -14.0}, service=self.service)
@@ -143,25 +146,57 @@ class TestFallback:
         class CapturingService:
             service = "dolby"
 
-            def master(self, audio_bytes, filename, profile, target_lufs, output_format):
+            def master(self, audio_bytes, filename, profile, target_lufs, output_format, timeout=None):
                 captured.update(
                     audio_bytes=audio_bytes,
                     filename=filename,
                     profile=profile,
                     target_lufs=target_lufs,
                     output_format=output_format,
+                    timeout=timeout,
                 )
                 return MasteringOutput(audio_bytes=audio_bytes, metrics={}, service="dolby")
 
         orch = MasteringOrchestrator({"dolby": CapturingService()})
         orch.master_with_fallback(b"AUDIO", "clip.wav", "club", -6.0, "flac", requested_service="dolby")
-        assert captured == {
-            "audio_bytes": b"AUDIO",
-            "filename": "clip.wav",
-            "profile": "club",
-            "target_lufs": -6.0,
-            "output_format": "flac",
-        }
+        assert captured["audio_bytes"] == b"AUDIO"
+        assert captured["filename"] == "clip.wav"
+        assert captured["profile"] == "club"
+        assert captured["target_lufs"] == -6.0
+        assert captured["output_format"] == "flac"
+        # The orchestrator hands each backend the remaining time on its deadline.
+        assert captured["timeout"] is not None and captured["timeout"] > 0
+
+
+class TestDeadline:
+    def test_total_timeout_bounds_the_chain_budget(self) -> None:
+        # Each backend receives the *remaining* deadline as its poll budget, so a
+        # later attempt gets a smaller timeout than an earlier one (codex P2).
+        dolby = FakeService(service="dolby", fail=True)
+        landr = FakeService(service="landr", fail=True)
+        bakuage = FakeService(service="bakuage")
+        orch = MasteringOrchestrator({"dolby": dolby, "landr": landr, "bakuage": bakuage})
+        orch.master_with_fallback(
+            b"a", "f.wav", "streaming", -14.0, "wav", requested_service="dolby", total_timeout=300.0
+        )
+        # Budgets shrink monotonically and never exceed the total.
+        budgets = [dolby.last_timeout, landr.last_timeout, bakuage.last_timeout]
+        assert all(b is not None and 0 < b <= 300.0 for b in budgets)
+        assert budgets[0] >= budgets[1] >= budgets[2]
+
+    def test_elapsed_deadline_stops_starting_fallbacks(self) -> None:
+        # The requested (primary) service always runs once; only *fallback*
+        # attempts are gated by the deadline. With a zero deadline, the primary
+        # runs and fails, then no fallback is started (codex P2).
+        dolby = FakeService(service="dolby", fail=True)
+        bakuage = FakeService(service="bakuage")
+        orch = MasteringOrchestrator({"dolby": dolby, "bakuage": bakuage})
+        with pytest.raises(MasteringError):
+            orch.master_with_fallback(
+                b"a", "f.wav", "streaming", -14.0, "wav", requested_service="dolby", total_timeout=0.0
+            )
+        assert dolby.calls == 1  # primary always runs
+        assert bakuage.calls == 0  # deadline elapsed → no fallback
 
 
 class TestProtocolConformance:

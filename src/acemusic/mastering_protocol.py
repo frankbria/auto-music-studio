@@ -69,7 +69,13 @@ class MasteringService(Protocol):
     service: str
 
     def master(
-        self, audio_bytes: bytes, filename: str, profile: str, target_lufs: float, output_format: str
+        self,
+        audio_bytes: bytes,
+        filename: str,
+        profile: str,
+        target_lufs: float,
+        output_format: str,
+        timeout: float | None = None,
     ) -> MasteringOutput:
         """Master ``audio_bytes`` and return the mastered audio plus metrics.
 
@@ -78,5 +84,9 @@ class MasteringService(Protocol):
         platform profile vocabulary (``streaming``/``soundcloud``/``club``/
         ``vinyl``/``custom``); ``target_lufs`` the resolved loudness target;
         ``output_format`` the container to produce (``wav``/``mp3``/``flac``).
+        ``timeout`` caps the whole mastering run (upload + poll + download) in
+        seconds; ``None`` lets the backend use its own default. The orchestrator
+        passes a shrinking budget so a multi-backend fallback chain stays within
+        an overall deadline (US-12.3).
         """
         ...
