@@ -26,7 +26,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, User, Workspace
 from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
-from acemusic.api.tasks.iterative import IterativeProcessingError
+from acemusic.api.tasks.iterative import JobProcessingError
 from acemusic.song_structure import SONG_STRUCTURE
 from acemusic.storage import LocalStorage, get_storage_backend
 
@@ -554,7 +554,7 @@ class TestFullSongHandler:
         # roll children back, unlike the multi-output sample handler.
         user, workspace, clip = await self._seed(storage)
         job = await self._job(user, workspace, clip, structure_plan=["intro", "verse", "chorus", "outro"])
-        with pytest.raises(IterativeProcessingError, match="ace boom"):
+        with pytest.raises(JobProcessingError, match="ace boom"):
             await self._run(job, _FailingAce(_wav_bytes(2.0), fail_on=3), storage)
         # Sections 1 and 2 committed before the third failed.
         children = await Clip.find(Clip.generation_mode == "full_song").to_list()
@@ -566,7 +566,7 @@ class TestFullSongHandler:
         user, workspace, clip = await self._seed(storage)
         start = (await User.get(user.id)).credits_balance
         job = await self._job(user, workspace, clip, structure_plan=["intro", "verse", "chorus", "outro"])
-        with pytest.raises(IterativeProcessingError, match="ace boom"):
+        with pytest.raises(JobProcessingError, match="ace boom"):
             await self._run(job, _FailingAce(_wav_bytes(2.0), fail_on=3), storage)
         assert (await User.get(user.id)).credits_balance == start + 2.0
 

@@ -210,14 +210,14 @@ class TestSuccess:
 class TestGracefulDegradation:
     async def test_missing_client_raises_clear_error(self, storage) -> None:
         job, _ = await _make_clip(storage, email="master-nocreds@example.com")
-        with pytest.raises(tasks.MasteringProcessingError, match="not configured"):
+        with pytest.raises(tasks.JobProcessingError, match="not configured"):
             await tasks.process_mastering_job(job, storage=storage, client=None)
 
     async def test_unsupported_service_raises(self, storage) -> None:
         job, _ = await _make_clip(storage, email="master-landr@example.com")
         job.input_params = {**job.input_params, "service": "landr"}
         client = FakeDolby(output=_wav_bytes(3.0))
-        with pytest.raises(tasks.MasteringProcessingError, match="not yet implemented"):
+        with pytest.raises(tasks.JobProcessingError, match="not yet implemented"):
             await tasks.process_mastering_job(job, storage=storage, client=client)
 
     async def test_unsupported_service_refunds_charged_credits(self, storage) -> None:
@@ -229,7 +229,7 @@ class TestGracefulDegradation:
         job.input_params = {**job.input_params, "service": "landr"}
         cost = credits_service.get_mastering_cost("landr")
         before = await credits_service.deduct_credits(job.user_id, cost)
-        with pytest.raises(tasks.MasteringProcessingError):
+        with pytest.raises(tasks.JobProcessingError):
             await tasks.process_mastering_job(job, storage=storage, client=FakeDolby(output=_wav_bytes(3.0)))
         user = await user_service.get_user_by_id(str(job.user_id))
         assert user.credits_balance == before + cost
@@ -240,7 +240,7 @@ class TestGracefulDegradation:
         job, _ = await _make_clip(storage, email="master-refund-nocreds@example.com")
         cost = credits_service.get_mastering_cost("dolby")
         before = await credits_service.deduct_credits(job.user_id, cost)
-        with pytest.raises(tasks.MasteringProcessingError, match="not configured"):
+        with pytest.raises(tasks.JobProcessingError, match="not configured"):
             await tasks.process_mastering_job(job, storage=storage, client=None)
         user = await user_service.get_user_by_id(str(job.user_id))
         assert user.credits_balance == before + cost
@@ -251,27 +251,27 @@ class TestErrorHandling:
     async def test_dolby_error_at_each_stage_is_wrapped(self, storage, stage) -> None:
         job, _ = await _make_clip(storage, email=f"master-fail-{stage}@example.com")
         client = FakeDolby(output=_wav_bytes(3.0), fail_on=stage)
-        with pytest.raises(tasks.MasteringProcessingError, match="Dolby"):
+        with pytest.raises(tasks.JobProcessingError, match="Dolby"):
             await tasks.process_mastering_job(job, storage=storage, client=client)
 
     async def test_missing_source_clip_fails(self, storage) -> None:
         job, source = await _make_clip(storage, email="master-gone@example.com")
         await source.delete()
         client = FakeDolby(output=_wav_bytes(3.0))
-        with pytest.raises(tasks.MasteringProcessingError, match="no longer exists"):
+        with pytest.raises(tasks.JobProcessingError, match="no longer exists"):
             await tasks.process_mastering_job(job, storage=storage, client=client)
 
     async def test_no_previews_returned_fails(self, storage) -> None:
         job, _ = await _make_clip(storage, email="master-empty@example.com")
         client = FakeDolby(output=_wav_bytes(3.0), previews=[])
-        with pytest.raises(tasks.MasteringProcessingError, match="no preview outputs"):
+        with pytest.raises(tasks.JobProcessingError, match="no preview outputs"):
             await tasks.process_mastering_job(job, storage=storage, client=client)
 
     async def test_download_failure_rolls_back_stored_previews(self, storage) -> None:
         job, _ = await _make_clip(storage, email="master-rollback@example.com")
         # First preview stores fine; the second download fails — the first must roll back.
         client = _RollbackDolby(output=_wav_bytes(3.0), previews=["dlb://p1.wav", "dlb://p2.wav"])
-        with pytest.raises(tasks.MasteringProcessingError):
+        with pytest.raises(tasks.JobProcessingError):
             await tasks.process_mastering_job(job, storage=storage, client=client)
         # No master clip should survive for this job's source.
         remaining = await Clip.find(Clip.generation_mode == MASTERING_JOB_TYPE).to_list()

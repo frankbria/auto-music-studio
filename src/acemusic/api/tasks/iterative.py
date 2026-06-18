@@ -62,6 +62,7 @@ from ..services.iterative import (
     REPAINT_JOB_TYPE,
     SAMPLE_JOB_TYPE,
 )
+from .common import JobProcessingError, download_clip, load_clip, rollback_clips, store_clip
 
 logger = logging.getLogger(__name__)
 
@@ -85,38 +86,13 @@ _ROLE_PROMPT_PREFIX = {
 PollFn = Callable[[AceStepClient, str], Awaitable[dict[str, Any]]]
 
 
-class IterativeProcessingError(Exception):
-    """An iterative-generation job could not be processed."""
-
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
 
-async def _load_clip(clip_id: str) -> Clip:
-    """Resolve a source clip by id, or fail the job with a clear error.
-
-    A source clip may legitimately vanish between enqueue and processing (the
-    owner can DELETE it while the job is queued), so a miss is a job failure,
-    not a crash (mirrors the extraction handlers).
-    """
-    try:
-        oid = PydanticObjectId(clip_id)
-    except Exception as exc:
-        raise IterativeProcessingError(f"Job has an invalid source clip id: {clip_id!r}") from exc
-    clip = await Clip.get(oid)
-    if clip is None:
-        raise IterativeProcessingError(f"Source clip {clip_id} no longer exists")
-    return clip
-
-
 async def _download(storage: StorageBackend, clip: Clip, dest: Path) -> None:
-    try:
-        data = await asyncio.to_thread(storage.download, clip.file_path)
-    except FileNotFoundError as exc:
-        raise IterativeProcessingError(f"Source clip {clip.id} audio object {clip.file_path!r} is missing") from exc
-    dest.write_bytes(data)
+    dest.write_bytes(await download_clip(storage, clip))
 
 
 def _source_prompt(clip: Clip, fallback: str) -> str:
@@ -142,10 +118,10 @@ async def _submit_and_download(
     task_id = await asyncio.to_thread(partial(client.submit_task, **submit_kwargs))
     result = await poll(client, task_id)
     if result.get("status") == "failed":
-        raise IterativeProcessingError(result.get("error") or "ACE-Step task failed")
+        raise JobProcessingError(result.get("error") or "ACE-Step task failed")
     audio_urls = result.get("audio_urls") or []
     if len(audio_urls) < expected:
-        raise IterativeProcessingError(f"ACE-Step returned {len(audio_urls)} clip(s) but {expected} were expected")
+        raise JobProcessingError(f"ACE-Step returned {len(audio_urls)} clip(s) but {expected} were expected")
     return [await asyncio.to_thread(client.download_audio, url) for url in audio_urls[:expected]]
 
 
@@ -178,13 +154,11 @@ async def _store_child_clip(
     generate / editing paths' rollback).
     """
     clip_id = PydanticObjectId()
-    path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
-    await asyncio.to_thread(storage.upload, path, data)
     clip = Clip(
         id=clip_id,
         user_id=job.user_id,
         workspace_id=job.workspace_id,
-        file_path=path,
+        file_path=f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}",
         title=title,
         format=fmt,
         duration=duration,
@@ -197,32 +171,8 @@ async def _store_child_clip(
         generation_mode=job.job_type,
         generation_params=dict(job.input_params or {}),
     )
-    try:
-        await clip.insert()
-    except BaseException:
-        try:
-            await asyncio.to_thread(storage.delete, path)
-        except Exception:  # pragma: no cover - cleanup is best-effort
-            logger.exception("Failed to delete orphaned storage object %s during rollback", path)
-        raise
+    await store_clip(storage, clip, data)
     return str(clip_id)
-
-
-async def _rollback_children(storage: StorageBackend, clip_ids: list[str]) -> None:
-    """Best-effort removal of child clips (docs + audio objects) already stored.
-
-    Used by multi-output modes (sample) so a failure partway through the batch
-    does not leave earlier children behind for a job that ends up ``failed``.
-    """
-    for clip_id in clip_ids:
-        clip = await Clip.get(PydanticObjectId(clip_id))
-        if clip is None:  # pragma: no cover - already gone
-            continue
-        try:
-            await asyncio.to_thread(storage.delete, clip.file_path)
-        except Exception:  # pragma: no cover - cleanup is best-effort
-            logger.exception("Failed to delete orphaned storage object %s during rollback", clip.file_path)
-        await clip.delete()
 
 
 def _decode(data: bytes, fmt: str) -> AudioSegment:
@@ -238,9 +188,9 @@ def _decode(data: bytes, fmt: str) -> AudioSegment:
 async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
     """Grow the source by ``duration`` from ``from_point`` (ACE-Step ``repaint``)."""
     params = dict(job.input_params or {})
-    source = await _load_clip(params["clip_id"])
+    source = await load_clip(params["clip_id"])
     if source.duration is None:
-        raise IterativeProcessingError(f"Source clip {source.id} has no duration metadata")
+        raise JobProcessingError(f"Source clip {source.id} has no duration metadata")
     fmt = native_format(source)
     duration_s = parse_time_string(params["duration"]) / 1000.0
     from_point = params.get("from_point", "end")
@@ -303,7 +253,7 @@ async def _process_restyle_job(
 ) -> dict:
     """Shared cover/remix path: ACE-Step ``cover`` at the source's length."""
     params = dict(job.input_params or {})
-    source = await _load_clip(params["clip_id"])
+    source = await load_clip(params["clip_id"])
     fmt = native_format(source)
     effective_lyrics = lyrics if lyrics is not None else source.lyrics
     with tempfile.TemporaryDirectory(prefix="acemusic-restyle-") as tmp:
@@ -371,7 +321,7 @@ async def process_remix_job(job: Job, *, storage: StorageBackend, client: AceSte
 async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
     """Layer vocals onto the source (ACE-Step ``complete``)."""
     params = dict(job.input_params or {})
-    source = await _load_clip(params["clip_id"])
+    source = await load_clip(params["clip_id"])
     fmt = native_format(source)
     with tempfile.TemporaryDirectory(prefix="acemusic-vocal-") as tmp:
         src_path = Path(tmp) / f"source.{fmt}"
@@ -417,7 +367,7 @@ async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: Ac
 async def process_repaint_job(job: Job, *, storage: StorageBackend, client: AceStepClient, poll: PollFn) -> dict:
     """Regenerate ``[start, end]`` and crossfade it back into the original audio."""
     params = dict(job.input_params or {})
-    source = await _load_clip(params["clip_id"])
+    source = await load_clip(params["clip_id"])
     fmt = native_format(source)
     start_ms = int(params["start_ms"])
     end_ms = int(params["end_ms"])
@@ -448,9 +398,7 @@ async def process_repaint_job(job: Job, *, storage: StorageBackend, client: AceS
     original = _decode(original_bytes, fmt)
     repaint_full = _decode(data[0], fmt)
     if len(repaint_full) < end_ms - 10:
-        raise IterativeProcessingError(
-            f"ACE-Step output is {len(repaint_full)}ms but the repaint window ends at {end_ms}ms"
-        )
+        raise JobProcessingError(f"ACE-Step output is {len(repaint_full)}ms but the repaint window ends at {end_ms}ms")
     before = original[:start_ms]
     middle = repaint_full[start_ms:end_ms]
     after = original[end_ms:]
@@ -489,7 +437,7 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
     """
     params = dict(job.input_params or {})
     clip_ids: list[str] = params["clip_ids"]
-    sources = [await _load_clip(cid) for cid in clip_ids]
+    sources = [await load_clip(cid) for cid in clip_ids]
     primary, secondaries = sources[0], sources[1:]
     fmt = native_format(primary)
     style = params.get("style")
@@ -572,7 +520,7 @@ async def _build_mashup_reference(
     # raise explicitly rather than assert: asserts are stripped under ``python -O``,
     # which would turn an unexpected empty list into an opaque AttributeError.
     if mixed is None:
-        raise IterativeProcessingError("mashup has no secondary sources to build a reference from")
+        raise JobProcessingError("mashup has no secondary sources to build a reference from")
     mixed.export(ref_path, format=fmt)
     return ref_path
 
@@ -619,7 +567,7 @@ async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceSt
     a ``failed`` job leaves no orphaned clips or storage objects behind.
     """
     params = dict(job.input_params or {})
-    source = await _load_clip(params["clip_id"])
+    source = await load_clip(params["clip_id"])
     fmt = native_format(source)
     start_ms = int(params["start_ms"])
     end_ms = int(params["end_ms"])
@@ -670,7 +618,7 @@ async def process_sample_job(job: Job, *, storage: StorageBackend, client: AceSt
         except BaseException:
             # BaseException (not Exception): a shutdown CancelledError must also
             # roll back, else a requeued retry duplicates the stored children.
-            await _rollback_children(storage, clip_ids)
+            await rollback_clips(storage, clip_ids)
             raise
     return {"clip_ids": clip_ids}
 
@@ -708,9 +656,9 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
     the CLI), so a ``failed`` job still exposes the work done so far.
     """
     params = dict(job.input_params or {})
-    seed = await _load_clip(params["clip_id"])
+    seed = await load_clip(params["clip_id"])
     if seed.duration is None:
-        raise IterativeProcessingError(f"Seed clip {seed.id} has no duration metadata")
+        raise JobProcessingError(f"Seed clip {seed.id} has no duration metadata")
     fmt = native_format(seed)
     target_duration = float(params["target_duration"])
     structure_plan = params.get("structure_plan")
@@ -800,7 +748,7 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
         # plan_sections guarantees a non-empty list (it raises on empty), so this
         # is only reachable if that invariant is ever broken — fail loudly rather
         # than return an invalid {"clip_ids": [None]} result.
-        raise IterativeProcessingError("Full-song planning produced no sections")
+        raise JobProcessingError("Full-song planning produced no sections")
     return {"clip_ids": [final_clip_id]}
 
 

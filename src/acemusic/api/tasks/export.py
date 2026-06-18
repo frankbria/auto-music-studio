@@ -26,55 +26,24 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from beanie import PydanticObjectId
-
 from acemusic.audio import EXPORT_FORMATS, export_audio
 from acemusic.storage import StorageBackend
 
-from ..models import Clip, Job
+from ..models import Job
 from ..services.clips import native_format
+from .common import JobProcessingError, download_clip, load_source_clip
 
 # Container/extension each export format is written to (wav32 is a wav variant).
 _FORMAT_EXTENSIONS = {"wav": "wav", "wav32": "wav", "flac": "flac", "mp3": "mp3"}
-
-
-class ExportProcessingError(Exception):
-    """An export job could not be processed (missing source, bad format)."""
-
-
-async def _load_source_clip(job: Job) -> Clip:
-    """Resolve the job's source clip, or fail the job with a clear error.
-
-    The clip may legitimately vanish between enqueue and processing (the owner
-    can DELETE it while the job is queued), so a miss is a job failure, not a
-    crash (mirrors the extraction handlers).
-    """
-    clip_id = (job.input_params or {}).get("clip_id")
-    try:
-        oid = PydanticObjectId(clip_id)
-    except Exception as exc:
-        raise ExportProcessingError(f"Job has an invalid source clip id: {clip_id!r}") from exc
-    clip = await Clip.get(oid)
-    if clip is None:
-        raise ExportProcessingError(f"Source clip {clip_id} no longer exists")
-    return clip
-
-
-async def _download_source(storage: StorageBackend, source: Clip, dest: Path) -> None:
-    try:
-        data = await asyncio.to_thread(storage.download, source.file_path)
-    except FileNotFoundError as exc:
-        raise ExportProcessingError(f"Source clip {source.id} audio object {source.file_path!r} is missing") from exc
-    await asyncio.to_thread(dest.write_bytes, data)
 
 
 async def process_export_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     """Transcode the source clip to the requested format and store the file."""
     fmt = (job.input_params or {}).get("format")
     if fmt not in EXPORT_FORMATS:
-        raise ExportProcessingError(f"Unsupported export format: {fmt!r}. Expected one of {EXPORT_FORMATS}.")
+        raise JobProcessingError(f"Unsupported export format: {fmt!r}. Expected one of {EXPORT_FORMATS}.")
 
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
     src_ext = native_format(source)
 
     ext = _FORMAT_EXTENSIONS[fmt]
@@ -82,7 +51,7 @@ async def process_export_job(job: Job, storage: StorageBackend) -> dict[str, Any
         # Keep the source's real extension so export_audio's pydub decode hint
         # (derived from the suffix) matches the actual format.
         input_path = Path(tmp_dir) / f"source.{src_ext}"
-        await _download_source(storage, source, input_path)
+        await asyncio.to_thread(input_path.write_bytes, await download_clip(storage, source))
         dest_path = Path(tmp_dir) / f"export.{ext}"
         await asyncio.to_thread(export_audio, input_path, dest_path, fmt)
         data = await asyncio.to_thread(dest_path.read_bytes)

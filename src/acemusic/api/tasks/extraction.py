@@ -42,44 +42,13 @@ from acemusic.storage import StorageBackend
 from ..models import Clip, Job
 from ..services.clips import native_format
 from ..services.extraction import MIDI_JOB_TYPE, STEMS_JOB_TYPE
+from .common import JobProcessingError, download_clip, load_source_clip, rollback_clips, store_clip
 
 logger = logging.getLogger(__name__)
 
 # Default sample rate if the stems client does not expose ``model_samplerate``
 # (mirrors acemusic.daw_export); test doubles need not load a real model.
 _DEFAULT_SAMPLE_RATE = 44100
-
-
-class ExtractionProcessingError(Exception):
-    """An extraction job could not be processed (missing source, ML failure)."""
-
-
-async def _load_source_clip(job: Job) -> Clip:
-    """Resolve the job's source clip, or fail the job with a clear error.
-
-    The clip may legitimately vanish between enqueue and processing (the owner
-    can DELETE it while the job is queued), so a miss is a job failure, not a
-    crash (mirrors the editing handlers).
-    """
-    clip_id = (job.input_params or {}).get("clip_id")
-    try:
-        oid = PydanticObjectId(clip_id)
-    except Exception as exc:
-        raise ExtractionProcessingError(f"Job has an invalid source clip id: {clip_id!r}") from exc
-    clip = await Clip.get(oid)
-    if clip is None:
-        raise ExtractionProcessingError(f"Source clip {clip_id} no longer exists")
-    return clip
-
-
-async def _download_source(storage: StorageBackend, source: Clip, dest: Path) -> None:
-    try:
-        data = await asyncio.to_thread(storage.download, source.file_path)
-    except FileNotFoundError as exc:
-        raise ExtractionProcessingError(
-            f"Source clip {source.id} audio object {source.file_path!r} is missing"
-        ) from exc
-    dest.write_bytes(data)
 
 
 def _separate_stems(source_path: Path, output_dir: Path, base_name: str) -> dict[str, Path]:
@@ -105,18 +74,18 @@ async def process_stems_job(job: Job, storage: StorageBackend) -> dict[str, Any]
     leaves orphaned ``Clip`` rows or storage objects behind (mirrors the
     generate path's rollback).
     """
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
 
     with tempfile.TemporaryDirectory(prefix="acemusic-stems-") as tmp_dir:
         input_path = Path(tmp_dir) / f"source.{native_format(source)}"
-        await _download_source(storage, source, input_path)
+        input_path.write_bytes(await download_clip(storage, source))
         stem_paths = await asyncio.to_thread(_separate_stems, input_path, Path(tmp_dir), str(source.id))
         # Read the produced stem bytes while the temp dir still exists, in the
         # canonical label order so the result is deterministic.
         produced = [(label, Path(stem_paths[label]).read_bytes()) for label in STEM_LABELS if label in stem_paths]
 
     if not produced:
-        raise ExtractionProcessingError(f"Stem separation produced no output for clip {source.id}")
+        raise JobProcessingError(f"Stem separation produced no output for clip {source.id}")
 
     # Re-extraction (only reached when the cached set is incomplete — a complete
     # set short-circuits in the router) replaces any leftover stem children so
@@ -149,24 +118,19 @@ async def _store_stem_clips(
 ) -> list[str]:
     """Upload each stem and insert its child Clip; roll back on any failure.
 
-    Uploaded paths are tracked the moment the upload returns — *before* the
-    insert — so a clip insert that fails after its object is already stored
-    still has that object cleaned up (not just the earlier, fully-stored ones).
+    ``store_clip`` rolls back a stem whose own insert fails (its object is removed
+    before raising); on that failure the already-inserted earlier stems are rolled
+    back here, so a ``failed`` job leaves no orphaned clips or objects behind.
     """
     clip_ids: list[str] = []
-    inserted: list[Clip] = []
-    uploaded_paths: list[str] = []
     try:
         for label, data in produced:
             clip_id = PydanticObjectId()
-            path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.wav"
-            await asyncio.to_thread(storage.upload, path, data)
-            uploaded_paths.append(path)
             clip = Clip(
                 id=clip_id,
                 user_id=job.user_id,
                 workspace_id=job.workspace_id,
-                file_path=path,
+                file_path=f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.wav",
                 title=label,
                 format="wav",
                 # Stems are the same length as the source mix (time-aligned).
@@ -176,27 +140,12 @@ async def _store_stem_clips(
                 parent_clip_ids=[source.id],
                 generation_mode=STEMS_JOB_TYPE,
             )
-            await clip.insert()
-            inserted.append(clip)
+            await store_clip(storage, clip, data)
             clip_ids.append(str(clip_id))
     except Exception:
-        await _rollback_clips(storage, inserted, uploaded_paths)
+        await rollback_clips(storage, clip_ids)
         raise
     return clip_ids
-
-
-async def _rollback_clips(storage: StorageBackend, inserted: list[Clip], uploaded_paths: list[str]) -> None:
-    """Best-effort cleanup of stem clips/files written before a mid-batch failure."""
-    for clip in inserted:
-        try:
-            await clip.delete()
-        except Exception:  # pragma: no cover - cleanup is best-effort
-            logger.exception("Failed to delete orphaned stem clip %s during rollback", clip.id)
-    for path in uploaded_paths:
-        try:
-            await asyncio.to_thread(storage.delete, path)
-        except Exception:  # pragma: no cover - cleanup is best-effort
-            logger.exception("Failed to delete orphaned storage object %s during rollback", path)
 
 
 async def process_midi_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
@@ -207,19 +156,19 @@ async def process_midi_job(job: Job, storage: StorageBackend) -> dict[str, Any]:
     failure after some uploads cleans them up so a failed job leaves no orphans
     and never half-populates ``midi_paths``.
     """
-    source = await _load_source_clip(job)
+    source = await load_source_clip(job)
     bpm = float(source.bpm) if source.bpm is not None else 120.0
 
     with tempfile.TemporaryDirectory(prefix="acemusic-midi-") as tmp_dir:
         input_path = Path(tmp_dir) / f"source.{native_format(source)}"
-        await _download_source(storage, source, input_path)
+        input_path.write_bytes(await download_clip(storage, source))
         midi_files = await asyncio.to_thread(_extract_midi, input_path, Path(tmp_dir), str(source.id), bpm)
         produced = [
             (label, Path(midi_files[label]).read_bytes()) for label in MIDI_OUTPUT_LABELS if label in midi_files
         ]
 
     if not produced:
-        raise ExtractionProcessingError(f"MIDI extraction produced no output for clip {source.id}")
+        raise JobProcessingError(f"MIDI extraction produced no output for clip {source.id}")
 
     midi_paths = await _store_midi_files(job, source, storage, produced)
     # Record the artifacts on the parent clip: this is the cache + retrieval
