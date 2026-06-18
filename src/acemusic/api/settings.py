@@ -121,6 +121,19 @@ class ApiSettings(BaseSettings):
     dolby_api_key: str | None = None
     dolby_api_secret: str | None = None
 
+    # LANDR B2B Music Mastering (US-12.3). Optional fallback alongside Dolby.io;
+    # the B2B API exchanges an app key/secret for a session token, mirroring
+    # Dolby.io. ``landr_enabled`` is False unless both are set, so the
+    # orchestrator skips LANDR in the fallback chain on a LANDR-less deployment.
+    landr_api_key: str | None = None
+    landr_api_secret: str | None = None
+
+    # Bakuage AI Mastering (US-12.3). Optional cost-effective fallback (the end of
+    # the Dolby -> LANDR -> Bakuage chain). Bakuage uses a single API-key bearer
+    # token (no OAuth), so only one credential is required; ``bakuage_enabled`` is
+    # False until it is set.
+    bakuage_api_key: str | None = None
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
@@ -137,6 +150,16 @@ class ApiSettings(BaseSettings):
     def dolby_enabled(self) -> bool:
         """True only when both Dolby.io credentials are configured (mastering is usable)."""
         return bool(self.dolby_api_key and self.dolby_api_secret)
+
+    @property
+    def landr_enabled(self) -> bool:
+        """True only when both LANDR B2B credentials are configured."""
+        return bool(self.landr_api_key and self.landr_api_secret)
+
+    @property
+    def bakuage_enabled(self) -> bool:
+        """True only when the Bakuage API key is configured."""
+        return bool(self.bakuage_api_key)
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.

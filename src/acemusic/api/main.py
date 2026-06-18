@@ -38,7 +38,7 @@ from .routers import (
     workspaces,
 )
 from .settings import ApiSettings
-from .tasks.mastering import get_dolby_client
+from .tasks.mastering import get_mastering_orchestrator
 from .tasks.processor import JobProcessor
 
 API_V1_PREFIX = "/api/v1"
@@ -104,10 +104,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     runpod_client_factory=runpod_factory,
                     runpod_timeout=settings.runpod_timeout,
                     runpod_poll_interval=settings.runpod_poll_interval,
-                    # Dolby.io mastering (US-12.2): the factory returns None when
-                    # credentials are unset, so mastering jobs fail cleanly rather
-                    # than the app crashing on a Dolby-less deployment.
-                    dolby_client_factory=lambda: get_dolby_client(settings),
+                    # Mastering (US-12.2 Dolby.io + US-12.3 LANDR/Bakuage
+                    # fallback): the orchestrator selects the requested backend
+                    # and falls back across the configured services on failure.
+                    # It is always wired so the handler can produce a clear "not
+                    # configured" error when no mastering credentials are set.
+                    mastering_orchestrator_factory=lambda: get_mastering_orchestrator(settings),
                 )
                 await processor.start()
             app_.state.job_processor = processor

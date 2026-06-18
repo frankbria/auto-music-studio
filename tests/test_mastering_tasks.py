@@ -1,15 +1,17 @@
-"""Tests for the mastering job handler (US-12.2, issue #128).
+"""Tests for the mastering job handler (US-12.2 + US-12.3, issue #128/#129).
 
 Exercise ``acemusic.api.tasks.mastering.process_mastering_job`` directly with a
-fake DolbyClient and a local on-disk storage backend: the handler downloads the
-source clip, "uploads" it to Dolby, "submits"/"polls" a master preview, downloads
-the mastered output and stores it as a lineage-tagged child clip. They assert the
-worker contract — preview clips with lineage, metrics in the result, graceful
-degradation without credentials, per-stage error handling, rollback — that the
-real Dolby integration tests cannot cheaply cover.
+fake mastering orchestrator (built from in-process ``FakeService`` stubs) and a
+local on-disk storage backend: the handler downloads the source clip, hands it
+to the orchestrator which runs the requested backend (and falls back on
+failure), downloads the mastered output and stores it as a lineage-tagged child
+clip. They assert the worker contract — lineage + metrics + the service that
+actually ran, graceful degradation without credentials, fallback from Dolby to
+Bakuage, refund-on-rejection, per-stage error handling — that the live Dolby /
+LANDR / Bakuage integration tests cannot cheaply cover.
 
-The ``get_dolby_client`` factory tests run in CI (no DB). The handler tests need a
-local MongoDB (Beanie) and are marked ``integration``.
+The ``get_mastering_orchestrator`` factory tests run in CI (no DB). The handler
+tests need a local MongoDB (Beanie) and are marked ``integration``.
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from acemusic.api.services import users as user_service
 from acemusic.api.services.mastering import MASTERING_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks import mastering as tasks
-from acemusic.dolby_client import DolbyError
+from acemusic.mastering_orchestrator import MasteringOrchestrator
+from acemusic.mastering_protocol import MasteringError, MasteringOutput
 from acemusic.storage import LocalStorage
 
 SR = 44100
@@ -44,68 +47,71 @@ def _wav_bytes(duration_s: float = 3.0, freq: float = 440.0) -> bytes:
 _METRICS = {"loudness": -14.0, "eq_bands": [float(i) for i in range(16)], "stereo": {"width": 0.8, "balance": 0.0}}
 
 
-class FakeDolby:
-    """Records the workflow calls and returns canned previews/metrics."""
+class FakeService:
+    """A MasteringService stub: returns canned output, or raises on master()."""
 
-    def __init__(
+    def __init__(self, *, service: str, output: bytes, metrics: dict | None = None, fail: bool = False) -> None:
+        self.service = service
+        self._output = output
+        self._metrics = metrics if metrics is not None else _METRICS
+        self._fail = fail
+        self.master_calls: list[dict] = []
+
+    def master(
         self,
-        *,
-        output: bytes,
-        previews: list[str] | None = None,
-        fail_on: str | None = None,
-    ) -> None:
-        self.output = output
-        self.previews = previews if previews is not None else ["dlb://preview-1.wav"]
-        self.fail_on = fail_on
-        self.calls: list[str] = []
+        audio_bytes: bytes,
+        filename: str,
+        profile: str,
+        target_lufs: float,
+        output_format: str,
+        timeout: float | None = None,
+    ) -> MasteringOutput:
+        self.master_calls.append(
+            {
+                "audio_bytes": audio_bytes,
+                "filename": filename,
+                "profile": profile,
+                "target_lufs": target_lufs,
+                "output_format": output_format,
+            }
+        )
+        if self._fail:
+            raise MasteringError(f"{self.service} unavailable")
+        return MasteringOutput(audio_bytes=self._output, metrics=dict(self._metrics), service=self.service)
 
-    def _maybe_fail(self, stage: str) -> None:
-        self.calls.append(stage)
-        if self.fail_on == stage:
-            raise DolbyError(f"boom at {stage}")
 
-    def upload(self, audio_bytes: bytes, filename: str) -> str:
-        self._maybe_fail("upload")
-        self.upload_filename = filename
-        return f"dlb://{filename}"
-
-    def submit_preview(self, input_url: str, outputs: list[dict]) -> str:
-        self._maybe_fail("submit")
-        self.submitted_outputs = outputs
-        return "dolby-job-1"
-
-    def wait_for_completion(self, job_id: str, *args, **kwargs) -> dict:
-        self._maybe_fail("wait")
-        return {"status": "success"}
-
-    def get_results(self, job_id: str, status_payload: dict | None = None) -> dict:
-        self._maybe_fail("results")
-        return {
-            "metrics": _METRICS,
-            "outputs": [{"destination": p, "preview": p} for p in self.previews],
-        }
-
-    def download(self, dlb_url: str) -> bytes:
-        self._maybe_fail("download")
-        return self.output
+def _orchestrator(**services: FakeService) -> MasteringOrchestrator:
+    """Build an orchestrator from the given FakeService stubs keyed by service name."""
+    return MasteringOrchestrator(dict(services))
 
 
 # ---------------------------------------------------------------------------
-# get_dolby_client factory (CI — no DB)
+# get_mastering_orchestrator factory (CI — no DB)
 # ---------------------------------------------------------------------------
 
 
-class TestGetDolbyClient:
-    def test_returns_none_without_credentials(self) -> None:
+class TestGetMasteringOrchestrator:
+    def test_no_credentials_yields_empty_orchestrator(self) -> None:
         settings = ApiSettings(_env_file=None)
-        assert tasks.get_dolby_client(settings) is None
+        orch = tasks.get_mastering_orchestrator(settings)
+        assert orch.available_services == ()
 
-    def test_returns_client_with_credentials(self) -> None:
+    def test_dolby_only(self) -> None:
         settings = ApiSettings(_env_file=None, dolby_api_key="k", dolby_api_secret="s")
-        client = tasks.get_dolby_client(settings)
-        assert client is not None
-        assert client.api_key == "k"
-        assert client.api_secret == "s"
+        orch = tasks.get_mastering_orchestrator(settings)
+        assert orch.available_services == ("dolby",)
+
+    def test_all_three_backends_wired(self) -> None:
+        settings = ApiSettings(
+            _env_file=None,
+            dolby_api_key="dk",
+            dolby_api_secret="ds",
+            landr_api_key="lk",
+            landr_api_secret="ls",
+            bakuage_api_key="bk",
+        )
+        orch = tasks.get_mastering_orchestrator(settings)
+        assert orch.available_services == ("dolby", "landr", "bakuage")
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +132,7 @@ async def _make_clip(
     duration: float = 3.0,
     bpm: int | None = 120,
     key: str | None = "C",
+    service: str = "dolby",
 ) -> tuple[Job, Clip]:
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
     workspace = Workspace(name="WS", user_id=user.id)
@@ -152,7 +159,7 @@ async def _make_clip(
         input_params={
             "clip_id": str(clip.id),
             "profile": "streaming",
-            "service": "dolby",
+            "service": service,
             "format": "wav",
             "target_lufs": -14.0,
         },
@@ -165,13 +172,14 @@ pytestmark = pytest.mark.integration
 
 
 class TestSuccess:
-    async def test_creates_master_clip_with_lineage_and_metrics(self, storage) -> None:
+    async def test_dolby_creates_master_clip_with_lineage_and_metrics(self, storage) -> None:
         job, source = await _make_clip(storage, email="master-ok@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0))
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby)
 
-        result = await tasks.process_mastering_job(job, storage=storage, client=client)
+        result = await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
 
-        assert len(result["clip_ids"]) == 1
+        assert result["clip_ids"]  # one clip stored
         assert result["service"] == "dolby"
         assert result["target_lufs"] == -14.0
         assert result["metrics"] == _METRICS
@@ -184,109 +192,161 @@ class TestSuccess:
         # The mastered audio is retrievable from storage.
         assert storage.download(child.file_path)
 
-    async def test_workflow_calls_in_order(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-order@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0))
-        await tasks.process_mastering_job(job, storage=storage, client=client)
-        assert client.calls == ["upload", "submit", "wait", "results", "download"]
+    async def test_landr_creates_master_clip(self, storage) -> None:
+        # AC1: LANDR mastering produces a mastered audio file.
+        job, source = await _make_clip(storage, email="master-landr@example.com", service="landr")
+        landr = FakeService(
+            service="landr", output=_wav_bytes(3.0), metrics={"loudness": -14.2, "eq_bands": [], "stereo": {}}
+        )
+        orch = _orchestrator(landr=landr)
 
-    async def test_multiple_previews_each_become_clips(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-multi@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0), previews=["dlb://p1.wav", "dlb://p2.wav", "dlb://p3.wav"])
-        result = await tasks.process_mastering_job(job, storage=storage, client=client)
-        assert len(result["clip_ids"]) == 3
+        result = await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
 
-    async def test_dolby_keys_are_unique_per_job(self, storage) -> None:
-        # The input/output keys carry the job id so concurrent masters on the same
-        # clip never collide (codex review P2).
+        assert result["service"] == "landr"
+        assert result["metrics"]["loudness"] == -14.2
+        child = await Clip.get(PydanticObjectId(result["clip_ids"][0]))
+        assert child is not None
+        assert child.parent_clip_ids == [source.id]
+        assert storage.download(child.file_path)
+
+    async def test_bakuage_creates_master_clip(self, storage) -> None:
+        # AC2: Bakuage mastering produces a mastered audio file.
+        job, source = await _make_clip(storage, email="master-bakuage@example.com", service="bakuage")
+        bakuage = FakeService(
+            service="bakuage", output=_wav_bytes(3.0), metrics={"loudness": -9.0, "eq_bands": [], "stereo": {}}
+        )
+        orch = _orchestrator(bakuage=bakuage)
+
+        result = await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        assert result["service"] == "bakuage"
+        child = await Clip.get(PydanticObjectId(result["clip_ids"][0]))
+        assert child is not None
+        assert child.parent_clip_ids == [source.id]
+
+    async def test_upload_keyed_by_job_id(self, storage) -> None:
+        # The upload filename carries the job id so concurrent masters on the same
+        # clip never collide on the backend's input keys.
         job, source = await _make_clip(storage, email="master-keys@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0))
-        await tasks.process_mastering_job(job, storage=storage, client=client)
-        assert str(job.id) in client.upload_filename
-        assert str(job.id) in client.submitted_outputs[0]["destination"]
-        assert str(source.id) in client.upload_filename
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        await tasks.process_mastering_job(job, storage=storage, orchestrator=_orchestrator(dolby=dolby))
+        filename = dolby.master_calls[0]["filename"]
+        assert str(job.id) in filename
+        assert str(source.id) in filename
+
+
+class TestFallback:
+    async def test_dolby_failure_falls_back_to_bakuage(self, storage) -> None:
+        # AC3: when Dolby.io returns an error, the job falls back to Bakuage.
+        job, source = await _make_clip(storage, email="master-fb@example.com", service="dolby")
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0), fail=True)
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        result = await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        # The fallback backend ran and its service is attributed in the result.
+        assert result["service"] == "bakuage"
+        assert dolby.master_calls and dolby.master_calls[0]  # primary was attempted
+        assert bakuage.master_calls  # fallback was attempted
+        child = await Clip.get(PydanticObjectId(result["clip_ids"][0]))
+        assert child is not None
+        assert child.parent_clip_ids == [source.id]
+        assert storage.download(child.file_path)
+
+    async def test_all_backends_fail_raises(self, storage) -> None:
+        job, _ = await _make_clip(storage, email="master-allfail@example.com", service="dolby")
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0), fail=True)
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0), fail=True)
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        with pytest.raises(tasks.JobProcessingError, match="Mastering failed"):
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+    async def test_fallback_reconciles_credits_to_actual_service(self, storage) -> None:
+        # codex P1: a fallback that runs a differently-priced service must adjust
+        # the balance so the user pays for the work performed. Dolby (3.0) ->
+        # Bakuage (5.0): the user is topped up by the 2.0 difference.
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(storage, email="master-reconcile@example.com", service="dolby")
+        # Simulate the router's enqueue charge of the requested service.
+        charged = credits_service.get_mastering_cost("dolby")
+        balance_after_charge = await credits_service.deduct_credits(job.user_id, charged)
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0), fail=True)
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        actual = credits_service.get_mastering_cost("bakuage")
+        user = await user_service.get_user_by_id(str(job.user_id))
+        # Final balance reflects the actual service's cost, not the requested one.
+        assert user.credits_balance == balance_after_charge - (actual - charged)
+
+    async def test_cheaper_fallback_refunds_the_difference(self, storage) -> None:
+        # Bakuage (5.0) -> Dolby (3.0): the 2.0 overcharge is refunded.
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(storage, email="master-refund@example.com", service="bakuage")
+        charged = credits_service.get_mastering_cost("bakuage")
+        balance_after_charge = await credits_service.deduct_credits(job.user_id, charged)
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0), fail=True)
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        actual = credits_service.get_mastering_cost("dolby")
+        user = await user_service.get_user_by_id(str(job.user_id))
+        # Cheaper fallback → the difference is refunded.
+        assert user.credits_balance == balance_after_charge + (charged - actual)
 
 
 class TestGracefulDegradation:
-    async def test_missing_client_raises_clear_error(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-nocreds@example.com")
-        with pytest.raises(tasks.JobProcessingError, match="not configured"):
-            await tasks.process_mastering_job(job, storage=storage, client=None)
-
-    async def test_unsupported_service_raises(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-landr@example.com")
-        job.input_params = {**job.input_params, "service": "landr"}
-        client = FakeDolby(output=_wav_bytes(3.0))
-        with pytest.raises(tasks.JobProcessingError, match="not yet implemented"):
-            await tasks.process_mastering_job(job, storage=storage, client=client)
-
-    async def test_unsupported_service_refunds_charged_credits(self, storage) -> None:
-        # The router charges per service up front; a pre-flight rejection must
-        # refund so the user is not left paying for a failed job (codex review P2).
+    async def test_requested_service_unconfigured_refunds_and_raises(self, storage) -> None:
+        # Explicitly requesting landr on a dolby-only deployment: clear error +
+        # refund (no silent substitution, no work performed).
         from acemusic.api.services import credits as credits_service
 
-        job, _ = await _make_clip(storage, email="master-refund-landr@example.com")
-        job.input_params = {**job.input_params, "service": "landr"}
+        job, _ = await _make_clip(storage, email="master-unconfigured@example.com", service="landr")
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby)
         cost = credits_service.get_mastering_cost("landr")
         before = await credits_service.deduct_credits(job.user_id, cost)
-        with pytest.raises(tasks.JobProcessingError):
-            await tasks.process_mastering_job(job, storage=storage, client=FakeDolby(output=_wav_bytes(3.0)))
+
+        with pytest.raises(tasks.JobProcessingError, match="not configured"):
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
         user = await user_service.get_user_by_id(str(job.user_id))
         assert user.credits_balance == before + cost
 
-    async def test_missing_client_refunds_charged_credits(self, storage) -> None:
+    async def test_no_backends_at_all_refunds_and_raises(self, storage) -> None:
         from acemusic.api.services import credits as credits_service
 
-        job, _ = await _make_clip(storage, email="master-refund-nocreds@example.com")
+        job, _ = await _make_clip(storage, email="master-nobackend@example.com", service="dolby")
+        orch = _orchestrator()  # empty
         cost = credits_service.get_mastering_cost("dolby")
         before = await credits_service.deduct_credits(job.user_id, cost)
+
         with pytest.raises(tasks.JobProcessingError, match="not configured"):
-            await tasks.process_mastering_job(job, storage=storage, client=None)
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
         user = await user_service.get_user_by_id(str(job.user_id))
         assert user.credits_balance == before + cost
 
 
 class TestErrorHandling:
-    @pytest.mark.parametrize("stage", ["upload", "submit", "wait", "results", "download"])
-    async def test_dolby_error_at_each_stage_is_wrapped(self, storage, stage) -> None:
-        job, _ = await _make_clip(storage, email=f"master-fail-{stage}@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0), fail_on=stage)
-        with pytest.raises(tasks.JobProcessingError, match="Dolby"):
-            await tasks.process_mastering_job(job, storage=storage, client=client)
-
     async def test_missing_source_clip_fails(self, storage) -> None:
         job, source = await _make_clip(storage, email="master-gone@example.com")
         await source.delete()
-        client = FakeDolby(output=_wav_bytes(3.0))
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
         with pytest.raises(tasks.JobProcessingError, match="no longer exists"):
-            await tasks.process_mastering_job(job, storage=storage, client=client)
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=_orchestrator(dolby=dolby))
 
-    async def test_no_previews_returned_fails(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-empty@example.com")
-        client = FakeDolby(output=_wav_bytes(3.0), previews=[])
-        with pytest.raises(tasks.JobProcessingError, match="no preview outputs"):
-            await tasks.process_mastering_job(job, storage=storage, client=client)
-
-    async def test_download_failure_rolls_back_stored_previews(self, storage) -> None:
-        job, _ = await _make_clip(storage, email="master-rollback@example.com")
-        # First preview stores fine; the second download fails — the first must roll back.
-        client = _RollbackDolby(output=_wav_bytes(3.0), previews=["dlb://p1.wav", "dlb://p2.wav"])
-        with pytest.raises(tasks.JobProcessingError):
-            await tasks.process_mastering_job(job, storage=storage, client=client)
-        # No master clip should survive for this job's source.
-        remaining = await Clip.find(Clip.generation_mode == MASTERING_JOB_TYPE).to_list()
-        assert remaining == []
-
-
-class _RollbackDolby(FakeDolby):
-    """Succeeds on the first download, fails on the second to trigger rollback."""
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._downloads = 0
-
-    def download(self, dlb_url: str) -> bytes:
-        self._downloads += 1
-        if self._downloads >= 2:
-            raise DolbyError("download blew up")
-        return self.output
+    async def test_missing_target_lufs_fails(self, storage) -> None:
+        job, _ = await _make_clip(storage, email="master-nolufs@example.com")
+        job.input_params = {k: v for k, v in job.input_params.items() if k != "target_lufs"}
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        with pytest.raises(tasks.JobProcessingError, match="target_lufs"):
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=_orchestrator(dolby=dolby))
