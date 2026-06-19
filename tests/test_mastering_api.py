@@ -6,6 +6,8 @@ source clip, gates on per-service credits, and enqueues a queued job returning
 are ``integration`` and drive the real app over a local MongoDB.
 """
 
+import io
+
 import httpx
 import pytest
 from beanie import PydanticObjectId
@@ -333,3 +335,335 @@ class TestJobCreationFailure:
         assert (await _reload(user)).credits_balance == 10.0
         assert await Job.find(Job.user_id == user.id).count() == 0
         assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+
+
+# ===========================================================================
+# US-12.4 — mastering preview / A/B comparison and approval
+#
+# Built on the as-built single-master pipeline: each mastering job produces ONE
+# mastered clip, so "previews" are the completed mastered candidates for a source
+# clip (one per job), and approval *promotes* an existing mastered clip to
+# ``generation_mode="mastered"``.
+# ===========================================================================
+
+# The canonical metrics shape every backend normalises to (see test_mastering_tasks).
+_MASTER_METRICS = {
+    "loudness": -13.5,
+    "eq_bands": [float(i) for i in range(16)],
+    "stereo": {"width": 0.8, "balance": 0.0},
+}
+
+
+def _detail_url(job_id: str) -> str:
+    return f"{API_V1_PREFIX}/mastering/jobs/{job_id}"
+
+
+def _previews_url(job_id: str) -> str:
+    return f"{API_V1_PREFIX}/mastering/jobs/{job_id}/previews"
+
+
+def _approve_url(job_id: str) -> str:
+    return f"{API_V1_PREFIX}/mastering/jobs/{job_id}/approve"
+
+
+def _wav_bytes(seconds: float = 1.0, sr: int = 22050) -> bytes:
+    """A short stereo tone, long enough for pyloudnorm's 400ms integration block."""
+    import numpy as np
+    import soundfile as sf
+
+    t = np.linspace(0, seconds, int(sr * seconds), endpoint=False)
+    tone = 0.2 * np.sin(2 * np.pi * 220 * t)
+    stereo = np.column_stack([tone, tone])
+    buf = io.BytesIO()
+    sf.write(buf, stereo, sr, format="WAV", subtype="PCM_16")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def local_storage(monkeypatch, tmp_path):
+    """Point the storage backend at a throwaway local root for get_url()/loudness."""
+    monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ACEMUSIC_STORAGE_LOCAL_ROOT", str(tmp_path))
+    return tmp_path
+
+
+async def _insert_clip_doc(user, workspace_id, *, store_bytes=None, generation_mode=None, parents=None) -> Clip:
+    from acemusic.storage import get_storage_backend
+
+    clip_id = PydanticObjectId()
+    file_path = f"{user.id}/{workspace_id}/clips/{clip_id}.wav"
+    if store_bytes is not None:
+        get_storage_backend().upload(file_path, store_bytes)
+    clip = Clip(
+        id=clip_id,
+        user_id=user.id,
+        workspace_id=workspace_id,
+        file_path=file_path,
+        format="wav",
+        duration=10.0,
+        parent_clip_ids=parents or [],
+        generation_mode=generation_mode,
+    )
+    await clip.insert()
+    return clip
+
+
+async def _insert_mastering_job(
+    user,
+    *,
+    source_clip_id,
+    workspace_id,
+    status=JobStatus.COMPLETED,
+    profile="streaming",
+    service="dolby",
+    mastered_clip=None,
+    metrics=None,
+    job_type="mastering",
+) -> Job:
+    result = None
+    if status == JobStatus.COMPLETED:
+        result = {
+            "clip_ids": [str(mastered_clip.id)] if mastered_clip is not None else [],
+            "service": service,
+            "target_lufs": -14.0,
+            "metrics": metrics if metrics is not None else _MASTER_METRICS,
+        }
+    job = Job(
+        user_id=user.id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        status=status,
+        input_params={
+            "clip_id": source_clip_id,
+            "profile": profile,
+            "service": service,
+            "format": "wav",
+            "target_lufs": -14.0,
+        },
+        result=result,
+    )
+    await job.insert()
+    return job
+
+
+class TestPreviewAuthGate:
+    def test_get_detail_missing_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        assert client.get(_detail_url(str(PydanticObjectId()))).status_code == 401
+
+    def test_get_previews_missing_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        assert client.get(_previews_url(str(PydanticObjectId()))).status_code == 401
+
+    def test_approve_missing_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        resp = client.post(_approve_url(str(PydanticObjectId())), json={"preview_id": str(PydanticObjectId())})
+        assert resp.status_code == 401
+
+
+@pytest.mark.integration
+class TestMasteringJobDetail:
+    async def test_unknown_job_returns_404(self, client, settings) -> None:
+        user = await _make_user("m124-detail-unknown@example.com")
+        resp = await client.get(_detail_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_other_users_job_returns_404(self, client, settings) -> None:
+        owner = await _make_user("m124-detail-owner@example.com")
+        other = await _make_user("m124-detail-other@example.com")
+        job = await _insert_mastering_job(
+            owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
+        )
+        resp = await client.get(_detail_url(str(job.id)), headers=_auth_headers(other, settings))
+        assert resp.status_code == 404
+
+    async def test_non_mastering_job_returns_404(self, client, settings) -> None:
+        user = await _make_user("m124-detail-wrongtype@example.com")
+        job = await _insert_mastering_job(
+            user, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId(), job_type="generate"
+        )
+        resp = await client.get(_detail_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_queued_job_is_minimal(self, client, settings) -> None:
+        user = await _make_user("m124-detail-queued@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, status=JobStatus.QUEUED)
+        resp = await client.get(_detail_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "queued"
+        assert body["source_clip_id"] == str(src.id)
+        assert body["profile"] == "streaming"
+        assert "metrics" not in body
+        assert "mastered_clip_id" not in body
+
+    async def test_completed_job_has_metrics_and_mastered_clip(self, client, settings) -> None:
+        user = await _make_user("m124-detail-done@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.get(_detail_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "completed"
+        assert body["mastered_clip_id"] == str(mastered.id)
+        assert body["metrics"]["loudness"] == _MASTER_METRICS["loudness"]
+        assert body["service"] == "dolby"
+
+
+@pytest.mark.integration
+class TestMasteringPreviews:
+    async def test_unowned_job_returns_404(self, client, settings) -> None:
+        owner = await _make_user("m124-prev-owner@example.com")
+        other = await _make_user("m124-prev-other@example.com")
+        job = await _insert_mastering_job(
+            owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
+        )
+        resp = await client.get(_previews_url(str(job.id)), headers=_auth_headers(other, settings))
+        assert resp.status_code == 404
+
+    async def test_returns_original_and_candidate_metrics(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-prev-ab@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.get(_previews_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["original_audio_url"]
+        # Original-side metric is measured locally: integrated LUFS is a finite float.
+        assert isinstance(body["original_metrics"]["loudness"], float)
+        assert len(body["previews"]) == 1
+        preview = body["previews"][0]
+        assert preview["preview_id"] == str(mastered.id)
+        assert preview["audio_url"]
+        assert preview["metrics"]["loudness"] == _MASTER_METRICS["loudness"]
+        # A/B metrics diff: mastered-minus-original integrated loudness, a real number.
+        assert preview["loudness_delta"] == round(_MASTER_METRICS["loudness"] - body["original_metrics"]["loudness"], 2)
+
+    async def test_missing_source_audio_degrades_without_500(self, client, settings, local_storage) -> None:
+        # Source clip exists in the DB but its audio object was never stored: loudness
+        # can't be measured, so original_metrics degrades to None rather than a 500.
+        user = await _make_user("m124-prev-noaudio@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)  # no store_bytes
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.get(_previews_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["original_metrics"] is None
+        assert len(body["previews"]) == 1
+
+    async def test_caps_displayed_previews_at_five(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-prev-cap@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
+        last_job = None
+        for _ in range(6):
+            mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+            last_job = await _insert_mastering_job(
+                user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered
+            )
+        resp = await client.get(_previews_url(str(last_job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        # Six candidates exist; the audition set is bounded to the five most recent.
+        assert len(resp.json()["previews"]) == 5
+
+    async def test_aggregates_multiple_candidates_for_one_source(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-prev-multi@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
+        m1 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        m2 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        await _insert_mastering_job(
+            user, source_clip_id=str(src.id), workspace_id=ws, profile="streaming", mastered_clip=m1
+        )
+        job2 = await _insert_mastering_job(
+            user, source_clip_id=str(src.id), workspace_id=ws, profile="club", mastered_clip=m2
+        )
+        resp = await client.get(_previews_url(str(job2.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        ids = {p["preview_id"] for p in resp.json()["previews"]}
+        assert ids == {str(m1.id), str(m2.id)}
+
+
+@pytest.mark.integration
+class TestMasteringApprove:
+    async def test_unowned_job_returns_404(self, client, settings) -> None:
+        owner = await _make_user("m124-appr-owner@example.com")
+        other = await _make_user("m124-appr-other@example.com")
+        job = await _insert_mastering_job(
+            owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
+        )
+        resp = await client.post(
+            _approve_url(str(job.id)),
+            json={"preview_id": str(PydanticObjectId())},
+            headers=_auth_headers(other, settings),
+        )
+        assert resp.status_code == 404
+
+    async def test_invalid_preview_id_returns_404(self, client, settings) -> None:
+        user = await _make_user("m124-appr-bad@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.post(
+            _approve_url(str(job.id)),
+            json={"preview_id": str(PydanticObjectId())},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 404
+
+    async def test_approve_promotes_clip(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-appr-ok@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.post(
+            _approve_url(str(job.id)),
+            json={"preview_id": str(mastered.id)},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["clip_id"] == str(mastered.id)
+        assert body["audio_url"]
+        # Promotion: the existing clip becomes the final master, lineage preserved.
+        refreshed = await Clip.get(mastered.id)
+        assert refreshed.generation_mode == "mastered"
+        assert refreshed.parent_clip_ids == [src.id]
+
+    async def test_approve_is_idempotent(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-appr-idem@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        headers = _auth_headers(user, settings)
+        first = await client.post(_approve_url(str(job.id)), json={"preview_id": str(mastered.id)}, headers=headers)
+        second = await client.post(_approve_url(str(job.id)), json={"preview_id": str(mastered.id)}, headers=headers)
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert (await Clip.get(mastered.id)).generation_mode == "mastered"
+
+    async def test_approving_a_second_candidate_moves_the_master(self, client, settings, local_storage) -> None:
+        # Exactly one final master per source: approving m2 demotes m1 back to a candidate.
+        user = await _make_user("m124-appr-exclusive@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        m1 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        m2 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job1 = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=m1)
+        job2 = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=m2)
+        headers = _auth_headers(user, settings)
+        await client.post(_approve_url(str(job1.id)), json={"preview_id": str(m1.id)}, headers=headers)
+        await client.post(_approve_url(str(job2.id)), json={"preview_id": str(m2.id)}, headers=headers)
+        assert (await Clip.get(m1.id)).generation_mode == "mastering"
+        assert (await Clip.get(m2.id)).generation_mode == "mastered"
