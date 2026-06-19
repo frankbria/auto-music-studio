@@ -12,19 +12,25 @@ mastering work is a future ticket — the processor only claims registered
 ``job_type``s, so submitted jobs queue safely until then.
 """
 
+import asyncio
 import logging
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from acemusic.storage import get_storage_backend
+
 from ..auth.dependencies import CurrentUser, get_current_user
+from ..models import Clip, JobStatus
 from ..services import (
     clips as clip_service,
     credits as credits_service,
     mastering as mastering_service,
     users as user_service,
 )
+from ..services.common import coerce_object_id
 
 logger = logging.getLogger(__name__)
 
@@ -142,3 +148,175 @@ async def create_mastering_job(
         # retry that double-charges. The ledger row is best-effort history.
         logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
     return MasteringJobResponse(job_id=str(job.id))
+
+
+# ---------------------------------------------------------------------------
+# Preview / A/B comparison and approval (US-12.4)
+#
+# The mastering pipeline produces ONE mastered clip per job (US-12.2), so a source
+# clip's "previews" are the mastered children of its completed mastering jobs (one
+# per job). The detail endpoint exposes a single job; the previews endpoint
+# aggregates every candidate for the source for side-by-side comparison against
+# the original; approval promotes a chosen candidate to the final master.
+# ---------------------------------------------------------------------------
+
+
+def _job_not_found() -> HTTPException:
+    """A mastering job that is missing, not owned, or not a mastering job (→ 404)."""
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mastering job not found.")
+
+
+class MasteringJobDetailResponse(BaseModel):
+    """A mastering job's status and (once complete) its mastered output + metrics.
+
+    ``response_model_exclude_none`` drops the result fields until the job
+    completes: ``mastered_clip_id``/``metrics`` appear only when there is a master.
+    """
+
+    job_id: str
+    status: JobStatus
+    source_clip_id: str | None = None
+    profile: str | None = None
+    service: str | None = None
+    target_lufs: float | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+    mastered_clip_id: str | None = None
+    metrics: dict | None = None
+    error: str | None = None
+
+
+class PreviewItem(BaseModel):
+    """One mastered candidate: its audio URL and the backend's loudness/EQ metrics."""
+
+    preview_id: str
+    audio_url: str
+    profile: str | None = None
+    service: str | None = None
+    metrics: dict | None = None
+
+
+class PreviewsResponse(BaseModel):
+    """A/B comparison set: the original plus every mastered candidate for the source.
+
+    ``original_metrics`` is the source's on-demand loudness measurement (``loudness``
+    only — the unmastered source has no per-band EQ/stereo analysis).
+    """
+
+    source_clip_id: str | None = None
+    original_audio_url: str | None = None
+    original_metrics: dict | None = None
+    previews: list[PreviewItem]
+
+
+class ApproveRequest(BaseModel):
+    """Approval body: the preview (mastered clip) id to promote to the final master."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preview_id: str
+
+
+class ApproveResponse(BaseModel):
+    """The promoted master's clip id and a retrievable audio URL."""
+
+    clip_id: str
+    audio_url: str
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=MasteringJobDetailResponse,
+    response_model_exclude_none=True,
+)
+async def get_mastering_job_detail(
+    job_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> MasteringJobDetailResponse:
+    """Return a mastering job's status, parameters, and (when complete) its master."""
+    job = await mastering_service.get_mastering_job(job_id, current.user_id)
+    if job is None:
+        raise _job_not_found()
+    params = job.input_params or {}
+    result = job.result or {}
+    clip_ids = result.get("clip_ids") or []
+    return MasteringJobDetailResponse(
+        job_id=str(job.id),
+        status=job.status,
+        source_clip_id=params.get("clip_id"),
+        profile=params.get("profile"),
+        # The service that actually ran (a fallback may differ from the request).
+        service=result.get("service") or params.get("service"),
+        target_lufs=params.get("target_lufs"),
+        created_at=job.created_at,
+        completed_at=job.completed_at,
+        mastered_clip_id=clip_ids[0] if clip_ids else None,
+        metrics=result.get("metrics"),
+        error=job.error,
+    )
+
+
+@router.get("/jobs/{job_id}/previews", response_model=PreviewsResponse)
+async def get_mastering_previews(
+    job_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> PreviewsResponse:
+    """A/B data for the job's source: original audio + loudness, and every candidate."""
+    job = await mastering_service.get_mastering_job(job_id, current.user_id)
+    if job is None:
+        raise _job_not_found()
+    source_clip_id = (job.input_params or {}).get("clip_id")
+    storage = get_storage_backend()
+
+    original_audio_url: str | None = None
+    original_metrics: dict | None = None
+    oid = coerce_object_id(source_clip_id) if source_clip_id else None
+    source = await Clip.get(oid) if oid is not None else None
+    if source is not None and str(source.user_id) == current.user_id:
+        original_audio_url = await asyncio.to_thread(storage.get_url, source.file_path)
+        original_metrics = {"loudness": await mastering_service.measure_clip_loudness(storage, source)}
+
+    previews: list[PreviewItem] = []
+    for candidate_job in await mastering_service.list_source_previews(source_clip_id, current.user_id):
+        result = candidate_job.result or {}
+        clip_ids = result.get("clip_ids") or []
+        if not clip_ids:
+            continue
+        clip_oid = coerce_object_id(clip_ids[0])
+        clip = await Clip.get(clip_oid) if clip_oid is not None else None
+        if clip is None:
+            continue
+        previews.append(
+            PreviewItem(
+                preview_id=clip_ids[0],
+                audio_url=await asyncio.to_thread(storage.get_url, clip.file_path),
+                profile=(candidate_job.input_params or {}).get("profile"),
+                service=result.get("service"),
+                metrics=result.get("metrics"),
+            )
+        )
+
+    return PreviewsResponse(
+        source_clip_id=source_clip_id,
+        original_audio_url=original_audio_url,
+        original_metrics=original_metrics,
+        previews=previews,
+    )
+
+
+@router.post("/jobs/{job_id}/approve", response_model=ApproveResponse)
+async def approve_mastering_preview(
+    job_id: str,
+    request: ApproveRequest,
+    current: CurrentUser = Depends(get_current_user),
+) -> ApproveResponse:
+    """Promote a preview to the final master; returns its clip id and audio URL."""
+    job = await mastering_service.get_mastering_job(job_id, current.user_id)
+    if job is None:
+        raise _job_not_found()
+    try:
+        clip = await mastering_service.approve_preview(job, request.preview_id, current.user_id)
+    except mastering_service.PreviewNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    audio_url = await asyncio.to_thread(get_storage_backend().get_url, clip.file_path)
+    return ApproveResponse(clip_id=str(clip.id), audio_url=audio_url)
