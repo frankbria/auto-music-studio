@@ -28,9 +28,13 @@ logger = logging.getLogger(__name__)
 
 MASTERING_JOB_TYPE = "mastering"
 
-# An approved master is promoted from ``generation_mode="mastering"`` (the worker's
-# tag for any mastered child) to this terminal mode (US-12.4), distinguishing the
-# musician's chosen release master from the other auditioned candidates.
+# The worker tags every mastered child with this mode (US-12.2); an un-approved
+# candidate keeps it.
+MASTERED_CANDIDATE_MODE = "mastering"
+
+# An approved master is promoted from ``MASTERED_CANDIDATE_MODE`` to this terminal
+# mode (US-12.4), distinguishing the musician's chosen release master from the
+# other auditioned candidates. Exactly one per source clip.
 APPROVED_GENERATION_MODE = "mastered"
 
 # Each standard profile maps to a fixed integrated-loudness target (LUFS). "club"
@@ -198,6 +202,22 @@ async def approve_preview(source_job: Job, preview_clip_id: str, user_id: str) -
         # A candidate id with no owned clip behind it is a data inconsistency, not
         # a client error the caller can fix — surface it as "not found" all the same.
         raise PreviewNotFoundError(f"Preview clip {preview_clip_id!r} not found")
+
+    # Exactly one final master per source: demote any previously-approved sibling
+    # back to a candidate so approving a different preview *moves* the master
+    # rather than leaving several clips all tagged as the final master.
+    source_oid = coerce_object_id(source_clip_id) if source_clip_id else None
+    if source_oid is not None:
+        siblings = await Clip.find(
+            Clip.user_id == clip.user_id,
+            Clip.parent_clip_ids == source_oid,
+            Clip.generation_mode == APPROVED_GENERATION_MODE,
+        ).to_list()
+        for sibling in siblings:
+            if sibling.id != clip.id:
+                sibling.generation_mode = MASTERED_CANDIDATE_MODE
+                await sibling.save()
+
     clip.generation_mode = APPROVED_GENERATION_MODE
     await clip.save()
     return clip

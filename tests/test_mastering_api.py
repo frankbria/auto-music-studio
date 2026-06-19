@@ -542,6 +542,23 @@ class TestMasteringPreviews:
         assert preview["preview_id"] == str(mastered.id)
         assert preview["audio_url"]
         assert preview["metrics"]["loudness"] == _MASTER_METRICS["loudness"]
+        # A/B metrics diff: mastered-minus-original integrated loudness, a real number.
+        assert preview["loudness_delta"] == round(_MASTER_METRICS["loudness"] - body["original_metrics"]["loudness"], 2)
+
+    async def test_caps_displayed_previews_at_five(self, client, settings, local_storage) -> None:
+        user = await _make_user("m124-prev-cap@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
+        last_job = None
+        for _ in range(6):
+            mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+            last_job = await _insert_mastering_job(
+                user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered
+            )
+        resp = await client.get(_previews_url(str(last_job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        # Six candidates exist; the audition set is bounded to the five most recent.
+        assert len(resp.json()["previews"]) == 5
 
     async def test_aggregates_multiple_candidates_for_one_source(self, client, settings, local_storage) -> None:
         user = await _make_user("m124-prev-multi@example.com")
@@ -621,3 +638,18 @@ class TestMasteringApprove:
         assert first.status_code == 200
         assert second.status_code == 200
         assert (await Clip.get(mastered.id)).generation_mode == "mastered"
+
+    async def test_approving_a_second_candidate_moves_the_master(self, client, settings, local_storage) -> None:
+        # Exactly one final master per source: approving m2 demotes m1 back to a candidate.
+        user = await _make_user("m124-appr-exclusive@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        m1 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        m2 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job1 = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=m1)
+        job2 = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=m2)
+        headers = _auth_headers(user, settings)
+        await client.post(_approve_url(str(job1.id)), json={"preview_id": str(m1.id)}, headers=headers)
+        await client.post(_approve_url(str(job2.id)), json={"preview_id": str(m2.id)}, headers=headers)
+        assert (await Clip.get(m1.id)).generation_mode == "mastering"
+        assert (await Clip.get(m2.id)).generation_mode == "mastered"

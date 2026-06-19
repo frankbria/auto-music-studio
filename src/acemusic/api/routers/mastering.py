@@ -161,9 +161,30 @@ async def create_mastering_job(
 # ---------------------------------------------------------------------------
 
 
+# The musician auditions a bounded set (US-12.4: "up to 5 preview variants"); a
+# frequently-remastered source can have more completed candidates, so the previews
+# view shows the most recent few. Approval still accepts any historical candidate.
+_MAX_PREVIEW_VARIANTS = 5
+
+
 def _job_not_found() -> HTTPException:
     """A mastering job that is missing, not owned, or not a mastering job (→ 404)."""
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mastering job not found.")
+
+
+def _loudness_delta(metrics: dict | None, original_metrics: dict | None) -> float | None:
+    """Mastered-minus-original integrated loudness (dB), or None if either is absent.
+
+    The one metric measurable on both sides (the source has no per-band EQ/stereo
+    analysis), so it is the A/B "metrics diff" the comparison view can report.
+    """
+    if not metrics or not original_metrics:
+        return None
+    mastered = metrics.get("loudness")
+    original = original_metrics.get("loudness")
+    if mastered is None or original is None:
+        return None
+    return round(mastered - original, 2)
 
 
 class MasteringJobDetailResponse(BaseModel):
@@ -194,6 +215,9 @@ class PreviewItem(BaseModel):
     profile: str | None = None
     service: str | None = None
     metrics: dict | None = None
+    # Mastered-minus-original integrated loudness (dB); the A/B metrics diff. None
+    # when either side's loudness is unavailable.
+    loudness_delta: float | None = None
 
 
 class PreviewsResponse(BaseModel):
@@ -277,7 +301,9 @@ async def get_mastering_previews(
         original_metrics = {"loudness": await mastering_service.measure_clip_loudness(storage, source)}
 
     previews: list[PreviewItem] = []
-    for candidate_job in await mastering_service.list_source_previews(source_clip_id, current.user_id):
+    candidate_jobs = await mastering_service.list_source_previews(source_clip_id, current.user_id)
+    # list_source_previews is oldest-first; show the most recent variants.
+    for candidate_job in candidate_jobs[-_MAX_PREVIEW_VARIANTS:]:
         result = candidate_job.result or {}
         clip_ids = result.get("clip_ids") or []
         if not clip_ids:
@@ -286,13 +312,15 @@ async def get_mastering_previews(
         clip = await Clip.get(clip_oid) if clip_oid is not None else None
         if clip is None:
             continue
+        metrics = result.get("metrics")
         previews.append(
             PreviewItem(
                 preview_id=clip_ids[0],
                 audio_url=await asyncio.to_thread(storage.get_url, clip.file_path),
                 profile=(candidate_job.input_params or {}).get("profile"),
                 service=result.get("service"),
-                metrics=result.get("metrics"),
+                metrics=metrics,
+                loudness_delta=_loudness_delta(metrics, original_metrics),
             )
         )
 
