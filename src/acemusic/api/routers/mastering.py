@@ -229,6 +229,8 @@ class PreviewsResponse(BaseModel):
 
     source_clip_id: str | None = None
     original_audio_url: str | None = None
+    # ``None`` when the source is missing/unowned or its loudness can't be measured;
+    # otherwise ``{"loudness": <LUFS>}`` (loudness-only by design).
     original_metrics: dict | None = None
     previews: list[PreviewItem]
 
@@ -298,7 +300,11 @@ async def get_mastering_previews(
     source = await Clip.get(oid) if oid is not None else None
     if source is not None and str(source.user_id) == current.user_id:
         original_audio_url = await asyncio.to_thread(storage.get_url, source.file_path)
-        original_metrics = {"loudness": await mastering_service.measure_clip_loudness(storage, source)}
+        loudness = await mastering_service.measure_clip_loudness(storage, source)
+        # Omit the metrics object entirely when unmeasurable rather than emitting a
+        # partial ``{"loudness": null}`` — callers see "no original metrics", not a
+        # present-but-null interior field.
+        original_metrics = {"loudness": loudness} if loudness is not None else None
 
     previews: list[PreviewItem] = []
     candidate_jobs = await mastering_service.list_source_previews(source_clip_id, current.user_id)

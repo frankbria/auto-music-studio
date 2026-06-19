@@ -545,6 +545,20 @@ class TestMasteringPreviews:
         # A/B metrics diff: mastered-minus-original integrated loudness, a real number.
         assert preview["loudness_delta"] == round(_MASTER_METRICS["loudness"] - body["original_metrics"]["loudness"], 2)
 
+    async def test_missing_source_audio_degrades_without_500(self, client, settings, local_storage) -> None:
+        # Source clip exists in the DB but its audio object was never stored: loudness
+        # can't be measured, so original_metrics degrades to None rather than a 500.
+        user = await _make_user("m124-prev-noaudio@example.com")
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)  # no store_bytes
+        mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=mastered)
+        resp = await client.get(_previews_url(str(job.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["original_metrics"] is None
+        assert len(body["previews"]) == 1
+
     async def test_caps_displayed_previews_at_five(self, client, settings, local_storage) -> None:
         user = await _make_user("m124-prev-cap@example.com")
         ws = PydanticObjectId()
