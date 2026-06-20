@@ -35,12 +35,15 @@ When S3 is configured (``ACEMUSIC_S3_BUCKET`` plus the ``ACEMUSIC_S3_*`` setting
 platform already uses), the handler downloads each clip on-worker and re-uploads it to
 S3, returning presigned GET URLs the platform can fetch. With no bucket configured it
 returns the worker-local URLs unchanged (local / single-host use, where ``localhost``
-is reachable).
+is reachable). Credentials come from boto3's standard chain (``AWS_ACCESS_KEY_ID`` /
+``AWS_SECRET_ACCESS_KEY`` / instance role) — set those in the RunPod template alongside
+the ``ACEMUSIC_S3_*`` vars.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import subprocess
@@ -53,6 +56,8 @@ try:  # boto3 ships in the worker image; optional so this module imports without
     import boto3
 except ImportError:  # pragma: no cover - exercised only where boto3 is absent
     boto3 = None
+
+logger = logging.getLogger(__name__)
 
 API_BASE_URL = "http://localhost:8001"
 
@@ -297,11 +302,16 @@ def _content_type(ext: str) -> str:
 
 def _s3_url_expiry() -> int:
     """Presigned-URL lifetime in seconds (``ACEMUSIC_S3_URL_EXPIRY``, default 3600)."""
+    raw = os.getenv("ACEMUSIC_S3_URL_EXPIRY", "3600")
     try:
-        expiry = int(os.getenv("ACEMUSIC_S3_URL_EXPIRY", "3600"))
+        expiry = int(raw)
     except ValueError:
+        logger.warning("Invalid ACEMUSIC_S3_URL_EXPIRY %r; defaulting to 3600s", raw)
         return 3600
-    return expiry if expiry > 0 else 3600
+    if expiry <= 0:
+        logger.warning("Non-positive ACEMUSIC_S3_URL_EXPIRY %r; defaulting to 3600s", raw)
+        return 3600
+    return expiry
 
 
 def _failure(message: str) -> dict:

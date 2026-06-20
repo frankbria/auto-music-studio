@@ -335,6 +335,15 @@ class TestS3Delivery:
         assert port_spoof.startswith(handler_mod.API_BASE_URL)  # the trap a prefix check falls into
         assert handler_mod._is_worker_local(port_spoof) is False
 
+    @pytest.mark.parametrize("value", ["not-an-int", "0", "-5"])
+    def test_invalid_url_expiry_falls_back_to_default(self, handler_mod, monkeypatch, value):
+        monkeypatch.setenv("ACEMUSIC_S3_URL_EXPIRY", value)
+        assert handler_mod._s3_url_expiry() == 3600
+
+    def test_valid_url_expiry_is_used(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_URL_EXPIRY", "900")
+        assert handler_mod._s3_url_expiry() == 900
+
     def test_uploads_clips_to_s3_and_returns_presigned_urls(self, handler_mod, monkeypatch):
         monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "clips-bucket")
         monkeypatch.delenv("ACEMUSIC_S3_PREFIX", raising=False)
