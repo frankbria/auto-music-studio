@@ -27,9 +27,10 @@ RUN git clone https://github.com/frankbria/ACE-Step-1.5.git /app/ACE-Step-1.5
 WORKDIR /app/ACE-Step-1.5
 RUN uv venv && uv sync
 
-# Serverless extras: the RunPod SDK plus httpx for the handler's API proxy (httpx is
-# the HTTP client used throughout the platform; the handler reuses it here).
-RUN pip install --no-cache-dir runpod httpx
+# Serverless extras: the RunPod SDK, httpx for the handler's API proxy (httpx is the
+# HTTP client used throughout the platform), and boto3 so the handler can upload
+# generated clips to S3 and return presigned URLs the platform can fetch (US-11.x).
+RUN pip install --no-cache-dir runpod httpx boto3
 
 # Serverless handler (bridges RunPod events to the local ACE-Step API).
 COPY handler.py /app/handler.py

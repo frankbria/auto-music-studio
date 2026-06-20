@@ -15,6 +15,7 @@ from acemusic.runpod_client import (
     RunPodClient,
     RunPodConnectionError,
     RunPodError,
+    _extract_audio_urls,
 )
 
 ENDPOINT = "ep-123"
@@ -232,6 +233,42 @@ class TestOutputExtraction:
         resp = _ok({"status": "CANCELLED", "error": "user cancelled"})
         with patch("acemusic.runpod_client.httpx.get", return_value=resp):
             assert _client().query_result("job-1")["status"] == "failed"
+
+
+class TestLocalhostFiltering:
+    """US-11.x: worker-local URLs must never escape to the platform."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8001/v1/audio?path=a.wav",
+            "http://127.0.0.1:8001/v1/audio?path=a.wav",
+            "http://[::1]:8001/v1/audio?path=a.wav",
+        ],
+    )
+    def test_localhost_urls_are_dropped(self, url):
+        assert _extract_audio_urls({"audio_urls": [url]}) == []
+
+    def test_presigned_s3_url_passes_through_with_query_intact(self):
+        url = "https://bucket.s3.example.test/runpod/job/0.wav?sig=abc&expires=3600"
+        assert _extract_audio_urls({"audio_urls": [url]}) == [url]
+
+    def test_mixed_list_keeps_only_reachable_urls(self):
+        urls = [
+            "http://localhost:8001/v1/audio?path=a.wav",
+            "https://bucket.s3.example.test/b.wav?sig=x",
+        ]
+        assert _extract_audio_urls({"audio_urls": urls}) == ["https://bucket.s3.example.test/b.wav?sig=x"]
+
+    def test_filtering_applies_to_dict_list_shape(self):
+        # The dict/file shape routes through _urls_from_list, not the direct path.
+        output = {"clips": [{"file": "http://127.0.0.1:8001/v1/audio?path=a.wav"}]}
+        assert _extract_audio_urls(output) == []
+
+    def test_completed_job_drops_localhost(self):
+        resp = _ok({"status": "COMPLETED", "output": {"audio_urls": ["http://localhost:8001/x.wav"]}})
+        with patch("acemusic.runpod_client.httpx.get", return_value=resp):
+            assert _client().query_result("job-1")["audio_urls"] == []
 
 
 class TestHealth:
