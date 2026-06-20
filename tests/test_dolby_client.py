@@ -349,7 +349,7 @@ class TestRetry:
         outputs = [master_output_config("streaming", -14.0, "dlb://o.wav")]
         with (
             patch("acemusic.dolby_client.httpx.post", side_effect=responses) as mock_post,
-            patch("acemusic.dolby_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             assert client.submit_preview("dlb://in.wav", outputs) == "j"
         assert mock_post.call_count == 2
@@ -415,7 +415,7 @@ class TestMasterEntrypoint:
         with (
             patch("acemusic.dolby_client.httpx.post", return_value=_resp(status_code=500)),
             patch("acemusic.dolby_client.httpx.put"),
-            patch("acemusic.dolby_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             with pytest.raises(DolbyError):
                 client.master(FAKE_AUDIO, "f.wav", "streaming", -14.0, "wav")

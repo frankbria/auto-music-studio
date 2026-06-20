@@ -9,6 +9,8 @@ from pathlib import Path
 
 import httpx
 
+from acemusic import _http
+
 _BASE_URL = "https://api.elevenlabs.io"
 
 # ElevenLabs music API duration limits (music_length_ms: 3000–600000).
@@ -316,12 +318,14 @@ class ElevenLabsClient:
             body["lyrics"] = lyrics
 
         try:
-            response = httpx.post(
+            response = _http.request(
+                httpx.post,
                 f"{_BASE_URL}/v1/music",
-                json=body,
                 headers=self._headers,
+                json=body,
                 params={"output_format": self.output_format},
                 timeout=_GENERATION_TIMEOUT,
+                retries=0,
             )
             response.raise_for_status()
             return response.content
@@ -354,11 +358,13 @@ class ElevenLabsClient:
             body["model_id"] = model_id
 
         try:
-            response = httpx.post(
+            response = _http.request(
+                httpx.post,
                 f"{_BASE_URL}/v1/music/plan",
-                json=body,
                 headers=self._headers,
+                json=body,
                 timeout=_PLAN_TIMEOUT,
+                retries=0,
             )
             response.raise_for_status()
             plan = response.json()
@@ -399,12 +405,14 @@ class ElevenLabsClient:
             body["seed"] = seed
 
         try:
-            response = httpx.post(
+            response = _http.request(
+                httpx.post,
                 f"{_BASE_URL}/v1/music",
-                json=body,
                 headers=self._headers,
+                json=body,
                 params={"output_format": self.output_format},
                 timeout=_GENERATION_TIMEOUT,
+                retries=0,
             )
             response.raise_for_status()
             return response.content
@@ -436,13 +444,15 @@ class ElevenLabsClient:
         audio_path = Path(audio_path)
         try:
             with open(audio_path, "rb") as fh:
-                response = httpx.post(
+                response = _http.request(
+                    httpx.post,
                     f"{_BASE_URL}/v1/music/stem-separation",
+                    headers=self._headers,
                     files={"file": (audio_path.name, fh)},
                     data={"stem_variation_id": stem_variation_id},
-                    headers=self._headers,
                     params={"output_format": self.output_format},
                     timeout=_STEMS_TIMEOUT,
+                    retries=0,
                 )
             response.raise_for_status()
         except OSError as exc:
@@ -481,14 +491,16 @@ class ElevenLabsClient:
         audio_path = Path(audio_path)
         try:
             with open(audio_path, "rb") as fh:
-                response = httpx.post(
+                response = _http.request(
+                    httpx.post,
                     f"{_BASE_URL}/v1/music/upload",
+                    headers=self._headers,
                     # No explicit content-type: httpx infers it from the
                     # filename (e.g. audio/x-wav, audio/mpeg) — same pattern
                     # proven against the live API by separate_stems (#97).
                     files={"file": (audio_path.name, fh)},
-                    headers=self._headers,
                     timeout=_UPLOAD_TIMEOUT,
+                    retries=0,
                 )
             response.raise_for_status()
         except OSError as exc:
@@ -516,10 +528,12 @@ class ElevenLabsClient:
     def validate_key(self, timeout: float = 5.0) -> bool:
         """Validate the API key via GET /v1/user. Returns True if valid, False otherwise."""
         try:
-            response = httpx.get(
+            response = _http.request(
+                httpx.get,
                 f"{_BASE_URL}/v1/user",
                 headers=self._headers,
                 timeout=timeout,
+                retries=0,
             )
             response.raise_for_status()
             return True

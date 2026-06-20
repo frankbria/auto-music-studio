@@ -21,12 +21,12 @@ backoff so the processor stays unaware of retry mechanics. 4xx errors fail fast.
 from __future__ import annotations
 
 import logging
-import random
-import time
 import urllib.parse
-from typing import Any, Callable
+from typing import Any
 
 import httpx
+
+from acemusic import _http
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +35,6 @@ logger = logging.getLogger(__name__)
 # these, but a stale worker image might — so they are dropped here as a safety net so
 # the platform never tries to fetch audio it cannot reach.
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
-# Retry policy for transient (5xx) responses. ``_MAX_RETRIES`` retries follow the
-# initial attempt, so a persistently-failing endpoint is hit up to 4 times. Delays
-# grow as base * 2**attempt (1s, 2s, 4s) with added jitter to avoid synchronised
-# retry storms when many jobs poll at once.
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0
-_BACKOFF_JITTER = 0.5
 
 # RunPod serverless states normalised onto the processor's status vocabulary. Any
 # unknown state is treated as still-pending so the poll loop keeps waiting (and is
@@ -60,27 +52,25 @@ DEFAULT_BASE_URL = "https://api.runpod.ai/v2"
 
 
 class RunPodError(Exception):
-    """Raised when the RunPod API returns an error or is unreachable."""
+    """Raised when the RunPod API returns an error or is unreachable.
 
+    Two flags classify transport failures (mirroring :class:`AceStepError`) so a
+    caller can tell them from an API/HTTP-status error without sniffing message
+    text:
 
-class RunPodConnectionError(RunPodError):
-    """Transport-level failure (connection refused, DNS failure, timeout).
-
-    Distinct from API/HTTP-status errors so callers can tell a transient network
-    issue from a real server-side error. ``is_timeout`` is True only for a *read*
-    timeout — the connection was established but the server was slow to respond
-    (e.g. a cold start spinning up a serverless worker). Connect timeouts and
-    refused/DNS failures leave it False so an unreachable host still fast-fails.
+    - ``is_connection`` is True for any transport-level failure (connection
+      refused, DNS failure, timeout) — the request never got an HTTP response.
+      HTTP-status errors leave it False.
+    - ``is_timeout`` is True only for a *read* timeout: the connection was
+      established but the server was slow to respond (e.g. a cold start spinning
+      up a serverless worker). Connect timeouts and refused/DNS failures leave
+      it False so an unreachable host still fast-fails.
     """
 
-    def __init__(self, message: str, *, is_timeout: bool = False) -> None:
+    def __init__(self, message: str, *, is_timeout: bool = False, is_connection: bool = False) -> None:
         super().__init__(message)
         self.is_timeout = is_timeout
-
-
-def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff (1s, 2s, 4s …) plus jitter for the given retry attempt."""
-    return _BACKOFF_BASE * (2**attempt) + random.uniform(0, _BACKOFF_JITTER)
+        self.is_connection = is_connection
 
 
 class RunPodClient:
@@ -92,36 +82,6 @@ class RunPodClient:
         self.base_url = f"{base_url.rstrip('/')}/{endpoint_id}"
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
-    def _send_with_retry(
-        self,
-        method: Callable[..., httpx.Response],
-        url: str,
-        *,
-        timeout: float,
-        headers: dict | None = None,
-        **kwargs: Any,
-    ) -> httpx.Response:
-        """Issue an HTTP request, retrying on 5xx with exponential backoff.
-
-        Returns the response untouched (the caller decides how to interpret a
-        non-5xx status, e.g. ``raise_for_status`` for a 4xx). Connection errors are
-        not retried — they propagate so the caller maps them to
-        :class:`RunPodConnectionError`. A 5xx that persists past the retry budget is
-        returned so the caller surfaces it as a :class:`RunPodError` like any other.
-
-        ``headers`` defaults to the client's auth headers; callers fetching from a
-        pre-authorized URL (e.g. a presigned audio URL) pass ``{}`` to avoid leaking
-        the RunPod bearer token to an external host.
-        """
-        request_headers = self._headers if headers is None else headers
-        for attempt in range(_MAX_RETRIES + 1):
-            response = method(url, headers=request_headers, timeout=timeout, **kwargs)
-            if response.status_code >= 500 and attempt < _MAX_RETRIES:
-                time.sleep(_backoff_delay(attempt))
-                continue
-            return response
-        return response  # pragma: no cover - loop always returns on the last attempt
-
     def submit(self, input_params: dict, timeout: float = 30.0) -> str:
         """Submit a job via POST ``/run`` and return the RunPod job id.
 
@@ -129,12 +89,12 @@ class RunPodClient:
         worker expects.
 
         Raises:
-            RunPodError: on HTTP error or a response missing the job id.
-            RunPodConnectionError: on connection failure or timeout.
+            RunPodError: on HTTP error, connection failure, timeout, or a
+                response missing the job id.
         """
         try:
-            response = self._send_with_retry(
-                httpx.post, f"{self.base_url}/run", json={"input": input_params}, timeout=timeout
+            response = _http.request(
+                httpx.post, f"{self.base_url}/run", headers=self._headers, json={"input": input_params}, timeout=timeout
             )
             response.raise_for_status()
             data = response.json()
@@ -145,8 +105,8 @@ class RunPodClient:
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod submit failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise RunPodConnectionError(
-                f"RunPod submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
+            raise RunPodError(
+                f"RunPod submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
             ) from exc
 
     def submit_task(self, **kwargs: Any) -> str:
@@ -166,18 +126,20 @@ class RunPodClient:
         Transient 5xx responses are retried with backoff before failing.
 
         Raises:
-            RunPodError: on a 4xx, or a 5xx that survives the retry budget.
-            RunPodConnectionError: on connection failure or timeout.
+            RunPodError: on a 4xx, a 5xx that survives the retry budget,
+                connection failure, or timeout.
         """
         try:
-            response = self._send_with_retry(httpx.get, f"{self.base_url}/status/{job_id}", timeout=timeout)
+            response = _http.request(
+                httpx.get, f"{self.base_url}/status/{job_id}", headers=self._headers, timeout=timeout
+            )
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod status failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise RunPodConnectionError(
-                f"RunPod status failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
+            raise RunPodError(
+                f"RunPod status failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
             ) from exc
 
         status = _STATUS_MAP.get(str(data.get("status", "")).lower(), "pending")
@@ -195,18 +157,17 @@ class RunPodClient:
         it to an external host.
 
         Raises:
-            RunPodError: on HTTP error.
-            RunPodConnectionError: on connection failure or timeout.
+            RunPodError: on HTTP error, connection failure, or timeout.
         """
         try:
-            response = self._send_with_retry(httpx.get, url, timeout=timeout, headers={}, follow_redirects=True)
+            response = _http.request(httpx.get, url, headers={}, timeout=timeout, follow_redirects=True)
             response.raise_for_status()
             return response.content
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod download failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
-            raise RunPodConnectionError(
-                f"RunPod download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
+            raise RunPodError(
+                f"RunPod download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
             ) from exc
 
     def health(self, timeout: float = 5.0) -> bool:

@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from acemusic.cli import app
-from acemusic.client import AceStepConnectionError, AceStepError
+from acemusic.client import AceStepError
 
 runner = CliRunner()
 
@@ -138,7 +138,7 @@ class TestGenerateCommand:
 
         client_mock = _make_client_mock(
             [
-                AceStepConnectionError("Query failed: timed out", is_timeout=True),
+                AceStepError("Query failed: timed out", is_timeout=True, is_connection=True),
                 PENDING_RESULT,
                 COMPLETED_RESULT,
             ]
@@ -166,7 +166,7 @@ class TestGenerateCommand:
 
         # 7 timeouts (> the 5 fast-fail cap) then success → must still complete.
         client_mock = _make_client_mock(
-            [AceStepConnectionError("Query failed: timed out", is_timeout=True)] * 7 + [COMPLETED_RESULT]
+            [AceStepError("Query failed: timed out", is_timeout=True, is_connection=True)] * 7 + [COMPLETED_RESULT]
         )
 
         with (
@@ -196,7 +196,7 @@ class TestGenerateCommand:
         )
 
         client_mock = _make_client_mock(
-            [AceStepConnectionError("Query failed: Connection refused", is_timeout=False)] * 20
+            [AceStepError("Query failed: Connection refused", is_timeout=False, is_connection=True)] * 20
         )
 
         with (

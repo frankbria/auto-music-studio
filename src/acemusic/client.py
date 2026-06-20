@@ -17,27 +17,31 @@ from typing import Literal
 
 import httpx
 
+from acemusic import _http
+
 TaskType = Literal["text2music", "cover", "repaint", "extract", "lego", "complete", "mashup"]
 
 
 class AceStepError(Exception):
-    """Raised when the ACE-Step API returns an error or is unreachable."""
+    """Raised when the ACE-Step API returns an error or is unreachable.
 
+    Two flags classify transport failures so callers can distinguish them from
+    API/HTTP-status errors without sniffing the message text (e.g. a 500 whose
+    body happens to mention "connection"):
 
-class AceStepConnectionError(AceStepError):
-    """Transport-level failure (connection refused, DNS failure, timeout).
-
-    Distinct from API/HTTP-status errors so callers can retry transient network
-    issues without masking a real server-side error (e.g. a 500 whose body
-    happens to mention "connection"). ``is_timeout`` is True only for a *read*
-    timeout — the connection was established but the server was slow to respond
-    (e.g. loading models on a cold start). Connect timeouts and refused/DNS
-    failures leave it False so an unreachable host still fast-fails.
+    - ``is_connection`` is True for any transport-level failure (connection
+      refused, DNS failure, timeout) — i.e. the request never got an HTTP
+      response. API/HTTP-status errors leave it False.
+    - ``is_timeout`` is True only for a *read* timeout: the connection was
+      established but the server was slow to respond (e.g. loading models on a
+      cold start). Connect timeouts and refused/DNS failures leave it False so
+      an unreachable host still fast-fails.
     """
 
-    def __init__(self, message: str, *, is_timeout: bool = False) -> None:
+    def __init__(self, message: str, *, is_timeout: bool = False, is_connection: bool = False) -> None:
         super().__init__(message)
         self.is_timeout = is_timeout
+        self.is_connection = is_connection
 
 
 class AceStepClient:
@@ -58,7 +62,9 @@ class AceStepClient:
             httpx.TimeoutException: if the server does not respond in time.
             httpx.HTTPStatusError: if the server returns a non-2xx status.
         """
-        response = httpx.get(f"{self.base_url}/v1/stats", headers=self._headers, timeout=timeout)
+        response = _http.request(
+            httpx.get, f"{self.base_url}/v1/stats", headers=self._headers, timeout=timeout, retries=0
+        )
         response.raise_for_status()
         outer = response.json()
         data = outer.get("data", outer)
@@ -185,11 +191,13 @@ class AceStepClient:
         if repainting_end is not None:
             payload["repainting_end"] = repainting_end
         try:
-            response = httpx.post(
+            response = _http.request(
+                httpx.post,
                 f"{self.base_url}/release_task",
-                json=payload,
                 headers=self._headers,
+                json=payload,
                 timeout=30.0,
+                retries=0,
             )
             response.raise_for_status()
             outer = response.json()
@@ -201,8 +209,8 @@ class AceStepClient:
         except httpx.HTTPStatusError as exc:
             raise AceStepError(f"Submit failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise AceStepConnectionError(
-                f"Submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
+            raise AceStepError(
+                f"Submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
             ) from exc
 
     def query_result(self, task_id: str, timeout: float = 10.0) -> dict:
@@ -218,11 +226,13 @@ class AceStepClient:
             AceStepError: on HTTP error or connection failure.
         """
         try:
-            response = httpx.post(
+            response = _http.request(
+                httpx.post,
                 f"{self.base_url}/query_result",
-                json={"task_id_list": [task_id]},
                 headers=self._headers,
+                json={"task_id_list": [task_id]},
                 timeout=timeout,
+                retries=0,
             )
             response.raise_for_status()
             outer = response.json()
@@ -254,7 +264,9 @@ class AceStepClient:
         except httpx.HTTPStatusError as exc:
             raise AceStepError(f"Query failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise AceStepConnectionError(f"Query failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)) from exc
+            raise AceStepError(
+                f"Query failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
+            ) from exc
 
     def download_audio(self, url: str, timeout: float = 120.0) -> bytes:
         """Download raw audio bytes from a URL.
@@ -263,12 +275,14 @@ class AceStepClient:
             AceStepError: on HTTP error or connection failure.
         """
         try:
-            response = httpx.get(url, headers=self._headers, timeout=timeout, follow_redirects=True)
+            response = _http.request(
+                httpx.get, url, headers=self._headers, timeout=timeout, follow_redirects=True, retries=0
+            )
             response.raise_for_status()
             return response.content
         except httpx.HTTPStatusError as exc:
             raise AceStepError(f"Download failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
-            raise AceStepConnectionError(
-                f"Download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)
+            raise AceStepError(
+                f"Download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
             ) from exc

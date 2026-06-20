@@ -26,12 +26,12 @@ orchestrator can treat it interchangeably with Dolby.io and Bakuage.
 
 from __future__ import annotations
 
-import random
 import time
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
+from acemusic import _http
 from acemusic.mastering_protocol import MasteringError, MasteringOutput
 
 # LANDR B2B API (assumed partnership-gated surface, per spec §41.2.2).
@@ -44,11 +44,6 @@ _MASTERS_URL = f"{_BASE_URL}/masters"
 # which we proactively refresh, mirroring the Dolby client.
 _TOKEN_LIFETIME_S = 1800
 _TOKEN_EXPIRY_BUFFER_S = 60.0
-
-# Retry policy for transient (5xx) responses, matching Dolby/RunPod.
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0
-_BACKOFF_JITTER = 0.5
 
 # Auth/JSON calls are quick; upload and download stream whole audio files.
 _AUTH_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
@@ -106,11 +101,6 @@ def landr_master_params(profile: str, target_lufs: float, output_format: str) ->
     return params
 
 
-def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff (1s, 2s, 4s …) plus jitter for the given retry attempt."""
-    return _BACKOFF_BASE * (2**attempt) + random.uniform(0, _BACKOFF_JITTER)
-
-
 def _as_float(value: Any) -> float | None:
     """Best-effort float coercion for a metric value, or None when absent/garbage."""
     if value is None or isinstance(value, bool):
@@ -142,11 +132,15 @@ class LandrClient:
         if self._token is not None and now < self._token_expiry - _TOKEN_EXPIRY_BUFFER_S:
             return self._token
         try:
-            response = httpx.post(
+            # The token exchange is not retried (a bad credential or rate limit
+            # should fail fast), so route through the shared helper with retries=0.
+            response = _http.request(
+                httpx.post,
                 _AUTH_URL,
                 auth=(self.api_key, self.api_secret),
                 data={"grant_type": "client_credentials", "expires_in": _TOKEN_LIFETIME_S},
                 timeout=_AUTH_TIMEOUT,
+                retries=0,
             )
             response.raise_for_status()
             payload = response.json()
@@ -170,28 +164,6 @@ class LandrClient:
         """Bearer auth header carrying a fresh-enough token."""
         return {"Authorization": f"Bearer {self._get_token()}"}
 
-    # -- transport ---------------------------------------------------------
-
-    def _send_with_retry(
-        self,
-        method: Callable[..., httpx.Response],
-        url: str,
-        *,
-        timeout: httpx.Timeout | float,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx.Response:
-        """Issue an HTTP request, retrying on 5xx with exponential backoff."""
-        request_headers = self._auth_headers() if headers is None else headers
-        response = None
-        for attempt in range(_MAX_RETRIES + 1):
-            response = method(url, headers=request_headers, timeout=timeout, **kwargs)
-            if response.status_code >= 500 and attempt < _MAX_RETRIES:
-                time.sleep(_backoff_delay(attempt))
-                continue
-            return response
-        return response  # pragma: no cover - loop always returns on the last attempt
-
     # -- upload ------------------------------------------------------------
 
     def upload(self, audio_bytes: bytes, filename: str) -> str:
@@ -201,7 +173,9 @@ class LandrClient:
         and an audio id, then PUT the bytes to the presigned URL (no bearer token).
         """
         try:
-            response = self._send_with_retry(httpx.post, _UPLOAD_URL, json={"filename": filename}, timeout=_API_TIMEOUT)
+            response = _http.request(
+                httpx.post, _UPLOAD_URL, headers=self._auth_headers(), json={"filename": filename}, timeout=_API_TIMEOUT
+            )
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -219,9 +193,7 @@ class LandrClient:
             raise LandrError("LANDR upload request failed: response contains no upload_url")
 
         try:
-            put = self._send_with_retry(
-                httpx.put, presigned_url, content=audio_bytes, timeout=_UPLOAD_TIMEOUT, headers={}
-            )
+            put = _http.request(httpx.put, presigned_url, headers={}, content=audio_bytes, timeout=_UPLOAD_TIMEOUT)
             put.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise LandrError(f"LANDR upload failed: {exc.response.status_code}") from exc
@@ -235,7 +207,9 @@ class LandrClient:
         """Submit a LANDR mastering job and return its ``job_id``."""
         body = {"audio_id": audio_id, **landr_master_params(profile, target_lufs, output_format)}
         try:
-            response = self._send_with_retry(httpx.post, _MASTERS_URL, json=body, timeout=_API_TIMEOUT)
+            response = _http.request(
+                httpx.post, _MASTERS_URL, headers=self._auth_headers(), json=body, timeout=_API_TIMEOUT
+            )
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -255,7 +229,9 @@ class LandrClient:
     def get_status(self, job_id: str) -> dict[str, Any]:
         """Fetch the current state of LANDR job ``job_id`` with a normalised status."""
         try:
-            response = self._send_with_retry(httpx.get, f"{_MASTERS_URL}/{job_id}", timeout=_API_TIMEOUT)
+            response = _http.request(
+                httpx.get, f"{_MASTERS_URL}/{job_id}", headers=self._auth_headers(), timeout=_API_TIMEOUT
+            )
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -297,18 +273,19 @@ class LandrClient:
         with *no* bearer header so the token never reaches the CDN host.
         """
         try:
-            response = self._send_with_retry(
+            response = _http.request(
                 httpx.get,
                 f"{_MASTERS_URL}/{job_id}/download",
+                headers=self._auth_headers(),
                 timeout=_DOWNLOAD_TIMEOUT,
                 follow_redirects=False,
             )
             if response.is_redirect and response.headers.get("location"):
-                response = self._send_with_retry(
+                response = _http.request(
                     httpx.get,
                     response.headers["location"],
-                    timeout=_DOWNLOAD_TIMEOUT,
                     headers={},
+                    timeout=_DOWNLOAD_TIMEOUT,
                     follow_redirects=True,
                 )
             response.raise_for_status()
