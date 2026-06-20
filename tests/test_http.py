@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from acemusic import _http
 
@@ -68,12 +69,8 @@ def test_retries_zero_makes_a_single_attempt():
 def test_connection_errors_propagate_unretried():
     method = MagicMock(side_effect=httpx.ConnectError("refused"))
     with patch("acemusic._http.time.sleep") as sleep:
-        try:
+        with pytest.raises(httpx.ConnectError):
             _http.request(method, "http://x", timeout=1.0)
-        except httpx.ConnectError:
-            pass
-        else:  # pragma: no cover
-            raise AssertionError("expected ConnectError to propagate")
     assert method.call_count == 1
     sleep.assert_not_called()
 
@@ -82,3 +79,11 @@ def test_passes_headers_and_kwargs_through():
     method = MagicMock(return_value=_resp(200))
     _http.request(method, "http://x", timeout=2.0, headers={"a": "b"}, json={"k": 1})
     assert method.call_args.kwargs == {"headers": {"a": "b"}, "timeout": 2.0, "json": {"k": 1}}
+
+
+def test_default_headers_none_is_passed_through():
+    """With no headers kwarg, the helper passes headers=None to the method (the
+    helper has no notion of auth, so the absence of a header is the safe default)."""
+    method = MagicMock(return_value=_resp(200))
+    _http.request(method, "http://x", timeout=1.0)
+    assert method.call_args.kwargs["headers"] is None

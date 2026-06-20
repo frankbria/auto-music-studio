@@ -54,16 +54,23 @@ DEFAULT_BASE_URL = "https://api.runpod.ai/v2"
 class RunPodError(Exception):
     """Raised when the RunPod API returns an error or is unreachable.
 
-    ``is_timeout`` is True only for a transport-level *read* timeout — the
-    connection was established but the server was slow to respond (e.g. a cold
-    start spinning up a serverless worker). Connect timeouts, refused/DNS
-    failures, and HTTP-status errors leave it False, so callers can tell a
-    slow-but-reachable endpoint from an unreachable host or a server-side error.
+    Two flags classify transport failures (mirroring :class:`AceStepError`) so a
+    caller can tell them from an API/HTTP-status error without sniffing message
+    text:
+
+    - ``is_connection`` is True for any transport-level failure (connection
+      refused, DNS failure, timeout) — the request never got an HTTP response.
+      HTTP-status errors leave it False.
+    - ``is_timeout`` is True only for a *read* timeout: the connection was
+      established but the server was slow to respond (e.g. a cold start spinning
+      up a serverless worker). Connect timeouts and refused/DNS failures leave
+      it False so an unreachable host still fast-fails.
     """
 
-    def __init__(self, message: str, *, is_timeout: bool = False) -> None:
+    def __init__(self, message: str, *, is_timeout: bool = False, is_connection: bool = False) -> None:
         super().__init__(message)
         self.is_timeout = is_timeout
+        self.is_connection = is_connection
 
 
 class RunPodClient:
@@ -98,7 +105,9 @@ class RunPodClient:
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod submit failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise RunPodError(f"RunPod submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)) from exc
+            raise RunPodError(
+                f"RunPod submit failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
+            ) from exc
 
     def submit_task(self, **kwargs: Any) -> str:
         """Alias matching :meth:`AceStepClient.submit_task` so the processor can treat
@@ -129,7 +138,9 @@ class RunPodClient:
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod status failed: {exc.response.status_code} {exc.response.text}") from exc
         except httpx.RequestError as exc:
-            raise RunPodError(f"RunPod status failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)) from exc
+            raise RunPodError(
+                f"RunPod status failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
+            ) from exc
 
         status = _STATUS_MAP.get(str(data.get("status", "")).lower(), "pending")
         error = data.get("error")
@@ -155,7 +166,9 @@ class RunPodClient:
         except httpx.HTTPStatusError as exc:
             raise RunPodError(f"RunPod download failed: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
-            raise RunPodError(f"RunPod download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout)) from exc
+            raise RunPodError(
+                f"RunPod download failed: {exc}", is_timeout=isinstance(exc, httpx.ReadTimeout), is_connection=True
+            ) from exc
 
     def health(self, timeout: float = 5.0) -> bool:
         """Return ``True`` if GET ``/health`` answers with a 2xx.

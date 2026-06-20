@@ -96,12 +96,22 @@ class TestSubmit:
             with pytest.raises(RunPodError) as exc:
                 _client().submit({"prompt": "x"})
         assert exc.value.is_timeout is True
+        assert exc.value.is_connection is True
 
     def test_connection_refused_is_not_timeout(self):
         with patch("acemusic.runpod_client.httpx.post", side_effect=httpx.ConnectError("refused")):
             with pytest.raises(RunPodError) as exc:
                 _client().submit({"prompt": "x"})
         assert exc.value.is_timeout is False
+        assert exc.value.is_connection is True
+
+    def test_http_status_error_is_not_a_connection_failure(self):
+        resp = _err(503)
+        with patch("acemusic.runpod_client.httpx.post", return_value=resp):
+            with patch("acemusic._http.time.sleep"):
+                with pytest.raises(RunPodError) as exc:
+                    _client().submit({"prompt": "x"})
+        assert exc.value.is_connection is False
 
 
 class TestQueryResult:
