@@ -20,11 +20,21 @@ backoff so the processor stays unaware of retry mechanics. 4xx errors fail fast.
 
 from __future__ import annotations
 
+import logging
 import random
 import time
+import urllib.parse
 from typing import Any, Callable
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# Hosts that resolve on the worker (or the platform host) rather than across the
+# network. A correctly-configured worker (US-11.x) uploads clips to S3 and never emits
+# these, but a stale worker image might — so they are dropped here as a safety net so
+# the platform never tries to fetch audio it cannot reach.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # Retry policy for transient (5xx) responses. ``_MAX_RETRIES`` retries follow the
 # initial attempt, so a persistently-failing endpoint is hit up to 4 times. Delays
@@ -235,12 +245,18 @@ class RunPodClient:
 
 
 def _extract_audio_urls(output: Any) -> list[str]:
-    """Pull audio URLs out of a RunPod ``output`` payload.
+    """Pull reachable audio URLs out of a RunPod ``output`` payload.
 
-    The worker (US-11.3) is not built yet, so this accepts the shapes it is most
-    likely to emit: a bare list of URLs, a list of ``{"url"|"file"|"audio_url": ...}``
-    objects, or a dict carrying any of those under ``audio_urls``/``clips``/``outputs``.
+    Accepts the shapes the worker (US-11.3) may emit: a bare list of URLs, a list of
+    ``{"url"|"file"|"audio_url": ...}`` objects, or a dict carrying any of those under
+    ``audio_urls``/``clips``/``outputs``. Worker-local URLs (``localhost`` etc.) are
+    dropped as a safety net (see :data:`_LOCAL_HOSTS`).
     """
+    return _drop_unreachable(_collect_audio_urls(output))
+
+
+def _collect_audio_urls(output: Any) -> list[str]:
+    """Pull every audio URL out of a RunPod ``output`` payload, reachable or not."""
     if not output:
         return []
     if isinstance(output, dict):
@@ -255,6 +271,28 @@ def _extract_audio_urls(output: Any) -> list[str]:
     if isinstance(output, list):
         return _urls_from_list(output)
     return []
+
+
+def _drop_unreachable(urls: list[str]) -> list[str]:
+    """Filter out worker-local URLs the platform cannot reach, logging any drops."""
+    reachable = [url for url in urls if not _is_localhost_url(url)]
+    dropped = len(urls) - len(reachable)
+    if dropped:
+        logger.warning(
+            "Dropped %d worker-local audio URL(s) the platform cannot reach; "
+            "the worker should upload clips to S3 (US-11.x)",
+            dropped,
+        )
+    return reachable
+
+
+def _is_localhost_url(url: str) -> bool:
+    """True if ``url``'s host is a loopback/worker-local address."""
+    try:
+        host = urllib.parse.urlparse(url).hostname
+    except ValueError:
+        return False
+    return host in _LOCAL_HOSTS
 
 
 def _urls_from_list(items: list) -> list[str]:

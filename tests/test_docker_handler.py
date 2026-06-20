@@ -61,6 +61,25 @@ def _query(status: int, *, result: str = "[]", error=None) -> MagicMock:
 
 
 _RESULT_TWO_CLIPS = '[{"file": "/v1/audio?path=a.wav"}, {"file": "/v1/audio?path=b.wav"}]'
+_RESULT_ONE_CLIP = '[{"file": "/v1/audio?path=a.wav"}]'
+
+
+def _audio_resp(body: bytes) -> MagicMock:
+    """A /v1/audio download response carrying raw clip bytes."""
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = 200
+    resp.content = body
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _mock_boto3():
+    """A stand-in boto3 whose S3 client records uploads and mints predictable URLs."""
+    client = MagicMock()
+    client.generate_presigned_url.side_effect = lambda op, Params, ExpiresIn: f"https://s3.test/{Params['Key']}?sig"
+    module = MagicMock()
+    module.client.return_value = client
+    return module, client
 
 
 class TestStartApiServer:
@@ -231,6 +250,188 @@ class TestAudioUrlExtraction:
     def test_absolute_url_passed_through(self, handler_mod):
         item = {"result": '[{"file": "https://cdn.test/x.wav"}]'}
         assert handler_mod._extract_audio_urls(item) == ["https://cdn.test/x.wav"]
+
+
+class TestS3Delivery:
+    """US-11.x: when S3 is configured the handler re-hosts clips and returns presigned URLs."""
+
+    def test_no_bucket_returns_worker_local_urls(self, handler_mod, monkeypatch):
+        # Local / pod use (not a serverless worker): localhost is reachable, so the
+        # worker-local URLs pass through unchanged.
+        monkeypatch.delenv("ACEMUSIC_S3_BUCKET", raising=False)
+        monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+        post = MagicMock(side_effect=[_release("t"), _query(1, result=_RESULT_TWO_CLIPS)])
+        with (
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            out = handler_mod.handler({"input": {}})
+        assert out["audio_urls"] == [
+            "http://localhost:8001/v1/audio?path=a.wav",
+            "http://localhost:8001/v1/audio?path=b.wav",
+        ]
+
+    def test_serverless_without_bucket_fails_loudly(self, handler_mod, monkeypatch):
+        # On a real serverless worker the platform is remote; missing storage is a
+        # misconfiguration, not a silent fall-back to unreachable localhost URLs.
+        monkeypatch.delenv("ACEMUSIC_S3_BUCKET", raising=False)
+        monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "ep-123")
+        post = MagicMock(side_effect=[_release("t"), _query(1, result=_RESULT_ONE_CLIP)])
+        with (
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            out = handler_mod.handler({"input": {}})
+        assert out["status"] == "failed"
+        assert "ACEMUSIC_S3_BUCKET" in out["error"]
+        assert out["audio_urls"] == []
+
+    def test_token_not_sent_to_external_result_host(self, handler_mod, monkeypatch):
+        # ACE-Step can return an absolute third-party URL; the ACE-Step token must not
+        # be disclosed to it (only the worker-local server gets the bearer header).
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        monkeypatch.setenv("ACESTEP_API_KEY", "secret")
+        boto3_mod, _ = _mock_boto3()
+        post = MagicMock(side_effect=[_release("job"), _query(1, result='[{"file": "https://cdn.test/x.wav"}]')])
+        get = MagicMock(return_value=_audio_resp(b"x"))
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", get),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            handler_mod.handler({"input": {}})
+        assert get.call_args.args[0] == "https://cdn.test/x.wav"
+        assert get.call_args.kwargs["headers"] == {}
+
+    def test_token_not_leaked_via_userinfo_spoofed_host(self, handler_mod, monkeypatch):
+        # A userinfo-spoofed URL parses to an attacker-controlled host, so the parsed
+        # origin (not a string prefix) decides whether the token is attached.
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        monkeypatch.setenv("ACESTEP_API_KEY", "secret")
+        boto3_mod, _ = _mock_boto3()
+        spoof = "http://localhost@attacker.example/x.wav"
+        post = MagicMock(side_effect=[_release("job"), _query(1, result=f'[{{"file": "{spoof}"}}]')])
+        get = MagicMock(return_value=_audio_resp(b"x"))
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", get),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            handler_mod.handler({"input": {}})
+        assert get.call_args.args[0] == spoof
+        assert get.call_args.kwargs["headers"] == {}
+
+    def test_origin_check_rejects_port_prefixed_spoof(self, handler_mod):
+        # Regression for the codex finding: a string-prefix check would accept a URL of
+        # the form <local-base>@otherhost (it starts with the base) yet httpx connects to
+        # otherhost. Built from parts so no literal credential string is committed.
+        port_spoof = handler_mod.API_BASE_URL + "@attacker.example/x.wav"
+        assert port_spoof.startswith(handler_mod.API_BASE_URL)  # the trap a prefix check falls into
+        assert handler_mod._is_worker_local(port_spoof) is False
+
+    def test_uploads_clips_to_s3_and_returns_presigned_urls(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "clips-bucket")
+        monkeypatch.delenv("ACEMUSIC_S3_PREFIX", raising=False)
+        monkeypatch.delenv("ACESTEP_API_KEY", raising=False)
+        boto3_mod, client = _mock_boto3()
+        post = MagicMock(side_effect=[_release("job7"), _query(1, result=_RESULT_TWO_CLIPS)])
+        get = MagicMock(return_value=_audio_resp(b"RIFFdata"))
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", get),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            out = handler_mod.handler({"input": {"prompt": "x"}})
+        assert out["status"] == "completed"
+        # Presigned S3 URLs replace the unreachable worker-local URLs.
+        assert out["audio_urls"] == [
+            "https://s3.test/runpod/job7/0.wav?sig",
+            "https://s3.test/runpod/job7/1.wav?sig",
+        ]
+        # Each clip was fetched from the worker-local ACE-Step server...
+        assert [c.args[0] for c in get.call_args_list] == [
+            "http://localhost:8001/v1/audio?path=a.wav",
+            "http://localhost:8001/v1/audio?path=b.wav",
+        ]
+        # ...then uploaded under runpod/<task_id>/<i><ext> with bytes + audio content type.
+        first = client.put_object.call_args_list[0].kwargs
+        assert [c.kwargs["Key"] for c in client.put_object.call_args_list] == [
+            "runpod/job7/0.wav",
+            "runpod/job7/1.wav",
+        ]
+        assert first["Bucket"] == "clips-bucket"
+        assert first["Body"] == b"RIFFdata"
+        assert first["ContentType"].startswith("audio/")
+
+    def test_prefix_prepended_to_s3_key(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        monkeypatch.setenv("ACEMUSIC_S3_PREFIX", "audio/")
+        boto3_mod, client = _mock_boto3()
+        post = MagicMock(side_effect=[_release("job"), _query(1, result=_RESULT_ONE_CLIP)])
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", MagicMock(return_value=_audio_resp(b"x"))),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            handler_mod.handler({"input": {}})
+        assert client.put_object.call_args.kwargs["Key"] == "audio/runpod/job/0.wav"
+
+    def test_clip_download_sends_api_key(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        monkeypatch.setenv("ACESTEP_API_KEY", "secret")
+        boto3_mod, _ = _mock_boto3()
+        post = MagicMock(side_effect=[_release("job"), _query(1, result=_RESULT_ONE_CLIP)])
+        get = MagicMock(return_value=_audio_resp(b"x"))
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", get),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            handler_mod.handler({"input": {}})
+        assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer secret"}
+
+    def test_s3_upload_failure_returns_failed(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        boto3_mod, client = _mock_boto3()
+        client.put_object.side_effect = RuntimeError("AccessDenied")
+        post = MagicMock(side_effect=[_release("job"), _query(1, result=_RESULT_ONE_CLIP)])
+        with (
+            patch.object(handler_mod, "boto3", boto3_mod),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.httpx, "get", MagicMock(return_value=_audio_resp(b"x"))),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            out = handler_mod.handler({"input": {}})
+        assert out["status"] == "failed"
+        assert "deliver audio to s3" in out["error"].lower()
+        assert out["audio_urls"] == []
+
+    def test_bucket_set_but_boto3_missing_returns_failed(self, handler_mod, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_S3_BUCKET", "b")
+        post = MagicMock(side_effect=[_release("job"), _query(1, result=_RESULT_ONE_CLIP)])
+        with (
+            patch.object(handler_mod, "boto3", None),
+            patch.object(handler_mod, "start_api_server", return_value=True),
+            patch.object(handler_mod.httpx, "post", post),
+            patch.object(handler_mod.time, "sleep"),
+        ):
+            out = handler_mod.handler({"input": {}})
+        assert out["status"] == "failed"
+        assert "boto3" in out["error"].lower()
+        assert out["audio_urls"] == []
 
 
 class TestModuleContract:
