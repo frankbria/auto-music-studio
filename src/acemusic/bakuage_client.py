@@ -22,22 +22,17 @@ analysis), so optional fields degrade to ``None`` to keep the shared shape.
 
 from __future__ import annotations
 
-import random
 import time
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
+from acemusic import _http
 from acemusic.mastering_protocol import MasteringError, MasteringOutput
 
 # Bakuage AI Mastering open REST API (spec §41.2.3).
 _BASE_URL = "https://api.bakuage.com:443/v1"
 _MASTERS_URL = f"{_BASE_URL}/masterings"
-
-# Retry policy for transient (5xx) responses, matching Dolby/LANDR/RunPod.
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0
-_BACKOFF_JITTER = 0.5
 
 # Create/poll calls are quick; download streams a whole audio file.
 _API_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=10.0)
@@ -79,11 +74,6 @@ def bakuage_master_params(profile: str, target_lufs: float, output_format: str) 
     return params
 
 
-def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff (1s, 2s, 4s …) plus jitter for the given retry attempt."""
-    return _BACKOFF_BASE * (2**attempt) + random.uniform(0, _BACKOFF_JITTER)
-
-
 def _as_float(value: Any) -> float | None:
     """Best-effort float coercion for a metric value, or None when absent/garbage."""
     if value is None or isinstance(value, bool):
@@ -105,28 +95,6 @@ class BakuageClient:
         self.api_key = api_key
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
-    # -- transport ---------------------------------------------------------
-
-    def _send_with_retry(
-        self,
-        method: Callable[..., httpx.Response],
-        url: str,
-        *,
-        timeout: httpx.Timeout | float,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx.Response:
-        """Issue an HTTP request, retrying on 5xx with exponential backoff."""
-        request_headers = self._headers if headers is None else headers
-        response = None
-        for attempt in range(_MAX_RETRIES + 1):
-            response = method(url, headers=request_headers, timeout=timeout, **kwargs)
-            if response.status_code >= 500 and attempt < _MAX_RETRIES:
-                time.sleep(_backoff_delay(attempt))
-                continue
-            return response
-        return response  # pragma: no cover - loop always returns on the last attempt
-
     # -- create mastering --------------------------------------------------
 
     def create_mastering(
@@ -146,7 +114,9 @@ class BakuageClient:
         files = {"audio_file": (filename, audio_bytes)}
         data = {k: str(v) for k, v in params.items()}
         try:
-            response = self._send_with_retry(httpx.post, _MASTERS_URL, files=files, data=data, timeout=_API_TIMEOUT)
+            response = _http.request(
+                httpx.post, _MASTERS_URL, headers=self._headers, files=files, data=data, timeout=_API_TIMEOUT
+            )
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -166,7 +136,7 @@ class BakuageClient:
     def get_status(self, job_id: str) -> dict[str, Any]:
         """Fetch the current state of Bakuage job ``job_id`` with a normalised status."""
         try:
-            response = self._send_with_retry(httpx.get, f"{_MASTERS_URL}/{job_id}", timeout=_API_TIMEOUT)
+            response = _http.request(httpx.get, f"{_MASTERS_URL}/{job_id}", headers=self._headers, timeout=_API_TIMEOUT)
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -208,18 +178,19 @@ class BakuageClient:
         with *no* bearer header so the token never reaches the CDN host.
         """
         try:
-            response = self._send_with_retry(
+            response = _http.request(
                 httpx.get,
                 f"{_MASTERS_URL}/{job_id}/download",
+                headers=self._headers,
                 timeout=_DOWNLOAD_TIMEOUT,
                 follow_redirects=False,
             )
             if response.is_redirect and response.headers.get("location"):
-                response = self._send_with_retry(
+                response = _http.request(
                     httpx.get,
                     response.headers["location"],
-                    timeout=_DOWNLOAD_TIMEOUT,
                     headers={},
+                    timeout=_DOWNLOAD_TIMEOUT,
                     follow_redirects=True,
                 )
             response.raise_for_status()

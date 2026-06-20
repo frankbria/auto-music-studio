@@ -6,13 +6,23 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
+from acemusic.client import AceStepClient, AceStepError
 
 
-def test_connection_error_is_an_acestep_error():
-    """generate's poll-time fallback relies on this: a raised
-    AceStepConnectionError must be caught by ``except AceStepError``."""
-    assert issubclass(AceStepConnectionError, AceStepError)
+def test_acestep_error_defaults_flags_false():
+    """A plain API/HTTP error carries no transport flags so callers don't mistake
+    it for a connection failure (the fallback logic keys off is_connection)."""
+    err = AceStepError("boom")
+    assert err.is_connection is False
+    assert err.is_timeout is False
+
+
+def test_acestep_error_carries_transport_flags():
+    """Transport failures fold is_timeout/is_connection into the base error
+    (replacing the former AceStepConnectionError subclass)."""
+    err = AceStepError("slow", is_timeout=True, is_connection=True)
+    assert err.is_connection is True
+    assert err.is_timeout is True
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +98,33 @@ class TestSubmitTask:
         with patch("acemusic.client.httpx.post", side_effect=httpx.ConnectError("refused")):
             with pytest.raises(AceStepError, match="Submit failed"):
                 client.submit_task("rock")
+
+    def test_connect_error_sets_is_connection_not_timeout(self):
+        """A refused connection is a transport failure but not a timeout."""
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", side_effect=httpx.ConnectError("refused")):
+            with pytest.raises(AceStepError) as exc:
+                client.submit_task("rock")
+        assert exc.value.is_connection is True
+        assert exc.value.is_timeout is False
+
+    def test_read_timeout_sets_is_timeout(self):
+        """A read timeout is a transport failure flagged as a timeout."""
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", side_effect=httpx.ReadTimeout("slow")):
+            with pytest.raises(AceStepError) as exc:
+                client.submit_task("rock")
+        assert exc.value.is_connection is True
+        assert exc.value.is_timeout is True
+
+    def test_http_status_error_is_not_a_connection_failure(self):
+        """An HTTP-status error responded, so it must not be flagged transport."""
+        resp = _make_error_response(503)
+        client = AceStepClient("http://localhost:8001")
+        with patch("acemusic.client.httpx.post", return_value=resp):
+            with pytest.raises(AceStepError) as exc:
+                client.submit_task("folk")
+        assert exc.value.is_connection is False
 
     def test_sends_batch_size_not_num_clips(self):
         """Payload uses 'batch_size' (ACE-Step field name), not 'num_clips'."""

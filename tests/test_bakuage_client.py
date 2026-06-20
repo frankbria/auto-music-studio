@@ -162,7 +162,7 @@ class TestRetry:
         responses = [_resp(status_code=503), _resp(json_data={"id": "bk"})]
         with (
             patch("acemusic.bakuage_client.httpx.post", side_effect=responses) as mock_post,
-            patch("acemusic.bakuage_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             assert client.create_mastering(FAKE_AUDIO, "clip.wav", "streaming", -14.0, "wav") == "bk"
         assert mock_post.call_count == 2
@@ -217,7 +217,7 @@ class TestMasterEntrypoint:
         client = _client()
         with (
             patch("acemusic.bakuage_client.httpx.post", return_value=_resp(status_code=500)),
-            patch("acemusic.bakuage_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             with pytest.raises(BakuageError):
                 client.master(FAKE_AUDIO, "f.wav", "streaming", -14.0, "wav")

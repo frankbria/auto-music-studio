@@ -36,7 +36,7 @@ from acemusic.audio import (
     time_stretch_audio,
 )
 from acemusic.backends import BackendError, ensure_supports, resolve_backend
-from acemusic.client import AceStepClient, AceStepConnectionError, AceStepError
+from acemusic.client import AceStepClient, AceStepError
 from acemusic.config import load_config
 from acemusic.constants import (
     BPM_MAX as _BPM_MAX,
@@ -267,7 +267,7 @@ def _is_connection_error(exc: AceStepError) -> bool:
 
 def _is_timeout_error(exc: AceStepError) -> bool:
     """Return True if the failure is a timeout (server slow-but-reachable)."""
-    if isinstance(exc, AceStepConnectionError):
+    if exc.is_connection:
         return exc.is_timeout
     msg = str(exc).lower()
     return "timed out" in msg or "timeout" in msg
@@ -281,7 +281,7 @@ def _should_fall_back(exc: AceStepError) -> bool:
     flags were requested), and API/HTTP errors mean the server responded — neither
     should switch backends.
     """
-    if isinstance(exc, AceStepConnectionError):
+    if exc.is_connection:
         return not exc.is_timeout
     return _is_connection_error(exc) and not _is_timeout_error(exc)
 
@@ -312,16 +312,17 @@ def _poll_until_complete(
     - A **genuine API error** aborts immediately.
 
     When ``raise_on_transport_error`` is True, a **persistent connection failure**
-    (the consecutive-failure abort — ACE-Step is unreachable) re-raises
-    ``AceStepConnectionError`` so the caller can fall back to another backend
-    (used by ``generate``). A **timeout** does NOT trigger fallback: it means
-    ACE-Step is reachable but slow, the job may still finish, and ACE-Step flags
-    were requested — so timeouts always ``typer.Exit``. Reported ``failed`` status
-    and genuine API errors also always exit (never a transport problem).
+    (the consecutive-failure abort — ACE-Step is unreachable) re-raises the
+    ``AceStepError`` (with ``is_connection=True``) so the caller can fall back to
+    another backend (used by ``generate``). A **timeout** does NOT trigger
+    fallback: it means ACE-Step is reachable but slow, the job may still finish,
+    and ACE-Step flags were requested — so timeouts always ``typer.Exit``.
+    Reported ``failed`` status and genuine API errors also always exit (never a
+    transport problem).
 
     Raises:
-        AceStepConnectionError: persistent connection failure when
-            ``raise_on_transport_error`` is set.
+        AceStepError: persistent connection failure (``is_connection=True``)
+            when ``raise_on_transport_error`` is set.
         typer.Exit: otherwise on timeout/failure/abort.
     """
     start = time.monotonic()
@@ -338,9 +339,13 @@ def _poll_until_complete(
         try:
             result = ace_client.query_result(task_id)
             consecutive_conn_failures = 0
-        except AceStepConnectionError as exc:
-            # Transport failure (classified by exception type, not message text, so a
-            # 500 whose body mentions "connection" is never mistaken for one).
+        except AceStepError as exc:
+            if not exc.is_connection:
+                # Genuine API/HTTP error — surface it immediately (never a fallback case).
+                console.print(f"[red]Error polling status: {exc}[/red]")
+                raise typer.Exit(code=1)
+            # Transport failure (classified by the is_connection flag, not message
+            # text, so a 500 whose body mentions "connection" is never mistaken for one).
             if exc.is_timeout:
                 # Server is reachable but slow — keep polling within the budget.
                 consecutive_conn_failures = 0
@@ -357,10 +362,6 @@ def _poll_until_complete(
             status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — waiting for server…[/bold green]")
             time.sleep(poll_interval)
             continue
-        except AceStepError as exc:
-            # Genuine API/HTTP error — surface it immediately (never a fallback case).
-            console.print(f"[red]Error polling status: {exc}[/red]")
-            raise typer.Exit(code=1)
 
         job_status = result.get("status", "unknown")
         status_bar.update(f"[bold green]{label}… ({elapsed:.0f}s) — {job_status}[/bold green]")
@@ -806,8 +807,9 @@ def _generate_via_ace_step(
     """Submit, poll, and download audio via the ACE-Step backend.
 
     When ``raise_on_transport_error`` is set, a poll-time transport outage
-    re-raises ``AceStepConnectionError`` (rather than exiting) so ``generate``
-    can fall back to ElevenLabs just as it does for submit-time failures.
+    re-raises the ``AceStepError`` (``is_connection=True``, rather than exiting)
+    so ``generate`` can fall back to ElevenLabs just as it does for submit-time
+    failures.
     """
     poll_timeout = float(os.environ.get("ACEMUSIC_POLL_TIMEOUT", "600"))
     poll_interval = 2.0

@@ -13,7 +13,6 @@ import pytest
 
 from acemusic.runpod_client import (
     RunPodClient,
-    RunPodConnectionError,
     RunPodError,
     _extract_audio_urls,
 )
@@ -94,13 +93,13 @@ class TestSubmit:
 
     def test_connection_timeout_raises_connection_error_with_flag(self):
         with patch("acemusic.runpod_client.httpx.post", side_effect=httpx.ReadTimeout("slow")):
-            with pytest.raises(RunPodConnectionError) as exc:
+            with pytest.raises(RunPodError) as exc:
                 _client().submit({"prompt": "x"})
         assert exc.value.is_timeout is True
 
     def test_connection_refused_is_not_timeout(self):
         with patch("acemusic.runpod_client.httpx.post", side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(RunPodConnectionError) as exc:
+            with pytest.raises(RunPodError) as exc:
                 _client().submit({"prompt": "x"})
         assert exc.value.is_timeout is False
 
@@ -145,7 +144,7 @@ class TestQueryResult:
     def test_4xx_raises_immediately_without_retry(self):
         resp = _err(404)
         with patch("acemusic.runpod_client.httpx.get", return_value=resp) as mock_get:
-            with patch("acemusic.runpod_client.time.sleep") as mock_sleep:
+            with patch("acemusic._http.time.sleep") as mock_sleep:
                 with pytest.raises(RunPodError):
                     _client().query_result("job-1")
         assert mock_get.call_count == 1
@@ -154,7 +153,7 @@ class TestQueryResult:
     def test_5xx_retries_three_times_then_raises(self):
         resp = _err(503)
         with patch("acemusic.runpod_client.httpx.get", return_value=resp) as mock_get:
-            with patch("acemusic.runpod_client.time.sleep") as mock_sleep:
+            with patch("acemusic._http.time.sleep") as mock_sleep:
                 with pytest.raises(RunPodError):
                     _client().query_result("job-1")
         # Initial attempt + 3 retries == 4 calls; 3 backoff sleeps between them.
@@ -164,22 +163,22 @@ class TestQueryResult:
     def test_5xx_then_success_recovers(self):
         responses = [_err(503), _ok({"status": "COMPLETED", "output": ["http://x/a.wav"]})]
         with patch("acemusic.runpod_client.httpx.get", side_effect=responses):
-            with patch("acemusic.runpod_client.time.sleep"):
+            with patch("acemusic._http.time.sleep"):
                 result = _client().query_result("job-1")
         assert result["status"] == "completed"
 
     def test_exponential_backoff_delays(self):
         resp = _err(500)
         with patch("acemusic.runpod_client.httpx.get", return_value=resp):
-            with patch("acemusic.runpod_client.random.uniform", return_value=0.0):
-                with patch("acemusic.runpod_client.time.sleep") as mock_sleep:
+            with patch("acemusic._http.random.uniform", return_value=0.0):
+                with patch("acemusic._http.time.sleep") as mock_sleep:
                     with pytest.raises(RunPodError):
                         _client().query_result("job-1")
         assert [call.args[0] for call in mock_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
     def test_connection_error_raises_connection_error(self):
         with patch("acemusic.runpod_client.httpx.get", side_effect=httpx.ReadTimeout("slow")):
-            with pytest.raises(RunPodConnectionError) as exc:
+            with pytest.raises(RunPodError) as exc:
                 _client().query_result("job-1")
         assert exc.value.is_timeout is True
 
@@ -198,7 +197,7 @@ class TestDownloadAudio:
 
     def test_connection_error_raises_connection_error(self):
         with patch("acemusic.runpod_client.httpx.get", side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(RunPodConnectionError) as exc:
+            with pytest.raises(RunPodError) as exc:
                 _client().download_audio("http://x/a.wav")
         assert exc.value.is_timeout is False
 
@@ -213,7 +212,7 @@ class TestDownloadAudio:
     def test_5xx_is_retried_then_recovers(self):
         responses = [_err(503), _ok({}, content=b"WAV")]
         with patch("acemusic.runpod_client.httpx.get", side_effect=responses) as mock_get:
-            with patch("acemusic.runpod_client.time.sleep"):
+            with patch("acemusic._http.time.sleep"):
                 assert _client().download_audio("http://x/a.wav") == b"WAV"
         assert mock_get.call_count == 2
 

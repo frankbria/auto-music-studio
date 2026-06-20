@@ -22,12 +22,12 @@ knowledge of our Job/Clip models — the mastering task handler owns that.
 
 from __future__ import annotations
 
-import random
 import time
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
+from acemusic import _http
 from acemusic.mastering_protocol import MasteringError, MasteringOutput
 
 # Auth lives on api.dolby.io; the Media (mastering/input/output) endpoints live on
@@ -40,13 +40,6 @@ _MEDIA_BASE_URL = "https://api.dolby.com/media"
 # expires mid-flight.
 _TOKEN_LIFETIME_S = 1800
 _TOKEN_EXPIRY_BUFFER_S = 60.0
-
-# Retry policy for transient (5xx) responses, matching the RunPod client: the
-# initial attempt plus ``_MAX_RETRIES`` retries, delays growing as
-# ``base * 2**attempt`` (1s, 2s, 4s) with jitter to avoid synchronised retries.
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0
-_BACKOFF_JITTER = 0.5
 
 # Dolby caps a single preview submission at five output variants; surface a clear
 # client-side error rather than letting the API reject an over-large request.
@@ -104,11 +97,6 @@ def master_output_config(profile: str, target_lufs: float, destination: str) -> 
     }
 
 
-def _backoff_delay(attempt: int) -> float:
-    """Exponential backoff (1s, 2s, 4s …) plus jitter for the given retry attempt."""
-    return _BACKOFF_BASE * (2**attempt) + random.uniform(0, _BACKOFF_JITTER)
-
-
 def _as_float(value: Any) -> float | None:
     """Best-effort float coercion for a metric value, or None when absent/garbage."""
     if value is None or isinstance(value, bool):
@@ -145,11 +133,16 @@ class DolbyClient:
         if self._token is not None and now < self._token_expiry - _TOKEN_EXPIRY_BUFFER_S:
             return self._token
         try:
-            response = httpx.post(
+            # The token exchange itself is not retried (a bad credential or rate
+            # limit should fail fast, not loop), so route through the shared
+            # helper with retries=0 for a single attempt.
+            response = _http.request(
+                httpx.post,
                 _AUTH_URL,
                 auth=(self.api_key, self.api_secret),
                 data={"grant_type": "client_credentials", "expires_in": _TOKEN_LIFETIME_S},
                 timeout=_AUTH_TIMEOUT,
+                retries=0,
             )
             response.raise_for_status()
             payload = response.json()
@@ -175,35 +168,6 @@ class DolbyClient:
         """Bearer auth header carrying a fresh-enough token."""
         return {"Authorization": f"Bearer {self._get_token()}"}
 
-    # -- transport ---------------------------------------------------------
-
-    def _send_with_retry(
-        self,
-        method: Callable[..., httpx.Response],
-        url: str,
-        *,
-        timeout: httpx.Timeout | float,
-        headers: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> httpx.Response:
-        """Issue an HTTP request, retrying on 5xx with exponential backoff.
-
-        Returns the response untouched so the caller decides how to interpret a
-        non-5xx status. Connection errors are not retried — they propagate for the
-        caller to wrap in :class:`DolbyError`. ``headers`` defaults to bearer auth;
-        callers hitting a presigned URL pass ``{}`` to avoid leaking the token to
-        an external host.
-        """
-        request_headers = self._auth_headers() if headers is None else headers
-        response = None
-        for attempt in range(_MAX_RETRIES + 1):
-            response = method(url, headers=request_headers, timeout=timeout, **kwargs)
-            if response.status_code >= 500 and attempt < _MAX_RETRIES:
-                time.sleep(_backoff_delay(attempt))
-                continue
-            return response
-        return response  # pragma: no cover - loop always returns on the last attempt
-
     # -- upload ------------------------------------------------------------
 
     def upload(self, audio_bytes: bytes, filename: str) -> str:
@@ -215,8 +179,12 @@ class DolbyClient:
         """
         dlb_url = f"dlb://{filename}"
         try:
-            response = self._send_with_retry(
-                httpx.post, f"{_MEDIA_BASE_URL}/input", json={"url": dlb_url}, timeout=_API_TIMEOUT
+            response = _http.request(
+                httpx.post,
+                f"{_MEDIA_BASE_URL}/input",
+                headers=self._auth_headers(),
+                json={"url": dlb_url},
+                timeout=_API_TIMEOUT,
             )
             response.raise_for_status()
             payload = response.json()
@@ -233,9 +201,7 @@ class DolbyClient:
 
         try:
             # The presigned URL is already authorized; send no bearer token to it.
-            put = self._send_with_retry(
-                httpx.put, presigned_url, content=audio_bytes, timeout=_UPLOAD_TIMEOUT, headers={}
-            )
+            put = _http.request(httpx.put, presigned_url, headers={}, content=audio_bytes, timeout=_UPLOAD_TIMEOUT)
             put.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise DolbyError(f"Dolby upload failed: {exc.response.status_code}") from exc
@@ -260,8 +226,12 @@ class DolbyClient:
             )
         body = {"inputs": [{"source": input_url}], "outputs": outputs}
         try:
-            response = self._send_with_retry(
-                httpx.post, f"{_MEDIA_BASE_URL}/master/preview", json=body, timeout=_API_TIMEOUT
+            response = _http.request(
+                httpx.post,
+                f"{_MEDIA_BASE_URL}/master/preview",
+                headers=self._auth_headers(),
+                json=body,
+                timeout=_API_TIMEOUT,
             )
             response.raise_for_status()
             payload = response.json()
@@ -287,8 +257,12 @@ class DolbyClient:
         or HTTP failure.
         """
         try:
-            response = self._send_with_retry(
-                httpx.get, f"{_MEDIA_BASE_URL}/master/preview", timeout=_API_TIMEOUT, params={"job_id": job_id}
+            response = _http.request(
+                httpx.get,
+                f"{_MEDIA_BASE_URL}/master/preview",
+                headers=self._auth_headers(),
+                timeout=_API_TIMEOUT,
+                params={"job_id": job_id},
             )
             response.raise_for_status()
             payload = response.json()
@@ -364,19 +338,20 @@ class DolbyClient:
         stripping.
         """
         try:
-            response = self._send_with_retry(
+            response = _http.request(
                 httpx.get,
                 f"{_MEDIA_BASE_URL}/output",
+                headers=self._auth_headers(),
                 timeout=_DOWNLOAD_TIMEOUT,
                 params={"url": dlb_url},
                 follow_redirects=False,
             )
             if response.is_redirect and response.headers.get("location"):
-                response = self._send_with_retry(
+                response = _http.request(
                     httpx.get,
                     response.headers["location"],
-                    timeout=_DOWNLOAD_TIMEOUT,
                     headers={},
+                    timeout=_DOWNLOAD_TIMEOUT,
                     follow_redirects=True,
                 )
             response.raise_for_status()

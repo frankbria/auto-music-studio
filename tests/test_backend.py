@@ -550,12 +550,12 @@ class TestPollTimeFallback:
 
     def test_poll_connection_failure_falls_back_to_elevenlabs(self, monkeypatch, tmp_path):
         """Persistent poll-time connection failure (auto) → fall back to ElevenLabs (exit 0)."""
-        from acemusic.client import AceStepConnectionError
+        from acemusic.client import AceStepError
 
         self._config_with_el(monkeypatch)
         # submit ok, then query_result keeps failing with a hard connection error
         ace = self._ace_mock_submit_ok_then_poll(
-            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+            [AceStepError("Query failed: connection refused", is_timeout=False, is_connection=True)] * 20
         )
         el = _elevenlabs_client_mock(FAKE_MP3)
         with (
@@ -602,11 +602,11 @@ class TestPollTimeFallback:
 
     def test_poll_connection_failure_no_key_exits_with_message(self, monkeypatch, tmp_path):
         """Poll-time connection failure without ELEVENLABS_API_KEY exits 1 with actionable message."""
-        from acemusic.client import AceStepConnectionError
+        from acemusic.client import AceStepError
 
         self._config_with_el(monkeypatch, el_key=None)
         ace = self._ace_mock_submit_ok_then_poll(
-            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+            [AceStepError("Query failed: connection refused", is_timeout=False, is_connection=True)] * 20
         )
         with (
             patch("acemusic.cli.AceStepClient", return_value=ace),
@@ -620,11 +620,11 @@ class TestPollTimeFallback:
 
     def test_explicit_ace_step_poll_failure_no_fallback(self, monkeypatch, tmp_path):
         """Explicit --backend ace-step + poll-time connection failure → exit 1, no fallback."""
-        from acemusic.client import AceStepConnectionError
+        from acemusic.client import AceStepError
 
         self._config_with_el(monkeypatch)  # key IS set but explicit ace-step must not use it
         ace = self._ace_mock_submit_ok_then_poll(
-            [AceStepConnectionError("Query failed: connection refused", is_timeout=False)] * 20
+            [AceStepError("Query failed: connection refused", is_timeout=False, is_connection=True)] * 20
         )
         el = _elevenlabs_client_mock(FAKE_MP3)
         with (
@@ -643,7 +643,7 @@ class TestTimeoutNeverFallsBack:
     connection failures do (#93 / codex P2 / CodeRabbit)."""
 
     def test_submit_timeout_does_not_fall_back(self, monkeypatch, tmp_path):
-        from acemusic.client import AceStepConnectionError
+        from acemusic.client import AceStepError
         from acemusic.config import AceConfig
 
         monkeypatch.setattr(
@@ -656,7 +656,7 @@ class TestTimeoutNeverFallsBack:
             ),
         )
         ace = MagicMock()
-        ace.submit_task.side_effect = AceStepConnectionError("Submit failed: timed out", is_timeout=True)
+        ace.submit_task.side_effect = AceStepError("Submit failed: timed out", is_timeout=True, is_connection=True)
         el = _elevenlabs_client_mock(FAKE_MP3)
         with (
             patch("acemusic.cli.AceStepClient", return_value=ace),

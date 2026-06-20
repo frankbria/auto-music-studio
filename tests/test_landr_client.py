@@ -225,7 +225,7 @@ class TestRetry:
         responses = [_resp(status_code=503), _resp(json_data={"job_id": "lj"})]
         with (
             patch("acemusic.landr_client.httpx.post", side_effect=responses) as mock_post,
-            patch("acemusic.landr_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             assert client.submit("aud-1", "streaming", -14.0, "wav") == "lj"
         assert mock_post.call_count == 2
@@ -297,7 +297,7 @@ class TestMasterEntrypoint:
         with (
             patch("acemusic.landr_client.httpx.post", return_value=_resp(status_code=500)),
             patch("acemusic.landr_client.httpx.put"),
-            patch("acemusic.landr_client.time.sleep"),
+            patch("acemusic._http.time.sleep"),
         ):
             with pytest.raises(LandrError):
                 client.master(FAKE_AUDIO, "f.wav", "streaming", -14.0, "wav")
