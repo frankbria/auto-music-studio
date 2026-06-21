@@ -208,6 +208,17 @@ All endpoints are non-destructive: the original clip(s) are never modified. Each
 
 Each request fans out into one sub-job per clip, tracked under a `BatchJob`. The 50-clip cap, an empty list, and duplicate ids each return 422. A clip that is unknown, not owned, or (for stems) non-`wav` is recorded as a **failed sub-job** rather than rejecting the whole request, so individual failures never halt the batch — the status reports `partial_success`. Stems sub-jobs reuse the single-clip stems job (wav only); export sub-jobs transcode any generated source (`wav`/`flac`/`mp3`/`aac`/`opus`) to a `wav`/`wav32`/`flac`/`mp3` target via ffmpeg and surface a `download_url` when complete. Like the single-clip extraction endpoints, these are non-generative local work, so **no credits are deducted**.
 
+### Cover Art (US-13.1)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/clips/{id}/artwork/generate` | Generate 4 AI cover-art options from the clip's title/style tags (optional `style_prompt` override); returns 202 + `job_id` |
+| `POST /api/v1/clips/{id}/artwork` | Select a generated option (`{artwork_id}`) as the clip's cover art |
+| `PUT /api/v1/clips/{id}/artwork/upload` | Upload custom artwork (multipart `file`; JPG/PNG, ≥3000×3000) |
+| `GET /api/v1/clips/{id}/artwork` | Stream the selected/uploaded cover art (honours `is_public`, 404 until one is set) |
+
+Generation is async: poll `GET /api/v1/jobs/{id}/status`, whose completed response lists `artwork_options` as `{artwork_id, url}` pairs. Each option is generated at 1024×1024 and upscaled to a 3000×3000 distribution master (PNG). Uploads are validated for format (JPG/PNG only), minimum resolution (≥3000×3000, else `422` with a descriptive error), byte size (≤25 MB), and pixel-bomb safety; corrupt files are rejected with `422`. Generation requires `ACEMUSIC_API_OPENAI_API_KEY` (DALL-E); without it the worker fails the job with a clear "not configured" message, and `ACEMUSIC_API_ARTWORK_GENERATION_ENABLED=false` is a kill-switch. No credits are deducted.
+
 ### Presets
 
 | Endpoint | Purpose |
