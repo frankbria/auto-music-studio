@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..models import BatchJob, Clip, Job, JobStatus
+from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus
 from ..services import (
     clips as clip_service,
     credits as credits_service,
@@ -282,7 +282,8 @@ async def get_mastering_batch_status(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
 
-    sub_jobs = [await _batch_sub_job_status(entry) for entry in batch.entries]
+    # Up to MAX_BATCH_SIZE entries, each a Job.get() — read them concurrently.
+    sub_jobs = await asyncio.gather(*(_batch_sub_job_status(e) for e in batch.entries))
     total = len(sub_jobs)
     counts = {s: 0 for s in (JobStatus.QUEUED, JobStatus.PROCESSING, JobStatus.COMPLETED, JobStatus.FAILED)}
     for sub in sub_jobs:
@@ -304,7 +305,7 @@ async def get_mastering_batch_status(
     )
 
 
-async def _batch_sub_job_status(entry) -> BatchSubJobStatus:
+async def _batch_sub_job_status(entry: BatchClipEntry) -> BatchSubJobStatus:
     """Resolve one batch entry to its live status (mastered clip id once complete)."""
     if entry.job_id is None:
         # Request-time validation failure: terminal, no live job.
