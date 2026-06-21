@@ -7,10 +7,17 @@ that replaces the inline duplicates cannot drift.
 import io
 
 import pytest
+import typer
 from rich.console import Console
 
 import acemusic.cli as cli
-from acemusic.cli import _build_elevenlabs_prompt, _render_table
+from acemusic.cli import (
+    _build_elevenlabs_prompt,
+    _render_table,
+    _require_elevenlabs_key,
+    _resolve_backend_or_exit,
+)
+from acemusic.config import AceConfig
 
 
 @pytest.fixture
@@ -80,6 +87,44 @@ class TestBuildElevenlabsPrompt:
         out = captured_console.getvalue()
         assert "--bpm is ACE-Step-native; injecting '90 BPM'" in out
         assert "--key is ACE-Step-native; injecting 'A minor'" in out
+
+
+class TestRequireElevenlabsKey:
+    def test_missing_key_prints_error_and_exits(self, captured_console):
+        config = AceConfig(api_url=None, api_key=None, elevenlabs_api_key=None)
+        with pytest.raises(typer.Exit) as exc:
+            _require_elevenlabs_key(config)
+        assert exc.value.exit_code == 1
+        assert "requires ELEVENLABS_API_KEY to be set" in captured_console.getvalue()
+
+    def test_present_key_is_noop(self, captured_console):
+        config = AceConfig(api_url=None, api_key=None, elevenlabs_api_key="sk-x")
+        _require_elevenlabs_key(config)  # no raise
+        assert captured_console.getvalue() == ""
+
+
+class TestResolveBackendOrExit:
+    def test_invalid_backend_exits(self, captured_console, monkeypatch):
+        monkeypatch.setattr(cli, "load_config", lambda: AceConfig(api_url=None, api_key=None))
+        with pytest.raises(typer.Exit) as exc:
+            _resolve_backend_or_exit("bogus")
+        assert exc.value.exit_code == 1
+        assert "Invalid backend 'bogus'" in captured_console.getvalue()
+
+    def test_valid_backend_returns_config_and_name(self, monkeypatch):
+        cfg = AceConfig(api_url=None, api_key=None)
+        monkeypatch.setattr(cli, "load_config", lambda: cfg)
+        config, effective = _resolve_backend_or_exit("elevenlabs")
+        assert config is cfg
+        assert effective == "elevenlabs"
+
+    def test_unsupported_capability_exits(self, captured_console, monkeypatch):
+        monkeypatch.setattr(cli, "load_config", lambda: AceConfig(api_url=None, api_key=None))
+        # compose is ElevenLabs-only, so ace-step fails the capability check.
+        with pytest.raises(typer.Exit) as exc:
+            _resolve_backend_or_exit("ace-step", capability="compose")
+        assert exc.value.exit_code == 1
+        assert "does not support 'compose'" in captured_console.getvalue()
 
 
 class TestRenderTable:

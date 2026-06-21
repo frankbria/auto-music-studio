@@ -13,7 +13,7 @@ import uuid
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from pydub import AudioSegment
@@ -175,7 +175,7 @@ def _require_elevenlabs_key(config: AceConfig) -> None:
 def _build_elevenlabs_prompt(
     prompt: str,
     *,
-    bpm: object | None,
+    bpm: int | float | str | None,
     key: str | None,
     time_signature: str | None = None,
     vocal_language: str | None = None,
@@ -189,6 +189,8 @@ def _build_elevenlabs_prompt(
     ``sounds``). ``warn_skip`` toggles the "no equivalent; skipping" notices for
     ``--bpm auto`` / ``--key any``. ``prefix`` seeds the additions list (e.g. the
     ``"<type> sample"`` entry used by ``sounds``).
+
+    Side effect: prints the injection/skip warnings to the module ``console``.
     """
     additions: list[str] = list(prefix) if prefix else []
     if bpm is not None and bpm != "auto":
@@ -223,10 +225,10 @@ def _build_elevenlabs_prompt(
 
 def _render_table(
     *,
-    columns: list[tuple[str, dict]],
+    columns: list[tuple[str, dict[str, Any]]],
     rows: list[tuple],
     title: str | None = None,
-    **table_kwargs: object,
+    **table_kwargs: Any,
 ) -> None:
     """Build and print a Rich table from *columns* (header, kwargs) and *rows*."""
     table = Table(title=title, **table_kwargs)
