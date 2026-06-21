@@ -310,31 +310,17 @@ class TestUpload:
         assert resp.status_code == 401
         assert await SoundCloudConnection.find_one(SoundCloudConnection.user_id == user.id) is None
 
-    async def test_artwork_url_is_fetched_and_forwarded(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up-art@example.com")
+    async def test_unknown_override_field_rejected(self, client, settings, local_storage) -> None:
+        # ``artwork_url`` was removed; extra keys are forbidden by the schema.
+        user = await _make_user("up-extra@example.com")
         clip = await _make_clip(user, b"audio")
         await _make_connection(user)
-
-        captured = {}
-
-        async def _fetch_artwork(url):
-            assert url == "https://img.test/cover.png"
-            return b"PNGBYTES"
-
-        async def _upload(token, audio, filename, metadata, artwork=None):
-            captured["artwork"] = artwork
-            return {"id": 1}
-
-        monkeypatch.setattr(sc, "fetch_artwork", _fetch_artwork)
-        monkeypatch.setattr(sc, "upload_track", _upload)
-
         resp = await client.post(
             _url("/soundcloud/upload"),
             headers=_auth_headers(user, settings),
             json={"clip_id": str(clip.id), "metadata_overrides": {"artwork_url": "https://img.test/cover.png"}},
         )
-        assert resp.status_code == 200
-        assert captured["artwork"] == b"PNGBYTES"
+        assert resp.status_code == 422
 
     async def test_token_refreshed_when_expired(self, client, settings, local_storage, monkeypatch) -> None:
         user = await _make_user("up-refresh@example.com")

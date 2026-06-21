@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from pymongo.errors import DuplicateKeyError
 
 from acemusic.storage import get_storage_backend
 
@@ -61,7 +62,6 @@ class MetadataOverrides(BaseModel):
     key_signature: str | None = None
     isrc: str | None = None
     sharing: str | None = Field(default=None, pattern="^(public|private)$")
-    artwork_url: str | None = None
 
 
 class UploadRequest(BaseModel):
@@ -163,29 +163,43 @@ async def soundcloud_callback(
 
 
 async def _upsert_connection(user_id: str, tokens: dict, profile: dict) -> SoundCloudConnection:
-    """Create or update the user's single SoundCloud connection."""
-    oid = PydanticObjectId(user_id)
-    connection = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == oid)
-    expires_at = sc.token_expiry(tokens.get("expires_in"))
-    username = profile.get("username") or profile.get("full_name")
-    sc_user_id = str(profile.get("id", ""))
-    if connection is None:
-        connection = SoundCloudConnection(
-            user_id=oid,
-            soundcloud_user_id=sc_user_id,
-            soundcloud_username=username,
-            access_token=tokens["access_token"],
-            refresh_token=tokens.get("refresh_token", ""),
-            token_expires_at=expires_at,
-        )
-        await connection.insert()
-        return connection
+    """Create or update the user's single SoundCloud connection (race-safe).
 
-    connection.soundcloud_user_id = sc_user_id
-    connection.soundcloud_username = username
+    The unique ``user_id`` index makes a find-then-insert racy: two concurrent
+    first-time links both see no row and one insert would 500 on the duplicate
+    key. So a fresh insert that loses the race re-resolves and updates instead
+    (mirrors ``users.get_or_create_user``).
+    """
+    oid = PydanticObjectId(user_id)
+    existing = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == oid)
+    if existing is not None:
+        return await _apply_tokens(existing, tokens, profile)
+
+    new_connection = SoundCloudConnection(
+        user_id=oid,
+        soundcloud_user_id=str(profile.get("id", "")),
+        soundcloud_username=profile.get("username") or profile.get("full_name"),
+        access_token=tokens["access_token"],
+        refresh_token=tokens.get("refresh_token", ""),
+        token_expires_at=sc.token_expiry(tokens.get("expires_in")),
+    )
+    try:
+        await new_connection.insert()
+        return new_connection
+    except DuplicateKeyError:
+        racer = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == oid)
+        if racer is None:
+            raise
+        return await _apply_tokens(racer, tokens, profile)
+
+
+async def _apply_tokens(connection: SoundCloudConnection, tokens: dict, profile: dict) -> SoundCloudConnection:
+    """Overwrite ``connection`` with the latest tokens/profile and persist it."""
+    connection.soundcloud_user_id = str(profile.get("id", ""))
+    connection.soundcloud_username = profile.get("username") or profile.get("full_name")
     connection.access_token = tokens["access_token"]
     connection.refresh_token = tokens.get("refresh_token") or connection.refresh_token
-    connection.token_expires_at = expires_at
+    connection.token_expires_at = sc.token_expiry(tokens.get("expires_in"))
     connection.updated_at = _now()
     await connection.save()
     return connection
@@ -238,7 +252,7 @@ async def soundcloud_upload(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     metadata = _merge_metadata(clip, body.metadata_overrides)
-    artwork = await _resolve_artwork(clip, body.metadata_overrides, storage)
+    artwork = await _resolve_artwork(clip, storage)
 
     filename = f"{clip.title or clip.id}.{clip.format or 'wav'}"
     try:
@@ -262,28 +276,24 @@ def _merge_metadata(clip: Clip, overrides: MetadataOverrides) -> dict[str, objec
         "key_signature": clip.key,
         "genre": clip.style_tags[0] if clip.style_tags else None,
     }
-    metadata.update({k: v for k, v in overrides.model_dump().items() if k != "artwork_url" and v is not None})
+    metadata.update({k: v for k, v in overrides.model_dump().items() if v is not None})
     return metadata
 
 
-async def _resolve_artwork(clip: Clip, overrides: MetadataOverrides, storage) -> bytes | None:
-    """Return the cover-art bytes to upload, or None.
+async def _resolve_artwork(clip: Clip, storage) -> bytes | None:
+    """Return the clip's own cover art (US-13.1 ``artwork_path``) to upload, or None.
 
-    An explicit ``artwork_url`` override wins; otherwise the clip's own selected
-    cover art (US-13.1 ``artwork_path``) is uploaded so a track carries its art by
-    default. A missing stored object is non-fatal — the track uploads without art.
+    Only the clip's stored, already-validated artwork is uploaded — there is no
+    arbitrary-URL fetch path (that would be an SSRF surface for no real gain). A
+    missing stored object is non-fatal: the track uploads without art.
     """
-    if overrides.artwork_url:
-        try:
-            return await sc.fetch_artwork(overrides.artwork_url)
-        except sc.SoundCloudError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    if clip.artwork_path:
-        try:
-            return await asyncio.to_thread(storage.download, clip.artwork_path)
-        except FileNotFoundError:
-            logger.warning("Clip %s artwork object %r is missing; uploading without art", clip.id, clip.artwork_path)
-    return None
+    if not clip.artwork_path:
+        return None
+    try:
+        return await asyncio.to_thread(storage.download, clip.artwork_path)
+    except FileNotFoundError:
+        logger.warning("Clip %s artwork object %r is missing; uploading without art", clip.id, clip.artwork_path)
+        return None
 
 
 @router.delete("/soundcloud/connect", status_code=status.HTTP_204_NO_CONTENT)

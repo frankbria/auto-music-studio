@@ -18,17 +18,14 @@ A single cohesive module (PKCE + state + HTTP + the token-refreshing
 is split only if a second distribution platform ever needs to share pieces.
 """
 
-import asyncio
 import base64
 import hashlib
 import hmac
-import ipaddress
 import secrets
-import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import httpx
 import jwt
@@ -321,7 +318,8 @@ async def get_valid_connection(user_id: str, settings: ApiSettings):
 
     from ..models import SoundCloudConnection
 
-    connection = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == PydanticObjectId(user_id))
+    oid = PydanticObjectId(user_id)
+    connection = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == oid)
     if connection is None:
         raise SoundCloudNotConnectedError("No SoundCloud account is linked.")
 
@@ -331,8 +329,15 @@ async def get_valid_connection(user_id: str, settings: ApiSettings):
     try:
         tokens = await refresh_access_token(connection.refresh_token, settings)
     except SoundCloudAuthError as exc:
-        # Confirmed dead grant — the link is unusable; drop it so the user re-links.
-        await connection.delete()
+        # A rejected grant *usually* means a dead link — but two uploads racing on
+        # an expiring token both refresh the same rotating token, and the loser
+        # gets invalid_grant. Re-read before deleting: if a concurrent refresh
+        # already produced a fresh token, use it instead of unlinking the user.
+        refreshed = await SoundCloudConnection.find_one(SoundCloudConnection.user_id == oid)
+        if refreshed is not None and not _is_expired(refreshed.token_expires_at):
+            return refreshed
+        if refreshed is not None:
+            await refreshed.delete()
         raise SoundCloudAuthError("SoundCloud re-authorization is required.") from exc
 
     connection.access_token = tokens.get("access_token") or connection.access_token
@@ -397,51 +402,3 @@ async def upload_track(
             return resp.json()
     except httpx.HTTPError as exc:
         raise SoundCloudError("SoundCloud track upload failed.") from exc
-
-
-async def _assert_public_url(url: str) -> None:
-    """Reject non-http(s) URLs or hosts resolving to a private/internal address.
-
-    Guards the user-supplied ``artwork_url`` against SSRF (cloud metadata,
-    internal services). ponytail: this validates the *resolved* host then lets
-    httpx connect, so there's a small TOCTOU window and DNS-rebind gap; pin the
-    connection to the checked IP if this ever fronts untrusted high-value infra.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise SoundCloudError("Artwork URL must use http or https.")
-    host = parsed.hostname
-    if not host:
-        raise SoundCloudError("Artwork URL has no host.")
-    try:
-        infos = await asyncio.to_thread(socket.getaddrinfo, host, parsed.port or 443, 0, socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise SoundCloudError("Artwork URL host could not be resolved.") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            raise SoundCloudError("Artwork URL resolves to a non-public address.")
-
-
-async def fetch_artwork(url: str) -> bytes:
-    """Download cover-art bytes from a public ``url`` for an upload.
-
-    Redirects are *not* followed: a public URL that 30x-redirects to an internal
-    address would bypass the pre-flight host check, so a redirect is treated as a
-    failed fetch rather than chased.
-    """
-    await _assert_public_url(url)
-    try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=False) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.content
-    except httpx.HTTPError as exc:
-        raise SoundCloudError("Fetching the artwork failed.") from exc

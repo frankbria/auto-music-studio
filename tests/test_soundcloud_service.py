@@ -149,24 +149,6 @@ async def test_transient_token_failure_is_not_auth_error() -> None:
     assert not isinstance(excinfo.value, sc.SoundCloudAuthError)
 
 
-class TestArtworkSsrf:
-    async def test_rejects_non_http_scheme(self) -> None:
-        with pytest.raises(sc.SoundCloudError):
-            await sc.fetch_artwork("ftp://example.com/cover.png")
-
-    async def test_rejects_loopback(self) -> None:
-        with pytest.raises(sc.SoundCloudError):
-            await sc.fetch_artwork("http://127.0.0.1/cover.png")
-
-    async def test_rejects_cloud_metadata_link_local(self) -> None:
-        with pytest.raises(sc.SoundCloudError):
-            await sc.fetch_artwork("http://169.254.169.254/latest/meta-data/")
-
-    async def test_allows_public_ip(self) -> None:
-        # Pure host check — no HTTP request is made, so this stays offline.
-        await sc._assert_public_url("https://8.8.8.8/cover.png")
-
-
 @respx.mock
 async def test_get_soundcloud_user_uses_oauth_header() -> None:
     route = respx.get(sc.SOUNDCLOUD_ME_URL).mock(return_value=httpx.Response(200, json={"id": 42, "username": "dj"}))
