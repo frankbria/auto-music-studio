@@ -55,6 +55,9 @@ _VERIFIER_BYTES = 64
 #: Refresh slightly before the real expiry so an in-flight call isn't rejected.
 _REFRESH_BUFFER_SECONDS = 60
 _HTTP_TIMEOUT = 30.0
+#: Uploads can be large, so reads/writes get a generous window — but never
+#: unbounded, so a stalled SoundCloud connection eventually releases the worker.
+_UPLOAD_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
 
 
 class SoundCloudError(Exception):
@@ -391,7 +394,7 @@ async def upload_track(
     if artwork is not None:
         files["track[artwork_data]"] = ("artwork", artwork, "application/octet-stream")
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=_UPLOAD_TIMEOUT) as client:
             resp = await client.post(
                 SOUNDCLOUD_UPLOAD_URL,
                 headers={"Authorization": f"OAuth {access_token}"},
