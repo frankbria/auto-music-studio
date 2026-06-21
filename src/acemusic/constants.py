@@ -108,5 +108,7 @@ ARTWORK_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 # 50 megapixels (~7000x7000) is far above the 3000x3000 floor yet bounds the memory
 # a single decode can allocate, so concurrent uploads can't exhaust the worker.
 ARTWORK_MAX_PIXELS = 50_000_000
-VALID_IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "jpg", "png"})
+# Pillow reports a JPEG's format as "JPEG" (lower-cased to "jpeg" in validate_image),
+# never "jpg", so the set holds the canonical Pillow names only.
+VALID_IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "png"})
 ARTWORK_PROMPT_MAX_LENGTH = 2000

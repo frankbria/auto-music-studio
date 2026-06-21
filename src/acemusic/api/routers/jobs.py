@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from typing import Literal
 
+from beanie.operators import In
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -137,19 +138,22 @@ async def _resolve_audio_urls(clip_ids: list[str]) -> list[str]:
 
 
 async def _resolve_artwork_options(option_ids: list[str]) -> list[dict]:
-    """Map a completed artwork job's option ids to ``{artwork_id, url}`` pairs."""
-    if not option_ids:
+    """Map a completed artwork job's option ids to ``{artwork_id, url}`` pairs.
+
+    Loads the batch in one query (ordered by ``option_index``) rather than one
+    round-trip per id.
+    """
+    oids = [oid for oid in (coerce_object_id(i) for i in option_ids) if oid is not None]
+    if not oids:
         return []
+    options = await ArtworkOption.find(In(ArtworkOption.id, oids)).to_list()
+    options.sort(key=lambda o: o.option_index)
     storage = get_storage_backend()
-    options: list[dict] = []
-    for option_id in option_ids:
-        option = await ArtworkOption.get(option_id)
-        if option is None:
-            logger.warning("Artwork option %s referenced by a completed job is missing", option_id)
-            continue
+    resolved: list[dict] = []
+    for option in options:
         url = await asyncio.to_thread(storage.get_url, option.storage_path)
-        options.append({"artwork_id": option_id, "url": url})
-    return options
+        resolved.append({"artwork_id": str(option.id), "url": url})
+    return resolved
 
 
 @router.get("/{job_id}/status", response_model=JobStatusResponse, response_model_exclude_none=True)

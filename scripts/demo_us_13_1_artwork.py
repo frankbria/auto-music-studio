@@ -10,6 +10,8 @@ Run: uv run python scripts/demo_us_13_1_artwork.py
 
 import asyncio
 import io
+import os
+import tempfile
 import uuid
 
 import httpx
@@ -40,11 +42,7 @@ class FakeImageClient:
 
 
 async def main():
-    import tempfile
-
     root = tempfile.mkdtemp(prefix="artwork-demo-")
-    import os
-
     os.environ["ACEMUSIC_STORAGE_BACKEND"] = "local"
     os.environ["ACEMUSIC_STORAGE_LOCAL_ROOT"] = root
 

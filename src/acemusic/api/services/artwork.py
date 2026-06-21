@@ -11,6 +11,7 @@ service modules — the router maps :class:`ArtworkNotFoundError` to 404 and
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from acemusic.constants import (
     ARTWORK_MAX_PIXELS,
@@ -19,12 +20,14 @@ from acemusic.constants import (
     ARTWORK_PROMPT_MAX_LENGTH,
     VALID_IMAGE_FORMATS,
 )
-from acemusic.image_processing import ImageValidationError, ensure_min_resolution, validate_image
+from acemusic.image_processing import ImageValidationError, validate_image
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, Job
 from .common import coerce_object_id
 from .jobs import create_job
+
+logger = logging.getLogger(__name__)
 
 ARTWORK_JOB_TYPE = "artwork"
 
@@ -94,15 +97,30 @@ async def upload_custom_artwork(clip: Clip, data: bytes) -> Clip:
         raise ImageValidationError(
             f"Image is {len(data)} bytes; the maximum upload size is {ARTWORK_MAX_UPLOAD_BYTES} bytes."
         )
-    fmt, _width, _height = validate_image(data, max_pixels=ARTWORK_MAX_PIXELS)
+    # One decode does it all: format, integrity (load), pixel-bomb guard, and the
+    # dimensions we need for the resolution check — no re-parsing.
+    fmt, width, height = validate_image(data, max_pixels=ARTWORK_MAX_PIXELS)
     if fmt not in VALID_IMAGE_FORMATS:
         raise ImageValidationError(f"Unsupported image format {fmt!r}; use {', '.join(sorted(VALID_IMAGE_FORMATS))}.")
-    ensure_min_resolution(data, ARTWORK_MIN_RESOLUTION)
+    if width < ARTWORK_MIN_RESOLUTION or height < ARTWORK_MIN_RESOLUTION:
+        raise ImageValidationError(
+            f"Image is {width}x{height}; at least {ARTWORK_MIN_RESOLUTION}x{ARTWORK_MIN_RESOLUTION} "
+            "is required for distribution."
+        )
 
     ext = "png" if fmt == "png" else "jpg"
-    path = f"{clip.user_id}/{clip.workspace_id}/artwork/{clip.id}/upload.{ext}"
+    base = f"{clip.user_id}/{clip.workspace_id}/artwork/{clip.id}"
+    path = f"{base}/upload.{ext}"
     storage = get_storage_backend()
     await asyncio.to_thread(storage.upload, path, data)
+    # A prior upload in the *other* format would otherwise be orphaned. Deleting
+    # only the sibling upload key (never a generated option's path, which an
+    # ArtworkOption doc still references) is safe and idempotent.
+    other = f"{base}/upload.{'jpg' if ext == 'png' else 'png'}"
+    try:
+        await asyncio.to_thread(storage.delete, other)
+    except Exception:  # pragma: no cover - cleanup is best-effort, must not fail the upload
+        logger.warning("Failed to delete prior upload %s while replacing artwork for clip %s", other, clip.id)
     clip.artwork_path = path
     await clip.save()
     return clip

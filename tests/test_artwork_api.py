@@ -165,6 +165,23 @@ class TestSelect:
         )
         assert resp.status_code == 404
 
+    async def test_another_users_option_returns_404(self, client, settings, local_storage) -> None:
+        # An option generated under a different user must not be selectable, even
+        # for a clip the caller owns — pins the ownership check in select_artwork.
+        owner = await _make_user("owner@example.com")
+        clip = await _make_clip(owner)
+        other = await _make_user("other@example.com")
+        option = ArtworkOption(
+            clip_id=clip.id, user_id=other.id, job_id=PydanticObjectId(), storage_path="p.png", option_index=0
+        )
+        await option.insert()
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/artwork",
+            json={"artwork_id": str(option.id)},
+            headers=_auth_headers(owner, settings),
+        )
+        assert resp.status_code == 404
+
 
 @pytest.mark.integration
 class TestUpload:
