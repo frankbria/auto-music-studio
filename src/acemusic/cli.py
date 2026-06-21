@@ -37,7 +37,7 @@ from acemusic.audio import (
 )
 from acemusic.backends import BackendError, ensure_supports, resolve_backend
 from acemusic.client import AceStepClient, AceStepError
-from acemusic.config import load_config
+from acemusic.config import AceConfig, load_config
 from acemusic.constants import (
     BPM_MAX as _BPM_MAX,
     BPM_MIN as _BPM_MIN,
@@ -90,6 +90,7 @@ from acemusic.utils import (
     write_sample_metadata,
 )
 from acemusic.workspace import (
+    Workspace,
     create_workspace,
     delete_workspace,
     ensure_default_workspace,
@@ -139,6 +140,101 @@ def _require_ace_step_url(config) -> None:
             message += " (or use --backend elevenlabs)"
         typer.echo(message)
         raise typer.Exit(1)
+
+
+def _get_active_ws() -> Workspace:
+    """Ensure a default workspace exists and return the active one."""
+    ensure_default_workspace()
+    return get_active_workspace()
+
+
+def _resolve_backend_or_exit(backend: str | None, capability: str | None = None) -> tuple[AceConfig, str]:
+    """Load config and resolve the effective backend, exiting on ``BackendError``.
+
+    Returns ``(config, effective_backend)``. When *capability* is given, also
+    verifies the resolved backend supports it (used by ``mashup``).
+    """
+    config = load_config()
+    try:
+        effective_backend = resolve_backend(backend, config.backend)
+        if capability is not None:
+            ensure_supports(effective_backend, capability)
+    except BackendError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    return config, effective_backend
+
+
+def _require_elevenlabs_key(config: AceConfig) -> None:
+    """Exit with the standard error if the ElevenLabs API key is not configured."""
+    if not config.elevenlabs_api_key:
+        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
+        raise typer.Exit(code=1)
+
+
+def _build_elevenlabs_prompt(
+    prompt: str,
+    *,
+    bpm: object | None,
+    key: str | None,
+    time_signature: str | None = None,
+    vocal_language: str | None = None,
+    term: str = "specific",
+    warn_skip: bool = True,
+    prefix: list[str] | None = None,
+) -> str:
+    """Augment *prompt* with ACE-Step-specific params for ElevenLabs, with warnings.
+
+    ``term`` selects the wording ("specific" for ``generate``, "native" for
+    ``sounds``). ``warn_skip`` toggles the "no equivalent; skipping" notices for
+    ``--bpm auto`` / ``--key any``. ``prefix`` seeds the additions list (e.g. the
+    ``"<type> sample"`` entry used by ``sounds``).
+    """
+    additions: list[str] = list(prefix) if prefix else []
+    if bpm is not None and bpm != "auto":
+        console.print(
+            f"[yellow]Warning: --bpm is ACE-Step-{term}; injecting '{bpm} BPM' into prompt for ElevenLabs.[/yellow]"
+        )
+        additions.append(f"{bpm} BPM")
+    elif bpm == "auto" and warn_skip:
+        console.print("[yellow]Warning: --bpm auto has no ElevenLabs equivalent; skipping prompt injection.[/yellow]")
+    if key is not None and key.lower() != "any":
+        console.print(
+            f"[yellow]Warning: --key is ACE-Step-{term}; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
+        )
+        additions.append(key)
+    elif key is not None and key.lower() == "any" and warn_skip:
+        console.print("[yellow]Warning: --key any has no ElevenLabs equivalent; skipping prompt injection.[/yellow]")
+    if time_signature is not None:
+        console.print(
+            f"[yellow]Warning: --time-signature is ACE-Step-{term}; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"
+        )
+        additions.append(f"{time_signature} time signature")
+    if vocal_language is not None and vocal_language.lower() != "auto":
+        language_name = _LANGUAGE_NAMES.get(vocal_language.lower(), vocal_language)
+        console.print(
+            f"[yellow]Note: ElevenLabs has no language field; injecting '{language_name} vocals' into prompt.[/yellow]"
+        )
+        additions.append(f"{language_name} vocals")
+    if not additions:
+        return prompt
+    return f"{prompt}, {', '.join(additions)}"
+
+
+def _render_table(
+    *,
+    columns: list[tuple[str, dict]],
+    rows: list[tuple],
+    title: str | None = None,
+    **table_kwargs: object,
+) -> None:
+    """Build and print a Rich table from *columns* (header, kwargs) and *rows*."""
+    table = Table(title=title, **table_kwargs)
+    for header, col_kwargs in columns:
+        table.add_column(header, **col_kwargs)
+    for row in rows:
+        table.add_row(*row)
+    console.print(table)
 
 
 @app.callback(invoke_without_command=True)
@@ -216,14 +312,18 @@ def health() -> None:
         avg_job_time = stats.get("avg_job_time")
         avg_str = f"{avg_job_time:.1f}s" if isinstance(avg_job_time, (int, float)) else "—"
 
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Key", style="bold")
-        table.add_column("Value")
-        table.add_row("Server URL", config.api_url)
-        table.add_row("Loaded models", models_str)
-        table.add_row("Active jobs", str(active_jobs))
-        table.add_row("Avg job time", avg_str)
-        console.print(table)
+        _render_table(
+            columns=[("Key", {"style": "bold"}), ("Value", {})],
+            rows=[
+                ("Server URL", config.api_url),
+                ("Loaded models", models_str),
+                ("Active jobs", str(active_jobs)),
+                ("Avg job time", avg_str),
+            ],
+            show_header=False,
+            box=None,
+            padding=(0, 1),
+        )
 
     # ElevenLabs key status — always shown regardless of ACE-Step health
     if config.elevenlabs_api_key:
@@ -530,22 +630,15 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    config = load_config()
-
     # Resolve the backend early (CLI flag > config default > auto) so duration
     # limits can be backend-aware. May change to "elevenlabs" below only when
     # resolved to "auto" (auto-fallback).
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
 
     # Load and apply preset if provided
     if preset is not None:
         try:
-            ensure_default_workspace()
-            ws = get_active_workspace()
+            ws = _get_active_ws()
             preset_obj = get_preset(ws.id, preset)
             if preset_obj is None:
                 console.print(f"[red]Error: Preset '{preset}' not found.[/red]")
@@ -717,45 +810,18 @@ def generate(
         if resolved_model is not None:
             console.print("[yellow]Warning: --model is ACE-Step-specific and is ignored by ElevenLabs.[/yellow]")
 
-        prompt_additions: list[str] = []
-        if parsed_bpm is not None and parsed_bpm != "auto":
-            console.print(
-                f"[yellow]Warning: --bpm is ACE-Step-specific; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
-            )
-            prompt_additions.append(f"{parsed_bpm} BPM")
-        elif parsed_bpm == "auto":
-            console.print(
-                "[yellow]Warning: --bpm auto has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
-            )
-        if key is not None and key.lower() != "any":
-            console.print(
-                f"[yellow]Warning: --key is ACE-Step-specific; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
-            )
-            prompt_additions.append(key)
-        elif key is not None and key.lower() == "any":
-            console.print(
-                "[yellow]Warning: --key any has no ElevenLabs equivalent; skipping prompt injection.[/yellow]"
-            )
-        if time_signature is not None:
-            console.print(
-                f"[yellow]Warning: --time-signature is ACE-Step-specific; injecting '{time_signature} time signature' into prompt for ElevenLabs.[/yellow]"
-            )
-            prompt_additions.append(f"{time_signature} time signature")
-        if vocal_language is not None and vocal_language.lower() != "auto":
-            language_name = _LANGUAGE_NAMES.get(vocal_language.lower(), vocal_language)
-            console.print(
-                f"[yellow]Note: ElevenLabs has no language field; injecting '{language_name} vocals' into prompt.[/yellow]"
-            )
-            prompt_additions.append(f"{language_name} vocals")
+        augmented_prompt = _build_elevenlabs_prompt(
+            prompt,
+            bpm=parsed_bpm,
+            key=key,
+            time_signature=time_signature,
+            vocal_language=vocal_language,
+        )
         if seed is not None:
             console.print(
                 "[yellow]Warning: ElevenLabs only honors --seed in composition-plan mode — "
                 "use `acemusic compose --seed`. Seed is ignored for generate.[/yellow]"
             )
-
-        augmented_prompt = prompt
-        if prompt_additions:
-            augmented_prompt = f"{prompt}, {', '.join(prompt_additions)}"
 
         el_client = ElevenLabsClient(
             api_key=config.elevenlabs_api_key,
@@ -1028,15 +1094,9 @@ def sounds(
         console.print("[red]--bpm and --key are only valid with --type 'loop'.[/red]")
         raise typer.Exit(code=1)
 
-    config = load_config()
-
     # Resolve the backend (CLI flag > config default > auto). No auto-fallback
     # for sounds (matches `sample`): 'auto' routes to ACE-Step.
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
 
     if effective_backend == "elevenlabs" and duration is not None:
         if not (EL_DURATION_MIN_S <= duration <= EL_DURATION_MAX_S):
@@ -1060,25 +1120,20 @@ def sounds(
     safe_name = make_slug(name) if name else None
 
     if effective_backend == "elevenlabs":
-        if not config.elevenlabs_api_key:
-            console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-            raise typer.Exit(code=1)
+        _require_elevenlabs_key(config)
         if format != "mp3":
             console.print(f"[yellow]Warning: ElevenLabs output is MP3-only; --format {format} is ignored.[/yellow]")
 
         # ElevenLabs has no sound mode or native bpm/key controls — steer them
         # through the prompt, mirroring the `generate` command's injections.
-        prompt_additions: list[str] = [f"{sound_type} sample"]
-        if parsed_bpm is not None and parsed_bpm != "auto":
-            console.print(
-                f"[yellow]Warning: --bpm is ACE-Step-native; injecting '{parsed_bpm} BPM' into prompt for ElevenLabs.[/yellow]"
-            )
-            prompt_additions.append(f"{parsed_bpm} BPM")
-        if key is not None and key.lower() != "any":
-            console.print(
-                f"[yellow]Warning: --key is ACE-Step-native; injecting '{key}' into prompt for ElevenLabs.[/yellow]"
-            )
-            prompt_additions.append(key)
+        augmented_prompt = _build_elevenlabs_prompt(
+            prompt,
+            bpm=parsed_bpm,
+            key=key,
+            term="native",
+            warn_skip=False,
+            prefix=[f"{sound_type} sample"],
+        )
 
         el_client = ElevenLabsClient(
             api_key=config.elevenlabs_api_key,
@@ -1086,7 +1141,7 @@ def sounds(
         )
         _sounds_via_elevenlabs(
             el_client=el_client,
-            prompt=f"{prompt}, {', '.join(prompt_additions)}",
+            prompt=augmented_prompt,
             num_clips=num_clips,
             duration=duration,
             output_path=output_path,
@@ -1457,8 +1512,7 @@ def _fmt_duration(seconds: Optional[float]) -> str:
 def clips_list() -> None:
     """List all clips in the active workspace."""
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         clips = list_clips(ws.id)
     except (ValueError, sqlite3.Error, OSError) as exc:
         console.print(f"[red]Error: {exc}[/red]")
@@ -1498,9 +1552,6 @@ def clips_info(clip_id: int = typer.Argument(..., help="Clip ID.")) -> None:
         console.print(f"[red]Clip {clip_id} not found.[/red]")
         raise typer.Exit(code=1)
 
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("Field", style="bold")
-    table.add_column("Value")
     fields = [
         ("ID", str(clip.id)),
         ("Title", clip.title or "-"),
@@ -1520,9 +1571,13 @@ def clips_info(clip_id: int = typer.Argument(..., help="Clip ID.")) -> None:
         ("Generation Mode", clip.generation_mode or "-"),
         ("Created", clip.created_at),
     ]
-    for field_name, value in fields:
-        table.add_row(field_name, value)
-    console.print(table)
+    _render_table(
+        columns=[("Field", {"style": "bold"}), ("Value", {})],
+        rows=fields,
+        show_header=False,
+        box=None,
+        padding=(0, 1),
+    )
 
 
 @clips_app.command("rename")
@@ -1582,8 +1637,7 @@ def clips_search(
             raise typer.Exit(code=1)
 
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         clips = search_clips(
             workspace_id=ws.id,
             style=style,
@@ -1638,8 +1692,7 @@ def import_clip(
         raise typer.Exit(code=1)
 
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         clips_dir = get_workspace_path(ws.id)
         clips_dir.mkdir(parents=True, exist_ok=True)
     except (ValueError, sqlite3.Error, OSError) as exc:
@@ -2126,9 +2179,7 @@ def _separate_stems_via_elevenlabs(config, source: Clip, stems_dir: Path, base_n
     Stem files take their extension from the configured ELEVENLABS_OUTPUT_FORMAT
     (mp3 by default), matching the other ElevenLabs code paths.
     """
-    if not config.elevenlabs_api_key:
-        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-        raise typer.Exit(code=1)
+    _require_elevenlabs_key(config)
 
     el_client = ElevenLabsClient(api_key=config.elevenlabs_api_key, output_format=config.elevenlabs_output_format)
     try:
@@ -2171,12 +2222,7 @@ def stems(
     ElevenLabs cloud API and produces six stems: vocals, drums, bass,
     guitar, piano, other (format from ELEVENLABS_OUTPUT_FORMAT, MP3 default).
     """
-    config = load_config()
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
 
     if effective_backend == "elevenlabs":
         if output_format is not None:
@@ -2441,9 +2487,7 @@ def _extend_via_elevenlabs(
     splice point is replaced, consistent with the ACE-Step behaviour — no
     local trimming is needed because the keep range handles it server-side.
     """
-    if not config.elevenlabs_api_key:
-        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-        raise typer.Exit(code=1)
+    _require_elevenlabs_key(config)
 
     # --style is an override: when given, it alone shapes the new section —
     # blending in the source's old style tags would send contradictory
@@ -2590,12 +2634,7 @@ def extend(
     repaint_end = from_seconds + duration_s
     target_audio_duration = repaint_end
 
-    config = load_config()
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
 
     if effective_backend == "elevenlabs":
         _extend_via_elevenlabs(
@@ -3150,9 +3189,7 @@ def _repaint_via_elevenlabs(
     prompt/style. ElevenLabs composes the full track server-side, so no local
     crossfade stitching is needed.
     """
-    if not config.elevenlabs_api_key:
-        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-        raise typer.Exit(code=1)
+    _require_elevenlabs_key(config)
 
     duration_ms_total = int(round(source_duration * 1000))
     keep_ranges = [(0, start_ms), (end_ms, duration_ms_total)]
@@ -3318,12 +3355,7 @@ def repaint(
         console.print(f"[red]Error: --crossfade-ms must be non-negative, got {crossfade_ms}.[/red]")
         raise typer.Exit(code=1)
 
-    config = load_config()
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
 
     if effective_backend == "elevenlabs":
         if crossfade_ms != _DEFAULT_CROSSFADE_MS:
@@ -3916,9 +3948,7 @@ def _mashup_via_elevenlabs(
     blend, recombination happens at the section/composition level, so
     ``--blend`` strategies do not apply.
     """
-    if not config.elevenlabs_api_key:
-        console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-        raise typer.Exit(code=1)
+    _require_elevenlabs_key(config)
 
     durations_ms: list[int] = []
     for clip in sources:
@@ -4106,13 +4136,7 @@ def mashup(
             )
             raise typer.Exit(code=1)
 
-    config = load_config()
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-        ensure_supports(effective_backend, "mashup")
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend, capability="mashup")
 
     # auto prefers ACE-Step, but 3+ sources are an ElevenLabs-only capability —
     # auto never fails just because one engine can't do a job another can.
@@ -4392,12 +4416,7 @@ def sample(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ext = source.format or "wav"
-    config = load_config()
-    try:
-        effective_backend = resolve_backend(backend, config.backend)
-    except BackendError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    config, effective_backend = _resolve_backend_or_exit(backend)
     title_slug = make_slug(name or source.title or "clip")
     enhanced_prompt = _build_sample_prompt(prompt, role, sample_duration_sec)
 
@@ -4429,9 +4448,7 @@ def sample(
             )
         else:
             engine_used = "elevenlabs"
-            if not config.elevenlabs_api_key:
-                console.print("[red]Error: --backend elevenlabs requires ELEVENLABS_API_KEY to be set.[/red]")
-                raise typer.Exit(code=1)
+            _require_elevenlabs_key(config)
             el_client = ElevenLabsClient(
                 api_key=config.elevenlabs_api_key,
                 output_format=config.elevenlabs_output_format,
@@ -4625,8 +4642,7 @@ def preset_save(
 ) -> None:
     """Save a generation preset with parameters."""
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
 
         if from_last:
             console.print("[red]Error: --from-last not yet implemented (requires tracking last generation).[/red]")
@@ -4684,8 +4700,7 @@ def preset_save(
 def preset_list() -> None:
     """List all presets in the active workspace."""
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         presets = list_presets(ws.id)
 
         if not presets:
@@ -4720,8 +4735,7 @@ def preset_list() -> None:
 def preset_load(name: str = typer.Argument(..., help="Name of the preset to load.")) -> None:
     """Display parameters of a saved preset."""
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         preset = get_preset(ws.id, name)
 
         if not preset:
@@ -4765,8 +4779,7 @@ def preset_load(name: str = typer.Argument(..., help="Name of the preset to load
 def preset_delete(name: str = typer.Argument(..., help="Name of the preset to delete.")) -> None:
     """Delete a preset."""
     try:
-        ensure_default_workspace()
-        ws = get_active_workspace()
+        ws = _get_active_ws()
         success = delete_preset(ws.id, name)
 
         if not success:
