@@ -18,12 +18,12 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..models import Clip, JobStatus
+from ..models import BatchJob, Clip, Job, JobStatus
 from ..services import (
     clips as clip_service,
     credits as credits_service,
@@ -148,6 +148,183 @@ async def create_mastering_job(
         # retry that double-charges. The ledger row is best-effort history.
         logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
     return MasteringJobResponse(job_id=str(job.id))
+
+
+# ---------------------------------------------------------------------------
+# Batch mastering (US-12.5)
+#
+# Masters many clips with one profile/service under a single BatchJob. The
+# service charges credits and queues one mastering job per owned clip, tolerating
+# per-clip failures; the status endpoint aggregates the sub-jobs' live status.
+# ---------------------------------------------------------------------------
+
+
+class BatchMasteringRequest(BaseModel):
+    """A batch submission: many source clips sharing one profile/service.
+
+    Mirrors :class:`MasteringRequest`'s profile/custom-lufs rules. ``clip_ids`` is
+    1..``MAX_BATCH_SIZE`` distinct ids; an over-large or duplicate list is a 422
+    before any credit moves.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    clip_ids: list[str] = Field(min_length=1, max_length=mastering_service.MAX_BATCH_SIZE)
+    profile: Literal["streaming", "soundcloud", "club", "vinyl", "custom"]
+    service: Literal["dolby", "landr", "bakuage"] = "dolby"
+    format: Literal["wav", "mp3", "flac"] = "wav"
+    target_lufs: float | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "BatchMasteringRequest":
+        if len(set(self.clip_ids)) != len(self.clip_ids):
+            raise ValueError("clip_ids must be distinct")
+        if self.profile == "custom":
+            if self.target_lufs is None:
+                raise ValueError("target_lufs is required when profile is 'custom'")
+            if not (_CUSTOM_LUFS_MIN <= self.target_lufs <= _CUSTOM_LUFS_MAX):
+                raise ValueError(f"target_lufs must be between {_CUSTOM_LUFS_MIN} and {_CUSTOM_LUFS_MAX} dB")
+        elif self.target_lufs is not None:
+            raise ValueError("target_lufs is only allowed when profile is 'custom'")
+        return self
+
+
+class BatchJobItem(BaseModel):
+    """One clip's place in the batch: its queued job id, or a failure reason."""
+
+    clip_id: str
+    job_id: str | None = None
+    error: str | None = None
+
+
+class BatchMasteringResponse(BaseModel):
+    """The accepted-batch acknowledgement returned with HTTP 202."""
+
+    batch_id: str
+    jobs: list[BatchJobItem]
+
+
+class BatchSubJobStatus(BaseModel):
+    """One sub-job's live status within a batch (mastered clip id once complete)."""
+
+    clip_id: str
+    job_id: str | None = None
+    status: str
+    error: str | None = None
+    mastered_clip_id: str | None = None
+
+
+class BatchStatusResponse(BaseModel):
+    """Overall batch progress with per-status counts and a per-clip breakdown."""
+
+    batch_id: str
+    total: int
+    queued: int
+    processing: int
+    completed: int
+    failed: int
+    progress: float  # (completed + failed) / total, 0.0–1.0
+    jobs: list[BatchSubJobStatus]
+
+
+@router.post("/batch", response_model=BatchMasteringResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_mastering_batch(
+    request: BatchMasteringRequest,
+    current: CurrentUser = Depends(get_current_user),
+) -> BatchMasteringResponse:
+    """Charge credits and queue one mastering job per owned clip.
+
+    422 for an invalid/over-large body (Pydantic, before this runs); 404 for a
+    stale token; 402 when the balance can't cover the owned clips. Unknown/not-owned
+    clips become failed entries rather than rejecting the whole request.
+    """
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
+    try:
+        batch = await mastering_service.create_mastering_batch(
+            user_id=current.user_id,
+            clip_ids=request.clip_ids,
+            profile=request.profile,
+            service=request.service,
+            format=request.format,
+            target_lufs=target_lufs,
+        )
+    except mastering_service.InsufficientCreditsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "insufficient_credits", "balance": exc.balance, "required": exc.required},
+        ) from exc
+    return BatchMasteringResponse(
+        batch_id=str(batch.id),
+        jobs=[BatchJobItem(clip_id=e.clip_id, job_id=e.job_id, error=e.error) for e in batch.entries],
+    )
+
+
+@router.get("/batch/{batch_id}/status", response_model=BatchStatusResponse, response_model_exclude_none=True)
+async def get_mastering_batch_status(
+    batch_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> BatchStatusResponse:
+    """Aggregate the batch's sub-job statuses (404 for unknown/unowned/non-mastering).
+
+    Owner- and operation-scoped: another user's batch, or a stems/export batch,
+    yields 404 so this endpoint only ever exposes the caller's mastering batches.
+    """
+    oid = coerce_object_id(batch_id)
+    batch = await BatchJob.get(oid) if oid is not None else None
+    if (
+        batch is None
+        or str(batch.user_id) != current.user_id
+        or batch.operation != mastering_service.BATCH_MASTERING_OPERATION
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+
+    sub_jobs = [await _batch_sub_job_status(entry) for entry in batch.entries]
+    total = len(sub_jobs)
+    counts = {s: 0 for s in (JobStatus.QUEUED, JobStatus.PROCESSING, JobStatus.COMPLETED, JobStatus.FAILED)}
+    for sub in sub_jobs:
+        status_enum = next((js for js in counts if js.value == sub.status), None)
+        if status_enum is not None:
+            counts[status_enum] += 1
+    completed = counts[JobStatus.COMPLETED]
+    failed = counts[JobStatus.FAILED]
+    progress = (completed + failed) / total if total else 1.0
+    return BatchStatusResponse(
+        batch_id=str(batch.id),
+        total=total,
+        queued=counts[JobStatus.QUEUED],
+        processing=counts[JobStatus.PROCESSING],
+        completed=completed,
+        failed=failed,
+        progress=progress,
+        jobs=sub_jobs,
+    )
+
+
+async def _batch_sub_job_status(entry) -> BatchSubJobStatus:
+    """Resolve one batch entry to its live status (mastered clip id once complete)."""
+    if entry.job_id is None:
+        # Request-time validation failure: terminal, no live job.
+        return BatchSubJobStatus(clip_id=entry.clip_id, status=JobStatus.FAILED.value, error=entry.error)
+    oid = coerce_object_id(entry.job_id)
+    job = await Job.get(oid) if oid is not None else None
+    if job is None:
+        return BatchSubJobStatus(
+            clip_id=entry.clip_id,
+            job_id=entry.job_id,
+            status=JobStatus.FAILED.value,
+            error="Sub-job no longer exists.",
+        )
+    sub = BatchSubJobStatus(clip_id=entry.clip_id, job_id=entry.job_id, status=job.status.value)
+    if job.status == JobStatus.FAILED:
+        sub.error = job.error
+    elif job.status == JobStatus.COMPLETED:
+        clip_ids = (job.result or {}).get("clip_ids") or []
+        sub.mastered_clip_id = clip_ids[0] if clip_ids else None
+    return sub
 
 
 # ---------------------------------------------------------------------------
