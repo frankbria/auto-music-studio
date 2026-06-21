@@ -150,6 +150,15 @@ class ApiSettings(BaseSettings):
     openai_api_key: str | None = None
     artwork_generation_enabled: bool = True
 
+    # Release identifiers (US-13.4). ISRC = country code + registrant code issued
+    # by the platform operator's national agency; UPC = the operator's 7-digit GS1
+    # company prefix. The defaults are demo placeholders ("US"/"A1B"/"0000000") so
+    # codes are well-formed out of the box; a production deployment overrides them
+    # with its own registered allocations via the environment.
+    isrc_country_code: str = "US"
+    isrc_registrant_code: str = "A1B"
+    upc_prefix: str = "0000000"
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the

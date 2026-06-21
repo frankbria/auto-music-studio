@@ -6,6 +6,7 @@
 from .artwork import ArtworkOption
 from .batch_job import BatchClipEntry, BatchJob
 from .clip import Clip
+from .counter import Counter
 from .credit_transaction import CreditTransaction
 from .job import Job, JobStatus
 from .preset import PRESET_PARAM_FIELDS, Preset
@@ -27,6 +28,7 @@ ALL_MODELS = [
     ArtworkOption,
     SoundCloudConnection,
     Release,
+    Counter,
 ]
 
 __all__ = [
@@ -45,5 +47,6 @@ __all__ = [
     "SoundCloudConnection",
     "Release",
     "ReleaseStatus",
+    "Counter",
     "ALL_MODELS",
 ]

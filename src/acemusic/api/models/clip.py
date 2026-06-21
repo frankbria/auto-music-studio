@@ -45,6 +45,11 @@ class Clip(Document):
     # owner selects a generated option or uploads custom artwork; the binary is
     # served via ``GET /clips/{id}/artwork`` (file_path stays internal, like audio).
     artwork_path: str | None = None
+    # International Standard Recording Code (US-13.4). Identifies this *recording*;
+    # minted (or reused) when the clip is first packaged into a release and shared
+    # with that release. Globally unique via the partial index below — a recording
+    # gets exactly one ISRC, never reused — while clips without one stay None.
+    isrc: str | None = None
     is_public: bool = False  # documents predating US-9.3 load as private
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -60,4 +65,11 @@ class Clip(Document):
             # Multikey index over the parent list powers the children lookup
             # ("clips derived from this clip", US-10.6) without a collection scan.
             IndexModel([("parent_clip_ids", ASCENDING)]),
+            # One ISRC per recording (US-13.4). Partial filter excludes the many
+            # clips with no code so they don't collide on null.
+            IndexModel(
+                [("isrc", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"isrc": {"$type": "string"}},
+            ),
         ]

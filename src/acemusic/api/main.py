@@ -20,7 +20,7 @@ from acemusic import __version__
 from acemusic.runpod_client import RunPodClient
 
 from . import database
-from .exceptions import HandleConflictError
+from .exceptions import DuplicateIdentifierError, HandleConflictError
 from .routers import (
     artwork,
     auth,
@@ -177,6 +177,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.exception_handler(HandleConflictError)
     async def _handle_conflict(_request: Request, _exc: HandleConflictError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": "Handle already taken"})
+
+    # A release/clip identifier collision (US-13.4) surfaces from the service as a
+    # domain exception; map it to 409 with the offending field named.
+    @app.exception_handler(DuplicateIdentifierError)
+    async def _duplicate_identifier(_request: Request, exc: DuplicateIdentifierError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": f"{exc.field} already in use"})
 
     return app
 

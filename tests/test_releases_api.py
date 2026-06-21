@@ -7,6 +7,7 @@ MongoDB (``mongo_db``), mirroring ``tests/test_presets_api.py``.
 """
 
 import itertools
+import re
 
 import httpx
 import pytest
@@ -17,12 +18,23 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Release, ReleaseStatus, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.identifiers import calculate_ean13_check_digit
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
 
 RELEASES_URL = f"{API_V1_PREFIX}/releases"
 
-# A representative complete create payload (clip_id is filled in per-test).
+_ISRC_RE = re.compile(r"^[A-Z]{2}-[A-Z0-9]{3}-\d{2}-\d{5}$")
+
+
+def _valid_ean13(payload12: str) -> str:
+    """Build a valid 13-digit EAN-13 from a 12-digit payload (for override tests)."""
+    return f"{payload12}{calculate_ean13_check_digit(payload12)}"
+
+
+# A representative complete create payload (clip_id is filled in per-test). ISRC
+# and UPC are intentionally absent: they are auto-minted on create (US-13.4) and
+# only set manually via PATCH.
 FULL_METADATA = {
     "title": "Midnight Drive",
     "artist": "The Algorithm",
@@ -30,8 +42,6 @@ FULL_METADATA = {
     "release_date": "2026-07-01T00:00:00Z",
     "album_name": "Neon Highways",
     "description": "A late-night cruise.",
-    "isrc": "USABC1234567",
-    "upc": "012345678905",
     "copyright": "© 2026 The Algorithm",
     "is_explicit": False,
     "language": "en",
@@ -325,6 +335,97 @@ class TestUpdate:
         again = await client.get(f"{RELEASES_URL}/{created['id']}", headers=_auth_headers(user, settings))
         assert again.status_code == 200
         assert again.json()[field] is not None
+
+
+@pytest.mark.integration
+class TestIdentifiers:
+    """ISRC/UPC auto-generation, dual storage, manual override, uniqueness (US-13.4)."""
+
+    async def test_create_auto_generates_valid_isrc_and_upc(self, client, settings) -> None:
+        user = await _make_user("rel-ids-auto@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        body = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        assert _ISRC_RE.match(body["isrc"]), body["isrc"]
+        upc = body["upc"]
+        assert len(upc) == 13 and upc.isdigit()
+        assert calculate_ean13_check_digit(upc[:12]) == int(upc[12])  # valid EAN-13
+
+    async def test_auto_isrc_is_written_to_the_linked_clip(self, client, settings) -> None:
+        user = await _make_user("rel-ids-sync@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        body = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        refreshed = await Clip.get(clip.id)
+        assert refreshed.isrc == body["isrc"]  # dual storage: release + clip
+
+    async def test_existing_clip_isrc_is_preserved(self, client, settings) -> None:
+        user = await _make_user("rel-ids-preserve@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        clip.isrc = "US-ZZZ-20-00042"
+        await clip.save()
+        body = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        assert body["isrc"] == "US-ZZZ-20-00042"  # reused, not regenerated
+
+    async def test_patch_overrides_isrc_and_syncs_clip(self, client, settings) -> None:
+        user = await _make_user("rel-ids-patch-isrc@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        resp = await client.patch(
+            f"{RELEASES_URL}/{created['id']}",
+            json={"isrc": "US-OVR-26-12345"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["isrc"] == "US-OVR-26-12345"
+        assert (await Clip.get(clip.id)).isrc == "US-OVR-26-12345"
+
+    async def test_patch_overrides_upc(self, client, settings) -> None:
+        user = await _make_user("rel-ids-patch-upc@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        manual_upc = _valid_ean13("123456789012")
+        resp = await client.patch(
+            f"{RELEASES_URL}/{created['id']}",
+            json={"upc": manual_upc},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["upc"] == manual_upc
+
+    async def test_duplicate_isrc_returns_409(self, client, settings) -> None:
+        user = await _make_user("rel-ids-dup@example.com")
+        clip_a = await _insert_clip(user, mastered=True, artwork=True)
+        clip_b = await _insert_clip(user, mastered=True, artwork=True)
+        rel_a = (await _create_release(client, settings=settings, user=user, clip=clip_a)).json()
+        rel_b = (await _create_release(client, settings=settings, user=user, clip=clip_b)).json()
+        # Claim a code on A's recording, then try to reuse it on B's.
+        await client.patch(
+            f"{RELEASES_URL}/{rel_a['id']}",
+            json={"isrc": "US-DUP-26-00001"},
+            headers=_auth_headers(user, settings),
+        )
+        resp = await client.patch(
+            f"{RELEASES_URL}/{rel_b['id']}",
+            json={"isrc": "US-DUP-26-00001"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 409
+        assert "isrc" in resp.json()["detail"].lower()
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("isrc", "not-an-isrc"), ("isrc", "USABC1234567"), ("upc", "012345678905"), ("upc", "abc")],
+    )
+    async def test_invalid_identifier_returns_422(self, client, settings, field: str, value: str) -> None:
+        user = await _make_user(f"rel-ids-422-{field}-{value[:4]}@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        resp = await client.patch(
+            f"{RELEASES_URL}/{created['id']}",
+            json={field: value},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert any(field in str(err.get("loc", [])) for err in resp.json()["detail"])
 
 
 @pytest.mark.integration
