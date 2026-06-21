@@ -104,7 +104,7 @@ async def main():
                     break
                 await asyncio.sleep(0.2)
             assert len(options) == 4, options
-            print(f"   ✓ 4 ArtworkOption URLs surfaced via job status\n")
+            print("   ✓ 4 ArtworkOption URLs surfaced via job status\n")
 
             print("AC2 — Select an option; it attaches to the clip and is served")
             chosen = options[1]["artwork_id"]
