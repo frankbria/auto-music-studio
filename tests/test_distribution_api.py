@@ -16,6 +16,7 @@ from beanie import PydanticObjectId
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, SoundCloudConnection
+from acemusic.api.routers import distribution as dist
 from acemusic.api.services import soundcloud as sc, users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -356,7 +357,11 @@ class TestUpload:
         other = await _make_user("up-other@example.com")
         clip = await _make_clip(owner, b"audio")
         await _make_connection(other)
-        monkeypatch.setattr(sc, "upload_track", lambda *a, **k: {"id": 1})
+
+        async def _upload(*a, **k):  # async to match the real signature; never reached
+            return {"id": 1}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
 
         resp = await client.post(
             _url("/soundcloud/upload"),
@@ -401,3 +406,32 @@ class TestDisconnect:
 
         second = await client.delete(_url("/soundcloud/connect"), headers=headers)
         assert second.status_code == 204  # idempotent
+
+
+# --- re-link / upsert update path -------------------------------------------
+class TestRelink:
+    async def test_relink_updates_existing_connection_in_place(self, settings) -> None:
+        """A second successful link for an already-connected user updates in place.
+
+        Exercises ``_upsert_connection``'s update branch + ``_apply_tokens`` (the
+        same update the DuplicateKeyError race fallback runs) against a real DB —
+        the unique ``user_id`` index means no second row is created.
+        """
+        user = await _make_user("relink@example.com")
+        updated = await dist._upsert_connection(
+            str(user.id),
+            {"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600},
+            {"id": 1, "username": "first"},
+        )
+        assert updated.access_token == "at-1"
+
+        again = await dist._upsert_connection(
+            str(user.id),
+            {"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600},
+            {"id": 1, "username": "second"},
+        )
+        assert again.id == updated.id  # same row, updated in place
+        assert again.access_token == "at-2"
+        assert again.refresh_token == "rt-2"
+        assert again.soundcloud_username == "second"
+        assert await SoundCloudConnection.find(SoundCloudConnection.user_id == user.id).count() == 1

@@ -14,17 +14,18 @@ this router is the HTTP surface (cookies, status codes, request/response shapes)
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import DuplicateKeyError
 
-from acemusic.storage import get_storage_backend
+from acemusic.storage import StorageBackend, get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, SoundCloudConnection
+from ..models.common import utcnow
 from ..services import clips as clip_service, soundcloud as sc
 from ..settings import ApiSettings
 
@@ -106,7 +107,7 @@ def _set_link_cookie(response: Response, request: Request, settings: ApiSettings
 
 
 @router.post("/soundcloud/connect", response_model=ConnectResponse)
-def soundcloud_connect(
+async def soundcloud_connect(
     request: Request,
     response: Response,
     current: CurrentUser = Depends(get_current_user),
@@ -115,9 +116,8 @@ def soundcloud_connect(
     settings = _settings(request)
     try:
         link = sc.build_connect_request(current.user_id, settings)
-    except sc.SoundCloudNotConfiguredError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except sc.SoundCloudError as exc:
+        # SoundCloudNotConfiguredError is a subclass, so this covers both.
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     _set_link_cookie(response, request, settings, link.nonce_cookie_name, link.state_nonce)
@@ -200,7 +200,7 @@ async def _apply_tokens(connection: SoundCloudConnection, tokens: dict, profile:
     connection.access_token = tokens["access_token"]
     connection.refresh_token = tokens.get("refresh_token") or connection.refresh_token
     connection.token_expires_at = sc.token_expiry(tokens.get("expires_in"))
-    connection.updated_at = _now()
+    connection.updated_at = utcnow()
     await connection.save()
     return connection
 
@@ -228,6 +228,18 @@ async def soundcloud_upload(
     """Upload an owned clip to the user's linked SoundCloud account."""
     clip = await clip_service.get_owned_clip(body.clip_id, current.user_id)
 
+    # Validate the SoundCloud link first so the common "not connected" / revoked
+    # case fast-fails before paying for a (potentially large) storage download.
+    try:
+        connection = await sc.get_valid_connection(current.user_id, _settings(request))
+    except sc.SoundCloudNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except sc.SoundCloudAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except sc.SoundCloudError as exc:
+        # Transient refresh failure — the connection is preserved; ask to retry.
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
     storage = get_storage_backend()
     try:
         audio = await asyncio.to_thread(storage.download, clip.file_path)
@@ -240,16 +252,6 @@ async def soundcloud_upload(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Audio exceeds SoundCloud's {sc.MAX_UPLOAD_BYTES}-byte upload limit.",
         )
-
-    try:
-        connection = await sc.get_valid_connection(current.user_id, _settings(request))
-    except sc.SoundCloudNotConnectedError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except sc.SoundCloudAuthError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    except sc.SoundCloudError as exc:
-        # Transient refresh failure — the connection is preserved; ask to retry.
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     metadata = _merge_metadata(clip, body.metadata_overrides)
     artwork = await _resolve_artwork(clip, storage)
@@ -280,7 +282,7 @@ def _merge_metadata(clip: Clip, overrides: MetadataOverrides) -> dict[str, objec
     return metadata
 
 
-async def _resolve_artwork(clip: Clip, storage) -> bytes | None:
+async def _resolve_artwork(clip: Clip, storage: StorageBackend) -> bytes | None:
     """Return the clip's own cover art (US-13.1 ``artwork_path``) to upload, or None.
 
     Only the clip's stored, already-validated artwork is uploaded — there is no
@@ -303,7 +305,3 @@ async def soundcloud_disconnect(current: CurrentUser = Depends(get_current_user)
     if connection is not None:
         await connection.delete()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)

@@ -25,12 +25,16 @@ import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import httpx
 import jwt
 
 from ..settings import ApiSettings
+
+if TYPE_CHECKING:
+    from ..models import SoundCloudConnection
 
 # --- SoundCloud endpoints ---------------------------------------------------
 SOUNDCLOUD_AUTHORIZE_URL = "https://secure.soundcloud.com/authorize"
@@ -305,7 +309,7 @@ def token_expiry(expires_in: object) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-async def get_valid_connection(user_id: str, settings: ApiSettings):
+async def get_valid_connection(user_id: str, settings: ApiSettings) -> "SoundCloudConnection":
     """Return the user's connection with a guaranteed-fresh access token.
 
     Refreshes (and persists) the token when it is within
