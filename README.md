@@ -219,6 +219,18 @@ Each request fans out into one sub-job per clip, tracked under a `BatchJob`. The
 
 Generation is async: poll `GET /api/v1/jobs/{id}/status`, whose completed response lists `artwork_options` as `{artwork_id, url}` pairs. Each option is generated at 1024×1024 and upscaled to a 3000×3000 distribution master (PNG). Uploads are validated for format (JPG/PNG only), minimum resolution (≥3000×3000, else `422` with a descriptive error), byte size (≤25 MB), and pixel-bomb safety; corrupt files are rejected with `422`. Generation requires `ACEMUSIC_API_OPENAI_API_KEY` (DALL-E); without it the worker fails the job with a clear "not configured" message, and `ACEMUSIC_API_ARTWORK_GENERATION_ENABLED=false` is a kill-switch. No credits are deducted.
 
+### Distribution — SoundCloud (US-13.2)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/distribution/soundcloud/connect` | Begin the OAuth 2.1 + PKCE account link; returns `authorization_url` and sets per-flow HttpOnly cookies |
+| `POST /api/v1/distribution/soundcloud/callback` | Validate `{code, state}` against the cookies, exchange the code, persist the connection |
+| `GET /api/v1/distribution/soundcloud/status` | Report link status (`connected`, `soundcloud_username`, `connected_at`, `token_valid`) |
+| `POST /api/v1/distribution/soundcloud/upload` | Upload an owned clip (`{clip_id, metadata_overrides}`) as a SoundCloud track; returns `{track_id, permalink_url}` |
+| `DELETE /api/v1/distribution/soundcloud/connect` | Unlink the SoundCloud account (idempotent, 204) |
+
+Account-linking is distinct from login: it connects an already-authenticated user's SoundCloud account so the platform can upload on their behalf, with PKCE (S256), a `uid`-bound signed `state`, and the PKCE verifier held in a per-flow HttpOnly cookie. Upload maps clip metadata (`title`, `bpm`, `key`→`key_signature`, first style tag→`genre`) onto the track, lets `metadata_overrides` (`title`, `genre`, `description`, `bpm`, `key_signature`, `isrc`, `sharing`) take precedence, and attaches the clip's own cover art (US-13.1) when present. Access tokens are refreshed transparently on expiry; a rejected refresh (revoked grant) unlinks the account, while a transient failure preserves it for retry. Uploads over 500 MB are rejected. Requires `ACEMUSIC_API_SOUNDCLOUD_CLIENT_ID/SECRET/REDIRECT_URI`.
+
 ### Presets
 
 | Endpoint | Purpose |

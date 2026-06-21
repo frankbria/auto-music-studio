@@ -61,6 +61,14 @@ class ApiSettings(BaseSettings):
     discord_client_secret: str | None = None
     discord_redirect_uri: str | None = None
 
+    # SoundCloud OAuth 2.1 + PKCE for distribution account-linking (US-13.2).
+    # Separate from the login providers above: these link an *already
+    # authenticated* user's SoundCloud account so the platform can upload tracks
+    # on their behalf. Unusable until all three are set via the environment.
+    soundcloud_client_id: str | None = None
+    soundcloud_client_secret: str | None = None
+    soundcloud_redirect_uri: str | None = None
+
     # JWT signing (US-8.3). ``jwt_secret_key`` has no default on purpose: the auth
     # layer raises a clear error if a token is minted while it is unset, rather
     # than silently signing with a guessable key. Lifetimes follow the common
