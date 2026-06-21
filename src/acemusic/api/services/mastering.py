@@ -20,13 +20,22 @@ from beanie import PydanticObjectId
 
 from acemusic.storage import StorageBackend
 
-from ..models import Clip, Job, JobStatus
+from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus, User
+from . import clips as clip_service, credits as credits_service
 from .common import coerce_object_id
 from .jobs import create_job
 
 logger = logging.getLogger(__name__)
 
 MASTERING_JOB_TYPE = "mastering"
+
+# US-12.5: a batch masters at most this many clips at once; the router rejects a
+# larger request with 422 before any credit moves.
+MAX_BATCH_SIZE = 20
+
+# The BatchJob.operation tag for a mastering batch, distinguishing it from the
+# stems/export batches (US-10.5) that share the ``batch_jobs`` collection.
+BATCH_MASTERING_OPERATION = "mastering"
 
 # The worker tags every mastered child with this mode (US-12.2); an un-approved
 # candidate keeps it.
@@ -86,6 +95,116 @@ async def create_mastering_job(
         job_type=MASTERING_JOB_TYPE,
         params=params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Batch mastering (US-12.5)
+#
+# Masters many clips with one profile/service under a single BatchJob (reusing the
+# US-10.5 batch model). Credits are charged upfront for the owned clips only, with
+# a per-clip ledger row and a per-clip refund if a job fails to queue — so the
+# "charged ⇒ a job exists or the credit is returned" invariant holds per clip and
+# one bad clip never halts the batch (partial success).
+# ---------------------------------------------------------------------------
+
+
+class InsufficientCreditsError(Exception):
+    """The user cannot afford the batch. Carries the balance and required cost."""
+
+    def __init__(self, balance: float, required: float) -> None:
+        super().__init__("insufficient_credits")
+        self.balance = balance
+        self.required = required
+
+
+async def create_mastering_batch(
+    *,
+    user_id: str,
+    clip_ids: list[str],
+    profile: str,
+    service: str,
+    format: str,
+    target_lufs: float,
+) -> BatchJob:
+    """Queue one mastering job per owned clip under a single :class:`BatchJob`.
+
+    Unknown/not-owned clips become failed entries (never charged). The remaining
+    clips' summed cost is deducted atomically upfront — :class:`InsufficientCreditsError`
+    if the balance is short, before any job is created. Each queued job records a
+    per-clip ``mastering`` ledger row; a job that fails to queue refunds its own
+    credit and becomes a failed entry. Returns the saved batch.
+    """
+    uid = coerce_object_id(user_id)
+
+    # Split the request into owned clips (chargeable) and failed entries up front;
+    # only owned clips count toward the cost.
+    owned: list[Clip] = []
+    entries: list[BatchClipEntry] = []
+    for clip_id in clip_ids:
+        clip = await clip_service.find_owned_clip(clip_id, user_id)
+        if clip is None:
+            entries.append(BatchClipEntry(clip_id=clip_id, error="Clip not found."))
+        else:
+            owned.append(clip)
+
+    per_clip_cost = credits_service.get_mastering_cost(service)
+    total_cost = per_clip_cost * len(owned)
+    # The whole batch is deducted in one atomic op, but each clip gets its own
+    # ledger row (US-12.5: "credits deducted for each clip individually"). Track a
+    # running balance so each row's ``balance_after`` reflects that clip's charge
+    # alone — a flat post-deduction figure on every row would misreport the
+    # trajectory. Refunds for failed-to-queue clips offset their upfront share, so
+    # the running total over *recorded* rows lands on the true final balance.
+    running_balance = 0.0
+    if total_cost > 0:
+        deducted = await credits_service.deduct_credits(uid, total_cost)
+        if deducted is None:
+            fresh = await User.get(uid)
+            raise InsufficientCreditsError(
+                balance=fresh.credits_balance if fresh is not None else 0.0,
+                required=total_cost,
+            )
+        # Balance before the deduction; each successful charge decrements it.
+        running_balance = deducted + total_cost
+
+    for clip in owned:
+        params = {
+            "clip_id": str(clip.id),
+            "profile": profile,
+            "service": service,
+            "format": format,
+            "target_lufs": target_lufs,
+        }
+        try:
+            job = await create_mastering_job(
+                user_id=clip.user_id,
+                workspace_id=clip.workspace_id,
+                params=params,
+            )
+        except Exception:
+            # Refund just this clip's share — the others stay charged and queued.
+            logger.exception("Failed to queue mastering job for clip %s", clip.id)
+            await credits_service.refund_credits(uid, per_clip_cost)
+            entries.append(BatchClipEntry(clip_id=str(clip.id), error="Failed to queue mastering job."))
+            continue
+        running_balance -= per_clip_cost
+        try:
+            await credits_service.record_transaction(
+                user_id=uid,
+                amount=-per_clip_cost,
+                action_type=MASTERING_JOB_TYPE,
+                job_id=str(job.id),
+                balance_after=running_balance,
+            )
+        except Exception:
+            # The charge is taken and the job queued; a missing ledger row is
+            # best-effort history (mirrors the single-job endpoint).
+            logger.exception("Credit ledger write failed for batch job %s", job.id)
+        entries.append(BatchClipEntry(clip_id=str(clip.id), job_id=str(job.id)))
+
+    batch = BatchJob(user_id=uid, operation=BATCH_MASTERING_OPERATION, format=format, entries=entries)
+    await batch.insert()
+    return batch
 
 
 # ---------------------------------------------------------------------------
