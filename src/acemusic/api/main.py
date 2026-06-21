@@ -27,6 +27,7 @@ from .routers import (
     batch,
     clips,
     compute,
+    distribution,
     editing,
     extraction,
     generation,
@@ -167,6 +168,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(presets.router, prefix=API_V1_PREFIX)
     app.include_router(compute.router, prefix=API_V1_PREFIX)
     app.include_router(mastering.router, prefix=API_V1_PREFIX)
+    app.include_router(distribution.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
