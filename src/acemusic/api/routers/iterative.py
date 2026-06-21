@@ -57,9 +57,8 @@ _MAX_MASHUP_CLIPS = 8
 
 # Free-text fields are persisted verbatim in Job.input_params / Clip.generation_params,
 # so bound them (like the generation API) to keep a single oversized request from
-# bloating a Mongo document or exhausting memory. voice_id is an identifier, so a
-# small bound suffices; style/prompt/lyrics reuse the shared generation caps.
-_VOICE_ID_MAX_LENGTH = 128
+# bloating a Mongo document or exhausting memory; style/prompt/lyrics reuse the
+# shared generation caps.
 
 # Full-song (US-10.4): the seed must be a short idea, not an already-long track —
 # the feature grows a clip *into* a song, so cap the seed and bound the section
@@ -145,17 +144,11 @@ class ExtendRequest(BaseModel):
 
 
 class CoverRequest(BaseModel):
-    """Restyle a clip in a different genre/style.
-
-    ``voice_id`` is part of the API contract (US-10.3) but is not yet applied by
-    the ACE-Step backend, which has no voice-selection parameter — it is accepted
-    and recorded for forward compatibility, not honoured. (Known limitation.)
-    """
+    """Restyle a clip in a different genre/style."""
 
     model_config = ConfigDict(extra="forbid")
 
     style: str = Field(min_length=1, max_length=STYLE_MAX_LENGTH)
-    voice_id: str | None = Field(default=None, max_length=_VOICE_ID_MAX_LENGTH)
     lyrics_override: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
 
 
@@ -204,15 +197,12 @@ class SampleRequest(BaseModel):
 class AddVocalRequest(BaseModel):
     """Layer vocals (``lyrics``) onto an existing clip.
 
-    ``vocal_style`` maps to the ACE-Step style control; ``voice_id`` is recorded
-    for forward compatibility but not yet applied by the backend (no voice-
-    selection parameter). (Known limitation.)
+    ``vocal_style`` maps to the ACE-Step style control.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     lyrics: str = Field(min_length=1, max_length=LYRICS_MAX_LENGTH)
-    voice_id: str | None = Field(default=None, max_length=_VOICE_ID_MAX_LENGTH)
     vocal_style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
 
 
@@ -459,7 +449,6 @@ async def cover_clip(
     params = {
         "clip_id": str(clip.id),
         "style": request.style,
-        "voice_id": request.voice_id,
         "lyrics_override": request.lyrics_override,
     }
     return await _enqueue_generation(
@@ -569,7 +558,6 @@ async def add_vocal_clip(
     params = {
         "clip_id": str(clip.id),
         "lyrics": request.lyrics,
-        "voice_id": request.voice_id,
         "vocal_style": request.vocal_style,
     }
     return await _enqueue_generation(

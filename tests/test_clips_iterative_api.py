@@ -369,6 +369,7 @@ class TestValidation:
             ("extend", {"duration": "30s", "bogus": 1}),  # extra="forbid"
             ("cover", {}),  # missing required style
             ("cover", {"style": ""}),  # empty style
+            ("cover", {"style": "jazz", "voice_id": "v1"}),  # voice_id dropped (US-15.7), extra="forbid"
             ("remix", {}),  # missing required style
             ("repaint", {"start": "1s", "end": "5s"}),  # missing prompt
             ("repaint", {"start": "x", "end": "5s", "prompt": "p"}),  # unparseable start
@@ -377,6 +378,7 @@ class TestValidation:
             ("sample", {"start": "1s", "end": "3s", "role": "loop-bed", "prompt": "p", "num_clips": 0}),  # num < 1
             ("add-vocal", {}),  # missing lyrics
             ("add-vocal", {"lyrics": ""}),  # empty lyrics
+            ("add-vocal", {"lyrics": "la", "voice_id": "v1"}),  # voice_id dropped (US-15.7), extra="forbid"
         ],
     )
     async def test_invalid_body_returns_422(self, client, settings, operation: str, body: dict) -> None:
