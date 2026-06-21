@@ -22,6 +22,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.artwork import build_artwork_prompt
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
 from acemusic.storage import LocalStorage
@@ -144,8 +145,6 @@ async def main():
             print(f"   PUT .../artwork/upload (corrupt) -> {r.status_code}: {r.json()['detail']}\n")
 
             print("AC5 — Generated prompt reflects the song's style tags (manual/mock)")
-            from acemusic.api.services.artwork import build_artwork_prompt
-
             print(f"   prompt = {build_artwork_prompt(clip)!r}")
             print("   ✓ synthwave/retro/neon + title carried into the image prompt")
     finally:
