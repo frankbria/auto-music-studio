@@ -94,3 +94,21 @@ KEY_MAX_LENGTH = 50
 # a BSON-encoding 500 when persisted.
 SEED_MIN = -(2**63)
 SEED_MAX = 2**63 - 1
+
+# Cover art generation (US-13.1). DALL-E 3 emits 1024x1024; we upscale to a
+# 3000x3000 distribution master (Spotify/Apple require >=3000). Uploads must meet
+# that same floor in one of the accepted raster formats and stay under the cap so
+# a single image can't exhaust worker memory or bloat storage.
+ARTWORK_OPTIONS_COUNT = 4
+ARTWORK_GENERATION_SIZE = 1024
+ARTWORK_FINAL_SIZE = 3000
+ARTWORK_MIN_RESOLUTION = 3000
+ARTWORK_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# Decompression-bomb guard: a small compressed upload can decode to hundreds of MB.
+# 50 megapixels (~7000x7000) is far above the 3000x3000 floor yet bounds the memory
+# a single decode can allocate, so concurrent uploads can't exhaust the worker.
+ARTWORK_MAX_PIXELS = 50_000_000
+# Pillow reports a JPEG's format as "JPEG" (lower-cased to "jpeg" in validate_image),
+# never "jpg", so the set holds the canonical Pillow names only.
+VALID_IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "png"})
+ARTWORK_PROMPT_MAX_LENGTH = 2000
