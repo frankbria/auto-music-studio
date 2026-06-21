@@ -356,25 +356,6 @@ def models() -> None:
     console.print(table)
 
 
-def _is_connection_error(exc: AceStepError) -> bool:
-    """Return True if the AceStepError is a connection/timeout failure (not an API error)."""
-    msg = str(exc).lower()
-    return any(
-        keyword in msg
-        # "timed out" and "timeout" are distinct substrings: httpx renders read/
-        # connect timeouts as "timed out", so both must be matched.
-        for keyword in ("connection refused", "connect", "timeout", "timed out", "unreachable", "name or service")
-    )
-
-
-def _is_timeout_error(exc: AceStepError) -> bool:
-    """Return True if the failure is a timeout (server slow-but-reachable)."""
-    if exc.is_connection:
-        return exc.is_timeout
-    msg = str(exc).lower()
-    return "timed out" in msg or "timeout" in msg
-
-
 def _should_fall_back(exc: AceStepError) -> bool:
     """Whether an ACE-Step failure warrants switching to ElevenLabs.
 
@@ -385,7 +366,16 @@ def _should_fall_back(exc: AceStepError) -> bool:
     """
     if exc.is_connection:
         return not exc.is_timeout
-    return _is_connection_error(exc) and not _is_timeout_error(exc)
+    # Transport flags absent: sniff the message. "timed out" and "timeout" are
+    # distinct substrings (httpx renders read/connect timeouts as "timed out"),
+    # so both must be matched.
+    msg = str(exc).lower()
+    is_connection = any(
+        keyword in msg
+        for keyword in ("connection refused", "connect", "timeout", "timed out", "unreachable", "name or service")
+    )
+    is_timeout = "timed out" in msg or "timeout" in msg
+    return is_connection and not is_timeout
 
 
 _MAX_CONSECUTIVE_POLL_ERRORS = 5
