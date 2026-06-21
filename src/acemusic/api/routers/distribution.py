@@ -250,7 +250,7 @@ async def soundcloud_upload(
     if len(audio) > sc.MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"Audio exceeds SoundCloud's {sc.MAX_UPLOAD_BYTES}-byte upload limit.",
+            detail=f"Audio exceeds SoundCloud's {sc.MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
         )
 
     metadata = _merge_metadata(clip, body.metadata_overrides)

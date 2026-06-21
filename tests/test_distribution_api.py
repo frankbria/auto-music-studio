@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from pymongo.errors import DuplicateKeyError
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
@@ -434,4 +435,43 @@ class TestRelink:
         assert again.access_token == "at-2"
         assert again.refresh_token == "rt-2"
         assert again.soundcloud_username == "second"
+        assert await SoundCloudConnection.find(SoundCloudConnection.user_id == user.id).count() == 1
+
+    async def test_concurrent_insert_race_falls_back_to_update(self, settings, monkeypatch) -> None:
+        """The insert loser (DuplicateKeyError) re-resolves and updates the winner row.
+
+        The patched ``insert`` lands a 'winner' row first, then raises — simulating
+        a concurrent link that landed between our find_one and our insert. This
+        leaves ``find_one``/``save`` real, so the fallback's re-resolve + update run
+        against the actual DB.
+        """
+        user = await _make_user("upsert-race@example.com")
+        real_insert = SoundCloudConnection.insert
+        fired = {"done": False}
+
+        async def fake_insert(self):
+            if not fired["done"]:
+                fired["done"] = True
+                winner = SoundCloudConnection(
+                    user_id=self.user_id,
+                    soundcloud_user_id="winner",
+                    soundcloud_username="winner",
+                    access_token="winner-at",
+                    refresh_token="winner-rt",
+                    token_expires_at=self.token_expires_at,
+                )
+                await real_insert(winner)
+                raise DuplicateKeyError("duplicate user_id")
+            return await real_insert(self)
+
+        monkeypatch.setattr(SoundCloudConnection, "insert", fake_insert)
+
+        result = await dist._upsert_connection(
+            str(user.id),
+            {"access_token": "mine-at", "refresh_token": "mine-rt", "expires_in": 3600},
+            {"id": 9, "username": "mine"},
+        )
+        # The fallback updated the winner row in place — no duplicate, my tokens win.
+        assert result.access_token == "mine-at"
+        assert result.refresh_token == "mine-rt"
         assert await SoundCloudConnection.find(SoundCloudConnection.user_id == user.id).count() == 1
