@@ -19,6 +19,18 @@ from ..settings import ApiSettings
 _ISRC_RE = re.compile(r"^[A-Z]{2}-[A-Z0-9]{3}-\d{2}-\d{5}$")
 _UPC_RE = re.compile(r"^\d{13}$")
 
+# Both schemes carry a 5-digit sequential field, so the counter must stay below
+# 100000 or the formatted code overflows its width and becomes malformed.
+_MAX_SEQUENCE = 99999
+
+
+def _checked(seq: int, kind: str) -> int:
+    """Fail loudly if a counter has exhausted its 5-digit field, rather than
+    silently emitting an over-wide (invalid) code."""
+    if seq > _MAX_SEQUENCE:
+        raise RuntimeError(f"{kind} sequence space exhausted ({_MAX_SEQUENCE}); the counter scheme needs widening")
+    return seq
+
 
 def validate_isrc_format(isrc: str) -> bool:
     """True if ``isrc`` matches the canonical dashed CC-XXX-YY-NNNNN form."""
@@ -49,15 +61,15 @@ def validate_upc_check_digit(upc: str) -> bool:
 
 async def generate_isrc(settings: ApiSettings) -> str:
     """Mint the next sequential ISRC in CC-XXX-YY-NNNNN form."""
-    # ponytail: one global designation counter; real ISRC resets NNNNN per year.
-    # Revisit only if a single year ever exceeds 99999 recordings.
-    seq = await get_next_sequence("isrc_seq")
+    # ponytail: one global *lifetime* counter (real ISRC resets the designation
+    # per year), so the 5-digit field is a lifetime cap — guarded by _checked.
+    seq = _checked(await get_next_sequence("isrc_seq"), "ISRC")
     year = utcnow().year % 100
     return f"{settings.isrc_country_code}-{settings.isrc_registrant_code}-{year:02d}-{seq:05d}"
 
 
 async def generate_upc(settings: ApiSettings) -> str:
     """Mint the next sequential EAN-13 UPC for ``settings.upc_prefix``."""
-    seq = await get_next_sequence("upc_seq")
+    seq = _checked(await get_next_sequence("upc_seq"), "UPC")
     payload = f"{settings.upc_prefix}{seq:05d}"
     return f"{payload}{calculate_ean13_check_digit(payload)}"

@@ -10,6 +10,7 @@ post-submission edit lock (409).
 from beanie import PydanticObjectId
 from beanie.operators import Eq
 from fastapi import HTTPException, status
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import DuplicateIdentifierError
@@ -76,16 +77,7 @@ async def create_release(user_id: str, clip_id: str, metadata: dict, settings: A
     the schema, so a created release is immediately ``ready``.
     """
     clip = await clip_service.get_owned_clip(clip_id, user_id)
-
-    # Claim the recording's ISRC first, so a release is never inserted with a code
-    # the clip then fails to accept.
-    if clip.isrc is None:
-        clip.isrc = await identifiers.generate_isrc(settings)
-        try:
-            await clip.save()
-        except DuplicateKeyError as exc:  # minted ISRC already on another clip (rare)
-            raise DuplicateIdentifierError("isrc") from exc
-    isrc = clip.isrc
+    isrc = await _claim_clip_isrc(clip, settings)
 
     for _ in range(_MAX_MINT_ATTEMPTS):
         release = Release(
@@ -102,6 +94,42 @@ async def create_release(user_id: str, clip_id: str, metadata: dict, settings: A
             continue  # UPC slot taken by a manual code — mint the next
         return release
     raise DuplicateIdentifierError("upc")
+
+
+async def _claim_clip_isrc(clip: Clip, settings: ApiSettings) -> str:
+    """Return the recording's ISRC, atomically minting and claiming one if absent.
+
+    Concurrent creations for the same uncoded clip race on the claim: exactly one
+    ``$set``-on-null wins and the losers read back its code, so every release
+    mirrors a single recording ISRC instead of diverging.
+    """
+    if clip.isrc is not None:
+        return clip.isrc
+    minted = await identifiers.generate_isrc(settings)
+    try:
+        doc = await Clip.get_pymongo_collection().find_one_and_update(
+            {"_id": clip.id, "isrc": None},
+            {"$set": {"isrc": minted}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError as exc:  # minted ISRC already on another recording (rare)
+        raise DuplicateIdentifierError("isrc") from exc
+    if doc is not None:
+        return doc["isrc"]  # we won the claim
+    # A concurrent creation already coded the clip — read back the canonical value.
+    refreshed = await Clip.get(clip.id)
+    return refreshed.isrc if refreshed and refreshed.isrc else minted
+
+
+async def _ensure_upc_unused(upc: str, release_id: PydanticObjectId) -> None:
+    """Raise 409 if a *different* release already holds ``upc``.
+
+    Checked before any write so a clashing UPC override can never leave the clip
+    re-coded while the release update itself rolls back on the unique index.
+    """
+    existing = await Release.find_one(Eq(Release.upc, upc))
+    if existing is not None and existing.id != release_id:
+        raise DuplicateIdentifierError("upc")
 
 
 async def _sync_isrc_to_clip(clip_id: PydanticObjectId, user_id: str, isrc: str) -> None:
@@ -147,6 +175,10 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     release = await get_owned_release(release_id, user_id)
     if release.status not in _EDITABLE_STATUSES:
         raise _state_error("Release metadata cannot be modified after submission")
+    # Reject a duplicate UPC up front, so a clashing override can't re-code the
+    # clip (below) and then have the release write roll back on the unique index.
+    if updates.get("upc") is not None:
+        await _ensure_upc_unused(updates["upc"], release.id)
     for field, value in updates.items():
         setattr(release, field, value)
     release.updated_at = utcnow()

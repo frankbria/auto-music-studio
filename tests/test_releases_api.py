@@ -411,6 +411,38 @@ class TestIdentifiers:
         assert resp.status_code == 409
         assert "isrc" in resp.json()["detail"].lower()
 
+    async def test_duplicate_upc_override_returns_409_without_recoding_clip(self, client, settings) -> None:
+        user = await _make_user("rel-ids-dup-upc@example.com")
+        clip_a = await _insert_clip(user, mastered=True, artwork=True)
+        clip_b = await _insert_clip(user, mastered=True, artwork=True)
+        rel_a = (await _create_release(client, settings=settings, user=user, clip=clip_a)).json()
+        rel_b = (await _create_release(client, settings=settings, user=user, clip=clip_b)).json()
+        manual_upc = _valid_ean13("111222333444")
+        await client.patch(
+            f"{RELEASES_URL}/{rel_a['id']}", json={"upc": manual_upc}, headers=_auth_headers(user, settings)
+        )
+        # Reusing it on B with a simultaneous ISRC override must 409 *before* B's
+        # clip is re-coded (the clip stays on its auto-generated ISRC).
+        clip_b_isrc_before = (await Clip.get(clip_b.id)).isrc
+        resp = await client.patch(
+            f"{RELEASES_URL}/{rel_b['id']}",
+            json={"isrc": "US-XXX-26-54321", "upc": manual_upc},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 409
+        assert "upc" in resp.json()["detail"].lower()
+        assert (await Clip.get(clip_b.id)).isrc == clip_b_isrc_before  # not re-coded
+
+    async def test_sequence_exhaustion_is_rejected(self, client, settings) -> None:
+        # Seed the UPC counter at its 5-digit ceiling: the next mint overflows the
+        # field, so generation must fail loudly rather than emit a malformed code.
+        from acemusic.api.models.counter import Counter
+        from acemusic.api.services.identifiers import generate_upc
+
+        await Counter(name="upc_seq", value=99999).insert()
+        with pytest.raises(RuntimeError):
+            await generate_upc(settings)
+
     @pytest.mark.parametrize(
         ("field", "value"),
         [("isrc", "not-an-isrc"), ("isrc", "USABC1234567"), ("upc", "012345678905"), ("upc", "abc")],
