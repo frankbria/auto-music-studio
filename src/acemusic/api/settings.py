@@ -134,6 +134,14 @@ class ApiSettings(BaseSettings):
     # False until it is set.
     bakuage_api_key: str | None = None
 
+    # Cover art generation (US-13.1). Optional: a deployment without an OpenAI key
+    # runs with artwork generation disabled — ``artwork_enabled`` is False, so the
+    # artwork worker fails a claimed job with a clear "not configured" error rather
+    # than crashing. ``artwork_generation_enabled`` is a manual kill-switch
+    # independent of the key (e.g. to pause a working integration).
+    openai_api_key: str | None = None
+    artwork_generation_enabled: bool = True
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
@@ -160,6 +168,11 @@ class ApiSettings(BaseSettings):
     def bakuage_enabled(self) -> bool:
         """True only when the Bakuage API key is configured."""
         return bool(self.bakuage_api_key)
+
+    @property
+    def artwork_enabled(self) -> bool:
+        """True only when artwork generation is configured and not kill-switched."""
+        return bool(self.openai_api_key and self.artwork_generation_enabled)
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.

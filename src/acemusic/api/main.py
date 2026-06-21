@@ -22,6 +22,7 @@ from acemusic.runpod_client import RunPodClient
 from . import database
 from .exceptions import HandleConflictError
 from .routers import (
+    artwork,
     auth,
     batch,
     clips,
@@ -38,6 +39,7 @@ from .routers import (
     workspaces,
 )
 from .settings import ApiSettings
+from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
 from .tasks.processor import JobProcessor
 
@@ -110,6 +112,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     # It is always wired so the handler can produce a clear "not
                     # configured" error when no mastering credentials are set.
                     mastering_orchestrator_factory=lambda: get_mastering_orchestrator(settings),
+                    # Cover art (US-13.1): the factory yields the image client when
+                    # an OpenAI key is set, else None — the handler then fails a
+                    # claimed job with a clear "not configured" error.
+                    image_client_factory=lambda: get_image_client(settings),
                 )
                 await processor.start()
             app_.state.job_processor = processor
@@ -153,6 +159,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix=API_V1_PREFIX)
     app.include_router(clips.router, prefix=API_V1_PREFIX)
     app.include_router(editing.router, prefix=API_V1_PREFIX)
+    app.include_router(artwork.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
     app.include_router(iterative.router, prefix=API_V1_PREFIX)
     app.include_router(batch.router, prefix=API_V1_PREFIX)

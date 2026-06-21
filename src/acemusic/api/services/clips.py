@@ -22,7 +22,7 @@ from fastapi import HTTPException, status
 
 from acemusic.storage import get_storage_backend
 
-from ..models import Clip
+from ..models import ArtworkOption, Clip
 from . import workspaces as workspace_service
 from .common import coerce_object_id
 
@@ -155,9 +155,10 @@ async def update_clip_title(clip_id: str, user_id: str, title: str) -> Clip:
 async def delete_clip(clip_id: str, user_id: str) -> None:
     """Delete the clip record and its stored audio (idempotent on the object).
 
-    Also removes any extracted MIDI objects (US-10.2 ``midi_paths``), which live
-    under their own storage keys rather than ``file_path`` and would otherwise
-    be orphaned when the parent clip is deleted.
+    Also removes any extracted MIDI objects (US-10.2 ``midi_paths``) and cover-art
+    artifacts (US-13.1: the selected ``artwork_path`` plus every generated
+    ``ArtworkOption`` and its image), which live under their own storage keys
+    rather than ``file_path`` and would otherwise be orphaned with the parent clip.
     """
     clip = await get_owned_clip(clip_id, user_id)
     storage = get_storage_backend()
@@ -173,7 +174,29 @@ async def delete_clip(clip_id: str, user_id: str) -> None:
             await asyncio.to_thread(storage.delete, midi_key)
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.warning("Failed to delete MIDI object %s while deleting clip %s", midi_key, clip.id)
+    await _delete_artwork(storage, clip)
     await clip.delete()
+
+
+async def _delete_artwork(storage, clip: Clip) -> None:
+    """Best-effort removal of a clip's cover art and all generated options."""
+    options = await ArtworkOption.find(ArtworkOption.clip_id == clip.id).to_list()
+    # The selected artwork may be an upload (no ArtworkOption row), so delete it
+    # explicitly too; options cover the generated batch. De-dup so a selected
+    # option's object is not deleted twice.
+    paths = {opt.storage_path for opt in options}
+    if clip.artwork_path:
+        paths.add(clip.artwork_path)
+    for path in paths:
+        try:
+            await asyncio.to_thread(storage.delete, path)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.warning("Failed to delete artwork object %s while deleting clip %s", path, clip.id)
+    for opt in options:
+        try:
+            await opt.delete()
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.warning("Failed to delete artwork option %s while deleting clip %s", opt.id, clip.id)
 
 
 async def get_lineage(

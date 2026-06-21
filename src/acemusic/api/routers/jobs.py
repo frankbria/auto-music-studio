@@ -18,7 +18,8 @@ from acemusic.song_structure import SONG_STRUCTURE
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..models import Clip, Job, JobStatus
+from ..models import ArtworkOption, Clip, Job, JobStatus
+from ..services.artwork import ARTWORK_JOB_TYPE
 from ..services.common import coerce_object_id
 from ..services.editing import EDIT_JOB_TYPES
 from ..services.export import EXPORT_JOB_TYPES
@@ -79,6 +80,9 @@ class JobStatusResponse(BaseModel):
     # Mastering jobs (US-12.2) carry their loudness/EQ/stereo analysis here; only
     # set for completed mastering jobs, dropped (None) for every other type.
     metrics: dict | None = None
+    # Artwork jobs (US-13.1) produce cover-art options, not clips; their results
+    # surface here as ``{artwork_id, url}`` pairs (resolved fresh, like audio_urls).
+    artwork_options: list[dict] | None = None
     error: str | None = None
 
 
@@ -132,6 +136,22 @@ async def _resolve_audio_urls(clip_ids: list[str]) -> list[str]:
     return urls
 
 
+async def _resolve_artwork_options(option_ids: list[str]) -> list[dict]:
+    """Map a completed artwork job's option ids to ``{artwork_id, url}`` pairs."""
+    if not option_ids:
+        return []
+    storage = get_storage_backend()
+    options: list[dict] = []
+    for option_id in option_ids:
+        option = await ArtworkOption.get(option_id)
+        if option is None:
+            logger.warning("Artwork option %s referenced by a completed job is missing", option_id)
+            continue
+        url = await asyncio.to_thread(storage.get_url, option.storage_path)
+        options.append({"artwork_id": option_id, "url": url})
+    return options
+
+
 @router.get("/{job_id}/status", response_model=JobStatusResponse, response_model_exclude_none=True)
 async def get_job_status(
     job_id: str,
@@ -157,6 +177,11 @@ async def get_job_status(
         if job.job_type == MIDI_JOB_TYPE:
             # MIDI jobs record ``midi_paths`` (label -> storage key), not clips.
             response.midi_download_urls = await resolve_midi_urls((job.result or {}).get("midi_paths", {}))
+        elif job.job_type == ARTWORK_JOB_TYPE:
+            # Artwork jobs record ``artwork_option_ids`` (separate documents), not clips.
+            response.artwork_options = await _resolve_artwork_options(
+                list((job.result or {}).get("artwork_option_ids", []))
+            )
         else:
             clip_ids = list((job.result or {}).get("clip_ids", []))
             response.clip_ids = clip_ids

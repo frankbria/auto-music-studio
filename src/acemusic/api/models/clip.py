@@ -41,6 +41,10 @@ class Clip(Document):
     # retrieval source (the storage backend offers no list/exists). None until a
     # MIDI extraction job completes for this clip.
     midi_paths: dict[str, str] | None = None
+    # Storage key of the selected/uploaded cover art (US-13.1). None until the
+    # owner selects a generated option or uploads custom artwork; the binary is
+    # served via ``GET /clips/{id}/artwork`` (file_path stays internal, like audio).
+    artwork_path: str | None = None
     is_public: bool = False  # documents predating US-9.3 load as private
     created_at: datetime = Field(default_factory=utcnow)
 

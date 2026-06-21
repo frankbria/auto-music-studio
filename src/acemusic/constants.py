@@ -94,3 +94,15 @@ KEY_MAX_LENGTH = 50
 # a BSON-encoding 500 when persisted.
 SEED_MIN = -(2**63)
 SEED_MAX = 2**63 - 1
+
+# Cover art generation (US-13.1). DALL-E 3 emits 1024x1024; we upscale to a
+# 3000x3000 distribution master (Spotify/Apple require >=3000). Uploads must meet
+# that same floor in one of the accepted raster formats and stay under the cap so
+# a single image can't exhaust worker memory or bloat storage.
+ARTWORK_OPTIONS_COUNT = 4
+ARTWORK_GENERATION_SIZE = 1024
+ARTWORK_FINAL_SIZE = 3000
+ARTWORK_MIN_RESOLUTION = 3000
+ARTWORK_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+VALID_IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "jpg", "png"})
+ARTWORK_PROMPT_MAX_LENGTH = 2000

@@ -29,6 +29,7 @@ from pymongo import ASCENDING, ReturnDocument
 
 from acemusic.client import AceStepClient
 from acemusic.config import load_config
+from acemusic.image_client import ImageGenerationClient
 from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
@@ -36,6 +37,7 @@ from acemusic.storage import StorageBackend, get_storage_backend
 from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
+from .artwork import ARTWORK_JOB_HANDLERS
 from .common import JobProcessingError
 from .editing import EDIT_JOB_HANDLERS
 from .export import EXPORT_JOB_HANDLERS
@@ -104,6 +106,7 @@ class JobProcessor:
         runpod_timeout: float = 300.0,
         runpod_poll_interval: float = 5.0,
         mastering_orchestrator_factory: Callable[[], MasteringOrchestrator] | None = None,
+        image_client_factory: Callable[[], ImageGenerationClient | None] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
@@ -124,6 +127,10 @@ class JobProcessor:
         # mastering credentials are set at all, in which case the mastering handler
         # fails a claimed job with a clear message rather than crashing.
         self._mastering_orchestrator_factory = mastering_orchestrator_factory
+        # Cover-art generation (US-13.1). The factory yields the image client, or
+        # None when no OpenAI key is set; the artwork handler then fails a claimed
+        # job with a clear "not configured" message rather than crashing.
+        self._image_client_factory = image_client_factory
         # A job legitimately stays in `processing` for at most poll_timeout (its
         # own worker fails it after that). Only re-queue jobs older than that
         # window plus a margin, so a startup sweep never reclaims a job a live
@@ -153,6 +160,10 @@ class JobProcessor:
         # so they get their own injecting wrapper.
         for job_type, mastering_handler in MASTERING_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_mastering_handler, mastering_handler)
+        # Artwork handlers (US-13.1) need storage plus the image client, so they
+        # get their own injecting wrapper like mastering.
+        for job_type, artwork_handler in ARTWORK_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_artwork_handler, artwork_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -320,6 +331,15 @@ class JobProcessor:
             )
         orchestrator = self._mastering_orchestrator_factory()
         return await mastering_handler(job, storage=self._storage_factory(), orchestrator=orchestrator)
+
+    async def _run_artwork_handler(self, artwork_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt an artwork handler (US-13.1), injecting storage and the image client."""
+        client = self._image_client_factory() if self._image_client_factory is not None else None
+        if client is None:
+            raise JobProcessingError(
+                "Artwork generation is not configured: set ACEMUSIC_API_OPENAI_API_KEY to enable it."
+            )
+        return await artwork_handler(job, storage=self._storage_factory(), client=client)
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run a generation job — locally via ACE-Step or remotely via RunPod.

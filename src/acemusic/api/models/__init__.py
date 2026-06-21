@@ -3,6 +3,7 @@
 ``ALL_MODELS`` is the registration list passed to ``init_beanie``.
 """
 
+from .artwork import ArtworkOption
 from .batch_job import BatchClipEntry, BatchJob
 from .clip import Clip
 from .credit_transaction import CreditTransaction
@@ -12,12 +13,13 @@ from .refresh_token import RefreshToken
 from .user import User
 from .workspace import Workspace
 
-ALL_MODELS = [User, Workspace, Clip, Job, RefreshToken, Preset, CreditTransaction, BatchJob]
+ALL_MODELS = [User, Workspace, Clip, Job, RefreshToken, Preset, CreditTransaction, BatchJob, ArtworkOption]
 
 __all__ = [
     "User",
     "Workspace",
     "Clip",
+    "ArtworkOption",
     "CreditTransaction",
     "Job",
     "JobStatus",
