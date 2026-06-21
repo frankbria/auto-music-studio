@@ -132,11 +132,39 @@ async def test_refresh_access_token_uses_refresh_grant() -> None:
 
 
 @respx.mock
-async def test_token_request_error_is_wrapped() -> None:
+async def test_rejected_grant_raises_auth_error() -> None:
     settings = _settings()
-    respx.post(sc.SOUNDCLOUD_TOKEN_URL).mock(return_value=httpx.Response(401, json={"error": "invalid_grant"}))
-    with pytest.raises(sc.SoundCloudError):
-        await sc.refresh_access_token("bad", settings)
+    respx.post(sc.SOUNDCLOUD_TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+    with pytest.raises(sc.SoundCloudAuthError):
+        await sc.refresh_access_token("revoked", settings)
+
+
+@respx.mock
+async def test_transient_token_failure_is_not_auth_error() -> None:
+    settings = _settings()
+    respx.post(sc.SOUNDCLOUD_TOKEN_URL).mock(return_value=httpx.Response(503))
+    with pytest.raises(sc.SoundCloudError) as excinfo:
+        await sc.refresh_access_token("good", settings)
+    # A 5xx is retryable: it must NOT be the auth subclass that deletes the link.
+    assert not isinstance(excinfo.value, sc.SoundCloudAuthError)
+
+
+class TestArtworkSsrf:
+    async def test_rejects_non_http_scheme(self) -> None:
+        with pytest.raises(sc.SoundCloudError):
+            await sc.fetch_artwork("ftp://example.com/cover.png")
+
+    async def test_rejects_loopback(self) -> None:
+        with pytest.raises(sc.SoundCloudError):
+            await sc.fetch_artwork("http://127.0.0.1/cover.png")
+
+    async def test_rejects_cloud_metadata_link_local(self) -> None:
+        with pytest.raises(sc.SoundCloudError):
+            await sc.fetch_artwork("http://169.254.169.254/latest/meta-data/")
+
+    async def test_allows_public_ip(self) -> None:
+        # Pure host check — no HTTP request is made, so this stays offline.
+        await sc._assert_public_url("https://8.8.8.8/cover.png")
 
 
 @respx.mock

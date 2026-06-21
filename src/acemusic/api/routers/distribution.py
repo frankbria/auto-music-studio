@@ -233,14 +233,12 @@ async def soundcloud_upload(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except sc.SoundCloudAuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except sc.SoundCloudError as exc:
+        # Transient refresh failure — the connection is preserved; ask to retry.
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     metadata = _merge_metadata(clip, body.metadata_overrides)
-    artwork = None
-    if body.metadata_overrides.artwork_url:
-        try:
-            artwork = await sc.fetch_artwork(body.metadata_overrides.artwork_url)
-        except sc.SoundCloudError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    artwork = await _resolve_artwork(clip, body.metadata_overrides, storage)
 
     filename = f"{clip.title or clip.id}.{clip.format or 'wav'}"
     try:
@@ -257,13 +255,35 @@ async def soundcloud_upload(
 def _merge_metadata(clip: Clip, overrides: MetadataOverrides) -> dict[str, object]:
     """Derive track metadata from the clip, letting overrides take precedence."""
     metadata: dict[str, object] = {
-        "title": clip.title,
+        # SoundCloud requires a title; an untitled clip falls back to its id so the
+        # upload never fails upstream for a missing ``track[title]``.
+        "title": clip.title or str(clip.id),
         "bpm": clip.bpm,
         "key_signature": clip.key,
         "genre": clip.style_tags[0] if clip.style_tags else None,
     }
     metadata.update({k: v for k, v in overrides.model_dump().items() if k != "artwork_url" and v is not None})
     return metadata
+
+
+async def _resolve_artwork(clip: Clip, overrides: MetadataOverrides, storage) -> bytes | None:
+    """Return the cover-art bytes to upload, or None.
+
+    An explicit ``artwork_url`` override wins; otherwise the clip's own selected
+    cover art (US-13.1 ``artwork_path``) is uploaded so a track carries its art by
+    default. A missing stored object is non-fatal — the track uploads without art.
+    """
+    if overrides.artwork_url:
+        try:
+            return await sc.fetch_artwork(overrides.artwork_url)
+        except sc.SoundCloudError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if clip.artwork_path:
+        try:
+            return await asyncio.to_thread(storage.download, clip.artwork_path)
+        except FileNotFoundError:
+            logger.warning("Clip %s artwork object %r is missing; uploading without art", clip.id, clip.artwork_path)
+    return None
 
 
 @router.delete("/soundcloud/connect", status_code=status.HTTP_204_NO_CONTENT)

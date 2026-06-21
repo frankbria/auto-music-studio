@@ -70,12 +70,24 @@ async def _make_user(email: str):
     return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
 
 
-async def _make_clip(user, audio: bytes, *, fmt: str = "wav", title: str | None = "Tune", store: bool = True):
+async def _make_clip(
+    user,
+    audio: bytes,
+    *,
+    fmt: str = "wav",
+    title: str | None = "Tune",
+    store: bool = True,
+    artwork: bytes | None = None,
+):
     clip_id = PydanticObjectId()
     workspace_id = PydanticObjectId()
     file_path = f"{user.id}/{workspace_id}/clips/{clip_id}.{fmt}"
     if store:
         get_storage_backend().upload(file_path, audio)
+    artwork_path = None
+    if artwork is not None:
+        artwork_path = f"{user.id}/{workspace_id}/clips/{clip_id}.png"
+        get_storage_backend().upload(artwork_path, artwork)
     clip = Clip(
         id=clip_id,
         user_id=user.id,
@@ -86,6 +98,7 @@ async def _make_clip(user, audio: bytes, *, fmt: str = "wav", title: str | None 
         bpm=120,
         key="Am",
         style_tags=["techno"],
+        artwork_path=artwork_path,
     )
     await clip.insert()
     return clip
@@ -223,6 +236,79 @@ class TestUpload:
         assert captured["metadata"]["key_signature"] == "Am"
         assert captured["metadata"]["genre"] == "house"  # override beat the style_tag default
         assert captured["audio"] == b"RIFFaudio"
+
+    async def test_untitled_clip_falls_back_to_clip_id_as_title(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        user = await _make_user("up-untitled@example.com")
+        clip = await _make_clip(user, b"audio", title=None)
+        await _make_connection(user)
+
+        captured = {}
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            captured["metadata"] = metadata
+            return {"id": 5}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 200
+        assert captured["metadata"]["title"] == str(clip.id)  # never empty for SoundCloud
+
+    async def test_clip_artwork_uploaded_by_default(self, client, settings, local_storage, monkeypatch) -> None:
+        user = await _make_user("up-defaultart@example.com")
+        clip = await _make_clip(user, b"audio", artwork=b"COVERPNG")
+        await _make_connection(user)
+
+        captured = {}
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            captured["artwork"] = artwork
+            return {"id": 6}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 200
+        assert captured["artwork"] == b"COVERPNG"  # the clip's own cover art, no override needed
+
+    async def test_transient_refresh_failure_preserves_connection(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        user = await _make_user("up-transient@example.com")
+        clip = await _make_clip(user, b"audio")
+        await _make_connection(user, expires_in_seconds=-10)  # expired → triggers refresh
+
+        async def _refresh(refresh_token, _settings):
+            raise sc.SoundCloudError("SoundCloud token request failed.")
+
+        monkeypatch.setattr(sc, "refresh_access_token", _refresh)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 502
+        # The link survives a transient outage so a later retry can succeed.
+        assert await SoundCloudConnection.find_one(SoundCloudConnection.user_id == user.id) is not None
+
+    async def test_revoked_refresh_token_unlinks_and_returns_401(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        user = await _make_user("up-revoked@example.com")
+        clip = await _make_clip(user, b"audio")
+        await _make_connection(user, expires_in_seconds=-10)
+
+        async def _refresh(refresh_token, _settings):
+            raise sc.SoundCloudAuthError("SoundCloud rejected the authorization grant.")
+
+        monkeypatch.setattr(sc, "refresh_access_token", _refresh)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 401
+        assert await SoundCloudConnection.find_one(SoundCloudConnection.user_id == user.id) is None
 
     async def test_artwork_url_is_fetched_and_forwarded(self, client, settings, local_storage, monkeypatch) -> None:
         user = await _make_user("up-art@example.com")
