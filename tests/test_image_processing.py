@@ -41,6 +41,16 @@ class TestValidateImage:
         with pytest.raises(ImageValidationError):
             validate_image(data)
 
+    def test_rejects_when_over_max_pixels(self) -> None:
+        # 800x600 = 480_000 px; a tiny cap rejects it before the full decode.
+        data = _img_bytes("PNG", size=(800, 600))
+        with pytest.raises(ImageValidationError):
+            validate_image(data, max_pixels=100_000)
+
+    def test_within_max_pixels_passes(self) -> None:
+        data = _img_bytes("PNG", size=(800, 600))
+        assert validate_image(data, max_pixels=1_000_000)[0] == "png"
+
 
 class TestEnsureMinResolution:
     def test_passes_when_meets_minimum(self) -> None:

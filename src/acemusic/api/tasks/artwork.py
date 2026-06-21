@@ -78,7 +78,10 @@ async def process_artwork_job(job: Job, *, storage: StorageBackend, client: Imag
     try:
         for idx, raw in enumerate(images):
             upscaled = await asyncio.to_thread(upscale_image, raw, ARTWORK_FINAL_SIZE)
-            path = f"{job.user_id}/{job.workspace_id}/artwork/{clip.id}/{idx}.png"
+            # Namespace by job id so regenerating for the same clip never overwrites
+            # an earlier batch (and a failed regen's rollback only deletes its own
+            # objects, not a previously selected cover sharing a path).
+            path = f"{job.user_id}/{job.workspace_id}/artwork/{clip.id}/{job.id}/{idx}.png"
             await asyncio.to_thread(storage.upload, path, upscaled)
             stored_paths.append(path)
             option = ArtworkOption(

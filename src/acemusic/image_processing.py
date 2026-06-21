@@ -18,18 +18,24 @@ class ImageValidationError(Exception):
     """An image is corrupt, in an unknown format, or below the required size."""
 
 
-def validate_image(data: bytes) -> tuple[str, int, int]:
+def validate_image(data: bytes, max_pixels: int | None = None) -> tuple[str, int, int]:
     """Return ``(format, width, height)`` for ``data``; raise if it is not a
     decodable image.
 
-    ``format`` is lower-cased (``"png"``/``"jpeg"``). ``img.load()`` forces a full
-    decode so truncated or corrupt bytes fail here rather than later in the worker.
+    ``format`` is lower-cased (``"png"``/``"jpeg"``). When ``max_pixels`` is given,
+    the pixel count is checked against it from the header *before* ``img.load()``
+    forces a full decode — so a small but enormously-dimensioned upload (a
+    decompression bomb) is rejected without ever allocating its decoded buffer.
     """
     try:
         with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            if max_pixels is not None and width * height > max_pixels:
+                raise ImageValidationError(
+                    f"Image is {width}x{height} ({width * height} pixels); the maximum is {max_pixels} pixels."
+                )
             img.load()  # force decode: truncated/corrupt data raises now, not later
             fmt = (img.format or "").lower()
-            width, height = img.size
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise ImageValidationError(f"Could not read image: {exc}") from exc
     if not fmt:

@@ -143,4 +143,4 @@ class TestProcessArtworkJob:
         assert await ArtworkOption.find(ArtworkOption.clip_id == clip.id).to_list() == []
         for idx in range(ARTWORK_OPTIONS_COUNT):
             with pytest.raises(FileNotFoundError):
-                storage.download(f"{job.user_id}/{job.workspace_id}/artwork/{clip.id}/{idx}.png")
+                storage.download(f"{job.user_id}/{job.workspace_id}/artwork/{clip.id}/{job.id}/{idx}.png")

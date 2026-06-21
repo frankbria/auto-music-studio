@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 
 from acemusic.constants import (
+    ARTWORK_MAX_PIXELS,
     ARTWORK_MAX_UPLOAD_BYTES,
     ARTWORK_MIN_RESOLUTION,
     ARTWORK_PROMPT_MAX_LENGTH,
@@ -93,7 +94,7 @@ async def upload_custom_artwork(clip: Clip, data: bytes) -> Clip:
         raise ImageValidationError(
             f"Image is {len(data)} bytes; the maximum upload size is {ARTWORK_MAX_UPLOAD_BYTES} bytes."
         )
-    fmt, _width, _height = validate_image(data)
+    fmt, _width, _height = validate_image(data, max_pixels=ARTWORK_MAX_PIXELS)
     if fmt not in VALID_IMAGE_FORMATS:
         raise ImageValidationError(f"Unsupported image format {fmt!r}; use {', '.join(sorted(VALID_IMAGE_FORMATS))}.")
     ensure_min_resolution(data, ARTWORK_MIN_RESOLUTION)
