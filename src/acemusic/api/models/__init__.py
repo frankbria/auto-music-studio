@@ -10,6 +10,7 @@ from .credit_transaction import CreditTransaction
 from .job import Job, JobStatus
 from .preset import PRESET_PARAM_FIELDS, Preset
 from .refresh_token import RefreshToken
+from .release import Release, ReleaseStatus
 from .soundcloud_connection import SoundCloudConnection
 from .user import User
 from .workspace import Workspace
@@ -25,6 +26,7 @@ ALL_MODELS = [
     BatchJob,
     ArtworkOption,
     SoundCloudConnection,
+    Release,
 ]
 
 __all__ = [
@@ -41,5 +43,7 @@ __all__ = [
     "Preset",
     "PRESET_PARAM_FIELDS",
     "SoundCloudConnection",
+    "Release",
+    "ReleaseStatus",
     "ALL_MODELS",
 ]
