@@ -70,6 +70,22 @@ class TestAuthGate:
         assert resp.status_code == 401
 
 
+class TestDuplicateFieldDetection:
+    """`_duplicate_field` reads the driver's structured keyPattern (no DB)."""
+
+    @pytest.mark.parametrize(
+        ("key_pattern", "expected"),
+        [({"isrc": 1}, "isrc"), ({"upc": 1}, "upc"), ({"user_id": 1, "upc": 1}, "upc")],
+    )
+    def test_maps_key_pattern_to_field(self, key_pattern: dict, expected: str) -> None:
+        from pymongo.errors import DuplicateKeyError
+
+        from acemusic.api.services.releases import _duplicate_field
+
+        exc = DuplicateKeyError("E11000 duplicate key", 11000, {"keyPattern": key_pattern})
+        assert _duplicate_field(exc) == expected
+
+
 # ---------------------------------------------------------------------------
 # Integration — real MongoDB
 # ---------------------------------------------------------------------------

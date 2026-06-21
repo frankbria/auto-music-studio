@@ -31,8 +31,13 @@ _MAX_MINT_ATTEMPTS = 5
 
 
 def _duplicate_field(exc: DuplicateKeyError) -> str:
-    """Name the identifier a unique-index violation collided on."""
-    return "isrc" if "isrc" in str(exc) else "upc"
+    """Name the identifier a unique-index violation collided on.
+
+    Reads the driver's structured ``keyPattern`` (stable across versions) rather
+    than string-matching the message.
+    """
+    key_pattern = (exc.details or {}).get("keyPattern", {})
+    return "isrc" if "isrc" in key_pattern else "upc"
 
 
 def _not_found() -> HTTPException:
@@ -177,6 +182,11 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
         raise _state_error("Release metadata cannot be modified after submission")
     # Reject a duplicate UPC up front, so a clashing override can't re-code the
     # clip (below) and then have the release write roll back on the unique index.
+    # With this pre-check both sequential failure directions stay clean: a UPC
+    # clash 409s here before any write; an ISRC clash 409s in the clip sync below,
+    # before release.save(). The residual is a true-concurrency TOCTOU that only a
+    # multi-doc transaction could close (unavailable on standalone MongoDB); the
+    # unique indexes still guarantee no duplicate is ever persisted.
     if updates.get("upc") is not None:
         await _ensure_upc_unused(updates["upc"], release.id)
     for field, value in updates.items():
