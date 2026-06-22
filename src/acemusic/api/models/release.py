@@ -55,6 +55,11 @@ class Release(Document):
     language: str | None = None
     credits: str | None = None
 
+    # Distribution targets the owner has confirmed a manual submission to (US-13.5).
+    # A release can go to more than one of LANDR/DistroKid/TuneCore, so this is a
+    # list of target names while ``status`` stays a single ``submitted`` flag.
+    submitted_channels: list[str] = Field(default_factory=list)
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime | None = None
 

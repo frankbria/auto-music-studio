@@ -231,6 +231,15 @@ Generation is async: poll `GET /api/v1/jobs/{id}/status`, whose completed respon
 
 Account-linking is distinct from login: it connects an already-authenticated user's SoundCloud account so the platform can upload on their behalf, with PKCE (S256), a `uid`-bound signed `state`, and the PKCE verifier held in a per-flow HttpOnly cookie. Upload maps clip metadata (`title`, `bpm`, `key`→`key_signature`, first style tag→`genre`) onto the track, lets `metadata_overrides` (`title`, `genre`, `description`, `bpm`, `key_signature`, `isrc`, `sharing`) take precedence, and attaches the clip's own cover art (US-13.1) when present. Access tokens are refreshed transparently on expiry; a rejected refresh (revoked grant) unlinks the account, while a transient failure preserves it for retry. Uploads over 500 MB are rejected. Requires `ACEMUSIC_API_SOUNDCLOUD_CLIENT_ID/SECRET/REDIRECT_URI`.
 
+### Distribution — Guided prep for LANDR / DistroKid / TuneCore (US-13.5)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/releases/{id}/prepare/{target}` | Validate a release against `target` (`landr`, `distrokid`, `tunecore`); returns a pass/fail `checklist`, `all_checks_passed`, a `bundle_url` (null until every check passes), and target-specific `instructions` |
+| `POST /api/v1/releases/{id}/submit/{target}` | Confirm a manual submission; moves the release to `submitted` and records the target in `submitted_channels` |
+
+Because LANDR, DistroKid, and TuneCore have no public submission API, the platform prepares the package and the user submits manually. Validation reads the source clip (audio at `clip.file_path`, cover at `clip.artwork_path`) and checks audio presence/format (WAV or FLAC), cover-art presence and ≥3000×3000 resolution, required metadata, and ISRC/UPC. When everything passes, a target-formatted zip (`audio.* + cover.* + metadata.json + README.txt`) is uploaded to storage and its URL returned. An unknown target is rejected with `422`; releases are owner-scoped (`404`). `submit` is the user's attestation that they completed the upload on the target platform, and a release can be confirmed to more than one target.
+
 ### Presets
 
 | Endpoint | Purpose |
