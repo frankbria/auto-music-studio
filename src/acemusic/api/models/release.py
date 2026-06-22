@@ -16,6 +16,7 @@ from pydantic import Field
 from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from .common import utcnow
+from .distribution import DistributionStatus, VisibilityState
 
 
 class ReleaseStatus(str, Enum):
@@ -60,6 +61,17 @@ class Release(Document):
     # list of target names while ``status`` stays a single ``submitted`` flag.
     submitted_channels: list[str] = Field(default_factory=list)
 
+    # Per-channel distribution status (US-13.6): maps a channel name
+    # ("soundcloud", "landr", …) to its current DistributionStatus. Empty until a
+    # channel is engaged. Distinct from ``status`` above, which is the release's own
+    # lifecycle — a channel can be ``in_review`` while the release is ``submitted``.
+    channel_statuses: dict[str, DistributionStatus] = Field(default_factory=dict)
+    visibility: VisibilityState = VisibilityState.PRIVATE
+    # Set when the release is uploaded to SoundCloud (US-13.2 upload + US-13.6
+    # association); the poller uses it to fetch live track state.
+    soundcloud_track_id: str | None = None
+    soundcloud_last_polled: datetime | None = None
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime | None = None
 
@@ -75,4 +87,7 @@ class Release(Document):
                 unique=True,
                 partialFilterExpression={"upc": {"$type": "string"}},
             ),
+            # The SoundCloud poller scans releases that have a track id; sparse so
+            # the (common) un-uploaded releases stay out of the index.
+            IndexModel([("soundcloud_track_id", ASCENDING)], sparse=True),
         ]

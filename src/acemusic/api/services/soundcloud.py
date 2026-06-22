@@ -295,6 +295,43 @@ async def get_soundcloud_user(access_token: str) -> dict:
         raise SoundCloudError("Fetching the SoundCloud profile failed.") from exc
 
 
+def _track_url(track_id: str) -> str:
+    return f"{SOUNDCLOUD_UPLOAD_URL}/{track_id}"
+
+
+async def get_track_status(access_token: str, track_id: str) -> dict:
+    """Fetch a track's current state (``GET /tracks/{id}``) for status polling (US-13.6).
+
+    Returns the SoundCloud track JSON, which carries ``state``
+    (``processing``/``finished``/``failed``) and ``sharing`` — mapped to a
+    distribution status by :func:`acemusic.api.services.distribution_status.map_soundcloud_state`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(_track_url(track_id), headers={"Authorization": f"OAuth {access_token}"})
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError as exc:
+        raise SoundCloudError("Fetching the SoundCloud track status failed.") from exc
+
+
+async def update_track_sharing(access_token: str, track_id: str, sharing: str) -> dict:
+    """Set a track's sharing to ``public`` or ``private`` (``PUT /tracks/{id}``) (US-13.6)."""
+    if sharing not in ("public", "private"):
+        raise SoundCloudError("SoundCloud sharing must be 'public' or 'private'.")
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.put(
+                _track_url(track_id),
+                headers={"Authorization": f"OAuth {access_token}"},
+                data={"track[sharing]": sharing},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError as exc:
+        raise SoundCloudError("Updating the SoundCloud track sharing failed.") from exc
+
+
 def token_expiry(expires_in: object) -> datetime:
     """Translate SoundCloud's ``expires_in`` seconds into an absolute UTC instant.
 

@@ -8,7 +8,9 @@ from .batch_job import BatchClipEntry, BatchJob
 from .clip import Clip
 from .counter import Counter
 from .credit_transaction import CreditTransaction
+from .distribution import DistributionStatus, VisibilityState
 from .job import Job, JobStatus
+from .notification_event import NotificationEvent
 from .preset import PRESET_PARAM_FIELDS, Preset
 from .refresh_token import RefreshToken
 from .release import Release, ReleaseStatus
@@ -28,6 +30,7 @@ ALL_MODELS = [
     ArtworkOption,
     SoundCloudConnection,
     Release,
+    NotificationEvent,
     Counter,
 ]
 
@@ -47,6 +50,9 @@ __all__ = [
     "SoundCloudConnection",
     "Release",
     "ReleaseStatus",
+    "DistributionStatus",
+    "VisibilityState",
+    "NotificationEvent",
     "Counter",
     "ALL_MODELS",
 ]

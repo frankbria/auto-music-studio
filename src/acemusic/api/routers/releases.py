@@ -14,17 +14,27 @@ piece (computed live from the clip). Persistence lives in
 :mod:`acemusic.api.services.releases`.
 """
 
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user, get_settings, require_existing_user
-from ..models import Release, ReleaseStatus
-from ..services import clips as clip_service, distribution as distribution_service, releases as release_service
+from ..models import DistributionStatus, Release, ReleaseStatus, VisibilityState
+from ..models.distribution import GUIDED_CHANNELS, SOUNDCLOUD_CHANNEL
+from ..services import (
+    clips as clip_service,
+    distribution as distribution_service,
+    distribution_status as status_service,
+    releases as release_service,
+    soundcloud as sc,
+)
 from ..services.distribution import ChecklistItem, DistributionTarget
 from ..services.identifiers import validate_isrc_format, validate_upc_check_digit
 from ..settings import ApiSettings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/releases", tags=["releases"], dependencies=[Depends(get_current_user)])
 
@@ -124,6 +134,10 @@ class ReleaseResponse(BaseModel):
     status: ReleaseStatus
     warnings: list[str]
     submitted_channels: list[str]
+    # Per-channel distribution status + visibility (US-13.6), so a listing shows
+    # where each release stands across all channels without a second call.
+    channel_statuses: dict[str, DistributionStatus]
+    visibility: VisibilityState
     created_at: datetime
     updated_at: datetime | None
 
@@ -148,10 +162,49 @@ class ReleaseResponse(BaseModel):
             status=release.status,
             warnings=warnings,
             submitted_channels=release.submitted_channels,
+            channel_statuses=release.channel_statuses,
+            visibility=release.visibility,
             created_at=release.created_at,
             updated_at=release.updated_at,
             **{field: getattr(release, field) for field in _METADATA_FIELDS},
         )
+
+
+class ChannelStatus(BaseModel):
+    channel: str
+    status: DistributionStatus
+
+
+class ReleaseStatusResponse(BaseModel):
+    release_id: str
+    title: str
+    channels: list[ChannelStatus]
+    visibility: VisibilityState
+    # Surfaced only when the release is on SoundCloud (the auto-polled channel).
+    soundcloud_last_polled: datetime | None = None
+
+    @classmethod
+    def from_release(cls, release: Release) -> "ReleaseStatusResponse":
+        return cls(
+            release_id=str(release.id),
+            title=release.title,
+            channels=[ChannelStatus(channel=ch, status=st) for ch, st in release.channel_statuses.items()],
+            visibility=release.visibility,
+            soundcloud_last_polled=release.soundcloud_last_polled,
+        )
+
+
+class StatusUpdateRequest(BaseModel):
+    # Pydantic rejects an unknown status value with 422 automatically.
+    model_config = ConfigDict(extra="forbid")
+
+    status: DistributionStatus
+
+
+class VisibilityUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: VisibilityState
 
 
 class PrepareResponse(BaseModel):
@@ -255,3 +308,75 @@ async def submit_release(
     """Confirm a manual submission to ``target`` — moves the release to ``submitted``."""
     release = await release_service.confirm_submission(release_id, current.user_id, target.value)
     return await _response_for(release)
+
+
+@router.get("/{release_id}/status", response_model=ReleaseStatusResponse)
+async def get_release_status(
+    release_id: str,
+    current: CurrentUser = Depends(require_existing_user),
+) -> ReleaseStatusResponse:
+    """Per-channel distribution status for a single release (US-13.6). 404 if not owned."""
+    release = await release_service.get_owned_release(release_id, current.user_id)
+    return ReleaseStatusResponse.from_release(release)
+
+
+@router.patch("/{release_id}/channels/{channel}/status", response_model=ChannelStatus)
+async def update_channel_status(
+    release_id: str,
+    channel: str,
+    body: StatusUpdateRequest,
+    current: CurrentUser = Depends(require_existing_user),
+) -> ChannelStatus:
+    """Manually update a *guided* channel's status (US-13.6).
+
+    SoundCloud is automated (rejected with 400); an unknown channel is also 400.
+    An out-of-sequence transition (e.g. draft → live) is 409.
+    """
+    if channel not in GUIDED_CHANNELS:
+        detail = (
+            "SoundCloud status is updated automatically and cannot be set manually."
+            if channel == SOUNDCLOUD_CHANNEL
+            else f"Unknown distribution channel: {channel}."
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+    release = await release_service.get_owned_release(release_id, current.user_id)
+    try:
+        old_status = await status_service.apply_channel_status(release, channel, body.status)
+    except status_service.InvalidStatusTransition as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if status_service.should_notify(old_status, body.status):
+        await status_service.create_status_notification(release, channel, body.status)
+    return ChannelStatus(channel=channel, status=release.channel_statuses[channel])
+
+
+@router.patch("/{release_id}/visibility", response_model=ReleaseStatusResponse)
+async def update_visibility(
+    release_id: str,
+    body: VisibilityUpdateRequest,
+    current: CurrentUser = Depends(require_existing_user),
+    settings: ApiSettings = Depends(get_settings),
+) -> ReleaseStatusResponse:
+    """Change a release's visibility (US-13.6); sync SoundCloud sharing if it's uploaded there."""
+    release = await release_service.get_owned_release(release_id, current.user_id)
+    if release.soundcloud_track_id:
+        await _sync_soundcloud_sharing(release, body.state, settings)
+    release = await release_service.update_visibility(release_id, current.user_id, body.state)
+    return ReleaseStatusResponse.from_release(release)
+
+
+async def _sync_soundcloud_sharing(release: Release, state: VisibilityState, settings: ApiSettings) -> None:
+    """Best-effort mirror of a release's visibility onto its SoundCloud track.
+
+    SoundCloud only models public/private, so anything short of ``public`` maps to
+    private. A missing link or a transient SoundCloud failure is logged and
+    swallowed — the local visibility change still stands rather than failing the
+    whole request on an external dependency.
+    """
+    sharing = "public" if state == VisibilityState.PUBLIC else "private"
+    try:
+        connection = await sc.get_valid_connection(str(release.user_id), settings)
+        await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, sharing)
+    except sc.SoundCloudError as exc:
+        logger.warning("SoundCloud sharing sync for release %s failed: %s", release.id, exc)

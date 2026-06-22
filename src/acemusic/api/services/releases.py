@@ -207,6 +207,19 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     return release
 
 
+async def update_visibility(release_id: str, user_id: str, visibility) -> Release:
+    """Set an owned release's visibility (US-13.6). Raises 404 if not owned.
+
+    Visibility is a sharing preference, not part of the submission lifecycle, so
+    it is editable in any state (unlike metadata, which locks after submission).
+    """
+    release = await get_owned_release(release_id, user_id)
+    release.visibility = visibility
+    release.updated_at = utcnow()
+    await release.save()
+    return release
+
+
 # A submission can only be confirmed once the package is assembled, and re-confirmed
 # for a further target after it has gone out — never from draft or a terminal state.
 _CONFIRMABLE_STATUSES = {ReleaseStatus.READY, ReleaseStatus.SUBMITTED}
