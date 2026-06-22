@@ -110,20 +110,22 @@ async def _claim_clip_isrc(clip: Clip, settings: ApiSettings) -> str:
     """
     if clip.isrc is not None:
         return clip.isrc
-    minted = await identifiers.generate_isrc(settings)
-    try:
-        doc = await Clip.get_pymongo_collection().find_one_and_update(
-            {"_id": clip.id, "isrc": None},
-            {"$set": {"isrc": minted}},
-            return_document=ReturnDocument.AFTER,
-        )
-    except DuplicateKeyError as exc:  # minted ISRC already on another recording (rare)
-        raise DuplicateIdentifierError("isrc") from exc
-    if doc is not None:
-        return doc["isrc"]  # we won the claim
-    # A concurrent creation already coded the clip — read back the canonical value.
-    refreshed = await Clip.get(clip.id)
-    return refreshed.isrc if refreshed and refreshed.isrc else minted
+    for _ in range(_MAX_MINT_ATTEMPTS):
+        minted = await identifiers.generate_isrc(settings)
+        try:
+            doc = await Clip.get_pymongo_collection().find_one_and_update(
+                {"_id": clip.id, "isrc": None},
+                {"$set": {"isrc": minted}},
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError:
+            continue  # a manual override took this slot — mint the next (as for UPC)
+        if doc is not None:
+            return doc["isrc"]  # we won the claim
+        # A concurrent creation already coded the clip — read back the canonical value.
+        refreshed = await Clip.get(clip.id)
+        return refreshed.isrc if refreshed and refreshed.isrc else minted
+    raise DuplicateIdentifierError("isrc")
 
 
 async def _ensure_upc_unused(upc: str, release_id: PydanticObjectId) -> None:

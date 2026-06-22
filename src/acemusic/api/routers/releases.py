@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from ..auth.dependencies import CurrentUser, get_current_user, get_settings, require_existing_user
 from ..models import Release, ReleaseStatus
 from ..services import clips as clip_service, releases as release_service
-from ..services.identifiers import validate_isrc_format, validate_upc_check_digit, validate_upc_format
+from ..services.identifiers import validate_isrc_format, validate_upc_check_digit
 from ..settings import ApiSettings
 
 router = APIRouter(prefix="/releases", tags=["releases"], dependencies=[Depends(get_current_user)])
@@ -100,7 +100,8 @@ class ReleaseUpdate(BaseModel):
     @classmethod
     def _check_upc(cls, value: str | None) -> str | None:
         """Reject a non-EAN-13 manual UPC (422); None clears it."""
-        if value is not None and not (validate_upc_format(value) and validate_upc_check_digit(value)):
+        # validate_upc_check_digit already enforces the 13-digit shape.
+        if value is not None and not validate_upc_check_digit(value):
             raise ValueError("upc must be a valid 13-digit EAN-13 with a correct check digit")
         return value
 

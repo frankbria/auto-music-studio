@@ -449,6 +449,24 @@ class TestIdentifiers:
         assert "upc" in resp.json()["detail"].lower()
         assert (await Clip.get(clip_b.id)).isrc == clip_b_isrc_before  # not re-coded
 
+    async def test_auto_isrc_retries_past_a_manually_claimed_slot(self, client, settings) -> None:
+        # A manual override can occupy a future counter slot; auto-create must mint
+        # the next code rather than 409, mirroring the UPC retry.
+        from acemusic.api.models.counter import Counter
+
+        await Counter.get_pymongo_collection().find_one_and_update(
+            {"name": "isrc_seq"}, {"$set": {"value": 100}}, upsert=True
+        )
+        # Park the code the counter will produce next (seq 101) on another recording.
+        squatter = await _insert_clip(user := await _make_user("rel-ids-retry@example.com"))
+        squatter.isrc = "US-A1B-26-00101"
+        await squatter.save()
+
+        fresh = await _insert_clip(user, mastered=True, artwork=True)
+        body = (await _create_release(client, settings=settings, user=user, clip=fresh)).json()
+        assert body["isrc"] == "US-A1B-26-00102"  # retried to the next slot
+        assert (await Clip.get(fresh.id)).isrc == "US-A1B-26-00102"
+
     async def test_sequence_exhaustion_is_rejected(self, client, settings) -> None:
         # Seed the UPC counter at its 5-digit ceiling: the next mint overflows the
         # field, so generation must fail loudly rather than emit a malformed code.
