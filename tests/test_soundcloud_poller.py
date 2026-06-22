@@ -62,7 +62,6 @@ def _poller(settings, *, track: dict, getter=None):
     )
 
 
-@pytest.mark.integration
 class TestPollOnce:
     async def test_advances_processing_to_in_review(self, mongo_db, mongo_settings) -> None:
         user = await _make_user("poll-proc@example.com")

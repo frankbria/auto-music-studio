@@ -13,7 +13,7 @@ Two callers, two contracts:
   truth and isn't forced through intermediate steps.
 """
 
-from beanie import PydanticObjectId
+from pymongo import ReturnDocument
 
 from ..models import NotificationEvent
 from ..models.common import utcnow
@@ -58,10 +58,31 @@ async def apply_channel_status(
     current = DistributionStatus(release.channel_statuses.get(channel, DistributionStatus.DRAFT))
     if validate and not validate_status_transition(current, new_status):
         raise InvalidStatusTransition(current, new_status)
-    # Reassign (not in-place mutate) so Beanie always sees the field as changed.
+
+    # Atomic per-channel $set guarded by the observed current state (mirrors the
+    # atomic claims in ``services.releases``): a concurrent update to a *different*
+    # channel isn't clobbered by a full-document save, and only one writer wins a
+    # given transition — so terminal notifications can't be duplicated.
+    field = f"channel_statuses.{channel}"
+    guard = {field: current.value} if channel in release.channel_statuses else {field: {"$exists": False}}
+    doc = await Release.get_pymongo_collection().find_one_and_update(
+        {"_id": release.id, **guard},
+        {"$set": {field: new_status.value, "updated_at": utcnow()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is None:
+        # Lost the race: another writer already moved this channel. Reflect the
+        # winning state and report it as the "previous" status, so the caller's
+        # ``should_notify(old, new)`` sees old == new and does not double-notify.
+        refreshed = await Release.get(release.id)
+        if refreshed is not None:
+            release.channel_statuses = refreshed.channel_statuses
+            release.updated_at = refreshed.updated_at
+        return DistributionStatus(release.channel_statuses.get(channel, new_status))
+
+    # Reflect the win in the in-memory document for the caller's response.
     release.channel_statuses = {**release.channel_statuses, channel: new_status}
-    release.updated_at = utcnow()
-    await release.save()
+    release.updated_at = doc.get("updated_at")
     return current
 
 
@@ -75,8 +96,8 @@ async def create_status_notification(
 ) -> NotificationEvent:
     """Record a notification event for a channel reaching a terminal status."""
     event = NotificationEvent(
-        user_id=PydanticObjectId(release.user_id),
-        release_id=PydanticObjectId(release.id),
+        user_id=release.user_id,
+        release_id=release.id,
         event_type=f"status_{new_status.value}",
         channel=channel,
         payload={"title": release.title, "status": new_status.value},

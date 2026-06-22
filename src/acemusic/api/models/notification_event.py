@@ -24,8 +24,7 @@ class NotificationEvent(Document):
     channel: str
     payload: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
-    # Null until a delivery mechanism (future work) processes it.
-    delivered_at: datetime | None = None
+    delivered_at: datetime | None = None  # set by a future delivery worker
 
     class Settings:
         name = "notification_events"

@@ -106,6 +106,9 @@ class SoundCloudStatusPoller:
         return changed
 
     async def _pending_batch(self) -> list[Release]:
+        # Oldest-polled first (nulls sort first in ascending order, so a
+        # never-polled release leads). Each poll stamps ``soundcloud_last_polled``,
+        # moving the release to the back — so a stuck track can't starve the rest.
         return (
             await Release.find(
                 {
@@ -113,6 +116,7 @@ class SoundCloudStatusPoller:
                     f"channel_statuses.{SOUNDCLOUD_CHANNEL}": {"$in": list(_NON_TERMINAL)},
                 }
             )
+            .sort(("soundcloud_last_polled", 1))
             .limit(self._batch_size)
             .to_list()
         )
@@ -123,14 +127,18 @@ class SoundCloudStatusPoller:
         new_status = status_service.map_soundcloud_state(track)
         current = DistributionStatus(release.channel_statuses.get(SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED))
 
-        release.soundcloud_last_polled = utcnow()
+        changed = False
         if new_status is not None and new_status != current:
-            # validate off: SoundCloud's real state is authoritative. apply saves
-            # the whole document, so the last_polled stamp above is persisted too.
-            await status_service.apply_channel_status(release, SOUNDCLOUD_CHANNEL, new_status, validate=False)
-            if status_service.should_notify(current, new_status):
+            # validate off: SoundCloud's real state is authoritative. apply is
+            # atomic and returns the pre-state; we only "won" if it actually moved.
+            old = await status_service.apply_channel_status(release, SOUNDCLOUD_CHANNEL, new_status, validate=False)
+            changed = old != new_status
+            if changed and status_service.should_notify(old, new_status):
                 await status_service.create_status_notification(release, SOUNDCLOUD_CHANNEL, new_status)
-            return True
 
-        await release.save()
-        return False
+        # Stamp the poll time regardless — atomic so it can't clobber a concurrent
+        # channel update the way a full-document save would.
+        await Release.get_pymongo_collection().update_one(
+            {"_id": release.id}, {"$set": {"soundcloud_last_polled": utcnow()}}
+        )
+        return changed

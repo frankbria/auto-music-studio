@@ -237,8 +237,7 @@ async def soundcloud_upload(
     """Upload an owned clip to the user's linked SoundCloud account."""
     clip = await clip_service.get_owned_clip(body.clip_id, current.user_id)
 
-    # Resolve the optional release association up front so a bad reference fails
-    # before the (potentially large) upload, not after.
+    # Validate the optional release association before the upload, not after.
     release = None
     if body.release_id is not None:
         release = await release_service.get_owned_release(body.release_id, current.user_id)
@@ -287,10 +286,12 @@ async def soundcloud_upload(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="SoundCloud returned no track id.")
 
     if release is not None:
-        # Persist the track id and start the SoundCloud channel at ``submitted`` so
-        # the poller (US-13.6) can advance it as the upload is processed. validate
-        # is off: this is the channel's authoritative initial state.
+        # Persist the track id, then start the SoundCloud channel at ``submitted``
+        # so the poller (US-13.6) can advance it as the upload is processed. The
+        # save persists the track id (apply_channel_status only sets the channel
+        # field atomically); validate is off — this is the channel's initial state.
         release.soundcloud_track_id = str(track_id)
+        await release.save()
         await status_service.apply_channel_status(
             release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
         )

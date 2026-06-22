@@ -228,6 +228,28 @@ class TestVisibility:
         assert resp.json()["visibility"] == "public"
         assert (await Release.get(PydanticObjectId(created["id"]))).visibility.value == "public"
 
+    async def test_public_visibility_publishes_source_clip(self, client, settings) -> None:
+        # The AC requires visibility to update the clip's sharing state — clip
+        # audio access is gated by Clip.is_public.
+        user = await _make_user("ds-vis-clip@example.com")
+        created = await _create_release(client, user, settings)
+        clip_id = PydanticObjectId(created["clip_id"])
+        assert (await Clip.get(clip_id)).is_public is False  # default
+
+        await client.patch(
+            f"{RELEASES_URL}/{created['id']}/visibility",
+            json={"state": "public"},
+            headers=_auth_headers(user, settings),
+        )
+        assert (await Clip.get(clip_id)).is_public is True
+
+        await client.patch(
+            f"{RELEASES_URL}/{created['id']}/visibility",
+            json={"state": "private"},
+            headers=_auth_headers(user, settings),
+        )
+        assert (await Clip.get(clip_id)).is_public is False
+
     async def test_visibility_syncs_soundcloud_sharing(self, client, settings, monkeypatch) -> None:
         user = await _make_user("ds-vis-sc@example.com")
         created = await _create_release(client, user, settings)
