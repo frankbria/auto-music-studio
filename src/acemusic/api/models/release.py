@@ -44,6 +44,10 @@ class Release(Document):
     # Optional metadata.
     album_name: str | None = None
     description: str | None = None
+    # Identifiers (US-13.4), auto-minted on create, overridable via PATCH. ``isrc``
+    # mirrors the source recording's code and is *not* unique here — re-releases of
+    # one recording legitimately share it (uniqueness is enforced on the clip).
+    # ``upc`` identifies this release and is globally unique (partial index below).
     isrc: str | None = None
     upc: str | None = None
     copyright: str | None = None
@@ -60,4 +64,10 @@ class Release(Document):
             # Serves "this user's releases, newest first" from the index.
             IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
             IndexModel([("clip_id", ASCENDING)]),
+            # One UPC per release (US-13.4); partial filter skips releases without one.
+            IndexModel(
+                [("upc", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"upc": {"$type": "string"}},
+            ),
         ]

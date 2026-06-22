@@ -17,11 +17,13 @@ piece (computed live from the clip). Persistence lives in
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, get_settings, require_existing_user
 from ..models import Release, ReleaseStatus
 from ..services import clips as clip_service, releases as release_service
+from ..services.identifiers import validate_isrc_format, validate_upc_check_digit
+from ..settings import ApiSettings
 
 router = APIRouter(prefix="/releases", tags=["releases"], dependencies=[Depends(get_current_user)])
 
@@ -52,11 +54,10 @@ class ReleaseCreate(BaseModel):
     artist: str
     genre: str
     release_date: datetime
-    # Optional metadata.
+    # Optional metadata. ISRC/UPC are not accepted here — they are auto-minted on
+    # create (US-13.4) and only overridable via PATCH.
     album_name: str | None = None
     description: str | None = None
-    isrc: str | None = None
-    upc: str | None = None
     copyright: str | None = None
     is_explicit: bool | None = None
     language: str | None = None
@@ -86,6 +87,23 @@ class ReleaseUpdate(BaseModel):
     is_explicit: bool | None = None
     language: str | None = None
     credits: str | None = None
+
+    @field_validator("isrc")
+    @classmethod
+    def _check_isrc(cls, value: str | None) -> str | None:
+        """Reject a malformed manual ISRC (422); None clears it."""
+        if value is not None and not validate_isrc_format(value):
+            raise ValueError("isrc must match the format CC-XXX-YY-NNNNN (e.g. US-A1B-26-00001)")
+        return value
+
+    @field_validator("upc")
+    @classmethod
+    def _check_upc(cls, value: str | None) -> str | None:
+        """Reject a non-EAN-13 manual UPC (422); None clears it."""
+        # validate_upc_check_digit already enforces the 13-digit shape.
+        if value is not None and not validate_upc_check_digit(value):
+            raise ValueError("upc must be a valid 13-digit EAN-13 with a correct check digit")
+        return value
 
     @model_validator(mode="after")
     def _reject_clearing_required(self) -> "ReleaseUpdate":
@@ -153,9 +171,10 @@ async def _response_for(release: Release) -> ReleaseResponse:
 async def create_release(
     body: ReleaseCreate,
     current: CurrentUser = Depends(require_existing_user),
+    settings: ApiSettings = Depends(get_settings),
 ) -> ReleaseResponse:
     metadata = body.model_dump(exclude={"clip_id"})
-    release = await release_service.create_release(current.user_id, body.clip_id, metadata)
+    release = await release_service.create_release(current.user_id, body.clip_id, metadata, settings)
     return await _response_for(release)
 
 

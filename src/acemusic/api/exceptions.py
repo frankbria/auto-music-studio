@@ -16,3 +16,15 @@ class EmailAlreadyRegisteredError(Exception):
     The User model holds a single OAuth identity and email is unique-indexed, so a
     second provider reporting an already-registered address cannot be linked yet.
     """
+
+
+class DuplicateIdentifierError(Exception):
+    """A release/clip identifier (ISRC or UPC) is already in use (US-13.4).
+
+    Raised by the release service when a unique-index write collides; ``field``
+    names the offending identifier so the HTTP layer can return a clear 409.
+    """
+
+    def __init__(self, field: str) -> None:
+        self.field = field
+        super().__init__(f"{field} already in use")
