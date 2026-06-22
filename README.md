@@ -240,6 +240,17 @@ Account-linking is distinct from login: it connects an already-authenticated use
 
 Because LANDR, DistroKid, and TuneCore have no public submission API, the platform prepares the package and the user submits manually. Validation reads the source clip (audio at `clip.file_path`, cover at `clip.artwork_path`) and checks audio presence/format (WAV or FLAC), cover-art presence and ≥3000×3000 resolution, required metadata, and ISRC/UPC. When everything passes, a target-formatted zip (`audio.* + cover.* + metadata.json + README.txt`) is uploaded to storage and its URL returned. An unknown target is rejected with `422`; releases are owner-scoped (`404`). `submit` is the user's attestation that they completed the upload on the target platform, and a release can be confirmed to more than one target.
 
+### Distribution status tracking (US-13.6)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/releases` | Each release in the listing now carries `channel_statuses` (per-channel status map) and `visibility` |
+| `GET /api/v1/releases/{id}/status` | Per-channel status breakdown: `channels` (`[{channel, status}]`), `visibility`, and `soundcloud_last_polled` |
+| `PATCH /api/v1/releases/{id}/channels/{channel}/status` | Manually set a **guided** channel's status (`landr`/`distrokid`/`tunecore`); `soundcloud` or an unknown channel → `400`, an out-of-sequence step → `409` |
+| `PATCH /api/v1/releases/{id}/visibility` | Set release visibility (`private`/`unlisted`/`public`); syncs the source clip's `is_public` and, if uploaded, the SoundCloud track's sharing |
+
+Each channel tracks its own status through the sequence `draft → ready → submitted → in_review → live | rejected` (no skipping — enforced by an atomic, guarded write). SoundCloud is driven automatically: `POST /distribution/soundcloud/upload` accepts an optional `release_id` to record the track id and start the channel at `submitted`, and a background `SoundCloudStatusPoller` advances it from the live track state (`processing`→`in_review`, `finished`+`public`→`live`, `failed`→`rejected`). Reaching `live`/`rejected` records a `NotificationEvent` (delivery is out of scope). The poller is gated by `ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED` (default on) with `ACEMUSIC_API_SOUNDCLOUD_POLL_INTERVAL` (default 60s, floor 5s) and `ACEMUSIC_API_SOUNDCLOUD_POLL_BATCH_SIZE` (default 20); it orders by `soundcloud_last_polled` so no release starves. `unlisted` maps to SoundCloud `private` (SoundCloud has no unlisted state).
+
 ### Presets
 
 | Endpoint | Purpose |
