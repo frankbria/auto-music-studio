@@ -361,25 +361,27 @@ def export_midi(
     return written
 
 
-def build_daw_bundle(
+def assemble_daw_bundle(
     clip: Clip,
     *,
+    full_mix_path: Path | str,
+    stem_paths: dict[str, Path | str],
+    midi_paths: dict[str, Path | str],
     output_path: Path,
-    stems_client_factory: Callable[[], StemsClient] = StemsClient,
-    midi_client_factory: Callable[[], MidiClient] = MidiClient,
-    reuse_existing: bool = True,
 ) -> Path:
-    """Build a DAW-importable ZIP bundle for ``clip`` at ``output_path``.
+    """Assemble a DAW bundle ZIP from already-resolved local files.
 
-    Resolves (reusing existing child clips, else generating) the four stems and
-    four MIDI files, assembles the canonical directory tree, writes
-    ``project.json`` and a placeholder ``artwork.jpg``, then packages everything
-    into a ZIP rooted at ``<Slug>_Export/``.
+    The resolution-agnostic half of :func:`build_daw_bundle`: validate the four
+    stems and four MIDI files, lay out the ``<Slug>_Export/`` tree, write
+    ``project.json`` and a placeholder ``artwork.jpg``, then ZIP it. ``clip`` is
+    read only for metadata (``title``, ``id``, ``bpm``, ``key``, ``duration``,
+    ``lyrics``, ``style_tags``, ``model``, ``seed``), so both the CLI dataclass
+    and the API ``Clip`` document work as the source of metadata. ``stem_paths``
+    is keyed by ``CANONICAL_STEMS`` and ``midi_paths`` by ``MIDI_OUTPUT_LABELS``.
 
-    Raises ``ValueError`` if resolution yields an incomplete set of stems or MIDI
-    files, rather than shipping a partial bundle. ``time_signature`` is always
-    null because clip records do not persist meter (deferred to US-4.2); bundled
-    MIDI therefore uses ``save_midi``'s default 4/4 map.
+    Raises ``ValueError`` if either set is incomplete, rather than shipping a
+    partial bundle. ``time_signature`` is always null because clip records do not
+    persist meter (deferred to US-4.2); bundled MIDI uses ``save_midi``'s 4/4 map.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -395,9 +397,6 @@ def build_daw_bundle(
         audio_dir.mkdir(parents=True, exist_ok=True)
         midi_dir.mkdir(parents=True, exist_ok=True)
 
-        stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
-        midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
-
         missing_stems = [s for s in CANONICAL_STEMS if not (stem_paths.get(s) and Path(stem_paths[s]).exists())]
         missing_midi = [m for m in MIDI_OUTPUT_LABELS if not (midi_paths.get(m) and Path(midi_paths[m]).exists())]
         if missing_stems or missing_midi:
@@ -411,7 +410,7 @@ def build_daw_bundle(
                 "Re-run stem separation / MIDI extraction or check the source clip."
             )
 
-        _copy_as_wav(clip.file_path, audio_dir / "full_mix.wav")
+        _copy_as_wav(full_mix_path, audio_dir / "full_mix.wav")
 
         stem_refs: list[StemReference] = []
         for label in CANONICAL_STEMS:
@@ -448,3 +447,28 @@ def build_daw_bundle(
                     zf.write(path, arcname)
 
     return output_path
+
+
+def build_daw_bundle(
+    clip: Clip,
+    *,
+    output_path: Path,
+    stems_client_factory: Callable[[], StemsClient] = StemsClient,
+    midi_client_factory: Callable[[], MidiClient] = MidiClient,
+    reuse_existing: bool = True,
+) -> Path:
+    """Build a DAW-importable ZIP bundle for ``clip`` at ``output_path``.
+
+    Resolves (reusing existing child clips, else generating) the four stems and
+    four MIDI files, then assembles the bundle via :func:`assemble_daw_bundle`.
+    Raises ``ValueError`` if resolution yields an incomplete set.
+    """
+    stem_paths = _resolve_stems(clip, stems_client_factory, reuse_existing)
+    midi_paths = _resolve_midi(clip, midi_client_factory, reuse_existing)
+    return assemble_daw_bundle(
+        clip,
+        full_mix_path=clip.file_path,
+        stem_paths=stem_paths,
+        midi_paths=midi_paths,
+        output_path=output_path,
+    )

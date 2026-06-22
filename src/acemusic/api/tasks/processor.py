@@ -39,6 +39,7 @@ from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
 from .artwork import ARTWORK_JOB_HANDLERS
 from .common import JobProcessingError
+from .daw_export import DAW_EXPORT_JOB_HANDLERS
 from .editing import EDIT_JOB_HANDLERS
 from .export import EXPORT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
@@ -148,6 +149,7 @@ class JobProcessor:
             **EDIT_JOB_HANDLERS,
             **EXTRACTION_JOB_HANDLERS,
             **EXPORT_JOB_HANDLERS,
+            **DAW_EXPORT_JOB_HANDLERS,
         }.items():
             self._handlers[job_type] = partial(self._run_storage_handler, storage_handler)
         # Iterative generation handlers (US-10.3) are generative: they need the
