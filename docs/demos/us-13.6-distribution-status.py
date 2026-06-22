@@ -82,21 +82,15 @@ async def main() -> None:
 
             # ---- AC5: transitions follow the valid sequence ------------------
             hdr("AC5: status transitions follow the valid sequence (no skipping)")
-            skip = await http.patch(
-                f"{RELEASES}/{rid}/channels/landr/status", json={"status": "live"}, headers=auth
-            )
+            skip = await http.patch(f"{RELEASES}/{rid}/channels/landr/status", json={"status": "live"}, headers=auth)
             print(f"draft → live (skip) ......... HTTP {skip.status_code}: {skip.json()['detail']}")
-            ok = await http.patch(
-                f"{RELEASES}/{rid}/channels/landr/status", json={"status": "ready"}, headers=auth
-            )
+            ok = await http.patch(f"{RELEASES}/{rid}/channels/landr/status", json={"status": "ready"}, headers=auth)
             print(f"draft → ready (valid step) .. HTTP {ok.status_code}: {ok.json()}")
 
             # ---- AC3: manual guided updates are stored and visible ------------
             hdr("AC3: manual status updates for guided channels are stored and visible")
             for step in ("submitted", "in_review"):
-                r = await http.patch(
-                    f"{RELEASES}/{rid}/channels/landr/status", json={"status": step}, headers=auth
-                )
+                r = await http.patch(f"{RELEASES}/{rid}/channels/landr/status", json={"status": step}, headers=auth)
                 print(f"landr → {step:10} HTTP {r.status_code}: {r.json()}")
             # SoundCloud is automated → manual update rejected.
             sc_manual = await http.patch(
@@ -142,6 +136,7 @@ async def main() -> None:
 
             # Two poll cycles with real SoundCloud-shaped payloads.
             for state in ({"state": "processing"}, {"state": "finished", "sharing": "public"}):
+
                 async def _fetch(_t, _id, _state=state):
                     return _state
 
