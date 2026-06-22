@@ -31,6 +31,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.daw_export import export_storage_path
 from acemusic.api.settings import ApiSettings
 from acemusic.daw_export import CANONICAL_STEMS, assemble_daw_bundle
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS
@@ -95,10 +96,11 @@ class TestAssembleBundle:
             p.write_bytes(_midi_bytes(label, bpm=128))
             midi_paths[label] = p
 
+        full_mix = tmp_path / "full_mix.wav"
+        full_mix.write_bytes(_tone_bytes())
+
         out = tmp_path / "bundle.zip"
-        assemble_daw_bundle(
-            clip, full_mix_path=stem_paths["vocals"], stem_paths=stem_paths, midi_paths=midi_paths, output_path=out
-        )
+        assemble_daw_bundle(clip, full_mix_path=full_mix, stem_paths=stem_paths, midi_paths=midi_paths, output_path=out)
 
         with zipfile.ZipFile(out) as zf:
             names = set(zf.namelist())
@@ -339,7 +341,7 @@ class TestDeleteCleansExport:
 
         user, workspace, clip = await _user_with_clip("daw-del@example.com")
         storage = get_storage_backend()
-        export_key = f"{user.id}/{workspace.id}/exports/{clip.id}_daw.zip"
+        export_key = export_storage_path(user.id, workspace.id, clip.id)
         storage.upload(export_key, b"PK-bundle")
 
         await clip_service.delete_clip(str(clip.id), str(user.id))
@@ -362,7 +364,7 @@ class TestDownload:
 
     async def test_get_returns_zip_when_present(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-get-ok@example.com", title="Cool Track")
-        export_path = f"{user.id}/{workspace.id}/exports/{clip.id}_daw.zip"
+        export_path = export_storage_path(user.id, workspace.id, clip.id)
         get_storage_backend().upload(export_path, b"PK\x03\x04 zip-bytes")
 
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(user, settings))
@@ -373,14 +375,14 @@ class TestDownload:
 
     async def test_other_users_private_clip_returns_403(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-priv-owner@example.com")
-        get_storage_backend().upload(f"{user.id}/{workspace.id}/exports/{clip.id}_daw.zip", b"PK")
+        get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK")
         other = await _make_user("daw-priv-other@example.com")
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 403
 
     async def test_public_clip_export_downloadable_by_other_user(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-pub-owner@example.com", is_public=True)
-        get_storage_backend().upload(f"{user.id}/{workspace.id}/exports/{clip.id}_daw.zip", b"PK-public")
+        get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK-public")
         other = await _make_user("daw-pub-other@example.com")
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 200

@@ -32,7 +32,7 @@ from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
 from ..services.clips import native_format
-from ..services.daw_export import DAW_EXPORT_JOB_TYPE
+from ..services.daw_export import DAW_EXPORT_JOB_TYPE, export_storage_path
 from ..services.extraction import STEMS_JOB_TYPE
 from .common import download_clip, load_clip, load_source_clip
 from .extraction import process_midi_job, process_stems_job
@@ -40,10 +40,15 @@ from .extraction import process_midi_job, process_stems_job
 
 async def _stem_children(clip_id: object) -> dict[str, Clip]:
     """The source's stem child clips, keyed by stem label (newest per label)."""
-    children = await Clip.find(
-        In(Clip.parent_clip_ids, [clip_id]),
-        Clip.generation_mode == STEMS_JOB_TYPE,
-    ).to_list()
+    children = (
+        await Clip.find(
+            In(Clip.parent_clip_ids, [clip_id]),
+            Clip.generation_mode == STEMS_JOB_TYPE,
+        )
+        # Newest-first so that after a partial re-extraction left duplicate
+        # children for a label, the freshest one wins deterministically.
+        .sort(("created_at", -1), ("_id", -1)).to_list()
+    )
     by_label: dict[str, Clip] = {}
     for child in children:
         if child.title in STEM_LABELS and child.title not in by_label:
@@ -104,7 +109,7 @@ async def process_daw_export_job(job: Job, storage: StorageBackend) -> dict[str,
         )
         data = await asyncio.to_thread(zip_local.read_bytes)
 
-    export_path = f"{job.user_id}/{job.workspace_id}/exports/{source.id}_daw.zip"
+    export_path = export_storage_path(job.user_id, job.workspace_id, source.id)
     await asyncio.to_thread(storage.upload, export_path, data)
     return {"export_path": export_path}
 

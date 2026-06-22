@@ -13,6 +13,16 @@ from .jobs import create_job
 DAW_EXPORT_JOB_TYPE = "daw_export"
 
 
+def export_storage_path(user_id, workspace_id, clip_id) -> str:
+    """Canonical storage key for a clip's DAW-export ZIP.
+
+    The single source of truth shared by the worker (which writes it), the GET
+    endpoint (which serves it), and clip deletion (which removes it) — so the
+    three can never drift and silently orphan a bundle.
+    """
+    return f"{user_id}/{workspace_id}/exports/{clip_id}_daw.zip"
+
+
 async def create_daw_export_job(
     *,
     user_id: PydanticObjectId,

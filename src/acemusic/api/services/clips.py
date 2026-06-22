@@ -23,7 +23,7 @@ from fastapi import HTTPException, status
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip
-from . import workspaces as workspace_service
+from . import daw_export as daw_export_service, workspaces as workspace_service
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ async def delete_clip(clip_id: str, user_id: str) -> None:
     # DAW-export bundle (US-14.1): the predictable per-clip ZIP the export worker
     # writes under its own key, orphaned otherwise. Best-effort and idempotent
     # (a never-exported clip has no object to remove), like the MIDI cleanup.
-    export_key = f"{clip.user_id}/{clip.workspace_id}/exports/{clip.id}_daw.zip"
+    export_key = daw_export_service.export_storage_path(clip.user_id, clip.workspace_id, clip.id)
     try:
         await asyncio.to_thread(storage.delete, export_key)
     except Exception:  # pragma: no cover - cleanup is best-effort

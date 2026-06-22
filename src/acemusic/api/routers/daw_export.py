@@ -41,7 +41,7 @@ class DawExportJobResponse(BaseModel):
 
 def _export_path(clip: Clip) -> str:
     """Predictable per-clip storage key the worker writes and the GET serves."""
-    return f"{clip.user_id}/{clip.workspace_id}/exports/{clip.id}_daw.zip"
+    return daw_export_service.export_storage_path(clip.user_id, clip.workspace_id, clip.id)
 
 
 @router.post("/{clip_id}/export/daw", response_model=DawExportJobResponse, status_code=status.HTTP_202_ACCEPTED)
