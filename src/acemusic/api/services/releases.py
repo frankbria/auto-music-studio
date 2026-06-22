@@ -205,3 +205,34 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     except DuplicateKeyError as exc:  # manual UPC already used by another release
         raise DuplicateIdentifierError(_duplicate_field(exc)) from exc
     return release
+
+
+# A submission can only be confirmed once the package is assembled, and re-confirmed
+# for a further target after it has gone out — never from draft or a terminal state.
+_CONFIRMABLE_STATUSES = {ReleaseStatus.READY, ReleaseStatus.SUBMITTED}
+
+
+async def confirm_submission(release_id: str, user_id: str, target: str) -> Release:
+    """Mark an owned release submitted to ``target`` (US-13.5).
+
+    Transitions ``ready``/``submitted`` → ``submitted`` and records ``target`` in
+    ``submitted_channels`` (deduped, so re-confirming the same target is a no-op).
+    Raises 404 if not owned, 409 from ``draft`` or a terminal state.
+    """
+    release = await get_owned_release(release_id, user_id)
+    if release.status not in _CONFIRMABLE_STATUSES:
+        raise _state_error(f"Release cannot be submitted from status {release.status.value!r}")
+    # Atomic $addToSet + guarded $set so concurrent confirmations of different
+    # targets can't lose a channel via read-modify-write (same care the ISRC/UPC
+    # claims take). The status filter re-checks the transition at write time.
+    confirmable = [s.value for s in _CONFIRMABLE_STATUSES]
+    doc = await Release.get_pymongo_collection().find_one_and_update(
+        {"_id": release.id, "status": {"$in": confirmable}},
+        {
+            "$addToSet": {"submitted_channels": target},
+            "$set": {"status": ReleaseStatus.SUBMITTED.value, "updated_at": utcnow()},
+        },
+    )
+    if doc is None:  # a concurrent transition moved it out of a confirmable state
+        raise _state_error("Release is no longer in a submittable state")
+    return await get_owned_release(release_id, user_id)

@@ -21,7 +21,8 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user, get_settings, require_existing_user
 from ..models import Release, ReleaseStatus
-from ..services import clips as clip_service, releases as release_service
+from ..services import clips as clip_service, distribution as distribution_service, releases as release_service
+from ..services.distribution import ChecklistItem, DistributionTarget
 from ..services.identifiers import validate_isrc_format, validate_upc_check_digit
 from ..settings import ApiSettings
 
@@ -122,6 +123,7 @@ class ReleaseResponse(BaseModel):
     clip_id: str
     status: ReleaseStatus
     warnings: list[str]
+    submitted_channels: list[str]
     created_at: datetime
     updated_at: datetime | None
 
@@ -145,10 +147,21 @@ class ReleaseResponse(BaseModel):
             clip_id=str(release.clip_id),
             status=release.status,
             warnings=warnings,
+            submitted_channels=release.submitted_channels,
             created_at=release.created_at,
             updated_at=release.updated_at,
             **{field: getattr(release, field) for field in _METADATA_FIELDS},
         )
+
+
+class PrepareResponse(BaseModel):
+    release_id: str
+    target: DistributionTarget
+    checklist: list[ChecklistItem]
+    all_checks_passed: bool
+    # Null until every checklist item passes; the package isn't bundled before then.
+    bundle_url: str | None
+    instructions: str
 
 
 class ReleaseListResponse(BaseModel):
@@ -207,4 +220,38 @@ async def update_release(
         release = await release_service.get_owned_release(release_id, current.user_id)
     else:
         release = await release_service.update_release(release_id, current.user_id, updates)
+    return await _response_for(release)
+
+
+@router.post("/{release_id}/prepare/{target}", response_model=PrepareResponse)
+async def prepare_release(
+    release_id: str,
+    target: DistributionTarget,
+    current: CurrentUser = Depends(require_existing_user),
+) -> PrepareResponse:
+    """Validate a release for a distribution target and, if it passes, build a bundle.
+
+    Always returns the checklist; ``bundle_url`` is null when any item fails. An
+    unknown target is rejected by FastAPI's enum path validation (422).
+    """
+    release = await release_service.get_owned_release(release_id, current.user_id)
+    checklist, bundle_url = await distribution_service.prepare_release(release, target)
+    return PrepareResponse(
+        release_id=str(release.id),
+        target=target,
+        checklist=checklist,
+        all_checks_passed=distribution_service.is_release_ready(checklist),
+        bundle_url=bundle_url,
+        instructions=distribution_service.instructions_for(target),
+    )
+
+
+@router.post("/{release_id}/submit/{target}", response_model=ReleaseResponse)
+async def submit_release(
+    release_id: str,
+    target: DistributionTarget,
+    current: CurrentUser = Depends(require_existing_user),
+) -> ReleaseResponse:
+    """Confirm a manual submission to ``target`` — moves the release to ``submitted``."""
+    release = await release_service.confirm_submission(release_id, current.user_id, target.value)
     return await _response_for(release)
