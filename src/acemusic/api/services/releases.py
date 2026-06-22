@@ -227,7 +227,9 @@ async def confirm_submission(release_id: str, user_id: str, target: str) -> Rele
     # claims take). The status filter re-checks the transition at write time.
     confirmable = [s.value for s in _CONFIRMABLE_STATUSES]
     doc = await Release.get_pymongo_collection().find_one_and_update(
-        {"_id": release.id, "status": {"$in": confirmable}},
+        # user_id in the filter too: closes the TOCTOU gap between the ownership
+        # read above and this write (the unique-claim helpers filter the same way).
+        {"_id": release.id, "user_id": release.user_id, "status": {"$in": confirmable}},
         {
             "$addToSet": {"submitted_channels": target},
             "$set": {"status": ReleaseStatus.SUBMITTED.value, "updated_at": utcnow()},

@@ -274,7 +274,8 @@ async def prepare_release(release: Release, target: DistributionTarget) -> tuple
     if not is_release_ready(validation.checklist):
         return validation.checklist, None
 
-    data = _build_zip(validation, release, target)
+    # _build_zip does synchronous tempfile/zip I/O — keep it off the event loop.
+    data = await asyncio.to_thread(_build_zip, validation, release, target)
     key = _bundle_key(release, target)
     storage = get_storage_backend()
     # upload() overwrites the key, so re-preparing a target replaces its bundle
