@@ -26,7 +26,13 @@ from acemusic.storage import StorageBackend, get_storage_backend
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import Clip, SoundCloudConnection
 from ..models.common import utcnow
-from ..services import clips as clip_service, soundcloud as sc
+from ..models.distribution import SOUNDCLOUD_CHANNEL, DistributionStatus
+from ..services import (
+    clips as clip_service,
+    distribution_status as status_service,
+    releases as release_service,
+    soundcloud as sc,
+)
 from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -69,6 +75,9 @@ class UploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     clip_id: str
+    # Optional: associate the upload with a release (US-13.6) so the SoundCloud
+    # track id is persisted and the release's soundcloud channel begins polling.
+    release_id: str | None = None
     metadata_overrides: MetadataOverrides = Field(default_factory=MetadataOverrides)
 
 
@@ -228,6 +237,16 @@ async def soundcloud_upload(
     """Upload an owned clip to the user's linked SoundCloud account."""
     clip = await clip_service.get_owned_clip(body.clip_id, current.user_id)
 
+    # Validate the optional release association before the upload, not after.
+    release = None
+    if body.release_id is not None:
+        release = await release_service.get_owned_release(body.release_id, current.user_id)
+        if str(release.clip_id) != str(clip.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="release_id does not reference the uploaded clip.",
+            )
+
     # Validate the SoundCloud link first so the common "not connected" / revoked
     # case fast-fails before paying for a (potentially large) storage download.
     try:
@@ -265,6 +284,18 @@ async def soundcloud_upload(
     track_id = track.get("id")
     if track_id is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="SoundCloud returned no track id.")
+
+    if release is not None:
+        # Persist the track id, then start the SoundCloud channel at ``submitted``
+        # so the poller (US-13.6) can advance it as the upload is processed. The
+        # save persists the track id (apply_channel_status only sets the channel
+        # field atomically); validate is off — this is the channel's initial state.
+        release.soundcloud_track_id = str(track_id)
+        await release.save()
+        await status_service.apply_channel_status(
+            release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
+        )
+
     return UploadResponse(track_id=str(track_id), permalink_url=track.get("permalink_url"))
 
 

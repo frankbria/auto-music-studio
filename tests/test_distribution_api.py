@@ -16,7 +16,7 @@ from pymongo.errors import DuplicateKeyError
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, SoundCloudConnection
+from acemusic.api.models import Clip, Release, SoundCloudConnection
 from acemusic.api.routers import distribution as dist
 from acemusic.api.services import soundcloud as sc, users as user_service
 from acemusic.api.settings import ApiSettings
@@ -475,3 +475,75 @@ class TestRelink:
         assert result.access_token == "mine-at"
         assert result.refresh_token == "mine-rt"
         assert await SoundCloudConnection.find(SoundCloudConnection.user_id == user.id).count() == 1
+
+
+# --- release association (US-13.6: persist track id + start SoundCloud channel) --
+async def _make_release(user, clip) -> Release:
+    release = Release(
+        clip_id=clip.id,
+        user_id=user.id,
+        title="Tune",
+        artist="DJ",
+        genre="house",
+        release_date=datetime.now(timezone.utc),
+    )
+    await release.insert()
+    return release
+
+
+class TestUploadReleaseAssociation:
+    async def test_upload_with_release_id_records_track_and_starts_channel(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        user = await _make_user("up-assoc@example.com")
+        clip = await _make_clip(user, b"RIFFaudio")
+        release = await _make_release(user, clip)
+        await _make_connection(user)
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            return {"id": 555, "permalink_url": "https://snd.sc/y"}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+
+        resp = await client.post(
+            _url("/soundcloud/upload"),
+            headers=_auth_headers(user, settings),
+            json={"clip_id": str(clip.id), "release_id": str(release.id)},
+        )
+        assert resp.status_code == 200
+        stored = await Release.get(release.id)
+        assert stored.soundcloud_track_id == "555"
+        assert stored.channel_statuses["soundcloud"].value == "submitted"
+
+    async def test_release_id_mismatched_clip_returns_400(self, client, settings, local_storage, monkeypatch) -> None:
+        user = await _make_user("up-assoc-mismatch@example.com")
+        clip = await _make_clip(user, b"RIFFaudio")
+        other_clip = await _make_clip(user, b"RIFFaudio2")
+        release = await _make_release(user, other_clip)  # release of a different clip
+        await _make_connection(user)
+
+        async def _upload(*a, **k):  # never reached
+            return {"id": 1}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+
+        resp = await client.post(
+            _url("/soundcloud/upload"),
+            headers=_auth_headers(user, settings),
+            json={"clip_id": str(clip.id), "release_id": str(release.id)},
+        )
+        assert resp.status_code == 400
+
+    async def test_other_users_release_returns_404(self, client, settings, local_storage) -> None:
+        user = await _make_user("up-assoc-owner@example.com")
+        intruder = await _make_user("up-assoc-intruder@example.com")
+        clip = await _make_clip(user, b"RIFFaudio")
+        release = await _make_release(user, clip)
+        await _make_connection(intruder)
+        resp = await client.post(
+            _url("/soundcloud/upload"),
+            headers=_auth_headers(intruder, settings),
+            json={"clip_id": str(clip.id), "release_id": str(release.id)},
+        )
+        # intruder doesn't own the clip → 404 before the release check even matters
+        assert resp.status_code == 404

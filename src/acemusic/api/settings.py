@@ -90,6 +90,16 @@ class ApiSettings(BaseSettings):
     job_poll_timeout: float = Field(default=600.0, gt=0)
     job_processor_enabled: bool = Field(default=True)
 
+    # SoundCloud distribution-status poller (US-13.6). A background task that keeps
+    # the SoundCloud channel's status in sync with the real track state.
+    # ``soundcloud_poll_interval`` is the gap between cycles; ``soundcloud_poll_batch_size``
+    # caps how many pending releases each cycle checks. Disable it (or run a
+    # poller-less API) via ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED=false.
+    soundcloud_poller_enabled: bool = Field(default=True)
+    # Floor at 5s so a misconfiguration can't hammer the SoundCloud API.
+    soundcloud_poll_interval: float = Field(default=60.0, ge=5)
+    soundcloud_poll_batch_size: int = Field(default=20, ge=1)
+
     # Compute routing (US-11.1). ``compute_preference`` selects where a generation
     # runs when the request does not pin a ``compute_target``: ``*_first`` tries
     # the named target then falls back to the other; ``*_only`` never falls back

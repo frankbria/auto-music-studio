@@ -186,6 +186,39 @@ async def test_upload_track_omits_absent_optional_fields() -> None:
     assert b"track[artwork_data]" not in body
 
 
+@respx.mock
+async def test_get_track_status_uses_oauth_header() -> None:
+    track_url = f"{sc.SOUNDCLOUD_UPLOAD_URL}/555"
+    route = respx.get(track_url).mock(
+        return_value=httpx.Response(200, json={"id": 555, "state": "finished", "sharing": "public"})
+    )
+    track = await sc.get_track_status("tok", "555")
+    assert track["state"] == "finished"
+    assert route.calls.last.request.headers["Authorization"] == "OAuth tok"
+
+
+@respx.mock
+async def test_get_track_status_wraps_http_error() -> None:
+    respx.get(f"{sc.SOUNDCLOUD_UPLOAD_URL}/555").mock(return_value=httpx.Response(404))
+    with pytest.raises(sc.SoundCloudError):
+        await sc.get_track_status("tok", "555")
+
+
+@respx.mock
+async def test_update_track_sharing_puts_sharing_field() -> None:
+    track_url = f"{sc.SOUNDCLOUD_UPLOAD_URL}/555"
+    route = respx.put(track_url).mock(return_value=httpx.Response(200, json={"id": 555, "sharing": "private"}))
+    await sc.update_track_sharing("tok", "555", "private")
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "OAuth tok"
+    assert b"track%5Bsharing%5D=private" in request.content  # urlencoded track[sharing]=private
+
+
+async def test_update_track_sharing_rejects_invalid_value() -> None:
+    with pytest.raises(sc.SoundCloudError):
+        await sc.update_track_sharing("tok", "555", "secret")
+
+
 class TestTokenExpiry:
     def test_uses_expires_in_seconds(self) -> None:
         from datetime import datetime, timezone

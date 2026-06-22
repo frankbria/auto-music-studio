@@ -44,6 +44,7 @@ from .settings import ApiSettings
 from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
 from .tasks.processor import JobProcessor
+from .tasks.soundcloud_poller import SoundCloudStatusPoller
 
 API_V1_PREFIX = "/api/v1"
 
@@ -89,6 +90,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         # try/finally wraps processor start too, so a start() failure still closes
         # the DB client rather than leaking it.
         processor: JobProcessor | None = None
+        poller: SoundCloudStatusPoller | None = None
         try:
             if settings.job_processor_enabled:
                 # Wire the RunPod backend (US-11.2) only when configured, so a
@@ -121,8 +123,22 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
                 await processor.start()
             app_.state.job_processor = processor
+
+            # SoundCloud distribution-status poller (US-13.6): keeps the SoundCloud
+            # channel status in sync with the real track state. Independent of the
+            # job processor and gated by its own flag.
+            if settings.soundcloud_poller_enabled:
+                poller = SoundCloudStatusPoller(
+                    settings,
+                    poll_interval=settings.soundcloud_poll_interval,
+                    batch_size=settings.soundcloud_poll_batch_size,
+                )
+                await poller.start()
+            app_.state.soundcloud_poller = poller
             yield
         finally:
+            if poller is not None:
+                await poller.stop()
             if processor is not None:
                 await processor.stop()
             await database.close_db(client)
