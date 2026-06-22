@@ -13,7 +13,7 @@ from .jobs import create_job
 DAW_EXPORT_JOB_TYPE = "daw_export"
 
 
-def export_storage_path(user_id, workspace_id, clip_id) -> str:
+def export_storage_path(user_id: PydanticObjectId, workspace_id: PydanticObjectId, clip_id: PydanticObjectId) -> str:
     """Canonical storage key for a clip's DAW-export ZIP.
 
     The single source of truth shared by the worker (which writes it), the GET
