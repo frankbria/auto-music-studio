@@ -316,6 +316,37 @@ class TestEnqueue:
         assert job.workspace_id == workspace.id
         assert job.input_params == {"clip_id": str(clip.id)}
 
+    @pytest.mark.parametrize("fmt", ["mp3", "flac"])
+    async def test_non_wav_clip_returns_422(self, client, settings, fmt: str) -> None:
+        # The server has no ffmpeg to transcode the full mix to wav, so a
+        # compressed source is rejected up front rather than failing the job.
+        user, _, clip = await _user_with_clip(f"daw-fmt-{fmt}@example.com", fmt=fmt)
+        resp = await client.post(_daw_url(clip.id), headers=_auth_headers(user, settings))
+        assert resp.status_code == 422
+        assert fmt in resp.json()["detail"]
+        assert await Job.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Clip deletion removes the orphan-able export bundle (US-14.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestDeleteCleansExport:
+    async def test_deleting_clip_removes_its_daw_export(self, settings, local_storage) -> None:
+        from acemusic.api.services import clips as clip_service
+
+        user, workspace, clip = await _user_with_clip("daw-del@example.com")
+        storage = get_storage_backend()
+        export_key = f"{user.id}/{workspace.id}/exports/{clip.id}_daw.zip"
+        storage.upload(export_key, b"PK-bundle")
+
+        await clip_service.delete_clip(str(clip.id), str(user.id))
+
+        with pytest.raises(FileNotFoundError):
+            storage.download(export_key)
+
 
 # ---------------------------------------------------------------------------
 # GET — 404 until built; visibility rules

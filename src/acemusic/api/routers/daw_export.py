@@ -51,6 +51,16 @@ async def create_daw_export(
 ) -> DawExportJobResponse:
     """Enqueue a DAW bundle build for ``clip_id``; poll the job, then GET the ZIP."""
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
+    # The bundle's full_mix (and any on-demand stem/MIDI extraction) round-trips
+    # through wav; the server has no ffmpeg to transcode a compressed source, so
+    # gate non-wav here with a clear 422 instead of a doomed queued job (mirrors
+    # the editing and stems endpoints).
+    fmt = clip_service.native_format(clip)
+    if fmt != "wav":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"unsupported format {fmt!r} for DAW export; currently only wav is supported.",
+        )
     job = await daw_export_service.create_daw_export_job(
         user_id=clip.user_id,
         workspace_id=clip.workspace_id,

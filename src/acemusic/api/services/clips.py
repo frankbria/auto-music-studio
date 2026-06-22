@@ -155,10 +155,11 @@ async def update_clip_title(clip_id: str, user_id: str, title: str) -> Clip:
 async def delete_clip(clip_id: str, user_id: str) -> None:
     """Delete the clip record and its stored audio (idempotent on the object).
 
-    Also removes any extracted MIDI objects (US-10.2 ``midi_paths``) and cover-art
+    Also removes any extracted MIDI objects (US-10.2 ``midi_paths``), cover-art
     artifacts (US-13.1: the selected ``artwork_path`` plus every generated
-    ``ArtworkOption`` and its image), which live under their own storage keys
-    rather than ``file_path`` and would otherwise be orphaned with the parent clip.
+    ``ArtworkOption`` and its image), and the DAW-export bundle (US-14.1), which
+    live under their own storage keys rather than ``file_path`` and would
+    otherwise be orphaned with the parent clip.
     """
     clip = await get_owned_clip(clip_id, user_id)
     storage = get_storage_backend()
@@ -175,6 +176,14 @@ async def delete_clip(clip_id: str, user_id: str) -> None:
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.warning("Failed to delete MIDI object %s while deleting clip %s", midi_key, clip.id)
     await _delete_artwork(storage, clip)
+    # DAW-export bundle (US-14.1): the predictable per-clip ZIP the export worker
+    # writes under its own key, orphaned otherwise. Best-effort and idempotent
+    # (a never-exported clip has no object to remove), like the MIDI cleanup.
+    export_key = f"{clip.user_id}/{clip.workspace_id}/exports/{clip.id}_daw.zip"
+    try:
+        await asyncio.to_thread(storage.delete, export_key)
+    except Exception:  # pragma: no cover - cleanup is best-effort
+        logger.warning("Failed to delete DAW export object %s while deleting clip %s", export_key, clip.id)
     await clip.delete()
 
 
