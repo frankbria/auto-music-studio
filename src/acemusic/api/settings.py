@@ -96,7 +96,8 @@ class ApiSettings(BaseSettings):
     # caps how many pending releases each cycle checks. Disable it (or run a
     # poller-less API) via ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED=false.
     soundcloud_poller_enabled: bool = Field(default=True)
-    soundcloud_poll_interval: float = Field(default=60.0, gt=0)
+    # Floor at 5s so a misconfiguration can't hammer the SoundCloud API.
+    soundcloud_poll_interval: float = Field(default=60.0, ge=5)
     soundcloud_poll_batch_size: int = Field(default=20, ge=1)
 
     # Compute routing (US-11.1). ``compute_preference`` selects where a generation

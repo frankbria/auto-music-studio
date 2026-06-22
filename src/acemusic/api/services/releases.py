@@ -208,23 +208,23 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     return release
 
 
-async def update_visibility(release_id: str, user_id: str, visibility: VisibilityState) -> Release:
-    """Set an owned release's visibility and mirror it onto the source clip (US-13.6).
+async def update_visibility(release: Release, visibility: VisibilityState) -> Release:
+    """Set ``release``'s visibility and mirror it onto the source clip (US-13.6).
 
-    Visibility is a sharing preference, not part of the submission lifecycle, so it
-    is editable in any state (unlike metadata, which locks after submission). The
-    source clip's ``is_public`` flag — what actually gates non-owner audio access —
-    is synced too: only ``public`` exposes the clip; ``unlisted``/``private`` keep
-    it owner-only (there is no link-token sharing concept). A deleted source clip
-    is tolerated (the release keeps its own visibility).
+    Takes an already-owned ``release`` (the router has validated ownership), so it
+    does not re-fetch. Visibility is a sharing preference, not part of the
+    submission lifecycle, so it is editable in any state (unlike metadata, which
+    locks after submission). The source clip's ``is_public`` flag — what actually
+    gates non-owner audio access — is synced too: only ``public`` exposes the clip;
+    ``unlisted``/``private`` keep it owner-only (there is no link-token sharing
+    concept). A deleted source clip is tolerated (the release keeps its visibility).
     """
-    release = await get_owned_release(release_id, user_id)
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
 
     is_public = visibility == VisibilityState.PUBLIC
-    clip = await clip_service.find_owned_clip(str(release.clip_id), user_id)
+    clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
     if clip is not None and clip.is_public != is_public:
         clip.is_public = is_public
         await clip.save()

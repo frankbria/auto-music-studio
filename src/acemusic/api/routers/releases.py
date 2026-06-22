@@ -346,7 +346,10 @@ async def update_channel_status(
     except status_service.InvalidStatusTransition as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    if status_service.should_notify(old_status, body.status):
+    # Notify only on a transition this request actually applied — a lost concurrent
+    # race returns old == requested, so ``changed`` is False and we don't double-fire.
+    changed = old_status != body.status
+    if changed and status_service.should_notify(old_status, body.status):
         await status_service.create_status_notification(release, channel, body.status)
     return ChannelStatus(channel=channel, status=release.channel_statuses[channel])
 
@@ -362,7 +365,7 @@ async def update_visibility(
     release = await release_service.get_owned_release(release_id, current.user_id)
     if release.soundcloud_track_id:
         await _sync_soundcloud_sharing(release, body.state, settings)
-    release = await release_service.update_visibility(release_id, current.user_id, body.state)
+    release = await release_service.update_visibility(release, body.state)
     return ReleaseStatusResponse.from_release(release)
 
 

@@ -54,6 +54,9 @@ async def apply_channel_status(
     so the first manual update must begin the sequence. With ``validate=True`` an
     out-of-sequence step raises :class:`InvalidStatusTransition`; the SoundCloud
     poller passes ``validate=False`` to mirror real platform state verbatim.
+
+    The returned "previous" status lets the caller decide whether to notify; on a
+    lost concurrent race it returns ``new_status`` (a no-op signal) — see below.
     """
     current = DistributionStatus(release.channel_statuses.get(channel, DistributionStatus.DRAFT))
     if validate and not validate_status_transition(current, new_status):
@@ -71,14 +74,17 @@ async def apply_channel_status(
         return_document=ReturnDocument.AFTER,
     )
     if doc is None:
-        # Lost the race: another writer already moved this channel. Reflect the
-        # winning state and report it as the "previous" status, so the caller's
-        # ``should_notify(old, new)`` sees old == new and does not double-notify.
+        # Lost the race: another writer already moved this channel, so this call
+        # applied nothing. Reflect the winning state in memory for the response,
+        # but report ``new_status`` as the "previous" status — callers compute
+        # ``should_notify(old, new)``/``changed = old != new``, so returning the
+        # same value they passed makes both treat this as a no-op and never notify
+        # for a transition this call did not perform.
         refreshed = await Release.get(release.id)
         if refreshed is not None:
             release.channel_statuses = refreshed.channel_statuses
             release.updated_at = refreshed.updated_at
-        return DistributionStatus(release.channel_statuses.get(channel, new_status))
+        return new_status
 
     # Reflect the win in the in-memory document for the caller's response.
     release.channel_statuses = {**release.channel_statuses, channel: new_status}
