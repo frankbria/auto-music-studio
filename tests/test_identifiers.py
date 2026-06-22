@@ -6,6 +6,7 @@ are exercised through the release integration tests in ``test_releases_api.py``.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from acemusic.api.services.identifiers import (
     calculate_ean13_check_digit,
@@ -13,6 +14,31 @@ from acemusic.api.services.identifiers import (
     validate_upc_check_digit,
     validate_upc_format,
 )
+from acemusic.api.settings import ApiSettings
+
+
+class TestIdentifierSettings:
+    """Identifier prefixes are width-validated at startup, not at mint time."""
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"isrc_country_code": "USA"},  # 3 letters
+            {"isrc_country_code": "u1"},  # lowercase / digit
+            {"isrc_registrant_code": "AB"},  # 2 chars
+            {"isrc_registrant_code": "ab1"},  # lowercase
+            {"upc_prefix": "000000"},  # 6 digits
+            {"upc_prefix": "00000000"},  # 8 digits
+            {"upc_prefix": "123456X"},  # non-digit
+        ],
+    )
+    def test_malformed_prefix_rejected_at_startup(self, overrides: dict) -> None:
+        with pytest.raises(ValidationError):
+            ApiSettings(jwt_secret_key="x" * 40, **overrides)
+
+    def test_defaults_are_valid(self) -> None:
+        s = ApiSettings(jwt_secret_key="x" * 40)
+        assert (s.isrc_country_code, s.isrc_registrant_code, s.upc_prefix) == ("US", "A1B", "0000000")
 
 
 class TestIsrcFormat:

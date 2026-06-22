@@ -455,7 +455,11 @@ class TestIdentifiers:
         from acemusic.api.models.counter import Counter
         from acemusic.api.services.identifiers import generate_upc
 
-        await Counter(name="upc_seq", value=99999).insert()
+        # Force-set via the same upsert the production counter uses, so the seed
+        # works whether or not the counter document already exists.
+        await Counter.get_pymongo_collection().find_one_and_update(
+            {"name": "upc_seq"}, {"$set": {"value": 99999}}, upsert=True
+        )
         with pytest.raises(RuntimeError):
             await generate_upc(settings)
 

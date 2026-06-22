@@ -5,6 +5,7 @@ All API settings are namespaced under the ``ACEMUSIC_API_`` env prefix so they d
 not collide with CLI or ACE-Step server variables.
 """
 
+import re
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -237,6 +238,35 @@ class ApiSettings(BaseSettings):
                 "oauth_cookie_samesite='none' requires oauth_cookie_secure=True (browsers ignore it otherwise)."
             )
         return self
+
+    @field_validator("isrc_country_code")
+    @classmethod
+    def _check_isrc_country_code(cls, value: str) -> str:
+        """ISRC country code is exactly two uppercase letters (US-13.4).
+
+        Validated here so a misconfiguration fails at startup, not silently at
+        mint time as a malformed ISRC the generator can't reject.
+        """
+        if not re.fullmatch(r"[A-Z]{2}", value):
+            raise ValueError(f"isrc_country_code {value!r} must be exactly two uppercase letters")
+        return value
+
+    @field_validator("isrc_registrant_code")
+    @classmethod
+    def _check_isrc_registrant_code(cls, value: str) -> str:
+        """ISRC registrant code is exactly three uppercase alphanumerics (US-13.4)."""
+        if not re.fullmatch(r"[A-Z0-9]{3}", value):
+            raise ValueError(f"isrc_registrant_code {value!r} must be exactly three uppercase alphanumerics")
+        return value
+
+    @field_validator("upc_prefix")
+    @classmethod
+    def _check_upc_prefix(cls, value: str) -> str:
+        """GS1 company prefix is exactly seven digits, so prefix + 5-digit item +
+        check digit form a valid 13-digit EAN-13 (US-13.4)."""
+        if not re.fullmatch(r"\d{7}", value):
+            raise ValueError(f"upc_prefix {value!r} must be exactly seven digits")
+        return value
 
     @field_validator("jwt_algorithm")
     @classmethod
