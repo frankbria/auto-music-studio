@@ -9,6 +9,7 @@ and skip when it is absent (CI does not install it).
 """
 
 import shutil
+import time
 
 import httpx
 import pytest
@@ -28,6 +29,7 @@ from acemusic.api.utils.range_requests import (
     parse_range_header,
     parse_range_header_multi,
 )
+from acemusic.api.utils.rate_limit import FixedWindowRateLimiter
 from acemusic.storage import get_storage_backend
 
 requires_ffmpeg = pytest.mark.skipif(
@@ -133,6 +135,13 @@ class TestParseRangeHeaderMulti:
         at_cap = "bytes=" + ",".join(f"{i}-{i}" for i in range(10))
         assert len(parse_range_header_multi(at_cap, 1000)) == 10
 
+    def test_aggregate_bytes_exceeding_content_are_ignored(self) -> None:
+        # Overlapping open-ended ranges stay under the count cap but each select
+        # the whole file -> serve the full body once (None) instead of N× memory.
+        assert parse_range_header_multi("bytes=0-,0-,0-", 1000) is None
+        # Non-overlapping ranges summing within the file are still honored.
+        assert parse_range_header_multi("bytes=0-99,200-299", 1000) == [(0, 99), (200, 299)]
+
 
 class TestBuildMultipartRangesResponse:
     def test_mime_structure_for_two_ranges(self) -> None:
@@ -148,6 +157,27 @@ class TestBuildMultipartRangesResponse:
         assert content[100:120] in body
         # Closing boundary terminates the body.
         assert body.endswith(b"\r\n--BOUNDARY123--\r\n")
+
+
+class TestFixedWindowRateLimiter:
+    def test_rejects_over_the_limit_within_a_window(self) -> None:
+        limiter = FixedWindowRateLimiter(limit=2, window_seconds=60.0)
+        limiter.check("ip")  # 1
+        limiter.check("ip")  # 2
+        with pytest.raises(HTTPException) as exc:
+            limiter.check("ip")  # 3 -> over
+        assert exc.value.status_code == 429
+        assert "Retry-After" in exc.value.headers
+
+    def test_expired_keys_are_pruned(self) -> None:
+        # One-off IPs must not accumulate forever on a public endpoint.
+        limiter = FixedWindowRateLimiter(limit=5, window_seconds=0.02)
+        limiter.check("old-ip")
+        assert "old-ip" in limiter._hits
+        time.sleep(0.03)  # let the window elapse
+        limiter.check("new-ip")  # triggers a prune sweep
+        assert "old-ip" not in limiter._hits
+        assert "new-ip" in limiter._hits
 
 
 # ---------------------------------------------------------------------------

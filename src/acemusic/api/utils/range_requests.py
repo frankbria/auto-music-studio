@@ -132,6 +132,12 @@ def parse_range_header_multi(range_header: str, content_length: int) -> list[tup
         ranges.append(pair)
 
     if ranges:
+        # Bound the multipart body by total bytes too, not just spec count:
+        # ``bytes=0-,0-,...`` stays under the count cap yet selects the whole
+        # representation N times. If the ranges overlap past the full size,
+        # ignore Range and serve the full body once.
+        if sum(end - start + 1 for start, end in ranges) > content_length:
+            return None
         return ranges
     # No satisfiable ranges: 416 if at least one was explicitly out of bounds,
     # otherwise the header was effectively empty ("bytes=-") — ignore it.

@@ -19,12 +19,19 @@ class FixedWindowRateLimiter:
         self._limit = limit
         self._window = window_seconds
         self._hits: dict[str, tuple[float, int]] = {}
+        self._last_prune = 0.0
         self._lock = Lock()
 
     def check(self, key: str) -> None:
         """Record one hit for ``key``; raise 429 once it exceeds the limit."""
         now = time.monotonic()
         with self._lock:
+            # A public endpoint sees many one-off IPs; without pruning, _hits
+            # grows unbounded. Sweep expired windows at most once per window.
+            if now - self._last_prune >= self._window:
+                cutoff = now - self._window
+                self._hits = {k: v for k, v in self._hits.items() if v[0] > cutoff}
+                self._last_prune = now
             window_start, count = self._hits.get(key, (now, 0))
             if now - window_start >= self._window:  # window elapsed — reset
                 window_start, count = now, 0
