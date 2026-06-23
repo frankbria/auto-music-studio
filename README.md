@@ -156,10 +156,13 @@ A default workspace is created automatically when a new user registers (OAuth ca
 | `PATCH /api/v1/clips/{id}` | Rename a clip (`title` is the only writable field; empty body is a no-op) |
 | `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
 | `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
+| `GET /api/v1/clips/{id}/stream` | Streams a clip for the web player — optional auth, full range support, rate-limited |
 
 `GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
 
 All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
+
+`GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
 
 ### Audio Editing (US-10.1)
 

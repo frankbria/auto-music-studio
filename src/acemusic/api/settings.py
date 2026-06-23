@@ -170,6 +170,12 @@ class ApiSettings(BaseSettings):
     isrc_registrant_code: str = "A1B"
     upc_prefix: str = "0000000"
 
+    # Audio streaming rate limit (US-14.2). The /clips/{id}/stream endpoint is
+    # public for public clips, so it is rate-limited per client IP to curb abuse.
+    # In-memory fixed window; raise via the environment for higher-traffic
+    # deployments (swap for a shared store if the API runs multiple workers).
+    stream_rate_limit_per_minute: int = Field(default=100, ge=1)
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
