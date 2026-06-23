@@ -12,6 +12,7 @@ from .distribution import DistributionStatus, VisibilityState
 from .job import Job, JobStatus
 from .notification_event import NotificationEvent
 from .preset import PRESET_PARAM_FIELDS, Preset
+from .queue import PlaybackQueue, RepeatMode
 from .refresh_token import RefreshToken
 from .release import Release, ReleaseStatus
 from .soundcloud_connection import SoundCloudConnection
@@ -32,6 +33,7 @@ ALL_MODELS = [
     Release,
     NotificationEvent,
     Counter,
+    PlaybackQueue,
 ]
 
 __all__ = [
@@ -54,5 +56,7 @@ __all__ = [
     "VisibilityState",
     "NotificationEvent",
     "Counter",
+    "PlaybackQueue",
+    "RepeatMode",
     "ALL_MODELS",
 ]
