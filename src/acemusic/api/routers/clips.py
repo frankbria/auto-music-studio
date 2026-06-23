@@ -13,6 +13,7 @@ filter rules live in :mod:`acemusic.api.services.clips`.
 import asyncio
 import logging
 import math
+import secrets
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -21,13 +22,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_existing_user
 from ..models import Clip
 from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
-from ..services.clips import get_clip_for_audio_access
+from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
 from ..utils.media_types import get_audio_content_type
-from ..utils.range_requests import parse_range_header
+from ..utils.range_requests import (
+    build_multipart_ranges_response,
+    parse_range_header,
+    parse_range_header_multi,
+)
+from ..utils.rate_limit import enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +46,12 @@ PER_PAGE_MAX = 100
 # Router-level dependency gates every route behind a valid Bearer token
 # (mirrors the jobs/generation routers), so unauthenticated requests get 401.
 router = APIRouter(prefix="/clips", tags=["clips"], dependencies=[Depends(get_current_user)])
+
+# US-14.2: the streaming endpoint must serve *public* clips to anonymous
+# listeners, so it lives on a separate router without the blanket auth gate
+# above. Auth is still resolved per-request (get_current_user_optional) to
+# enforce private-clip access. Mounted alongside ``router`` in main.py.
+stream_router = APIRouter(prefix="/clips", tags=["clips"])
 
 
 class ClipSearchParams(BaseModel):
@@ -344,6 +356,83 @@ async def get_clip_audio(
                 content=audio[start : end + 1],
                 status_code=status.HTTP_206_PARTIAL_CONTENT,
                 media_type=media_type,
+                headers=headers,
+            )
+
+    return Response(content=audio, media_type=media_type, headers=headers)
+
+
+@stream_router.get("/{clip_id}/stream", dependencies=[Depends(enforce_stream_rate_limit)])
+async def stream_clip_audio(
+    clip_id: str,
+    request: Request,
+    format: Literal["wav", "mp3"] | None = Query(
+        default=None,
+        description="Convert to this format on the fly (mp3 for size, wav for lossless; default: stored format).",
+    ),
+    current: CurrentUser | None = Depends(get_current_user_optional),
+) -> Response:
+    """Stream a clip's audio with seeking support (US-14.2).
+
+    Public clips stream without authentication; private clips require the owner.
+    Honors single- and multi-range requests (206 / ``multipart/byteranges``),
+    serves the full body otherwise (200), and rate-limits per client IP.
+    """
+    clip = await get_clip_for_streaming(clip_id, current.user_id if current else None)
+
+    storage = get_storage_backend()
+    try:
+        audio = await asyncio.to_thread(storage.download, clip.file_path)
+    except FileNotFoundError:
+        logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
+
+    native_format = clip_service.native_format(clip)
+    serve_format = native_format
+    converted = False
+    if format is not None and format != native_format:
+        try:
+            audio = await asyncio.to_thread(convert_audio_format, audio, native_format, format)
+        except Exception as exc:
+            logger.exception("Format conversion of clip %s (%s -> %s) failed", clip.id, native_format, format)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Could not convert audio to {format}.",
+            ) from exc
+        serve_format = format
+        converted = True
+
+    media_type = get_audio_content_type(serve_format)
+    # Public clips are immutable once shared, so shared caches may hold them;
+    # private clips stay client-only and uncached.
+    cache_control = "public, max-age=3600" if clip.is_public else "private, no-store"
+
+    # Conversion changes the byte layout, so Range (and Accept-Ranges) only
+    # applies to the unconverted stored representation — mirrors /audio.
+    if converted:
+        return Response(content=audio, media_type=media_type, headers={"Cache-Control": cache_control})
+
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
+    range_header = request.headers.get("range")
+    if range_header is not None:
+        ranges = parse_range_header_multi(range_header, len(audio))  # raises 416 if all unsatisfiable
+        if ranges is not None and len(ranges) == 1:
+            start, end = ranges[0]
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(audio)}"
+            return Response(
+                content=audio[start : end + 1],
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=media_type,
+                headers=headers,
+            )
+        if ranges is not None:
+            # secrets.token_hex gives a boundary that won't appear in the audio.
+            boundary = secrets.token_hex(16)
+            body, multipart_type = build_multipart_ranges_response(audio, ranges, media_type, boundary)
+            return Response(
+                content=body,
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=multipart_type,
                 headers=headers,
             )
 

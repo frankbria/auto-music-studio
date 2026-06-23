@@ -23,7 +23,11 @@ from acemusic.api.services import users as user_service
 from acemusic.api.services.audio_conversion import convert_audio_format
 from acemusic.api.settings import ApiSettings
 from acemusic.api.utils.media_types import get_audio_content_type
-from acemusic.api.utils.range_requests import parse_range_header
+from acemusic.api.utils.range_requests import (
+    build_multipart_ranges_response,
+    parse_range_header,
+    parse_range_header_multi,
+)
 from acemusic.storage import get_storage_backend
 
 requires_ffmpeg = pytest.mark.skipif(
@@ -33,6 +37,10 @@ requires_ffmpeg = pytest.mark.skipif(
 
 def _audio_url(clip_id: str) -> str:
     return f"{API_V1_PREFIX}/clips/{clip_id}/audio"
+
+
+def _stream_url(clip_id: str) -> str:
+    return f"{API_V1_PREFIX}/clips/{clip_id}/stream"
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +72,82 @@ class TestGetAudioContentType:
     @pytest.mark.parametrize("fmt", [None, "", "   "])
     def test_missing_or_blank_format_falls_back_to_octet_stream(self, fmt: str | None) -> None:
         assert get_audio_content_type(fmt) == "application/octet-stream"
+
+
+# ---------------------------------------------------------------------------
+# Multi-range parsing (US-14.2) — runs in CI (pure functions, no DB)
+# ---------------------------------------------------------------------------
+
+
+class TestParseRangeHeaderMulti:
+    def test_single_range_returns_one_pair(self) -> None:
+        assert parse_range_header_multi("bytes=0-99", 1000) == [(0, 99)]
+
+    def test_two_ranges(self) -> None:
+        assert parse_range_header_multi("bytes=0-99,200-299", 1000) == [(0, 99), (200, 299)]
+
+    def test_many_ranges_preserve_order(self) -> None:
+        header = "bytes=0-9,20-29,40-49,60-69"
+        assert parse_range_header_multi(header, 1000) == [(0, 9), (20, 29), (40, 49), (60, 69)]
+
+    def test_overlapping_ranges_served_as_is(self) -> None:
+        # RFC permits serving overlapping ranges without merging.
+        assert parse_range_header_multi("bytes=0-99,50-149", 1000) == [(0, 99), (50, 149)]
+
+    def test_mixed_explicit_suffix_and_open_ended(self) -> None:
+        assert parse_range_header_multi("bytes=0-99,-100,800-", 1000) == [(0, 99), (900, 999), (800, 999)]
+
+    def test_whitespace_between_specs_is_tolerated(self) -> None:
+        assert parse_range_header_multi("bytes=0-99, 200-299", 1000) == [(0, 99), (200, 299)]
+
+    def test_end_clamped_to_content_length(self) -> None:
+        assert parse_range_header_multi("bytes=0-99,500-9999", 1000) == [(0, 99), (500, 999)]
+
+    def test_malformed_spec_invalidates_whole_header(self) -> None:
+        assert parse_range_header_multi("bytes=0-99,abc", 1000) is None
+
+    def test_non_bytes_unit_returns_none(self) -> None:
+        assert parse_range_header_multi("items=0-99", 1000) is None
+
+    def test_inverted_spec_invalidates_whole_header(self) -> None:
+        assert parse_range_header_multi("bytes=0-99,5-2", 1000) is None
+
+    def test_all_unsatisfiable_raises_416(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            parse_range_header_multi(f"bytes={2000}-,{3000}-", 1000)
+        assert exc.value.status_code == 416
+        assert exc.value.headers["Content-Range"] == "bytes */1000"
+
+    def test_satisfiable_plus_unsatisfiable_drops_the_bad_one(self) -> None:
+        # One valid, one past the end: serve the valid range, skip the rest.
+        assert parse_range_header_multi("bytes=0-99,5000-6000", 1000) == [(0, 99)]
+
+    def test_empty_content_returns_none(self) -> None:
+        assert parse_range_header_multi("bytes=0-99", 0) is None
+
+    def test_too_many_ranges_are_ignored(self) -> None:
+        # Guards against multipart amplification: >10 ranges -> ignore Range,
+        # serve the full body (None) rather than building an N×-sized response.
+        many = "bytes=" + ",".join(f"{i}-{i}" for i in range(11))
+        assert parse_range_header_multi(many, 1000) is None
+        at_cap = "bytes=" + ",".join(f"{i}-{i}" for i in range(10))
+        assert len(parse_range_header_multi(at_cap, 1000)) == 10
+
+
+class TestBuildMultipartRangesResponse:
+    def test_mime_structure_for_two_ranges(self) -> None:
+        content = bytes(range(256)) * 4  # 1024 deterministic bytes
+        body, content_type = build_multipart_ranges_response(content, [(0, 9), (100, 119)], "audio/wav", "BOUNDARY123")
+        assert content_type == "multipart/byteranges; boundary=BOUNDARY123"
+        # Two parts, each with its own headers and the exact slice as payload.
+        assert body.count(b"--BOUNDARY123\r\n") == 2
+        assert b"Content-Type: audio/wav\r\n" in body
+        assert b"Content-Range: bytes 0-9/1024\r\n" in body
+        assert b"Content-Range: bytes 100-119/1024\r\n" in body
+        assert content[0:10] in body
+        assert content[100:120] in body
+        # Closing boundary terminates the body.
+        assert body.endswith(b"\r\n--BOUNDARY123--\r\n")
 
 
 # ---------------------------------------------------------------------------
@@ -394,3 +478,125 @@ class TestClipAudioFormatConversion:
         resp = await client.get(_audio_url(str(clip.id)) + "?format=mp3", headers=headers)
         assert resp.status_code == 200
         assert len(resp.content) > 100
+
+
+@pytest.mark.integration
+class TestClipStreaming:
+    """US-14.2: GET /clips/{id}/stream — optional auth, multi-range, rate limit."""
+
+    # --- Authentication / access control -----------------------------------
+
+    async def test_anonymous_streams_public_clip(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-pub-owner@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_stream_url(str(clip.id)))  # no auth header
+        assert resp.status_code == 200
+        assert resp.content == wav_bytes
+        assert resp.headers["accept-ranges"] == "bytes"
+        assert "public" in resp.headers["cache-control"]
+
+    async def test_anonymous_private_clip_returns_404(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-priv-owner@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False)
+
+        # 404 (not 403) so a stranger cannot tell a private clip exists.
+        resp = await client.get(_stream_url(str(clip.id)))
+        assert resp.status_code == 404
+
+    async def test_owner_streams_own_private_clip(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-own-priv@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False)
+
+        resp = await client.get(_stream_url(str(clip.id)), headers=_auth_headers(owner, settings))
+        assert resp.status_code == 200
+        assert resp.content == wav_bytes
+        assert "private" in resp.headers["cache-control"]
+
+    async def test_authenticated_non_owner_private_clip_returns_403(
+        self, client, settings, local_storage, wav_bytes
+    ) -> None:
+        owner = await _make_user("stream-other-owner@example.com")
+        other = await _make_user("stream-other-user@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False)
+
+        resp = await client.get(_stream_url(str(clip.id)), headers=_auth_headers(other, settings))
+        assert resp.status_code == 403
+
+    async def test_invalid_token_is_rejected(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-badtoken@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        # An explicitly-supplied bad token is a 401, not an anonymous request.
+        resp = await client.get(_stream_url(str(clip.id)), headers={"Authorization": "Bearer not-a-real-token"})
+        assert resp.status_code == 401
+
+    # --- Range requests ----------------------------------------------------
+
+    async def test_single_range_returns_206(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-range1@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_stream_url(str(clip.id)), headers={"Range": "bytes=0-99"})
+        assert resp.status_code == 206
+        assert resp.content == wav_bytes[:100]
+        assert resp.headers["content-range"] == f"bytes 0-99/{len(wav_bytes)}"
+
+    async def test_no_range_returns_200_full(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-range2@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_stream_url(str(clip.id)))
+        assert resp.status_code == 200
+        assert resp.content == wav_bytes
+
+    async def test_multi_range_returns_multipart_206(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-range3@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_stream_url(str(clip.id)), headers={"Range": "bytes=0-99,200-299"})
+        assert resp.status_code == 206
+        assert resp.headers["content-type"].startswith("multipart/byteranges; boundary=")
+        # Both requested slices are present in the multipart body.
+        assert wav_bytes[0:100] in resp.content
+        assert wav_bytes[200:300] in resp.content
+        assert b"Content-Range: bytes 0-99/" in resp.content
+        assert b"Content-Range: bytes 200-299/" in resp.content
+
+    async def test_unsatisfiable_range_returns_416(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-range4@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_stream_url(str(clip.id)), headers={"Range": f"bytes={len(wav_bytes)}-"})
+        assert resp.status_code == 416
+        assert resp.headers["content-range"] == f"bytes */{len(wav_bytes)}"
+
+    # --- Format conversion -------------------------------------------------
+
+    @requires_ffmpeg
+    async def test_format_mp3_converts_and_disables_ranges(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-fmt@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        headers = {"Range": "bytes=0-99"}  # ranges ignored once converted
+        resp = await client.get(_stream_url(str(clip.id)) + "?format=mp3", headers=headers)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "audio/mpeg"
+        assert resp.content[:3] == b"ID3" or resp.content[0] == 0xFF
+        assert "accept-ranges" not in resp.headers
+
+    # --- Rate limiting -----------------------------------------------------
+
+    async def test_exceeding_rate_limit_returns_429(self, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("stream-ratelimit@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        # Dedicated app with a low limit; all requests share the test client IP.
+        limited = settings.model_copy(update={"stream_rate_limit_per_minute": 2})
+        async with _async_client(create_app(limited)) as limited_client:
+            url = _stream_url(str(clip.id))
+            assert (await limited_client.get(url)).status_code == 200
+            assert (await limited_client.get(url)).status_code == 200
+            third = await limited_client.get(url)
+            assert third.status_code == 429
+            assert "retry-after" in third.headers

@@ -46,6 +46,7 @@ from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
 from .tasks.processor import JobProcessor
 from .tasks.soundcloud_poller import SoundCloudStatusPoller
+from .utils.rate_limit import FixedWindowRateLimiter as RateLimiter
 
 API_V1_PREFIX = "/api/v1"
 
@@ -153,6 +154,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.start_time = time.monotonic()
+    # US-14.2: per-client in-memory limiter for the streaming endpoint. Set on
+    # app.state (not module-global) so each app instance — and each test — gets
+    # an isolated window.
+    app.state.stream_limiter = RateLimiter(settings.stream_rate_limit_per_minute)
 
     # allow_credentials=True is incompatible with a wildcard allow_origins=["*"]
     # (browsers reject the combination). _split_origins in settings.py never
@@ -177,6 +182,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(generation.router, prefix=API_V1_PREFIX)
     app.include_router(jobs.router, prefix=API_V1_PREFIX)
     app.include_router(clips.router, prefix=API_V1_PREFIX)
+    # US-14.2: public streaming router (no blanket auth) shares the /clips prefix.
+    app.include_router(clips.stream_router, prefix=API_V1_PREFIX)
     app.include_router(editing.router, prefix=API_V1_PREFIX)
     app.include_router(artwork.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
