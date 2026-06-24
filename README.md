@@ -147,6 +147,23 @@ reported as unavailable, never a 5xx. `max_workers` is left `null` (RunPod's
 
 A default workspace is created automatically when a new user registers (OAuth callback). The get-or-create call is idempotent, so subsequent logins are a cheap lookup and accounts created before this feature are backfilled on their next login.
 
+### Playback Queue (US-14.3)
+
+A single server-side playback queue per user, so the web player can queue clips, support next/previous, and restore state across page navigations.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/queue` | Add clips at an optional `position` (appends by default) |
+| `GET /api/v1/queue` | Current queue, playback position, and modes |
+| `DELETE /api/v1/queue/{clip_id}` | Remove a clip (404 if not in the queue) |
+| `POST /api/v1/queue/next` | Advance to the next clip (repeat/shuffle aware) |
+| `POST /api/v1/queue/previous` | Go back to the previous clip (repeat/shuffle aware) |
+| `PUT /api/v1/queue/reorder` | Move a clip to a new position |
+| `DELETE /api/v1/queue` | Clear the entire queue (204) |
+| `PATCH /api/v1/queue` | Update `repeat_mode` (`none`/`one`/`all`) and/or `shuffle_enabled` |
+
+The queue is owner-scoped (one document per user, unique on `user_id`). Repeat is `none` (stops at the end, `current_index` → `null`), `one` (holds the current clip), or `all` (wraps). Shuffle is history-based: `next` picks a random unplayed clip and `previous` walks back through the play history. A single `GET` returns everything needed to rebuild player state after a reload.
+
 ### Clips
 
 | Endpoint | Purpose |
