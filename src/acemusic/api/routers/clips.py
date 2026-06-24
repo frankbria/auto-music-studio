@@ -217,6 +217,18 @@ class ClipChildrenResponse(BaseModel):
     children: list[ClipSummary]
 
 
+class SimilarClipsResponse(BaseModel):
+    """Clips similar to a seed clip (US-14.4), ranked most-similar first.
+
+    ``total`` is the number of candidates that matched before ``limit`` was
+    applied, so a client can tell a truncated radio queue from an exhausted one.
+    """
+
+    clips: list[ClipResponse]
+    total: int
+    limit: int
+
+
 @router.get("", response_model=ClipListResponse)
 async def list_clips(
     # Annotated[..., Query()] (not plain Depends) makes FastAPI validate the
@@ -265,6 +277,28 @@ async def get_clip_lineage(clip_id: str, current: CurrentUser = Depends(require_
         depth_limit=clip_service.MAX_LINEAGE_DEPTH,
         depth_truncated=truncated,
         nodes=[LineageNode.from_clip(clip, depth) for clip, depth in nodes],
+    )
+
+
+@router.get("/{clip_id}/similar", response_model=SimilarClipsResponse)
+async def get_similar_clips(
+    clip_id: str,
+    scope: Literal["mine", "public", "all"] = "all",
+    limit: int = Query(default=20, ge=1, le=50),
+    current: CurrentUser = Depends(require_existing_user),
+) -> SimilarClipsResponse:
+    """Return clips similar to this one for radio-style discovery (US-14.4).
+
+    Similarity blends shared style tags, BPM proximity, related key, and matching
+    model/generation-mode. ``scope`` selects the candidate pool: the caller's own
+    clips, public clips, or both (default). 404 if the seed is unknown, 403 if it
+    is another user's private clip, 200 with an empty list if nothing matches.
+    """
+    clips, total = await clip_service.find_similar_clips(clip_id, current.user_id, scope, limit)
+    return SimilarClipsResponse(
+        clips=[ClipResponse.from_clip(clip) for clip in clips],
+        total=total,
+        limit=limit,
     )
 
 
