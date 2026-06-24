@@ -32,6 +32,126 @@ logger = logging.getLogger(__name__)
 # unboundedly. 50 levels is the documented maximum lineage depth.
 MAX_LINEAGE_DEPTH = 50
 
+# US-14.4: relative major/minor pairs ("C major" shares notes with "A minor"),
+# so a clip in one key is musically similar to a clip in its relative. Stored
+# both directions for an O(1) lookup; keys are compared lowercased.
+RELATIVE_KEYS: dict[str, str] = {
+    "c major": "a minor",
+    "g major": "e minor",
+    "d major": "b minor",
+    "a major": "f# minor",
+    "e major": "c# minor",
+    "b major": "g# minor",
+    "f# major": "d# minor",
+    "db major": "bb minor",
+    "ab major": "f minor",
+    "eb major": "c minor",
+    "bb major": "g minor",
+    "f major": "d minor",
+}
+RELATIVE_KEYS.update({v: k for k, v in list(RELATIVE_KEYS.items())})
+
+# US-14.4: a similar clip must share at least one style tag with the seed or sit
+# within this fraction of its BPM (acceptance criteria). The same window gates
+# the BPM scoring bonus.
+BPM_PROXIMITY = 0.10
+
+
+def keys_are_related(key1: str | None, key2: str | None) -> bool:
+    """True if two musical keys are identical or a relative major/minor pair.
+
+    None for either side means "unknown key" — not a match. Comparison is
+    case-insensitive ("C major" == "c MAJOR").
+    """
+    if key1 is None or key2 is None:
+        return False
+    k1, k2 = key1.strip().lower(), key2.strip().lower()
+    return k1 == k2 or RELATIVE_KEYS.get(k1) == k2
+
+
+def compute_similarity_score(seed: Clip, candidate: Clip) -> int:
+    """Score ``candidate`` against ``seed`` (US-14.4): higher = more similar.
+
+    +1 per shared style tag (case-insensitive), +1 if BPM is within
+    ``BPM_PROXIMITY``, +1 if the keys are related, +1 if model *and*
+    generation_mode both match. Criteria where the seed's field is unset
+    (None/empty) are skipped — they neither add nor subtract — so a sparsely
+    tagged seed still ranks candidates by what it does have.
+    """
+    score = 0
+    if seed.style_tags:
+        seed_tags = {t.lower() for t in seed.style_tags}
+        cand_tags = {t.lower() for t in candidate.style_tags}
+        score += len(seed_tags & cand_tags)
+    if seed.bpm and candidate.bpm is not None and abs(candidate.bpm - seed.bpm) <= seed.bpm * BPM_PROXIMITY:
+        score += 1
+    if keys_are_related(seed.key, candidate.key):
+        score += 1
+    if (
+        seed.model
+        and seed.generation_mode
+        and seed.model == candidate.model
+        and seed.generation_mode == candidate.generation_mode
+    ):
+        score += 1
+    return score
+
+
+async def find_similar_clips(
+    clip_id: str,
+    user_id: str,
+    scope: Literal["mine", "public", "all"] = "all",
+    limit: int = 20,
+) -> tuple[list[Clip], int]:
+    """Return clips similar to ``clip_id`` plus the total number of candidates.
+
+    The seed is resolved with :func:`get_clip_for_audio_access`, so any clip the
+    caller may see (their own, or a public one) can seed a radio queue (404
+    unknown, 403 another user's private clip). ``scope`` limits the candidate
+    pool to the caller's clips (``mine``), public clips (``public``), or both
+    (``all``).
+
+    Candidates must clear the base-similarity bar — share a style tag or fall
+    within ``BPM_PROXIMITY`` of the seed's BPM — then are scored and sorted in
+    Python (descending score, newest first as a tiebreak). A seed with neither
+    tags nor BPM has no bar to match, so the result is empty.
+    """
+    seed = await get_clip_for_audio_access(clip_id, user_id)
+
+    similarity_clauses: list[dict] = []
+    if seed.style_tags:
+        # Match tags case-insensitively so the DB filter agrees with the
+        # case-insensitive scorer (and with list_clips' style filter). An
+        # anchored IGNORECASE regex is an exact tag match ignoring case; $in
+        # keeps a candidate if any of its tags matches any of the seed's.
+        tag_patterns = [re.compile(f"^{re.escape(tag)}$", re.IGNORECASE) for tag in seed.style_tags]
+        similarity_clauses.append({"style_tags": {"$in": tag_patterns}})
+    if seed.bpm:
+        similarity_clauses.append(
+            {"bpm": {"$gte": seed.bpm * (1 - BPM_PROXIMITY), "$lte": seed.bpm * (1 + BPM_PROXIMITY)}}
+        )
+    if not similarity_clauses:
+        return [], 0
+
+    owner = PydanticObjectId(user_id)
+    if scope == "mine":
+        scope_clause: dict = {"user_id": owner}
+    elif scope == "public":
+        scope_clause = {"is_public": True}
+    else:
+        scope_clause = {"$or": [{"user_id": owner}, {"is_public": True}]}
+
+    query = {
+        "$and": [
+            scope_clause,
+            {"$or": similarity_clauses},
+            {"_id": {"$ne": seed.id}},
+        ]
+    }
+    candidates = await Clip.find(query).to_list()
+    candidates.sort(key=lambda c: (compute_similarity_score(seed, c), c.created_at), reverse=True)
+    return candidates[:limit], len(candidates)
+
 
 async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
     """Return ``clip_id``'s clip if ``current_user_id`` may retrieve its audio.

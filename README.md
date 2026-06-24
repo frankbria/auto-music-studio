@@ -174,12 +174,15 @@ The queue is owner-scoped (one document per user, unique on `user_id`). Repeat i
 | `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
 | `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
 | `GET /api/v1/clips/{id}/stream` | Streams a clip for the web player — optional auth, full range support, rate-limited |
+| `GET /api/v1/clips/{id}/similar` | Clips similar to this one for radio-style discovery (US-14.4) |
 
 `GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
 
 All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
 
 `GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
+
+`GET /api/v1/clips/{id}/similar` finds clips related to a seed for a radio-style queue (pairs with the playback queue above). It scores candidates by shared style tags (each +1, case-insensitive), BPM within ±10% (+1), the same or relative key (+1), and matching model **and** generation mode (+1), returning them most-similar first. `?scope=mine|public|all` (default `all`) selects the candidate pool — the caller's own clips, public clips, or both — and `?limit=N` caps the result (default 20, max 50); `total` reports how many candidates matched before the limit. The seed is resolved like `/audio` (`404` unknown, `403` another user's private clip), so any clip the caller can see may seed a queue, and no matches returns `200` with an empty array.
 
 ### Audio Editing (US-10.1)
 
