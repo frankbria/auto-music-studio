@@ -1,6 +1,6 @@
-# Next.js template
+# Auto Music Studio — Web UI (Layer 3)
 
-This is a Next.js template with shadcn/ui.
+Next.js 16 app built on the Shadcn Nova template (gray palette, Hugeicons, Nunito Sans). See the root [README](../README.md) for the full project.
 
 ## Adding components
 
@@ -17,5 +17,5 @@ This will place the ui components in the `components` directory.
 To use the components in your app, import them as follows:
 
 ```tsx
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/button"
 ```

@@ -140,7 +140,7 @@ tests/
 
 web/                # Next.js frontend (Layer 3) — Shadcn Nova scaffold (US-15.1)
 plugin/             # JUCE VST3 plugin (placeholder, Layer 4)
-docs/               # Additional documentation (placeholder)
+docs/               # Demo docs, spec evidence, and story artifacts
 ```
 
 ### Key Modules
