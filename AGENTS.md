@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–9 complete on `main`; Stage 10 in progress (US-10.1 audio editing, US-10.2 stems/MIDI extraction, US-10.3 iterative generation endpoints implemented). CLI foundation (Stages 1–7): generation, workspace management, audio processing, DAW export. Platform API (Stages 8–9): FastAPI with OAuth2 auth, async job queue, clip audio streaming, workspace/clip/preset CRUD, credit deduction. Audio editing API (US-10.1): crop, speed-adjust, and remaster endpoints enqueue async jobs that create derived clips with lineage tracking. Stems/MIDI extraction API (US-10.2): stem separation (4 child clips) and MIDI extraction (files referenced via `Clip.midi_paths`) run as cache-first, idempotent async jobs. Iterative generation API (US-10.3): extend, cover, remix, repaint, sample, add-vocal, and mashup endpoints enqueue credit-bearing async jobs that create lineage-tagged child clips. Compute routing (Stage 11): US-11.2 `RunPodClient` (submit/poll/download against a RunPod serverless endpoint, mirroring `AceStepClient`'s consumer interface), US-11.3 ACE-Step worker image + serverless handler (`docker/`), and US-11.x remote audio delivery — the handler uploads each generated clip to S3 and returns presigned GET URLs (worker-local `localhost` URLs are unreachable from a remote platform; the client also filters them defensively). Mastering pipeline (Stage 12): US-12.1 submission endpoint (per-service credit charge + async job), US-12.2 Dolby.io integration, US-12.3 LANDR + Bakuage fallback integrations with a shared `MasteringService` interface and a `MasteringOrchestrator` that selects the requested backend and falls back (Dolby→LANDR→Bakuage) across configured services on any `MasteringError`. US-12.4 preview/A-B comparison: `GET /mastering/jobs/{id}` (detail + metrics), `GET /mastering/jobs/{id}/previews` (original audio + on-demand LUFS vs the source's mastered candidates, with a `loudness_delta` diff), and `POST /mastering/jobs/{id}/approve` (exclusive in-place promotion of a chosen candidate to `generation_mode="mastered"`). US-12.5 batch mastering: `POST /mastering/batch` masters up to 20 clips with one profile/service, reusing the US-10.5 `BatchJob` model (`operation="mastering"`) — credits for the owned clips are deducted upfront with a per-clip ledger row and per-clip refund on queue failure, unknown/not-owned clips become failed entries (partial success), and `GET /mastering/batch/{id}/status` aggregates the sub-jobs' live status (queued/processing/completed/failed counts + progress).
+**Current progress:** Stages 1–14 complete on `main`; Stage 15 in progress (US-15.1 Next.js Nova scaffold). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stage 15): Next.js Shadcn Nova scaffold (US-15.1).
 
 ## Commands
 
@@ -138,7 +138,7 @@ tests/
   test_workspace.py # Workspace command tests
   features/         # pytest-bdd feature files (not yet populated)
 
-web/                # Next.js frontend (placeholder, Layer 3)
+web/                # Next.js frontend (Layer 3) — Shadcn Nova scaffold (US-15.1)
 plugin/             # JUCE VST3 plugin (placeholder, Layer 4)
 docs/               # Additional documentation (placeholder)
 ```
@@ -229,7 +229,8 @@ Package manager: `uv` with `hatchling` build backend
 
 ## Agent Notes
 
-- The `web/`, `plugin/`, and `docs/` directories are placeholders — don't expect working code there yet
+- The `plugin/` directory is a placeholder — don't expect working code there yet
+- `web/` is the scaffolded Next.js app (US-15.1, Shadcn Nova); run with `cd web && npm install && npm run dev`
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions
