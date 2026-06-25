@@ -16,6 +16,14 @@ uv run python -c "import acemusic"  # smoke test
 uv run pytest
 ```
 
+## Running the web app (Layer 3)
+
+```bash
+cd web && npm install && npm run dev
+```
+
+Starts the Next.js dev server at `http://localhost:3000`.
+
 ## Running the API (Layer 2)
 
 The platform API is a FastAPI app served under `/api/v1`:
