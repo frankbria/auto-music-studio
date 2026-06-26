@@ -43,7 +43,12 @@ function parseErrors(status: number, body: unknown): SaveResult {
   ) {
     const fieldErrors: FieldErrors = {}
     for (const d of (body as { detail: ValidationDetail[] }).detail) {
-      const field = d.loc?.[d.loc.length - 1]
+      // The field name is the segment after "body"; for a per-item failure the
+      // loc is ["body", "style_tags", 0], so the *last* segment would be the
+      // index (a number) and miss the field. Fall back to last for safety.
+      const loc = d.loc ?? []
+      const bodyIdx = loc.indexOf("body")
+      const field = bodyIdx >= 0 ? loc[bodyIdx + 1] : loc[loc.length - 1]
       if (typeof field === "string" && EDITABLE_FIELDS.has(field)) {
         fieldErrors[field as keyof FieldErrors] = d.msg
       }

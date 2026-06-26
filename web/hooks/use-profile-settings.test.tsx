@@ -111,4 +111,27 @@ describe("useProfileSettings", () => {
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.fieldErrors.bio).toBe("too long")
   })
+
+  it("maps a nested style_tags item error to the style_tags field", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(PROFILE))
+      .mockResolvedValueOnce(
+        jsonRes(
+          { detail: [{ loc: ["body", "style_tags", 0], msg: "too long" }] },
+          422
+        )
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { result } = renderHook(() => useProfileSettings(), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    let res!: Awaited<ReturnType<typeof result.current.save>>
+    await act(async () => {
+      res = await result.current.save({ style_tags: ["x".repeat(40)] })
+    })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.fieldErrors.style_tags).toBe("too long")
+  })
 })
