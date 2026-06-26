@@ -149,7 +149,9 @@ function SettingsForm({
     }
   }
 
-  const bioOver = form.bio.length > BIO_MAX_LENGTH
+  // Trimmed, to match validateBio and the submitted payload — so the counter
+  // and aria-invalid never flag a bio that would actually save fine.
+  const bioOver = form.bio.trim().length > BIO_MAX_LENGTH
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">

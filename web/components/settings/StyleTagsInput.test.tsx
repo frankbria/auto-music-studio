@@ -56,4 +56,19 @@ describe("StyleTagsInput", () => {
       screen.getByRole("option", { name: "orchestral" })
     ).toBeInTheDocument()
   })
+
+  it("wires the combobox ARIA contract as the list opens", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    expect(input).toHaveAttribute("aria-expanded", "false")
+    expect(input).toHaveAttribute("aria-controls", "style-suggestions-list")
+
+    await user.type(input, "or")
+    expect(input).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "id",
+      "style-suggestions-list"
+    )
+  })
 })

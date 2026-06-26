@@ -61,6 +61,7 @@ export function StyleTagsInput({
     draftKey.length > 0 &&
     !suggestions.some((s) => s === draftKey) &&
     !tags.some((t) => t.toLowerCase() === draftKey)
+  const listOpen = suggestions.length > 0 || showAddCustom
 
   return (
     <div data-slot="style-tags" className="flex flex-col gap-2">
@@ -99,10 +100,15 @@ export function StyleTagsInput({
           }}
           placeholder="Add a style (e.g. cello, lo-fi)"
           aria-label="Add a style tag"
+          role="combobox"
+          aria-expanded={listOpen}
+          aria-controls="style-suggestions-list"
+          aria-autocomplete="list"
           disabled={tags.length >= STYLE_TAGS_MAX_ITEMS}
         />
-        {(suggestions.length > 0 || showAddCustom) && (
+        {listOpen && (
           <ul
+            id="style-suggestions-list"
             role="listbox"
             aria-label="Style suggestions"
             className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md"
