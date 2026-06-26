@@ -41,6 +41,13 @@ describe("StyleTagsInput", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/already/i)
   })
 
+  it("does not offer an 'Add' option for a tag already in the list", async () => {
+    render(<StyleTagsInput tags={["cello"]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "cello")
+    expect(screen.queryByText(/Add /)).not.toBeInTheDocument()
+  })
+
   it("shows typeahead suggestions filtered by input", async () => {
     render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
     const user = userEvent.setup()

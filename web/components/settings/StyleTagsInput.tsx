@@ -56,9 +56,11 @@ export function StyleTagsInput({
     setError(null)
   }
 
+  const draftKey = draft.trim().toLowerCase()
   const showAddCustom =
-    draft.trim().length > 0 &&
-    !suggestions.some((s) => s === draft.trim().toLowerCase())
+    draftKey.length > 0 &&
+    !suggestions.some((s) => s === draftKey) &&
+    !tags.some((t) => t.toLowerCase() === draftKey)
 
   return (
     <div data-slot="style-tags" className="flex flex-col gap-2">

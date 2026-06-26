@@ -90,7 +90,9 @@ export function validateHandle(value: string): string | null {
 }
 
 export function validateBio(value: string): string | null {
-  if (value.length > BIO_MAX_LENGTH)
+  // Validate the trimmed length, since that's what gets sent to the backend —
+  // trailing whitespace shouldn't trip the limit on an otherwise-valid bio.
+  if (value.trim().length > BIO_MAX_LENGTH)
     return `Bio must be at most ${BIO_MAX_LENGTH} characters.`
   return null
 }

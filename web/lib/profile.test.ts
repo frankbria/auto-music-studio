@@ -49,6 +49,9 @@ describe("validateBio", () => {
   it("rejects over 500 chars", () => {
     expect(validateBio("a".repeat(501))).toMatch(/at most/)
   })
+  it("ignores surrounding whitespace when checking the limit", () => {
+    expect(validateBio("  " + "a".repeat(500) + "  ")).toBeNull()
+  })
 })
 
 describe("validateNewStyleTag", () => {
