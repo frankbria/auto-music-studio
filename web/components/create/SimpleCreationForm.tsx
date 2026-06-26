@@ -36,10 +36,14 @@ export function SimpleCreationForm() {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [status, setStatus] = useState<Status>({ kind: "idle" })
 
+  // Lyrics only count when the field is open — hiding it shouldn't keep Create
+  // enabled (and then submit an empty prompt). Use this one value everywhere.
+  const effectiveLyrics = showLyrics ? lyrics : ""
+
   // Enabled the moment either text field has content — tags and the instrumental
   // toggle don't gate submission (per the acceptance criteria).
   const canSubmit =
-    description.trim().length > 0 || lyrics.trim().length > 0
+    description.trim().length > 0 || effectiveLyrics.trim().length > 0
 
   async function handleCreate() {
     if (!canSubmit || status.kind === "submitting") return
@@ -49,7 +53,7 @@ export function SimpleCreationForm() {
     }
     setStatus({ kind: "submitting" })
     const result = await submitGeneration(
-      { description, lyrics: showLyrics ? lyrics : "", instrumental, selectedTags },
+      { description, lyrics: effectiveLyrics, instrumental, selectedTags },
       accessToken
     )
     switch (result.status) {

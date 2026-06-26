@@ -103,4 +103,10 @@ describe("submitGeneration", () => {
     const result = await submitGeneration(data, "tok")
     expect(result.status).toBe("error")
   })
+
+  it("returns an error result when the request rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")))
+    const result = await submitGeneration(data, "tok")
+    expect(result.status).toBe("error")
+  })
 })

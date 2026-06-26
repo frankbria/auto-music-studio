@@ -69,14 +69,21 @@ export async function submitGeneration(
   data: GenerationFormData,
   accessToken: string
 ): Promise<SubmitResult> {
-  const res = await fetch("/api/generate", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(buildGenerationPayload(data)),
-  })
+  let res: Response
+  try {
+    res = await fetch("/api/generate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(buildGenerationPayload(data)),
+    })
+  } catch {
+    // Network failure / aborted request — never let it bubble out and leave the
+    // form stuck on "Creating..."; surface it as a generic error instead.
+    return { status: "error", detail: "Generation failed. Please try again." }
+  }
 
   if (res.status === 202) {
     const body = await res.json().catch(() => ({}))

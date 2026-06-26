@@ -50,6 +50,19 @@ describe("SimpleCreationForm", () => {
     expect(createButton()).toBeEnabled()
   })
 
+  it("disables Create again when lyrics are hidden after being the only input", async () => {
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+
+    await user.click(screen.getByRole("button", { name: /lyrics/i }))
+    await user.type(screen.getByLabelText("Lyrics"), "la la la")
+    expect(createButton()).toBeEnabled()
+
+    // Hiding the lyrics field must not leave Create enabled on hidden text.
+    await user.click(screen.getByRole("button", { name: /lyrics/i }))
+    expect(createButton()).toBeDisabled()
+  })
+
   it("toggles the instrumental switch", async () => {
     const user = userEvent.setup()
     render(<SimpleCreationForm />)
