@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import { Nunito_Sans } from "next/font/google"
 
 import "./globals.css"
-import { AppShell } from "@/components/layout"
+import { AppShell, BottomPlaybar } from "@/components/layout"
 import { ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
 
@@ -27,6 +27,8 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <AppShell>{children}</AppShell>
+          {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
+          <BottomPlaybar />
         </ThemeProvider>
       </body>
     </html>

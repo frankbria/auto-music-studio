@@ -31,10 +31,14 @@ describe("AppShell", () => {
     expect(main).toHaveTextContent("route content")
   })
 
-  it("always renders the sidebar and the bottom playbar", () => {
+  it("always renders the sidebar", () => {
     render(<AppShell>x</AppShell>)
     expect(screen.getByTestId("app-sidebar")).toBeInTheDocument()
-    expect(screen.getByTestId("app-playbar")).toBeInTheDocument()
+  })
+
+  it("does not render the playbar itself (root layout renders it as a sibling)", () => {
+    render(<AppShell>x</AppShell>)
+    expect(screen.queryByTestId("app-playbar")).not.toBeInTheDocument()
   })
 
   it("reserves bottom space for the fixed playbar so content is not hidden", () => {

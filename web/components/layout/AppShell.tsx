@@ -1,14 +1,15 @@
 import type { ReactNode } from "react"
 
 import { LAYOUT } from "@/lib/constants/layout"
-import { BottomPlaybar } from "./BottomPlaybar"
 import { RightPanel } from "./RightPanel"
 import { Sidebar } from "./Sidebar"
 
 /**
- * Four-zone application shell: sidebar + main + optional right panel, with a
- * fixed bottom playbar. Wraps every route via the App Router root layout so the
- * shell (and audio playback) persists across navigation.
+ * Three top zones of the application shell: sidebar + main + optional right
+ * panel. Reserves bottom space equal to the playbar height; the `BottomPlaybar`
+ * itself is rendered as a sibling in the root layout (outside this container)
+ * so its `position: fixed` stays viewport-anchored even if a future ancestor
+ * here gains a `transform`/`will-change` and becomes a containing block.
  */
 export function AppShell({
   children,
@@ -26,7 +27,6 @@ export function AppShell({
       <Sidebar />
       <main className="flex-1 overflow-y-auto bg-background">{children}</main>
       {rightPanel ? <RightPanel>{rightPanel}</RightPanel> : null}
-      <BottomPlaybar />
     </div>
   )
 }
