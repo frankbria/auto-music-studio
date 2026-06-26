@@ -57,6 +57,32 @@ describe("StyleTagsInput", () => {
     ).toBeInTheDocument()
   })
 
+  it("navigates suggestions with arrow keys and selects with Enter", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+
+    await user.type(input, "o") // matches several suggestions
+    await user.keyboard("{ArrowDown}") // highlight first option
+    const first = screen.getAllByRole("option")[0]
+    expect(first).toHaveAttribute("aria-selected", "true")
+    expect(input).toHaveAttribute("aria-activedescendant", first.id)
+
+    await user.keyboard("{Enter}") // add the highlighted option
+    expect(onChange).toHaveBeenCalledWith([first.textContent])
+  })
+
+  it("closes the suggestion list on Escape", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "or")
+    expect(screen.getByRole("listbox")).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
   it("wires the combobox ARIA contract as the list opens", async () => {
     render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
     const user = userEvent.setup()

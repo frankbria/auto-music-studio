@@ -27,6 +27,10 @@ export function StyleTagsInput({
 }) {
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
+  // Highlighted option for keyboard navigation (-1 = none); `dismissed` closes
+  // the list on Escape until the next keystroke reopens it.
+  const [activeIndex, setActiveIndex] = useState(-1)
+  const [dismissed, setDismissed] = useState(false)
 
   const suggestions = useMemo(() => {
     const q = draft.trim().toLowerCase()
@@ -61,7 +65,43 @@ export function StyleTagsInput({
     draftKey.length > 0 &&
     !suggestions.some((s) => s === draftKey) &&
     !tags.some((t) => t.toLowerCase() === draftKey)
-  const listOpen = suggestions.length > 0 || showAddCustom
+
+  // Unified, ordered options so keyboard navigation has a single index space.
+  const options = [
+    ...suggestions.map((s) => ({ id: `style-opt-${s}`, label: s, value: s })),
+    ...(showAddCustom
+      ? [{ id: "style-opt-add", label: `Add "${draft.trim()}"`, value: draft }]
+      : []),
+  ]
+  const listOpen = options.length > 0 && !dismissed
+  const activeId =
+    listOpen && activeIndex >= 0 ? options[activeIndex]?.id : undefined
+
+  function resetList() {
+    setActiveIndex(-1)
+    setDismissed(false)
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      add(activeIndex >= 0 ? (options[activeIndex]?.value ?? draft) : draft)
+      return
+    }
+    if (e.key === "Escape" && listOpen) {
+      setDismissed(true)
+      setActiveIndex(-1)
+      return
+    }
+    if (!listOpen) return
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setActiveIndex((i) => (i + 1) % options.length)
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setActiveIndex((i) => (i <= 0 ? options.length - 1 : i - 1))
+    }
+  }
 
   return (
     <div data-slot="style-tags" className="flex flex-col gap-2">
@@ -91,19 +131,16 @@ export function StyleTagsInput({
           onChange={(e) => {
             setDraft(e.target.value)
             setError(null)
+            resetList()
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault()
-              add(draft)
-            }
-          }}
+          onKeyDown={onKeyDown}
           placeholder="Add a style (e.g. cello, lo-fi)"
           aria-label="Add a style tag"
           role="combobox"
           aria-expanded={listOpen}
           aria-controls="style-suggestions-list"
           aria-autocomplete="list"
+          aria-activedescendant={activeId}
           disabled={tags.length >= STYLE_TAGS_MAX_ITEMS}
         />
         {listOpen && (
@@ -113,30 +150,24 @@ export function StyleTagsInput({
             aria-label="Style suggestions"
             className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md"
           >
-            {suggestions.map((s) => (
-              <li key={s}>
+            {options.map((opt, i) => (
+              <li key={opt.id}>
                 <button
                   type="button"
+                  id={opt.id}
                   role="option"
-                  aria-selected={false}
-                  onClick={() => add(s)}
-                  className="flex w-full px-2.5 py-1.5 text-left text-sm hover:bg-muted"
+                  aria-selected={i === activeIndex}
+                  onClick={() => add(opt.value)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={
+                    "flex w-full px-2.5 py-1.5 text-left text-sm hover:bg-muted" +
+                    (i === activeIndex ? " bg-muted" : "")
+                  }
                 >
-                  {s}
+                  {opt.label}
                 </button>
               </li>
             ))}
-            {showAddCustom && (
-              <li>
-                <button
-                  type="button"
-                  onClick={() => add(draft)}
-                  className="flex w-full px-2.5 py-1.5 text-left text-sm hover:bg-muted"
-                >
-                  Add &ldquo;{draft.trim()}&rdquo;
-                </button>
-              </li>
-            )}
           </ul>
         )}
       </div>

@@ -230,7 +230,7 @@ function SettingsForm({
                     (bioOver ? "text-destructive" : "text-muted-foreground")
                   }
                 >
-                  {form.bio.length}/{BIO_MAX_LENGTH}
+                  {form.bio.trim().length}/{BIO_MAX_LENGTH}
                 </span>
               </div>
             </div>
