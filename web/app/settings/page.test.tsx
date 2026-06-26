@@ -18,7 +18,9 @@ const authValue = {
 
 function renderPage() {
   function wrapper({ children }: { children: ReactNode }) {
-    return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+    return (
+      <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+    )
   }
   return render(<SettingsPage />, { wrapper })
 }
@@ -68,7 +70,9 @@ describe("SettingsPage", () => {
     await user.type(nameInput, "Ada L")
     await user.click(screen.getByRole("button", { name: /Save changes/ }))
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved."))
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Saved.")
+    )
     const patch = fetchMock.mock.calls[1]
     expect(patch[1].method).toBe("PATCH")
     expect(JSON.parse(patch[1].body)).toEqual({ display_name: "Ada L" })
@@ -82,10 +86,14 @@ describe("SettingsPage", () => {
     const handleInput = await screen.findByLabelText("Handle")
     await user.clear(handleInput)
     await user.type(handleInput, "ab") // too short
-    await waitFor(() => expect(screen.getByText(/3-30 characters/)).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/3-30 characters/)).toBeInTheDocument()
+    )
 
     await user.type(handleInput, "cde") // now "abcde" — valid
-    await waitFor(() => expect(screen.getByText("Looks good")).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText("Looks good")).toBeInTheDocument()
+    )
   })
 
   it("shows an inline error when the handle is already taken (409)", async () => {
@@ -119,18 +127,30 @@ describe("SettingsPage", () => {
     await user.click(screen.getByRole("button", { name: /Save changes/ }))
 
     expect(screen.getByText(/required/i)).toBeInTheDocument()
+    // The error is associated with the field for assistive tech.
+    const nameField = screen.getByLabelText("Display name")
+    expect(nameField).toHaveAttribute("aria-describedby", "display_name-error")
+    expect(screen.getByText(/required/i)).toHaveAttribute(
+      "id",
+      "display_name-error"
+    )
   })
 
   it("shows an error state when the profile fails to load", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({}, 500)))
     renderPage()
     await waitFor(() =>
-      expect(screen.getByText(/Could not load your profile/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Could not load your profile/i)
+      ).toBeInTheDocument()
     )
   })
 
   it("surfaces a session-expired message on a 401 load", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ detail: "x" }, 401)))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonRes({ detail: "x" }, 401))
+    )
     renderPage()
     await waitFor(() =>
       expect(screen.getByText(/session expired/i)).toBeInTheDocument()

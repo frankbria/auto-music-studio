@@ -181,9 +181,15 @@ function SettingsForm({
                 value={form.display_name}
                 onChange={(e) => update("display_name", e.target.value)}
                 aria-invalid={errors.display_name ? true : undefined}
+                aria-describedby={
+                  errors.display_name ? "display_name-error" : undefined
+                }
                 maxLength={120}
               />
-              <FieldError message={errors.display_name} />
+              <FieldError
+                id="display_name-error"
+                message={errors.display_name}
+              />
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -197,11 +203,17 @@ function SettingsForm({
                   value={form.handle}
                   onChange={(e) => update("handle", e.target.value)}
                   aria-invalid={errors.handle || handleHint ? true : undefined}
+                  aria-describedby={
+                    errors.handle || handleHint ? "handle-error" : undefined
+                  }
                   className="pl-6"
                   placeholder="your-handle"
                 />
               </div>
-              <FieldError message={errors.handle ?? handleHint} />
+              <FieldError
+                id="handle-error"
+                message={errors.handle ?? handleHint}
+              />
               {!errors.handle &&
                 !handleHint &&
                 form.handle.length > 0 &&
@@ -220,10 +232,11 @@ function SettingsForm({
                 value={form.bio}
                 onChange={(e) => update("bio", e.target.value)}
                 aria-invalid={errors.bio || bioOver ? true : undefined}
+                aria-describedby={errors.bio ? "bio-error" : undefined}
                 rows={4}
               />
               <div className="flex items-center justify-between">
-                <FieldError message={errors.bio} />
+                <FieldError id="bio-error" message={errors.bio} />
                 <span
                   className={
                     "ml-auto text-xs " +
