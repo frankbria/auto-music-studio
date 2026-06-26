@@ -8,6 +8,7 @@
  */
 export const LAYOUT = {
   sidebarWidth: 64,
+  sidebarExpandedWidth: 240,
   playbarHeight: 72,
   rightPanelWidth: 320,
   z: {
