@@ -42,6 +42,8 @@ export type GenerationPayload = {
   weirdness?: number
   style_influence?: number
   seed?: number
+  mode?: "song" | "sound"
+  sound_type?: "one-shot" | "loop"
 }
 
 export type SubmitResult =
@@ -202,6 +204,67 @@ export function submitAdvancedGeneration(
   accessToken: string
 ): Promise<SubmitResult> {
   return postGeneration(buildAdvancedPayload(data), accessToken)
+}
+
+/** Form state for the Sounds creation form (US-16.3): short one-shots and loops. */
+export type SoundsFormData = {
+  description: string
+  /** "" until the user picks one — Create stays disabled while unset. */
+  soundType: "" | "one-shot" | "loop"
+  /** bpm/key apply to loops only; ignored (and never sent) for one-shots. */
+  bpmAuto: boolean
+  /** Raw numeric-input string; "" means unset. */
+  bpm: string
+  /** "" is the "Any" choice (omitted from the payload). */
+  key: string
+}
+
+/**
+ * Build the backend payload for a sound request. The description is the prompt
+ * and the mode is fixed to "sound"; sounds are instrumental clips. The backend
+ * forbids bpm/key on one-shots (a one-shot is a single hit with no tempo/tonal
+ * context), so those are added for loops only — bpm when not on Auto and in
+ * range, key when a specific key is chosen. Caller must ensure soundType is set.
+ */
+export function buildSoundsPayload(data: SoundsFormData): GenerationPayload {
+  const payload: GenerationPayload = {
+    prompt: data.description.trim(),
+    instrumental: true,
+    mode: "sound",
+    // soundType is "" only before a type is chosen; Create is disabled until then.
+    sound_type: data.soundType || "one-shot",
+  }
+  if (data.soundType === "loop") {
+    if (!data.bpmAuto && data.bpm.trim()) payload.bpm = Number(data.bpm)
+    if (data.key) payload.key = data.key
+  }
+  return payload
+}
+
+/**
+ * Validate the Sounds form before submitting. A type is required (it gates the
+ * payload's sound_type), the description becomes the prompt so it must be
+ * non-empty, and a loop's explicit BPM is range-checked to surface a message
+ * inline instead of as a 422. Returns the first problem, or null when valid.
+ */
+export function validateSounds(data: SoundsFormData): string | null {
+  if (!data.soundType) return "Choose a sound type to create."
+  if (!data.description.trim()) return "Add a description to create."
+  if (data.soundType === "loop" && !data.bpmAuto && data.bpm.trim()) {
+    const bpm = Number(data.bpm)
+    if (!Number.isFinite(bpm) || bpm < BPM_MIN || bpm > BPM_MAX) {
+      return `BPM must be between ${BPM_MIN} and ${BPM_MAX}.`
+    }
+  }
+  return null
+}
+
+/** Submit the Sounds creation form through the BFF proxy. */
+export function submitSoundsGeneration(
+  data: SoundsFormData,
+  accessToken: string
+): Promise<SubmitResult> {
+  return postGeneration(buildSoundsPayload(data), accessToken)
 }
 
 /** POST a built payload through the BFF proxy and classify the response. */
