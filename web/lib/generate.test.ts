@@ -96,10 +96,10 @@ describe("buildAdvancedPayload", () => {
     expect(payload).not.toHaveProperty("lyrics")
   })
 
-  it("sends bpm 'auto' when the Auto toggle is on, otherwise the number", () => {
-    expect(buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: true })).bpm).toBe(
-      "auto"
-    )
+  it("omits bpm when Auto is on, and sends the number otherwise", () => {
+    expect(
+      buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: true }))
+    ).not.toHaveProperty("bpm")
     expect(
       buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: false, bpm: "120" })).bpm
     ).toBe(120)

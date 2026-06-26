@@ -118,18 +118,18 @@ export function buildAdvancedPayload(data: AdvancedFormData): GenerationPayload 
     instrumental: data.instrumental,
     weirdness: data.weirdness,
     style_influence: data.styleInfluence,
-    bpm: data.bpmAuto ? "auto" : Number(data.bpm),
   }
   if (style) payload.style = style
   if (lyrics) payload.lyrics = lyrics
   if (data.vocalLanguage) payload.vocal_language = data.vocalLanguage
+  // Auto = no tempo preference, so omit bpm entirely (matching every other
+  // optional field) rather than pinning "auto" — the backend's model_dump uses
+  // exclude_none, so an absent bpm and an explicit "auto" are NOT equivalent.
+  if (!data.bpmAuto && data.bpm.trim()) payload.bpm = Number(data.bpm)
   if (data.key) payload.key = data.key
   if (data.timeSignature) payload.time_signature = data.timeSignature
   if (data.duration.trim()) payload.duration = Number(data.duration)
   if (!data.seedRandom && data.seed.trim()) payload.seed = Number(data.seed)
-  // bpm "" with Auto off is invalid input; validateAdvanced blocks it first, so
-  // an unguarded NaN here never reaches the wire.
-  if (!data.bpmAuto && !data.bpm.trim()) delete payload.bpm
   return payload
 }
 

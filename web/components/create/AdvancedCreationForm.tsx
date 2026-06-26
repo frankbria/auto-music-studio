@@ -25,6 +25,7 @@ import {
   VOCAL_LANGUAGES,
   WEIRDNESS_DEFAULT,
 } from "@/lib/constants/generation"
+import { SELECT_CLASS } from "@/lib/constants/ui"
 
 type Status =
   | { kind: "idle" }
@@ -33,9 +34,6 @@ type Status =
   | { kind: "error"; message: string }
 
 const STUB_NOTICE = "This feature is coming soon."
-
-const selectClass =
-  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
 
 const initialOptions: MoreOptions = {
   bpmAuto: true,
@@ -171,7 +169,7 @@ export function AdvancedCreationForm() {
         <div className="flex flex-wrap items-center gap-2">
           <select
             aria-label="Vocal language"
-            className={`${selectClass} w-auto`}
+            className={`${SELECT_CLASS} w-auto`}
             value={vocalLanguage}
             onChange={(e) => setVocalLanguage(e.target.value)}
           >

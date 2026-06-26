@@ -58,12 +58,14 @@ describe("AdvancedCreationForm", () => {
     const user = userEvent.setup()
     render(<AdvancedCreationForm />)
     const toggle = screen.getByRole("button", { name: /more options/i })
-    expect(screen.queryByLabelText("BPM")).not.toBeInTheDocument()
+    // The panel is always in the DOM (so aria-controls resolves) but hidden when
+    // collapsed; assert visibility rather than presence.
+    expect(screen.getByLabelText("BPM")).not.toBeVisible()
     await user.click(toggle)
-    expect(screen.getByLabelText("BPM")).toBeInTheDocument()
-    expect(screen.getByLabelText("Weirdness")).toBeInTheDocument()
+    expect(screen.getByLabelText("BPM")).toBeVisible()
+    expect(screen.getByLabelText(/weirdness/i)).toBeVisible()
     await user.click(toggle)
-    expect(screen.queryByLabelText("BPM")).not.toBeInTheDocument()
+    expect(screen.getByLabelText("BPM")).not.toBeVisible()
   })
 
   it("restores the styles field after Clear via Undo", async () => {
