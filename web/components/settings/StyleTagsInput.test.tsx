@@ -24,6 +24,14 @@ describe("StyleTagsInput", () => {
     expect(onChange).toHaveBeenCalledWith(["ambient"])
   })
 
+  it("normalizes a custom tag to lowercase", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "LoFi{Enter}")
+    expect(onChange).toHaveBeenCalledWith(["lofi"])
+  })
+
   it("rejects a duplicate tag with an inline error", async () => {
     const onChange = vi.fn()
     render(<StyleTagsInput tags={["jazz"]} onChange={onChange} />)

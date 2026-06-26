@@ -128,4 +128,29 @@ describe("SettingsPage", () => {
       expect(screen.getByText(/Could not load your profile/i)).toBeInTheDocument()
     )
   })
+
+  it("surfaces a session-expired message on a 401 load", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ detail: "x" }, 401)))
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText(/session expired/i)).toBeInTheDocument()
+    )
+  })
+
+  it("skips the network round-trip when only trailing whitespace changed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonRes(PROFILE))
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    renderPage()
+
+    const nameInput = await screen.findByLabelText("Display name")
+    await user.type(nameInput, "  ") // "Ada  " trims back to "Ada"
+    await user.click(screen.getByRole("button", { name: /Save changes/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Saved.")
+    )
+    // Only the mount GET fired — no PATCH.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

@@ -23,7 +23,10 @@ async function proxy(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
-  const init: RequestInit = { method, headers: { authorization: auth } }
+  const init: RequestInit = {
+    method,
+    headers: { authorization: auth, accept: "application/json" },
+  }
   if (method === "PATCH") {
     init.headers = { ...init.headers, "content-type": "application/json" }
     init.body = await request.text()

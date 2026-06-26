@@ -35,10 +35,9 @@ export function AvatarUpload({ currentUrl }: { currentUrl: string | null }) {
       return
     }
     setError(null)
-    setPreviewUrl((old) => {
-      if (old) URL.revokeObjectURL(old)
-      return URL.createObjectURL(file)
-    })
+    // The effect below owns revocation: it revokes the prior URL when this
+    // value changes and on unmount, so we only create here.
+    setPreviewUrl(URL.createObjectURL(file))
   }
 
   const shown = previewUrl ?? currentUrl

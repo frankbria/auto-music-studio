@@ -81,8 +81,9 @@ export function validateHandle(value: string): string | null {
     return "Only letters, numbers, and hyphens allowed."
   if (value.startsWith("-") || value.endsWith("-"))
     return "Cannot start or end with a hyphen."
-  // Catch any residual mismatch (e.g. consecutive-hyphen edge cases the
-  // backend pattern rejects) so client and server never disagree.
+  // Backstop against the exact backend pattern so client and server never
+  // disagree. (The backend, like this, accepts internal consecutive hyphens —
+  // e.g. "a--b" — so we deliberately don't reject them here.)
   if (!HANDLE_PATTERN.test(value))
     return "Only letters, numbers, and hyphens allowed."
   return null

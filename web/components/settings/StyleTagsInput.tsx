@@ -38,7 +38,9 @@ export function StyleTagsInput({
   }, [draft, tags])
 
   function add(raw: string) {
-    const tag = raw.trim()
+    // Normalize to lowercase so custom tags match the (lowercase) suggestions
+    // and the case-insensitive duplicate guard, keeping the list consistent.
+    const tag = raw.trim().toLowerCase()
     const err = validateNewStyleTag(tag, tags)
     if (err) {
       setError(err)

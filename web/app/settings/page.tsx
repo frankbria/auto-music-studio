@@ -109,15 +109,29 @@ function SettingsForm({
       return
     }
 
-    // Send only changed fields (exclude_unset). Empty handle clears it (null).
+    // Send only changed fields (exclude_unset). Compare the normalized
+    // (trimmed) values against the stored baseline so a trailing space alone
+    // doesn't trigger a no-op PATCH, and a whitespace-only bio isn't stored.
+    const trimmedName = form.display_name.trim()
+    const trimmedBio = form.bio.trim()
     const payload: UserProfileUpdate = {}
-    if (form.display_name !== baseline.display_name)
-      payload.display_name = form.display_name.trim()
+    if (trimmedName !== baseline.display_name)
+      payload.display_name = trimmedName
     if (form.handle !== baseline.handle)
       payload.handle = form.handle.length === 0 ? null : form.handle
-    if (form.bio !== baseline.bio) payload.bio = form.bio
+    if (trimmedBio !== baseline.bio) payload.bio = trimmedBio
     if (JSON.stringify(form.style_tags) !== JSON.stringify(baseline.style_tags))
       payload.style_tags = form.style_tags
+
+    // Nothing actually changed once normalized — just re-sync the form to the
+    // trimmed values and report success without a wasted round-trip.
+    if (Object.keys(payload).length === 0) {
+      const synced = { ...form, display_name: trimmedName, bio: trimmedBio }
+      setForm(synced)
+      setBaseline(synced)
+      setSavedOk(true)
+      return
+    }
 
     setSaving(true)
     setErrors({})

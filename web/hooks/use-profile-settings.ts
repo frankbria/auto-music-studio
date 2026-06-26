@@ -14,9 +14,14 @@ export type SaveResult =
   | { ok: true; profile: UserProfile }
   | { ok: false; fieldErrors: FieldErrors; message: string | null }
 
-// null = not loaded yet; failed reflects a load error. Loading/error are
-// derived from this + auth so the effect never calls setState synchronously.
-type Loaded = { profile: UserProfile | null; failed: boolean }
+// null = not loaded yet; failed reflects a load error (expired = the access
+// token was rejected). Loading/error are derived from this + auth so the effect
+// never calls setState synchronously.
+type Loaded = {
+  profile: UserProfile | null
+  failed: boolean
+  expired?: boolean
+}
 
 // FastAPI validation error shape: { detail: [{ loc: ["body", field], msg }] }.
 type ValidationDetail = { loc: (string | number)[]; msg: string }
@@ -31,7 +36,11 @@ function parseErrors(status: number, body: unknown): SaveResult {
       message: null,
     }
   }
-  if (status === 422 && body && Array.isArray((body as { detail?: unknown }).detail)) {
+  if (
+    status === 422 &&
+    body &&
+    Array.isArray((body as { detail?: unknown }).detail)
+  ) {
     const fieldErrors: FieldErrors = {}
     for (const d of (body as { detail: ValidationDetail[] }).detail) {
       const field = d.loc?.[d.loc.length - 1]
@@ -47,7 +56,10 @@ function parseErrors(status: number, body: unknown): SaveResult {
   return {
     ok: false,
     fieldErrors: {},
-    message: typeof detail === "string" ? detail : "Could not save changes. Please try again.",
+    message:
+      typeof detail === "string"
+        ? detail
+        : "Could not save changes. Please try again.",
   }
 }
 
@@ -55,6 +67,10 @@ function parseErrors(status: number, body: unknown): SaveResult {
  * Load the current user's profile and expose a save action. Fetch waits for the
  * in-memory access token (restored on app mount) before calling the same-origin
  * BFF proxy at /api/users/me.
+ *
+ * Precondition: use behind an auth guard (e.g. useRequireAuth). When auth has
+ * settled with no token, this surfaces a "Not authenticated." error rather than
+ * loading — an unguarded consumer would flash that on first render.
  */
 export function useProfileSettings() {
   const { accessToken, isLoading: authLoading } = useAuth()
@@ -69,11 +85,13 @@ export function useProfileSettings() {
       headers: { authorization: `Bearer ${accessToken}` },
     })
       .then(async (res) => {
+        if (res.status === 401)
+          return { profile: null, failed: true, expired: true }
         if (!res.ok) throw new Error("fetch failed")
-        return (await res.json()) as UserProfile
+        return { profile: (await res.json()) as UserProfile, failed: false }
       })
-      .then((profile) => {
-        if (active) setLoaded({ profile, failed: false })
+      .then((next) => {
+        if (active) setLoaded(next)
       })
       .catch(() => {
         if (active) setLoaded({ profile: null, failed: true })
@@ -87,9 +105,11 @@ export function useProfileSettings() {
   const error =
     !authLoading && !accessToken
       ? "Not authenticated."
-      : loaded?.failed
-        ? "Could not load your profile. Please try again."
-        : null
+      : loaded?.expired
+        ? "Your session expired. Please sign in again."
+        : loaded?.failed
+          ? "Could not load your profile. Please try again."
+          : null
   const profile = loaded?.profile ?? null
 
   const save = useCallback(
