@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRequireAuth } from "@/hooks/use-require-auth"
 import { SimpleCreationForm } from "@/components/create/SimpleCreationForm"
 import { AdvancedCreationForm } from "@/components/create/AdvancedCreationForm"
+import { SoundsCreationForm } from "@/components/create/SoundsCreationForm"
 
 export default function CreatePage() {
   const { isLoading, isAuthenticated } = useRequireAuth()
@@ -28,7 +29,7 @@ export default function CreatePage() {
           <AdvancedCreationForm />
         </TabsContent>
         <TabsContent value="sounds">
-          <p className="text-sm text-muted-foreground">Coming soon.</p>
+          <SoundsCreationForm />
         </TabsContent>
       </Tabs>
     </div>

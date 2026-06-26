@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   buildAdvancedPayload,
   buildGenerationPayload,
+  buildSoundsPayload,
   submitGeneration,
   validateAdvanced,
+  validateSounds,
   type AdvancedFormData,
+  type SoundsFormData,
 } from "@/lib/generate"
 
 afterEach(() => vi.restoreAllMocks())
@@ -192,6 +195,89 @@ describe("validateAdvanced", () => {
     expect(validateAdvanced(advancedData({ styles: "rock", styleInfluence: -1 }))).toMatch(
       /influence/i
     )
+  })
+})
+
+/** A valid baseline sounds form; tests override only what they exercise. */
+function soundsData(overrides: Partial<SoundsFormData> = {}): SoundsFormData {
+  return {
+    description: "a punchy kick",
+    soundType: "one-shot",
+    bpmAuto: true,
+    bpm: "",
+    key: "",
+    ...overrides,
+  }
+}
+
+describe("buildSoundsPayload", () => {
+  it("maps description to prompt and fixes mode to sound (instrumental)", () => {
+    const payload = buildSoundsPayload(soundsData({ description: "  warm pad  " }))
+    expect(payload).toMatchObject({
+      prompt: "warm pad",
+      mode: "sound",
+      sound_type: "one-shot",
+      instrumental: true,
+    })
+  })
+
+  it("never sends bpm or key for a one-shot (backend forbids them)", () => {
+    // Even if stray loop values are present, a one-shot must omit tempo/tonal keys.
+    const payload = buildSoundsPayload(
+      soundsData({ soundType: "one-shot", bpmAuto: false, bpm: "120", key: "C major" })
+    )
+    expect(payload).not.toHaveProperty("bpm")
+    expect(payload).not.toHaveProperty("key")
+  })
+
+  it("sends bpm and key for a loop", () => {
+    const payload = buildSoundsPayload(
+      soundsData({ soundType: "loop", bpmAuto: false, bpm: "128", key: "A minor" })
+    )
+    expect(payload).toMatchObject({ sound_type: "loop", bpm: 128, key: "A minor" })
+  })
+
+  it("omits bpm for a loop when Auto is on, and key when Any", () => {
+    const payload = buildSoundsPayload(
+      soundsData({ soundType: "loop", bpmAuto: true, bpm: "128", key: "" })
+    )
+    expect(payload).not.toHaveProperty("bpm")
+    expect(payload).not.toHaveProperty("key")
+  })
+})
+
+describe("validateSounds", () => {
+  it("accepts a valid one-shot and a valid loop", () => {
+    expect(validateSounds(soundsData())).toBeNull()
+    expect(
+      validateSounds(soundsData({ soundType: "loop", bpmAuto: false, bpm: "120" }))
+    ).toBeNull()
+  })
+
+  it("requires a sound type", () => {
+    expect(validateSounds(soundsData({ soundType: "" }))).toMatch(/type/i)
+  })
+
+  it("requires a description", () => {
+    expect(validateSounds(soundsData({ description: "  " }))).toMatch(/description/i)
+  })
+
+  it("rejects an over-long description (the prompt bound)", () => {
+    expect(validateSounds(soundsData({ description: "x".repeat(2001) }))).toMatch(
+      /description/i
+    )
+  })
+
+  it("rejects an out-of-range loop BPM", () => {
+    expect(
+      validateSounds(soundsData({ soundType: "loop", bpmAuto: false, bpm: "300" }))
+    ).toMatch(/bpm/i)
+  })
+
+  it("ignores BPM bounds when Auto is on", () => {
+    expect(
+      validateSounds(soundsData({ soundType: "loop", bpmAuto: true, bpm: "300" }))
+    ).toBeNull()
   })
 })
 
