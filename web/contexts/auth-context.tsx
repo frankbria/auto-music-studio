@@ -78,17 +78,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push("/login")
   }, [router])
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      user: accessToken ? decodeAccessToken(accessToken) : null,
-      isAuthenticated: accessToken !== null,
+  const value = useMemo<AuthContextValue>(() => {
+    // Derive isAuthenticated from the decoded user so the two can't disagree
+    // (a token missing sub/email decodes to null → treated as unauthenticated).
+    const user = accessToken ? decodeAccessToken(accessToken) : null
+    return {
+      user,
+      isAuthenticated: user !== null,
       isLoading,
       login,
       completeLogin,
       logout,
-    }),
-    [accessToken, isLoading, login, completeLogin, logout]
-  )
+    }
+  }, [accessToken, isLoading, login, completeLogin, logout])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

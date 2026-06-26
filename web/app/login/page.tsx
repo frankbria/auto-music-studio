@@ -10,7 +10,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
-import { safeInternalPath } from "@/lib/auth"
+import { RETURN_TO_KEY, safeInternalPath } from "@/lib/auth"
 import { useAuth } from "@/hooks/use-auth"
 
 const PROVIDERS = [
@@ -36,6 +36,9 @@ function LoginForm() {
     setFailed(false)
     setPending(provider)
     try {
+      // Providers don't echo app params back on the callback URL, so stash the
+      // return path here for the callback page to pick up after the round-trip.
+      sessionStorage.setItem(RETURN_TO_KEY, from)
       await login(provider) // navigates away to the provider on success
     } catch {
       setFailed(true)

@@ -47,4 +47,12 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /Continue with Google/ }))
     expect(login).toHaveBeenCalledWith("google")
   })
+
+  it("stashes the return path for the callback to pick up after the round-trip", async () => {
+    const user = userEvent.setup()
+    renderLogin({ login: vi.fn().mockResolvedValue(undefined) })
+    await user.click(screen.getByRole("button", { name: /Continue with Discord/ }))
+    // searchParams is empty here, so it defaults to /create.
+    expect(sessionStorage.getItem("ams_return_to")).toBe("/create")
+  })
 })

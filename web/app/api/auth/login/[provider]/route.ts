@@ -18,6 +18,12 @@ export async function POST(
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) return NextResponse.json(body, { status: res.status })
+  if (!body.authorization_url) {
+    return NextResponse.json(
+      { detail: "Malformed login response from backend." },
+      { status: 502 }
+    )
+  }
 
   const out = NextResponse.json({ authorization_url: body.authorization_url })
   for (const { name, value } of parseStateSetCookies(res.headers.getSetCookie())) {

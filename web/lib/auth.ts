@@ -7,6 +7,9 @@ export const REFRESH_COOKIE = "ams_refresh_token"
 /** Prefix of the backend's per-flow OAuth state cookie (`oauth_state_<flow_id>`). */
 export const OAUTH_STATE_PREFIX = "oauth_state_"
 
+/** sessionStorage key holding the post-login return path across the OAuth round-trip. */
+export const RETURN_TO_KEY = "ams_return_to"
+
 export type AuthUser = { id: string; email: string }
 
 /** OAuth providers the UI and BFF support. */

@@ -7,7 +7,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert01Icon, Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
-import { safeInternalPath } from "@/lib/auth"
+import { RETURN_TO_KEY, safeInternalPath } from "@/lib/auth"
 import { useAuth } from "@/hooks/use-auth"
 
 function CallbackHandler() {
@@ -20,16 +20,18 @@ function CallbackHandler() {
 
   const code = searchParams.get("code")
   const state = searchParams.get("state")
-  const from = safeInternalPath(searchParams.get("from"))
   const failed = exchangeFailed || !code || !state
 
   useEffect(() => {
     if (started.current || !code || !state) return // exchange the code exactly once
     started.current = true
+    // The return path was stashed by the login page (providers don't echo it back).
+    const from = safeInternalPath(sessionStorage.getItem(RETURN_TO_KEY))
+    sessionStorage.removeItem(RETURN_TO_KEY)
     completeLogin(params.provider, code, state)
       .then(() => router.replace(from))
       .catch(() => setExchangeFailed(true))
-  }, [completeLogin, params.provider, router, from, code, state])
+  }, [completeLogin, params.provider, router, code, state])
 
   if (failed) {
     return (
