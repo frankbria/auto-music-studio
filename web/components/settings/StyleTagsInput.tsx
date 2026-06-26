@@ -93,12 +93,18 @@ export function StyleTagsInput({
       setActiveIndex(-1)
       return
     }
-    if (!listOpen) return
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return
+    if (options.length === 0) return
+    e.preventDefault()
+    // ArrowDown/Up reopen the list if Escape dismissed it (APG pattern).
+    if (!listOpen) {
+      setDismissed(false)
+      setActiveIndex(e.key === "ArrowDown" ? 0 : options.length - 1)
+      return
+    }
     if (e.key === "ArrowDown") {
-      e.preventDefault()
       setActiveIndex((i) => (i + 1) % options.length)
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault()
+    } else {
       setActiveIndex((i) => (i <= 0 ? options.length - 1 : i - 1))
     }
   }
@@ -144,31 +150,32 @@ export function StyleTagsInput({
           disabled={tags.length >= STYLE_TAGS_MAX_ITEMS}
         />
         {listOpen && (
-          <ul
+          // role="option" elements are direct children of the listbox (no <li>
+          // intermediary) so the ARIA ownership chain stays intact. Focus stays
+          // on the input; selection is driven via aria-activedescendant.
+          <div
             id="style-suggestions-list"
             role="listbox"
             aria-label="Style suggestions"
             className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-md"
           >
             {options.map((opt, i) => (
-              <li key={opt.id}>
-                <button
-                  type="button"
-                  id={opt.id}
-                  role="option"
-                  aria-selected={i === activeIndex}
-                  onClick={() => add(opt.value)}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  className={
-                    "flex w-full px-2.5 py-1.5 text-left text-sm hover:bg-muted" +
-                    (i === activeIndex ? " bg-muted" : "")
-                  }
-                >
-                  {opt.label}
-                </button>
-              </li>
+              <div
+                key={opt.id}
+                id={opt.id}
+                role="option"
+                aria-selected={i === activeIndex}
+                onClick={() => add(opt.value)}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={
+                  "cursor-pointer px-2.5 py-1.5 text-sm hover:bg-muted" +
+                  (i === activeIndex ? " bg-muted" : "")
+                }
+              >
+                {opt.label}
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 

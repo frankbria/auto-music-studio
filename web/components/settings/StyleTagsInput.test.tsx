@@ -83,6 +83,17 @@ describe("StyleTagsInput", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
   })
 
+  it("reopens a dismissed list when ArrowDown is pressed", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "or")
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    await user.keyboard("{ArrowDown}")
+    expect(screen.getByRole("listbox")).toBeInTheDocument()
+  })
+
   it("wires the combobox ARIA contract as the list opens", async () => {
     render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
     const user = userEvent.setup()
