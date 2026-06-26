@@ -73,6 +73,18 @@ describe("StyleTagsInput", () => {
     expect(onChange).toHaveBeenCalledWith([first.textContent])
   })
 
+  it("ignores a second Enter after adding (no spurious empty-tag error)", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "o")
+    await user.keyboard("{ArrowDown}{Enter}") // add the highlighted suggestion
+    expect(onChange).toHaveBeenCalledTimes(1)
+    await user.keyboard("{Enter}") // draft is empty now — should be a no-op
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
   it("closes the suggestion list on Escape", async () => {
     render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
     const user = userEvent.setup()

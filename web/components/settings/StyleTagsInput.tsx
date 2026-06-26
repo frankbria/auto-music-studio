@@ -53,6 +53,7 @@ export function StyleTagsInput({
     onChange([...tags, tag])
     setDraft("")
     setError(null)
+    resetList()
   }
 
   function remove(tag: string) {
@@ -85,7 +86,11 @@ export function StyleTagsInput({
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
       e.preventDefault()
-      add(activeIndex >= 0 ? (options[activeIndex]?.value ?? draft) : draft)
+      const active = activeIndex >= 0 ? options[activeIndex] : undefined
+      // No-op on Enter with an empty draft and nothing highlighted (e.g. right
+      // after adding a tag) instead of surfacing a spurious "empty" error.
+      if (active) add(active.value)
+      else if (draft.trim()) add(draft)
       return
     }
     if (e.key === "Escape" && listOpen) {

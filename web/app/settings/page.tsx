@@ -153,6 +153,11 @@ function SettingsForm({
   // and aria-invalid never flag a bio that would actually save fine.
   const bioOver = form.bio.trim().length > BIO_MAX_LENGTH
 
+  // Synchronous validity gates the "Looks good" hint so it can't flash on a
+  // still-invalid handle during the 400 ms before the debounce settles.
+  const handleValid =
+    form.handle.length > 0 && validateHandle(form.handle) === null
+
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">
       <Card>
@@ -215,8 +220,9 @@ function SettingsForm({
                 message={errors.handle ?? handleHint}
               />
               {!errors.handle &&
+                !formError &&
                 !handleHint &&
-                form.handle.length > 0 &&
+                handleValid &&
                 form.handle !== baseline.handle && (
                   <p className="flex items-center gap-1 text-sm text-muted-foreground">
                     <HugeiconsIcon icon={CheckmarkCircle01Icon} size={14} />

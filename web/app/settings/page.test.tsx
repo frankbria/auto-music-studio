@@ -96,6 +96,45 @@ describe("SettingsPage", () => {
     )
   })
 
+  it("does not flash 'Looks good' while typing an invalid handle", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes(PROFILE)))
+    const user = userEvent.setup()
+    renderPage()
+
+    const handleInput = await screen.findByLabelText("Handle")
+    await user.clear(handleInput)
+    await user.type(handleInput, "ab") // too short → never valid
+    // Synchronous validity gate means the hint never appears, even pre-debounce.
+    expect(screen.queryByText("Looks good")).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByText(/3-30 characters/)).toBeInTheDocument()
+    )
+    expect(screen.queryByText("Looks good")).not.toBeInTheDocument()
+  })
+
+  it("hides 'Looks good' when a save fails with a form-level error", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(PROFILE))
+      .mockResolvedValueOnce(jsonRes({}, 500))
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    renderPage()
+
+    const handleInput = await screen.findByLabelText("Handle")
+    await user.clear(handleInput)
+    await user.type(handleInput, "new-handle") // valid format
+    await waitFor(() =>
+      expect(screen.getByText("Looks good")).toBeInTheDocument()
+    )
+    await user.click(screen.getByRole("button", { name: /Save changes/ }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/Could not save changes/i)).toBeInTheDocument()
+    )
+    expect(screen.queryByText("Looks good")).not.toBeInTheDocument()
+  })
+
   it("shows an inline error when the handle is already taken (409)", async () => {
     const fetchMock = vi
       .fn()
