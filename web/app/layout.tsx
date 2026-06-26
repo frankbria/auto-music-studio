@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Nunito_Sans } from "next/font/google"
 
 import "./globals.css"
+import { AppShell } from "@/components/layout"
 import { ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
 
@@ -24,7 +25,9 @@ export default function RootLayout({
       className={cn("antialiased", nunitoSans.variable)}
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <AppShell>{children}</AppShell>
+        </ThemeProvider>
       </body>
     </html>
   )
