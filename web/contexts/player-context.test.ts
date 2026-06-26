@@ -78,15 +78,17 @@ describe("playerReducer next/previous", () => {
     expect(n.history).toEqual([])
   })
 
-  it("previous restarts the track when past 3s", () => {
+  it("previous restarts the track when past 3s, preserving play state", () => {
     const s = base({
       current: track("b"),
       currentTime: 10,
       history: [track("a")],
+      isPlaying: true,
     })
     const p = playerReducer(s, { type: "previous" })
     expect(p.current?.id).toBe("b")
     expect(p.seekRequest).toBe(0)
+    expect(p.isPlaying).toBe(true)
   })
 
   it("previous steps back when near the start", () => {
@@ -99,6 +101,16 @@ describe("playerReducer next/previous", () => {
     const p = playerReducer(s, { type: "previous" })
     expect(p.current?.id).toBe("a")
     expect(p.queue.map((t) => t.id)).toEqual(["b"])
+  })
+
+  it("previous does not start playback when paused", () => {
+    const s = base({
+      current: track("b"),
+      currentTime: 10,
+      history: [track("a")],
+      isPlaying: false,
+    })
+    expect(playerReducer(s, { type: "previous" }).isPlaying).toBe(false)
   })
 })
 
@@ -128,6 +140,13 @@ describe("playerReducer volume + mute", () => {
     const unmuted = playerReducer(muted, { type: "mute/toggle" })
     expect(unmuted.isMuted).toBe(false)
     expect(unmuted.volume).toBe(0.6)
+  })
+
+  it("unmute preserves an intentional volume of 0", () => {
+    const s = base({ volume: 0 })
+    const muted = playerReducer(s, { type: "mute/toggle" })
+    const unmuted = playerReducer(muted, { type: "mute/toggle" })
+    expect(unmuted.volume).toBe(0)
   })
 
   it("setting volume clamps and unmutes", () => {

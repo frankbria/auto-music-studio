@@ -204,14 +204,15 @@ export function playerReducer(
     }
     case "mute/toggle":
       return state.isMuted
-        ? { ...state, isMuted: false, volume: state.previousVolume || 0.8 }
+        ? { ...state, isMuted: false, volume: state.previousVolume ?? 0.8 }
         : { ...state, isMuted: true, previousVolume: state.volume }
     case "next":
       return advance(state)
     case "previous": {
       // Restart current if we're past the first few seconds, else step back.
+      // Preserve play/pause — stepping tracks shouldn't force playback to start.
       if (state.currentTime > 3 || state.history.length === 0) {
-        return { ...state, currentTime: 0, seekRequest: 0, isPlaying: true }
+        return { ...state, currentTime: 0, seekRequest: 0 }
       }
       const prev = state.history[state.history.length - 1]
       return {
@@ -221,7 +222,6 @@ export function playerReducer(
         queue: state.current ? [state.current, ...state.queue] : state.queue,
         currentTime: 0,
         duration: 0,
-        isPlaying: true,
         isLoading: true,
         seekRequest: null,
       }

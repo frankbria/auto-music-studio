@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 
 import {
   usePlayer,
@@ -69,9 +69,16 @@ export function playerShortcutAction(
 export function usePlayerShortcuts(): void {
   const { state, dispatch } = usePlayer()
 
+  // Read the latest state through a ref so the listener registers once instead
+  // of re-subscribing on every `timeupdate` (~4 Hz) that mutates state.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const action = playerShortcutAction(e.key, state, e.target)
+      const action = playerShortcutAction(e.key, stateRef.current, e.target)
       if (!action) return
       // Space would otherwise scroll the page; arrows are claimed for transport.
       e.preventDefault()
@@ -79,5 +86,5 @@ export function usePlayerShortcuts(): void {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [state, dispatch])
+  }, [dispatch])
 }
