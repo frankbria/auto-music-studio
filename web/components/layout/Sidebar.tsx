@@ -89,7 +89,9 @@ function AccountMenuItems() {
       <DropdownMenuItem asChild>
         <Link href="/me">Profile</Link>
       </DropdownMenuItem>
-      <DropdownMenuItem>Account settings</DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link href="/settings">Account settings</Link>
+      </DropdownMenuItem>
       <DropdownMenuItem>Subscription</DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => logout()}>

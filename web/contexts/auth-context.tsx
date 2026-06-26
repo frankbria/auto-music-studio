@@ -14,6 +14,8 @@ import { decodeAccessToken, type AuthUser } from "@/lib/auth"
 
 type AuthContextValue = {
   user: AuthUser | null
+  /** In-memory access token for same-origin Bearer calls (e.g. /api/users/me). */
+  accessToken: string | null
   isAuthenticated: boolean
   isLoading: boolean
   /** Begin an OAuth flow; redirects the browser to the provider on success. */
@@ -84,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const user = accessToken ? decodeAccessToken(accessToken) : null
     return {
       user,
+      accessToken,
       isAuthenticated: user !== null,
       isLoading,
       login,
