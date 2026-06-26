@@ -8,6 +8,11 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+// Stubbed so the unauthorized path's router.push("/login") never throws.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}))
+
 const submitSoundsGeneration = vi.fn()
 vi.mock("@/lib/generate", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/generate")>()
@@ -84,5 +89,19 @@ describe("SoundsCreationForm", () => {
       expect.objectContaining({ soundType: "loop", bpm: "128", key: "A minor" }),
       "tok"
     )
+    // Guard the loop success-message branch separately from the one-shot one.
+    expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
+  })
+
+  it("surfaces an error notice when generation fails", async () => {
+    submitSoundsGeneration.mockResolvedValue({ status: "error", detail: "Server error" })
+    const user = userEvent.setup()
+    render(<SoundsCreationForm />)
+
+    await user.type(screen.getByLabelText("Sound description"), "a punchy kick")
+    await user.click(oneShot())
+    await user.click(createButton())
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/server error/i)
   })
 })

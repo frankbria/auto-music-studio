@@ -262,6 +262,12 @@ describe("validateSounds", () => {
     expect(validateSounds(soundsData({ description: "  " }))).toMatch(/description/i)
   })
 
+  it("rejects an over-long description (the prompt bound)", () => {
+    expect(validateSounds(soundsData({ description: "x".repeat(2001) }))).toMatch(
+      /description/i
+    )
+  })
+
   it("rejects an out-of-range loop BPM", () => {
     expect(
       validateSounds(soundsData({ soundType: "loop", bpmAuto: false, bpm: "300" }))

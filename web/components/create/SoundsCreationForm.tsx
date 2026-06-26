@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
 import { submitSoundsGeneration, validateSounds, type SoundsFormData } from "@/lib/generate"
-import { BPM_MAX, BPM_MIN, KEY_OPTIONS } from "@/lib/constants/generation"
+import { BPM_MAX, BPM_MIN, KEY_OPTIONS, PROMPT_MAX_LENGTH } from "@/lib/constants/generation"
 import { SELECT_CLASS } from "@/lib/constants/ui"
 
 type Status =
@@ -96,6 +96,7 @@ export function SoundsCreationForm() {
         <Textarea
           id="sound-description"
           rows={4}
+          maxLength={PROMPT_MAX_LENGTH}
           placeholder="Describe the sound you want to create..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}

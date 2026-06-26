@@ -249,7 +249,13 @@ export function buildSoundsPayload(data: SoundsFormData): GenerationPayload {
  */
 export function validateSounds(data: SoundsFormData): string | null {
   if (!data.soundType) return "Choose a sound type to create."
-  if (!data.description.trim()) return "Add a description to create."
+  const description = data.description.trim()
+  if (!description) return "Add a description to create."
+  // The description is the prompt; the backend caps it, so surface a clear
+  // message inline instead of a generic 422 (mirrors buildAdvancedPayload's cap).
+  if (description.length > PROMPT_MAX_LENGTH) {
+    return `Description must be ${PROMPT_MAX_LENGTH} characters or fewer.`
+  }
   if (data.soundType === "loop" && !data.bpmAuto && data.bpm.trim()) {
     const bpm = Number(data.bpm)
     if (!Number.isFinite(bpm) || bpm < BPM_MIN || bpm > BPM_MAX) {
