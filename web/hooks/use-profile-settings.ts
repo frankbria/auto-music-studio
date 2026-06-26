@@ -29,6 +29,15 @@ type ValidationDetail = { loc: (string | number)[]; msg: string }
 const EDITABLE_FIELDS = new Set(["display_name", "handle", "bio", "style_tags"])
 
 function parseErrors(status: number, body: unknown): SaveResult {
+  if (status === 401) {
+    // Token expired between load and save — match the load path's wording so a
+    // retry isn't implied to help.
+    return {
+      ok: false,
+      fieldErrors: {},
+      message: "Your session expired. Please sign in again.",
+    }
+  }
   if (status === 409) {
     return {
       ok: false,

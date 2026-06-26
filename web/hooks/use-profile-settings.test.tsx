@@ -16,7 +16,9 @@ const authValue = {
 }
 
 function wrapper({ children }: { children: ReactNode }) {
-  return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+  )
 }
 
 const PROFILE = {
@@ -50,7 +52,9 @@ describe("useProfileSettings", () => {
     expect(result.current.profile?.handle).toBe("ada")
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/users/me")
-    expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
   })
 
   it("save() returns the updated profile on success", async () => {
@@ -94,10 +98,7 @@ describe("useProfileSettings", () => {
       .fn()
       .mockResolvedValueOnce(jsonRes(PROFILE))
       .mockResolvedValueOnce(
-        jsonRes(
-          { detail: [{ loc: ["body", "bio"], msg: "too long" }] },
-          422
-        )
+        jsonRes({ detail: [{ loc: ["body", "bio"], msg: "too long" }] }, 422)
       )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -110,6 +111,24 @@ describe("useProfileSettings", () => {
     })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.fieldErrors.bio).toBe("too long")
+  })
+
+  it("maps a 401 on save to a session-expired message", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(PROFILE))
+      .mockResolvedValueOnce(jsonRes({ detail: "x" }, 401))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { result } = renderHook(() => useProfileSettings(), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    let res!: Awaited<ReturnType<typeof result.current.save>>
+    await act(async () => {
+      res = await result.current.save({ display_name: "Ada L" })
+    })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.message).toMatch(/session expired/i)
   })
 
   it("maps a nested style_tags item error to the style_tags field", async () => {

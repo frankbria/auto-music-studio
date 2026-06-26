@@ -147,6 +147,8 @@ export function StyleTagsInput({
           aria-controls={listOpen ? "style-suggestions-list" : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "style-tag-error" : undefined}
           disabled={tags.length >= STYLE_TAGS_MAX_ITEMS}
         />
         {listOpen && (
@@ -179,7 +181,7 @@ export function StyleTagsInput({
         )}
       </div>
 
-      <FieldError message={error} />
+      <FieldError id="style-tag-error" message={error} />
     </div>
   )
 }

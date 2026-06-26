@@ -232,12 +232,20 @@ function SettingsForm({
                 value={form.bio}
                 onChange={(e) => update("bio", e.target.value)}
                 aria-invalid={errors.bio || bioOver ? true : undefined}
-                aria-describedby={errors.bio ? "bio-error" : undefined}
+                aria-describedby={
+                  [
+                    errors.bio ? "bio-error" : null,
+                    bioOver ? "bio-counter" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
                 rows={4}
               />
               <div className="flex items-center justify-between">
                 <FieldError id="bio-error" message={errors.bio} />
                 <span
+                  id="bio-counter"
                   className={
                     "ml-auto text-xs " +
                     (bioOver ? "text-destructive" : "text-muted-foreground")
