@@ -239,12 +239,11 @@ function SettingsForm({
                 onChange={(e) => update("bio", e.target.value)}
                 aria-invalid={errors.bio || bioOver ? true : undefined}
                 aria-describedby={
-                  [
-                    errors.bio ? "bio-error" : null,
-                    bioOver ? "bio-counter" : null,
-                  ]
+                  // Counter is always rendered, so always announce it; add the
+                  // error id only when there's a submitted bio error.
+                  [errors.bio ? "bio-error" : null, "bio-counter"]
                     .filter(Boolean)
-                    .join(" ") || undefined
+                    .join(" ")
                 }
                 rows={4}
               />

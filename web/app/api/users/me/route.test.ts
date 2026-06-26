@@ -4,7 +4,10 @@ import type { NextRequest } from "next/server"
 import { GET, PATCH } from "@/app/api/users/me/route"
 
 function req(init: RequestInit = {}): NextRequest {
-  return new Request("http://localhost/api/users/me", init) as unknown as NextRequest
+  return new Request(
+    "http://localhost/api/users/me",
+    init
+  ) as unknown as NextRequest
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -19,7 +22,9 @@ describe("GET /api/users/me", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ id: "u1", handle: "ada" }), { status: 200 })
+        new Response(JSON.stringify({ id: "u1", handle: "ada" }), {
+          status: 200,
+        })
       )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -29,7 +34,9 @@ describe("GET /api/users/me", () => {
 
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain("/api/v1/users/me")
-    expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
   })
 })
 
@@ -45,7 +52,10 @@ describe("PATCH /api/users/me", () => {
     const res = await PATCH(
       req({
         method: "PATCH",
-        headers: { authorization: "Bearer tok", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer tok",
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ handle: "taken" }),
       })
     )
@@ -60,5 +70,21 @@ describe("PATCH /api/users/me", () => {
   it("401s without an Authorization header", async () => {
     const res = await PATCH(req({ method: "PATCH" }))
     expect(res.status).toBe(401)
+  })
+
+  it("passes a 204 through without an empty {} body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    )
+    const res = await PATCH(
+      req({
+        method: "PATCH",
+        headers: { authorization: "Bearer tok" },
+        body: "{}",
+      })
+    )
+    expect(res.status).toBe(204)
+    expect(await res.text()).toBe("")
   })
 })

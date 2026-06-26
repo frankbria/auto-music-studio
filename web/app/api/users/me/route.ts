@@ -33,6 +33,9 @@ async function proxy(
   }
 
   const res = await fetch(TARGET, init)
+  // Pass an empty (204) response through as-is rather than turning it into a
+  // {} JSON body — otherwise the client would treat it as an all-blank profile.
+  if (res.status === 204) return new NextResponse(null, { status: 204 })
   const body = await res.json().catch(() => ({}))
   return NextResponse.json(body, { status: res.status })
 }
