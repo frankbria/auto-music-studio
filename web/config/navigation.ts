@@ -14,19 +14,17 @@ import {
 } from "@hugeicons/core-free-icons"
 
 /**
- * A single sidebar destination. Most navigate via `href`; `Account` is special
- * (`isDialog`) and opens a dialog instead of routing. Single source of truth for
+ * A sidebar destination. Most route via `href` (`link`); `Account` opens a
+ * dialog (`dialog`) and so carries no route. The discriminated union keeps the
+ * two kinds from borrowing each other's fields. Single source of truth for
  * routes + icons (US-15.3, spec section 1.2).
  */
-export type NavItem = {
-  id: string
-  label: string
-  href: string
-  icon: IconSvgElement
-  isDialog?: boolean
-}
+type NavItemBase = { id: string; label: string; icon: IconSvgElement }
+export type NavLinkItem = NavItemBase & { href: string; isDialog?: false }
+export type NavDialogItem = NavItemBase & { isDialog: true }
+export type NavItem = NavLinkItem | NavDialogItem
 
-export const mainNav: NavItem[] = [
+export const mainNav: NavLinkItem[] = [
   { id: "home", label: "Home", href: "/", icon: HomeIcon },
   { id: "explore", label: "Explore", href: "/explore", icon: Compass01Icon },
   { id: "create", label: "Create", href: "/create", icon: MusicNote01Icon },
@@ -50,11 +48,5 @@ export const mainNav: NavItem[] = [
 
 export const bottomNav: NavItem[] = [
   { id: "labs", label: "Labs", href: "/labs", icon: TestTube01Icon },
-  {
-    id: "account",
-    label: "Account",
-    href: "#account",
-    icon: UserCircleIcon,
-    isDialog: true,
-  },
+  { id: "account", label: "Account", icon: UserCircleIcon, isDialog: true },
 ]

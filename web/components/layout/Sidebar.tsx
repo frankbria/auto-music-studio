@@ -6,12 +6,16 @@ import { usePathname } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   SidebarLeftIcon,
-  UserCircleIcon,
   UserIcon,
 } from "@hugeicons/core-free-icons"
 
 import { LAYOUT } from "@/lib/constants/layout"
-import { bottomNav, mainNav, type NavItem } from "@/config/navigation"
+import {
+  bottomNav,
+  mainNav,
+  type NavDialogItem,
+  type NavLinkItem,
+} from "@/config/navigation"
 import { cn } from "@/lib/utils"
 import {
   DropdownMenu,
@@ -30,6 +34,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
+/** Shared base styling for every interactive sidebar item (links, triggers). */
+const sidebarItemBase =
+  "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+
 /** Active when the path equals the route, or sits under it (root matches exactly). */
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/"
@@ -41,17 +49,19 @@ function NavLink({
   expanded,
   active,
 }: {
-  item: NavItem
+  item: NavLinkItem
   expanded: boolean
   active: boolean
 }) {
   return (
     <Link
       href={item.href}
-      aria-label={item.label}
+      // Collapsed items have no visible text, so the label must come from
+      // aria-label; expanded, the visible span is the accessible name already.
+      aria-label={expanded ? undefined : item.label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground",
+        sidebarItemBase,
         active && "bg-sidebar-accent text-sidebar-foreground",
         !expanded && "justify-center px-0"
       )}
@@ -68,10 +78,7 @@ function ProfileMenu({ expanded }: { expanded: boolean }) {
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="Open account menu"
-        className={cn(
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
-          !expanded && "justify-center px-0"
-        )}
+        className={cn(sidebarItemBase, !expanded && "justify-center px-0")}
       >
         <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-foreground">
           <HugeiconsIcon icon={UserIcon} size={18} />
@@ -93,23 +100,26 @@ function ProfileMenu({ expanded }: { expanded: boolean }) {
   )
 }
 
-/** Bottom-pinned Account item: opens a placeholder dialog (spec section 1.2). */
-function AccountDialogItem({ expanded }: { expanded: boolean }) {
+/** Bottom-pinned dialog item (Account): opens a placeholder dialog (spec 1.2). */
+function NavDialog({
+  item,
+  expanded,
+}: {
+  item: NavDialogItem
+  expanded: boolean
+}) {
   return (
     <Dialog>
       <DialogTrigger
-        aria-label="Account"
-        className={cn(
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
-          !expanded && "justify-center px-0"
-        )}
+        aria-label={item.label}
+        className={cn(sidebarItemBase, !expanded && "justify-center px-0")}
       >
-        <HugeiconsIcon icon={UserCircleIcon} size={22} className="shrink-0" />
-        {expanded && <span className="truncate text-sm">Account</span>}
+        <HugeiconsIcon icon={item.icon} size={22} className="shrink-0" />
+        {expanded && <span className="truncate text-sm">{item.label}</span>}
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Account</DialogTitle>
+          <DialogTitle>{item.label}</DialogTitle>
           <DialogDescription>
             Account, subscription, and billing details arrive in a later story.
           </DialogDescription>
@@ -142,10 +152,7 @@ export function Sidebar() {
         aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        className={cn(
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
-          !expanded && "justify-center px-0"
-        )}
+        className={cn(sidebarItemBase, !expanded && "justify-center px-0")}
       >
         <HugeiconsIcon
           icon={SidebarLeftIcon}
@@ -171,7 +178,7 @@ export function Sidebar() {
       <div className="flex flex-col gap-1">
         {bottomNav.map((item) =>
           item.isDialog ? (
-            <AccountDialogItem key={item.id} expanded={expanded} />
+            <NavDialog key={item.id} item={item} expanded={expanded} />
           ) : (
             <NavLink
               key={item.id}
