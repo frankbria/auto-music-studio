@@ -1,0 +1,125 @@
+import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { describe, expect, it, vi } from "vitest"
+
+import { StyleTagsInput } from "@/components/settings/StyleTagsInput"
+
+describe("StyleTagsInput", () => {
+  it("renders existing tags as removable pills", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={["cello", "lo-fi"]} onChange={onChange} />)
+
+    expect(screen.getByText("cello")).toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Remove cello" }))
+    expect(onChange).toHaveBeenCalledWith(["lo-fi"])
+  })
+
+  it("adds a tag on Enter", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    const input = screen.getByLabelText("Add a style tag")
+    await user.type(input, "ambient{Enter}")
+    expect(onChange).toHaveBeenCalledWith(["ambient"])
+  })
+
+  it("normalizes a custom tag to lowercase", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "LoFi{Enter}")
+    expect(onChange).toHaveBeenCalledWith(["lofi"])
+  })
+
+  it("rejects a duplicate tag with an inline error", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={["jazz"]} onChange={onChange} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "Jazz{Enter}")
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByRole("alert")).toHaveTextContent(/already/i)
+  })
+
+  it("does not offer an 'Add' option for a tag already in the list", async () => {
+    render(<StyleTagsInput tags={["cello"]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "cello")
+    expect(screen.queryByText(/Add /)).not.toBeInTheDocument()
+  })
+
+  it("shows typeahead suggestions filtered by input", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText("Add a style tag"), "or")
+    expect(
+      screen.getByRole("option", { name: "orchestral" })
+    ).toBeInTheDocument()
+  })
+
+  it("navigates suggestions with arrow keys and selects with Enter", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+
+    await user.type(input, "o") // matches several suggestions
+    await user.keyboard("{ArrowDown}") // highlight first option
+    const first = screen.getAllByRole("option")[0]
+    expect(first).toHaveAttribute("aria-selected", "true")
+    expect(input).toHaveAttribute("aria-activedescendant", first.id)
+
+    await user.keyboard("{Enter}") // add the highlighted option
+    expect(onChange).toHaveBeenCalledWith([first.textContent])
+  })
+
+  it("ignores a second Enter after adding (no spurious empty-tag error)", async () => {
+    const onChange = vi.fn()
+    render(<StyleTagsInput tags={[]} onChange={onChange} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "o")
+    await user.keyboard("{ArrowDown}{Enter}") // add the highlighted suggestion
+    expect(onChange).toHaveBeenCalledTimes(1)
+    await user.keyboard("{Enter}") // draft is empty now — should be a no-op
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("closes the suggestion list on Escape", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "or")
+    expect(screen.getByRole("listbox")).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
+  it("reopens a dismissed list when ArrowDown is pressed", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    await user.type(input, "or")
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    await user.keyboard("{ArrowDown}")
+    expect(screen.getByRole("listbox")).toBeInTheDocument()
+  })
+
+  it("wires the combobox ARIA contract as the list opens", async () => {
+    render(<StyleTagsInput tags={[]} onChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole("combobox", { name: "Add a style tag" })
+    expect(input).toHaveAttribute("aria-expanded", "false")
+    // Closed: aria-controls must not dangle (target isn't in the DOM yet).
+    expect(input).not.toHaveAttribute("aria-controls")
+
+    await user.type(input, "or")
+    expect(input).toHaveAttribute("aria-expanded", "true")
+    expect(input).toHaveAttribute("aria-controls", "style-suggestions-list")
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "id",
+      "style-suggestions-list"
+    )
+  })
+})

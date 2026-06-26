@@ -14,6 +14,7 @@ import { AuthContext } from "@/contexts/auth-context"
 
 const baseAuth = {
   user: null,
+  accessToken: null,
   isAuthenticated: false,
   isLoading: false,
   login: vi.fn(),
