@@ -87,4 +87,12 @@ describe("SimpleCreationForm", () => {
     )
     expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
   })
+
+  it("shows the +Audio placeholder as a neutral notice, not an error", async () => {
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+    await user.click(screen.getByRole("button", { name: /audio/i }))
+    expect(screen.getByRole("status")).toHaveTextContent(/coming soon/i)
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
 })

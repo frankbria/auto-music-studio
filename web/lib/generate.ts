@@ -87,7 +87,13 @@ export async function submitGeneration(
 
   if (res.status === 202) {
     const body = await res.json().catch(() => ({}))
-    return { status: "accepted", jobId: (body as { job_id?: string }).job_id ?? "" }
+    const jobId = (body as { job_id?: string }).job_id
+    // A 202 with no usable job id is unexpected (non-JSON body, schema drift) —
+    // treat it as an error rather than report a hollow success US-16.7 can't poll.
+    if (!jobId) {
+      return { status: "error", detail: "Server returned an unexpected response." }
+    }
+    return { status: "accepted", jobId }
   }
   if (res.status === 401) return { status: "unauthorized" }
 

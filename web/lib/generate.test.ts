@@ -70,6 +70,15 @@ describe("submitGeneration", () => {
     expect(JSON.parse(opts.body)).toEqual({ prompt: "song", instrumental: false })
   })
 
+  it("treats a 202 with no job id as an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("not json", { status: 202 }))
+    )
+    const result = await submitGeneration(data, "tok")
+    expect(result.status).toBe("error")
+  })
+
   it("classifies a 401 as unauthorized", async () => {
     vi.stubGlobal(
       "fetch",

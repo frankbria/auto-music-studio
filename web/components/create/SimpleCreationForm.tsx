@@ -13,9 +13,12 @@ import { useAuth } from "@/hooks/use-auth"
 import { submitGeneration } from "@/lib/generate"
 import { InspirationTags } from "@/components/create/InspirationTags"
 
+// A user-facing message only. Whether a request is in flight is tracked
+// separately (isSubmitting) so a non-error notice — e.g. the +Audio placeholder
+// — can't clobber the in-flight state and re-enable Create mid-request.
 type Status =
   | { kind: "idle" }
-  | { kind: "submitting" }
+  | { kind: "info"; message: string }
   | { kind: "success"; message: string }
   | { kind: "error"; message: string }
 
@@ -35,6 +38,7 @@ export function SimpleCreationForm() {
   const [showLyrics, setShowLyrics] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [status, setStatus] = useState<Status>({ kind: "idle" })
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Lyrics only count when the field is open — hiding it shouldn't keep Create
   // enabled (and then submit an empty prompt). Use this one value everywhere.
@@ -46,32 +50,34 @@ export function SimpleCreationForm() {
     description.trim().length > 0 || effectiveLyrics.trim().length > 0
 
   async function handleCreate() {
-    if (!canSubmit || status.kind === "submitting") return
+    if (!canSubmit || isSubmitting) return
     if (!accessToken) {
       router.push("/login")
       return
     }
-    setStatus({ kind: "submitting" })
-    const result = await submitGeneration(
-      { description, lyrics: effectiveLyrics, instrumental, selectedTags },
-      accessToken
-    )
-    switch (result.status) {
-      case "accepted":
-        setStatus({
-          kind: "success",
-          message: "Generation started. We'll let you know when it's ready.",
-        })
-        break
-      case "unauthorized":
-        router.push("/login")
-        break
-      case "invalid":
-        setStatus({ kind: "error", message: result.detail })
-        break
-      case "error":
-        setStatus({ kind: "error", message: result.detail })
-        break
+    setIsSubmitting(true)
+    try {
+      const result = await submitGeneration(
+        { description, lyrics: effectiveLyrics, instrumental, selectedTags },
+        accessToken
+      )
+      switch (result.status) {
+        case "accepted":
+          setStatus({
+            kind: "success",
+            message: "Generation started. We'll let you know when it's ready.",
+          })
+          break
+        case "unauthorized":
+          router.push("/login")
+          break
+        case "invalid":
+        case "error":
+          setStatus({ kind: "error", message: result.detail })
+          break
+      }
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -106,7 +112,10 @@ export function SimpleCreationForm() {
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setStatus({ kind: "error", message: "Audio input is coming soon." })}
+          disabled={isSubmitting}
+          onClick={() =>
+            setStatus({ kind: "info", message: "Audio input is coming soon." })
+          }
         >
           <HugeiconsIcon icon={MusicNote01Icon} data-icon="inline-start" />
           Audio
@@ -133,7 +142,9 @@ export function SimpleCreationForm() {
 
       <InspirationTags selectedTags={selectedTags} onChange={setSelectedTags} />
 
-      {status.kind === "success" && (
+      {/* Neutral notices (info/success) are polite status; only real failures
+          use the assertive, destructive alert. */}
+      {(status.kind === "info" || status.kind === "success") && (
         <p role="status" className="text-sm text-muted-foreground">
           {status.message}
         </p>
@@ -147,10 +158,10 @@ export function SimpleCreationForm() {
       <Button
         type="button"
         className="w-fit"
-        disabled={!canSubmit || status.kind === "submitting"}
+        disabled={!canSubmit || isSubmitting}
         onClick={handleCreate}
       >
-        {status.kind === "submitting" ? "Creating..." : "Create"}
+        {isSubmitting ? "Creating..." : "Create"}
       </Button>
     </div>
   )
