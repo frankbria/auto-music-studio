@@ -144,7 +144,7 @@ export function StyleTagsInput({
           aria-label="Add a style tag"
           role="combobox"
           aria-expanded={listOpen}
-          aria-controls="style-suggestions-list"
+          aria-controls={listOpen ? "style-suggestions-list" : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeId}
           disabled={tags.length >= STYLE_TAGS_MAX_ITEMS}

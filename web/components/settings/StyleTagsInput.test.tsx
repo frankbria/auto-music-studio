@@ -99,10 +99,12 @@ describe("StyleTagsInput", () => {
     const user = userEvent.setup()
     const input = screen.getByRole("combobox", { name: "Add a style tag" })
     expect(input).toHaveAttribute("aria-expanded", "false")
-    expect(input).toHaveAttribute("aria-controls", "style-suggestions-list")
+    // Closed: aria-controls must not dangle (target isn't in the DOM yet).
+    expect(input).not.toHaveAttribute("aria-controls")
 
     await user.type(input, "or")
     expect(input).toHaveAttribute("aria-expanded", "true")
+    expect(input).toHaveAttribute("aria-controls", "style-suggestions-list")
     expect(screen.getByRole("listbox")).toHaveAttribute(
       "id",
       "style-suggestions-list"
