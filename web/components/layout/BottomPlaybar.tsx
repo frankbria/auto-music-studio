@@ -1,20 +1,10 @@
-import { LAYOUT } from "@/lib/constants/layout"
+import { Playbar } from "@/components/player/Playbar"
 
 /**
- * Persistent player bar fixed to the viewport bottom. Stays visible during
- * scroll and renders above every other zone. Placeholder controls — real
- * playback UI arrives in US-15.6.
+ * Persistent player bar fixed to the viewport bottom. The real playback UI
+ * lives in `components/player/Playbar` (US-15.6); this thin wrapper keeps the
+ * shell's layout slot stable.
  */
 export function BottomPlaybar() {
-  return (
-    <footer
-      data-testid="app-playbar"
-      aria-label="Player"
-      style={{ height: LAYOUT.playbarHeight }}
-      className="fixed inset-x-0 bottom-0 z-50 flex items-center gap-3 border-t border-border bg-background px-4"
-    >
-      {/* placeholder player controls — populated by US-15.6 */}
-      <span className="text-sm text-muted-foreground">Player controls</span>
-    </footer>
-  )
+  return <Playbar />
 }
