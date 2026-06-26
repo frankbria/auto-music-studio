@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { describe, expect, it } from "vitest"
 
-import { middleware } from "@/middleware"
+import { proxy } from "@/proxy"
 import { REFRESH_COOKIE } from "@/lib/auth"
 
 function request(path: string, withSession: boolean): NextRequest {
@@ -10,9 +10,9 @@ function request(path: string, withSession: boolean): NextRequest {
   return req
 }
 
-describe("middleware route protection", () => {
+describe("proxy route protection", () => {
   it("redirects an unauthenticated visitor to /login, preserving the path", () => {
-    const res = middleware(request("/create", false))
+    const res = proxy(request("/create", false))
     const location = res.headers.get("location")!
     const url = new URL(location)
     expect(url.pathname).toBe("/login")
@@ -20,7 +20,7 @@ describe("middleware route protection", () => {
   })
 
   it("lets an authenticated visitor through", () => {
-    const res = middleware(request("/create", true))
+    const res = proxy(request("/create", true))
     expect(res.headers.get("location")).toBeNull()
   })
 })
