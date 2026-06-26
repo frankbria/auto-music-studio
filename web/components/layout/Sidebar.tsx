@@ -16,6 +16,7 @@ import {
   type NavDialogItem,
   type NavLinkItem,
 } from "@/config/navigation"
+import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
 import {
   DropdownMenu,
@@ -72,6 +73,32 @@ function NavLink({
   )
 }
 
+/**
+ * Account menu body. Kept separate from the trigger so it (and its `useAuth`
+ * call) only mounts when the dropdown opens — components rendering the Sidebar
+ * without an AuthProvider stay unaffected unless they open this menu.
+ */
+function AccountMenuItems() {
+  const { user, logout } = useAuth()
+  return (
+    <>
+      <DropdownMenuLabel className="truncate">
+        {user?.email ?? "Account"}
+      </DropdownMenuLabel>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem asChild>
+        <Link href="/me">Profile</Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem>Account settings</DropdownMenuItem>
+      <DropdownMenuItem>Subscription</DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+        Log out
+      </DropdownMenuItem>
+    </>
+  )
+}
+
 /** Profile avatar at the top; opens the account dropdown (spec section 1.4). */
 function ProfileMenu({ expanded }: { expanded: boolean }) {
   return (
@@ -86,15 +113,7 @@ function ProfileMenu({ expanded }: { expanded: boolean }) {
         {expanded && <span className="truncate text-sm">Your account</span>}
       </DropdownMenuTrigger>
       <DropdownMenuContent side="right" align="start" className="w-48">
-        <DropdownMenuLabel>Account</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link href="/me">Profile</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem>Account settings</DropdownMenuItem>
-        <DropdownMenuItem>Subscription</DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive">Log out</DropdownMenuItem>
+        <AccountMenuItems />
       </DropdownMenuContent>
     </DropdownMenu>
   )

@@ -4,6 +4,7 @@ import { Nunito_Sans } from "next/font/google"
 import "./globals.css"
 import { AppShell, BottomPlaybar } from "@/components/layout"
 import { ThemeProvider } from "@/components/theme-provider"
+import { AuthProvider } from "@/contexts/auth-context"
 import { cn } from "@/lib/utils"
 
 export const metadata: Metadata = {
@@ -26,9 +27,11 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
-          <AppShell>{children}</AppShell>
-          {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
-          <BottomPlaybar />
+          <AuthProvider>
+            <AppShell>{children}</AppShell>
+            {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
+            <BottomPlaybar />
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
