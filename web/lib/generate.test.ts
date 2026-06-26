@@ -308,6 +308,28 @@ describe("submitGeneration", () => {
     expect(JSON.parse(opts.body)).toEqual({ prompt: "song", instrumental: false })
   })
 
+  it("includes the selected model in the payload (US-16.4)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitGeneration(data, "tok", "xl-base")
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(JSON.parse(opts.body).model).toBe("xl-base")
+  })
+
+  it("omits model when none is selected so the backend default applies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitGeneration(data, "tok", "")
+    const [, opts] = fetchMock.mock.calls[0]
+    expect("model" in JSON.parse(opts.body)).toBe(false)
+  })
+
   it("treats a 202 with no job id as an error", async () => {
     vi.stubGlobal(
       "fetch",

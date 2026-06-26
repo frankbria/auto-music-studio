@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useModelSelection } from "@/contexts/model-selection-context"
 import { submitSoundsGeneration, validateSounds, type SoundsFormData } from "@/lib/generate"
 import { BPM_MAX, BPM_MIN, KEY_OPTIONS, PROMPT_MAX_LENGTH } from "@/lib/constants/generation"
 import { SELECT_CLASS } from "@/lib/constants/ui"
@@ -35,6 +36,7 @@ const SOUND_TYPES = [
 export function SoundsCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const { selectedModel } = useModelSelection()
 
   const [description, setDescription] = useState("")
   const [soundType, setSoundType] = useState<SoundsFormData["soundType"]>("")
@@ -68,7 +70,7 @@ export function SoundsCreationForm() {
     }
     setIsSubmitting(true)
     try {
-      const result = await submitSoundsGeneration(data, accessToken)
+      const result = await submitSoundsGeneration(data, accessToken, selectedModel)
       switch (result.status) {
         case "accepted":
           setStatus({

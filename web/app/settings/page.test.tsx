@@ -43,6 +43,51 @@ function jsonRes(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status })
 }
 
+const MODELS = [
+  {
+    key: "base",
+    display_name: "Standard Model",
+    category: "Standard",
+    description: "Balanced quality/speed",
+    pro_only: false,
+    vram: "~2.4GB",
+    steps: "32-64",
+    dit_size: "2B",
+  },
+  {
+    key: "xl-base",
+    display_name: "Latest Model (XL)",
+    category: "XL",
+    description: "Highest quality",
+    pro_only: true,
+    vram: "~8GB",
+    steps: "32-64",
+    dit_size: "4B",
+  },
+]
+
+// fetch mock that routes /api/models (the default-model dropdown, US-16.4) to a
+// fixed model list and serves the given responses, in order, for /api/users/me.
+// This keeps model-list loading from disturbing the profile load/save sequence.
+function meFetch(...meResponses: Response[]) {
+  let i = 0
+  return vi.fn((url: unknown) => {
+    if (typeof url === "string" && url.includes("/api/models")) {
+      return Promise.resolve(jsonRes({ models: MODELS }))
+    }
+    const res = meResponses[Math.min(i, meResponses.length - 1)]
+    i += 1
+    return Promise.resolve(res)
+  })
+}
+
+// The PATCH/GET calls to /api/users/me, filtered out from the models call.
+function meCalls(mock: ReturnType<typeof vi.fn>) {
+  return mock.mock.calls.filter(
+    ([url]) => typeof url === "string" && url.includes("/api/users/me")
+  )
+}
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("SettingsPage", () => {
@@ -57,10 +102,10 @@ describe("SettingsPage", () => {
   })
 
   it("saves changed fields and shows a success message", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonRes(PROFILE))
-      .mockResolvedValueOnce(jsonRes({ ...PROFILE, display_name: "Ada L" }))
+    const fetchMock = meFetch(
+      jsonRes(PROFILE),
+      jsonRes({ ...PROFILE, display_name: "Ada L" })
+    )
     vi.stubGlobal("fetch", fetchMock)
     const user = userEvent.setup()
     renderPage()
@@ -73,9 +118,32 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("Saved.")
     )
-    const patch = fetchMock.mock.calls[1]
+    const patch = meCalls(fetchMock)[1]
     expect(patch[1].method).toBe("PATCH")
     expect(JSON.parse(patch[1].body)).toEqual({ display_name: "Ada L" })
+  })
+
+  it("saves the chosen default model (US-16.4)", async () => {
+    const fetchMock = meFetch(
+      jsonRes(PROFILE),
+      jsonRes({ ...PROFILE, default_model: "xl-base" })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    renderPage()
+
+    const select = await screen.findByLabelText("Default model")
+    // The options populate after fetchModels() resolves.
+    await screen.findByRole("option", { name: /Latest Model \(XL\)/ })
+    await user.selectOptions(select, "xl-base")
+    await user.click(screen.getByRole("button", { name: /Save changes/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Saved.")
+    )
+    const patch = meCalls(fetchMock)[1]
+    expect(patch[1].method).toBe("PATCH")
+    expect(JSON.parse(patch[1].body)).toEqual({ default_model: "xl-base" })
   })
 
   it("gives real-time format feedback on the handle as you type", async () => {
@@ -113,10 +181,7 @@ describe("SettingsPage", () => {
   })
 
   it("hides 'Looks good' when a save fails with a form-level error", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonRes(PROFILE))
-      .mockResolvedValueOnce(jsonRes({}, 500))
+    const fetchMock = meFetch(jsonRes(PROFILE), jsonRes({}, 500))
     vi.stubGlobal("fetch", fetchMock)
     const user = userEvent.setup()
     renderPage()
@@ -136,10 +201,7 @@ describe("SettingsPage", () => {
   })
 
   it("shows an inline error when the handle is already taken (409)", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonRes(PROFILE))
-      .mockResolvedValueOnce(jsonRes({ detail: "taken" }, 409))
+    const fetchMock = meFetch(jsonRes(PROFILE), jsonRes({ detail: "taken" }, 409))
     vi.stubGlobal("fetch", fetchMock)
     const user = userEvent.setup()
     renderPage()
@@ -197,7 +259,7 @@ describe("SettingsPage", () => {
   })
 
   it("skips the network round-trip when only trailing whitespace changed", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonRes(PROFILE))
+    const fetchMock = meFetch(jsonRes(PROFILE))
     vi.stubGlobal("fetch", fetchMock)
     const user = userEvent.setup()
     renderPage()
@@ -209,7 +271,7 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("Saved.")
     )
-    // Only the mount GET fired — no PATCH.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // Only the mount GET fired against /api/users/me — no PATCH.
+    expect(meCalls(fetchMock)).toHaveLength(1)
   })
 })

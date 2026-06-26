@@ -9,6 +9,10 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+vi.mock("@/contexts/model-selection-context", () => ({
+  useModelSelection: () => ({ selectedModel: "base" }),
+}))
+
 const submitAdvancedGeneration = vi.fn()
 vi.mock("@/lib/generate", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/generate")>()
@@ -105,7 +109,8 @@ describe("AdvancedCreationForm", () => {
 
     expect(submitAdvancedGeneration).toHaveBeenCalledWith(
       expect.objectContaining({ styles: "orchestral" }),
-      "tok"
+      "tok",
+      "base"
     )
     expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
   })

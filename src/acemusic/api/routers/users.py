@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import CreditTransaction, User
 from ..services import credits as credits_service, users as user_service
+from ._validators import validate_model
 
 # Free-text profile fields are stored verbatim and re-served on every
 # GET /users/me, so cap them: one PATCH must not be able to bloat the document
@@ -46,6 +47,7 @@ class UserProfileResponse(BaseModel):
     style_tags: list[str]
     avatar_url: str | None
     subscription_tier: str
+    default_model: str | None
     created_at: datetime
     updated_at: datetime | None
 
@@ -61,6 +63,7 @@ class UserProfileResponse(BaseModel):
             style_tags=user.style_tags,
             avatar_url=user.avatar_url,
             subscription_tier=user.subscription_tier,
+            default_model=user.default_model,
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
@@ -85,6 +88,15 @@ class UserProfileUpdate(BaseModel):
         ]
         | None
     ) = None
+    # US-16.4: preferred default generation model. Null clears the preference.
+    default_model: str | None = None
+
+    @field_validator("default_model")
+    @classmethod
+    def _check_default_model(cls, value: str | None) -> str | None:
+        # Reuses the generation schema's model validator so the allowed set has
+        # one home (constants.VALID_MODELS). None passes through (clear preference).
+        return validate_model(value)
 
     @field_validator("handle")
     @classmethod

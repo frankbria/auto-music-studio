@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useModelSelection } from "@/contexts/model-selection-context"
 import { submitGeneration } from "@/lib/generate"
 import { InspirationTags } from "@/components/create/InspirationTags"
 
@@ -31,6 +32,7 @@ type Status =
 export function SimpleCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const { selectedModel } = useModelSelection()
 
   const [description, setDescription] = useState("")
   const [instrumental, setInstrumental] = useState(false)
@@ -59,7 +61,8 @@ export function SimpleCreationForm() {
     try {
       const result = await submitGeneration(
         { description, lyrics: effectiveLyrics, instrumental, selectedTags },
-        accessToken
+        accessToken,
+        selectedModel
       )
       switch (result.status) {
         case "accepted":

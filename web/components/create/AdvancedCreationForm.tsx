@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useModelSelection } from "@/contexts/model-selection-context"
 import { InspirationTags } from "@/components/create/InspirationTags"
 import { MoreOptionsSection, type MoreOptions } from "@/components/create/MoreOptionsSection"
 import { useUndoableField } from "@/components/create/useUndoableField"
@@ -59,6 +60,7 @@ const initialOptions: MoreOptions = {
 export function AdvancedCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const { selectedModel } = useModelSelection()
 
   const lyricsField = useUndoableField("")
   const stylesField = useUndoableField("")
@@ -115,7 +117,7 @@ export function AdvancedCreationForm() {
     }
     setIsSubmitting(true)
     try {
-      const result = await submitAdvancedGeneration(data, accessToken)
+      const result = await submitAdvancedGeneration(data, accessToken, selectedModel)
       switch (result.status) {
         case "accepted":
           setStatus({
