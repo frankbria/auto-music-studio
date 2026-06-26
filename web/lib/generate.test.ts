@@ -1,8 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { buildGenerationPayload, submitGeneration } from "@/lib/generate"
+import {
+  buildAdvancedPayload,
+  buildGenerationPayload,
+  submitGeneration,
+  validateAdvanced,
+  type AdvancedFormData,
+} from "@/lib/generate"
 
 afterEach(() => vi.restoreAllMocks())
+
+/** A valid baseline; individual tests override only what they exercise. */
+function advancedData(overrides: Partial<AdvancedFormData> = {}): AdvancedFormData {
+  return {
+    lyrics: "",
+    lyricsMode: "manual",
+    vocalLanguage: "",
+    styles: "",
+    selectedTags: [],
+    instrumental: false,
+    bpmAuto: true,
+    bpm: "",
+    key: "",
+    timeSignature: "",
+    duration: "",
+    weirdness: 50,
+    styleInfluence: 50,
+    seedRandom: true,
+    seed: "",
+    ...overrides,
+  }
+}
 
 describe("buildGenerationPayload", () => {
   it("maps description to prompt and joins tags into style", () => {
@@ -40,6 +68,130 @@ describe("buildGenerationPayload", () => {
     })
     expect(payload.prompt).toBe("first line\nsecond line")
     expect(payload.lyrics).toBe("first line\nsecond line")
+  })
+})
+
+describe("buildAdvancedPayload", () => {
+  it("combines free-text styles and tags into the style string and prompt", () => {
+    const payload = buildAdvancedPayload(
+      advancedData({ styles: "cinematic, epic", selectedTags: ["lo-fi", "ambient"] })
+    )
+    expect(payload.style).toBe("cinematic, epic, lo-fi, ambient")
+    // With no description field, the combined style string becomes the prompt.
+    expect(payload.prompt).toBe("cinematic, epic, lo-fi, ambient")
+  })
+
+  it("falls back to lyrics for the prompt when no styles are given (manual mode)", () => {
+    const payload = buildAdvancedPayload(
+      advancedData({ lyricsMode: "manual", lyrics: "[Verse]\nhello" })
+    )
+    expect(payload.prompt).toBe("[Verse]\nhello")
+    expect(payload.lyrics).toBe("[Verse]\nhello")
+  })
+
+  it("omits lyrics entirely in auto mode", () => {
+    const payload = buildAdvancedPayload(
+      advancedData({ styles: "jazz", lyricsMode: "auto", lyrics: "ignored" })
+    )
+    expect(payload).not.toHaveProperty("lyrics")
+  })
+
+  it("sends bpm 'auto' when the Auto toggle is on, otherwise the number", () => {
+    expect(buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: true })).bpm).toBe(
+      "auto"
+    )
+    expect(
+      buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: false, bpm: "120" })).bpm
+    ).toBe(120)
+  })
+
+  it("includes key, time_signature, duration, vocal_language, weirdness, style_influence and numeric seed", () => {
+    const payload = buildAdvancedPayload(
+      advancedData({
+        styles: "orchestral",
+        vocalLanguage: "English",
+        key: "C major",
+        timeSignature: "3/4",
+        duration: "90",
+        weirdness: 70,
+        styleInfluence: 30,
+        seedRandom: false,
+        seed: "42",
+      })
+    )
+    expect(payload).toMatchObject({
+      vocal_language: "English",
+      key: "C major",
+      time_signature: "3/4",
+      duration: 90,
+      weirdness: 70,
+      style_influence: 30,
+      seed: 42,
+    })
+  })
+
+  it("caps the lyrics-derived prompt at the backend's prompt limit", () => {
+    // Lyrics may be up to 5000 chars but prompt is capped at 2000; a lyrics-only
+    // submission must not build an over-long prompt that the backend would 422.
+    const payload = buildAdvancedPayload(
+      advancedData({ styles: "", lyricsMode: "manual", lyrics: "x".repeat(5000) })
+    )
+    expect(payload.prompt.length).toBe(2000)
+    expect(payload.lyrics).toHaveLength(5000)
+  })
+
+  it("omits seed when Random is selected", () => {
+    const payload = buildAdvancedPayload(
+      advancedData({ styles: "rock", seedRandom: true, seed: "42" })
+    )
+    expect(payload).not.toHaveProperty("seed")
+  })
+
+  it("never sends UI-only fields (backend forbids unknown keys)", () => {
+    const payload = buildAdvancedPayload(advancedData({ styles: "rock" }))
+    expect(payload).not.toHaveProperty("vocal_gender")
+    expect(payload).not.toHaveProperty("exclude_styles")
+    expect(payload).not.toHaveProperty("song_title")
+    expect(payload).not.toHaveProperty("workspace")
+  })
+})
+
+describe("validateAdvanced", () => {
+  it("accepts a valid form", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "120" }))).toBeNull()
+  })
+
+  it("requires a style or lyrics", () => {
+    expect(validateAdvanced(advancedData())).toMatch(/style or lyrics/i)
+  })
+
+  it("rejects an out-of-range BPM", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "300" }))).toMatch(
+      /bpm/i
+    )
+    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "10" }))).toMatch(
+      /bpm/i
+    )
+  })
+
+  it("ignores BPM bounds when Auto is on", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: true, bpm: "300" }))).toBeNull()
+  })
+
+  it("rejects an out-of-range duration", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", duration: "5" }))).toMatch(/duration/i)
+    expect(validateAdvanced(advancedData({ styles: "rock", duration: "999" }))).toMatch(/duration/i)
+  })
+
+  it("rejects an over-long key", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", key: "x".repeat(60) }))).toMatch(/key/i)
+  })
+
+  it("rejects out-of-range weirdness and style influence", () => {
+    expect(validateAdvanced(advancedData({ styles: "rock", weirdness: 200 }))).toMatch(/weirdness/i)
+    expect(validateAdvanced(advancedData({ styles: "rock", styleInfluence: -1 }))).toMatch(
+      /influence/i
+    )
   })
 })
 
