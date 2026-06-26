@@ -8,6 +8,7 @@ import {
   RightPanel,
   Sidebar,
 } from "@/components/layout"
+import { PlayerProvider } from "@/contexts/player-context"
 
 describe("layout constants", () => {
   it("define the shell dimensions and a layered z-index scale", () => {
@@ -79,7 +80,11 @@ describe("RightPanel", () => {
 
 describe("BottomPlaybar", () => {
   it("is fixed to the viewport bottom above all other zones", () => {
-    render(<BottomPlaybar />)
+    render(
+      <PlayerProvider>
+        <BottomPlaybar />
+      </PlayerProvider>
+    )
     const el = screen.getByTestId("app-playbar")
     expect(el.className).toContain("fixed")
     expect(el.className).toContain("bottom-0")
