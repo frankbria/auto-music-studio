@@ -46,6 +46,8 @@ export function MiniWaveform() {
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, w, hgt)
 
+    // These resolve to complete color strings (e.g. "oklch(0.205 0 0)"), so
+    // use them directly — don't re-wrap in oklch().
     const styles = getComputedStyle(canvas)
     const played = styles.getPropertyValue("--primary").trim() || "#888"
     const unplayed =
@@ -56,8 +58,7 @@ export function MiniWaveform() {
     const barW = (w - gap * (BARS - 1)) / BARS
     for (let i = 0; i < BARS; i++) {
       const bh = heights[i] * hgt
-      ctx.fillStyle =
-        i / BARS < progress ? `oklch(${played})` : `oklch(${unplayed})`
+      ctx.fillStyle = i / BARS < progress ? played : unplayed
       ctx.globalAlpha = i / BARS < progress ? 0.9 : 0.4
       ctx.fillRect(i * (barW + gap), (hgt - bh) / 2, barW, bh)
     }

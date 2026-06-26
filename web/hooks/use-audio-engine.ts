@@ -49,26 +49,35 @@ export function useAudioEngine(): void {
     }
   }, [dispatch])
 
-  // Load a new source whenever the current track changes.
+  // (Re)load and restart whenever the *track* changes — keyed on id, not src,
+  // so advancing between tracks that share an audio URL still restarts from 0
+  // (the demo queue reuses one sample). Autoplay only if already playing.
+  const trackId = state.current?.id ?? ""
   const src = state.current?.audioUrl ?? ""
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    if (src) {
-      audio.src = src
-      audio.load()
-    } else {
+    if (!src) {
       audio.removeAttribute("src")
       audio.load()
+      return
     }
-  }, [src])
+    audio.src = src
+    audio.load()
+    audio.currentTime = 0
+    if (state.isPlaying) audio.play().catch(() => dispatch({ type: "pause" }))
+    // Intentionally keyed on the track id only; the play/pause effect below
+    // handles isPlaying transitions that aren't track changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackId])
 
-  // Reflect play/pause intent. play() may reject under autoplay policy.
+  // Reflect a play/pause toggle that isn't a track change. play() may reject
+  // under autoplay policy (no user gesture) → fall back to paused state.
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !src) return
     if (state.isPlaying) {
-      audio.play().catch(() => dispatch({ type: "pause" }))
+      if (audio.paused) audio.play().catch(() => dispatch({ type: "pause" }))
     } else {
       audio.pause()
     }
@@ -81,11 +90,16 @@ export function useAudioEngine(): void {
     audio.volume = state.isMuted ? 0 : state.volume
   }, [state.volume, state.isMuted])
 
-  // Honor a scrub request, then clear it.
+  // Honor a scrub request, then clear it. A seek to 0 is also how repeat-one /
+  // same-source repeat restart after `ended` — the element is paused at the end,
+  // so resume playback if we're meant to be playing.
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || state.seekRequest === null) return
     audio.currentTime = state.seekRequest
+    if (state.isPlaying && audio.paused) {
+      audio.play().catch(() => dispatch({ type: "pause" }))
+    }
     dispatch({ type: "seek/done" })
-  }, [state.seekRequest, dispatch])
+  }, [state.seekRequest, state.isPlaying, dispatch])
 }
