@@ -30,4 +30,5 @@ proto.scrollIntoView ??= () => {}
 afterEach(() => {
   cleanup()
   routerMock.pathname = "/"
+  vi.clearAllMocks()
 })

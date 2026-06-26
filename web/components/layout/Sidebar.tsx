@@ -111,7 +111,7 @@ function NavDialog({
   return (
     <Dialog>
       <DialogTrigger
-        aria-label={item.label}
+        aria-label={expanded ? undefined : item.label}
         className={cn(sidebarItemBase, !expanded && "justify-center px-0")}
       >
         <HugeiconsIcon icon={item.icon} size={22} className="shrink-0" />
