@@ -16,15 +16,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
-  const res = await fetch(TARGET, {
-    method: "POST",
-    headers: {
-      authorization: auth,
-      "content-type": "application/json",
-      accept: "application/json",
-    },
-    body: await request.text(),
-  })
+  let res: Response
+  try {
+    res = await fetch(TARGET, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: await request.text(),
+    })
+  } catch {
+    // Backend unreachable / network error — return a controlled 502 instead of
+    // letting the route throw an opaque 500.
+    return NextResponse.json(
+      { detail: "Generation service is unavailable." },
+      { status: 502 }
+    )
+  }
   const body = await res.json().catch(() => ({}))
   return NextResponse.json(body, { status: res.status })
 }

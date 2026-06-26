@@ -47,6 +47,15 @@ describe("POST /api/generate", () => {
     expect(opts.body).toBe(JSON.stringify({ prompt: "hi", instrumental: false }))
   })
 
+  it("returns a controlled 502 when the upstream fetch rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")))
+    const res = await POST(
+      req({ headers: { authorization: "Bearer tok" }, body: "{}" })
+    )
+    expect(res.status).toBe(502)
+    expect(await res.json()).toMatchObject({ detail: expect.any(String) })
+  })
+
   it("surfaces a 422 verbatim", async () => {
     vi.stubGlobal(
       "fetch",

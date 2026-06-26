@@ -38,7 +38,7 @@ export function buildGenerationPayload(
 ): GenerationPayload {
   const description = data.description.trim()
   const lyrics = data.lyrics.trim()
-  const style = data.selectedTags.join(", ").trim()
+  const style = data.selectedTags.join(", ")
 
   const payload: GenerationPayload = {
     prompt: description || lyrics,
