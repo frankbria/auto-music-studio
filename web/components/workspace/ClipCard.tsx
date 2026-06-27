@@ -159,8 +159,10 @@ export function ClipCard({
     setEditing(false)
     const next = draft.trim()
     if (next && next !== (title ?? "")) {
-      setTitle(next)
       onTitleChange?.(clip.id, next)
+      // Reflect the rename locally only when a parent can persist it — otherwise
+      // the edit has nowhere to go and shouldn't look saved.
+      if (onTitleChange) setTitle(next)
     }
   }
 
@@ -170,8 +172,9 @@ export function ClipCard({
 
   function togglePublish() {
     const next = !isPublic
-    setIsPublic(next)
     onPublishToggle?.(clip.id, next)
+    // Only reflect the new visibility when a parent persists it.
+    if (onPublishToggle) setIsPublic(next)
   }
 
   return (
