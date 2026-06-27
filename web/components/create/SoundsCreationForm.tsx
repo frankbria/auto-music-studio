@@ -9,16 +9,22 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useGeneration } from "@/hooks/use-generation"
 import { useModelSelection } from "@/contexts/model-selection-context"
-import { submitSoundsGeneration, validateSounds, type SoundsFormData } from "@/lib/generate"
-import { BPM_MAX, BPM_MIN, KEY_OPTIONS, PROMPT_MAX_LENGTH } from "@/lib/constants/generation"
+import {
+  submitSoundsGeneration,
+  validateSounds,
+  type SoundsFormData,
+} from "@/lib/generate"
+import {
+  BPM_MAX,
+  BPM_MIN,
+  KEY_OPTIONS,
+  PROMPT_MAX_LENGTH,
+} from "@/lib/constants/generation"
 import { SELECT_CLASS } from "@/lib/constants/ui"
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "info"; message: string }
-  | { kind: "success"; message: string }
-  | { kind: "error"; message: string }
+import { GenerationProgress } from "@/components/create/GenerationProgress"
+import { GenerationError } from "@/components/create/GenerationError"
 
 const SOUND_TYPES = [
   { value: "one-shot", label: "One-Shot" },
@@ -33,31 +39,38 @@ const SOUND_TYPES = [
  * one-shots carry no tempo/tonal context. Clip rendering is deferred (as in
  * US-16.1/16.2) — success just reports the job started.
  */
-export function SoundsCreationForm() {
+export function SoundsCreationForm({
+  onGenerated,
+}: { onGenerated?: () => void } = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel, isLoading: modelLoading } = useModelSelection()
+  const { models, selectedModel, isLoading: modelLoading } = useModelSelection()
+  const generation = useGeneration({ onComplete: onGenerated })
 
   const [description, setDescription] = useState("")
   const [soundType, setSoundType] = useState<SoundsFormData["soundType"]>("")
   const [bpmAuto, setBpmAuto] = useState(true)
   const [bpm, setBpm] = useState("")
   const [key, setKey] = useState("")
-  const [status, setStatus] = useState<Status>({ kind: "idle" })
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  // Pre-submit validation message, separate from the generation state machine.
+  const [formError, setFormError] = useState<string | null>(null)
 
   const isLoop = soundType === "loop"
 
   // A type and a description are both required (the description is the prompt);
   // range validation runs on submit so a bad BPM surfaces a message.
   const canSubmit = soundType !== "" && description.trim().length > 0
+  const busy =
+    generation.state.phase === "submitting" ||
+    generation.state.phase === "polling"
+  const modelName = models.find((m) => m.key === selectedModel)?.display_name
 
   function formData(): SoundsFormData {
     return { description, soundType, bpmAuto, bpm, key }
   }
 
   async function handleCreate() {
-    if (!canSubmit || isSubmitting || modelLoading) return
+    if (!canSubmit || busy || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
@@ -65,30 +78,24 @@ export function SoundsCreationForm() {
     const data = formData()
     const error = validateSounds(data)
     if (error) {
-      setStatus({ kind: "error", message: error })
+      setFormError(error)
       return
     }
-    setIsSubmitting(true)
-    try {
-      const result = await submitSoundsGeneration(data, accessToken, selectedModel)
-      switch (result.status) {
-        case "accepted":
-          setStatus({
-            kind: "success",
-            message: "Generation started. We'll let you know when it's ready.",
-          })
-          break
-        case "unauthorized":
-          router.push("/login")
-          break
-        case "invalid":
-        case "error":
-          setStatus({ kind: "error", message: result.detail })
-          break
-      }
-    } finally {
-      setIsSubmitting(false)
-    }
+    setFormError(null)
+    await generation.submit(
+      () => submitSoundsGeneration(data, accessToken, selectedModel),
+      accessToken
+    )
+  }
+
+  function clearAll() {
+    setDescription("")
+    setSoundType("")
+    setBpmAuto(true)
+    setBpm("")
+    setKey("")
+    setFormError(null)
+    generation.reset()
   }
 
   return (
@@ -141,7 +148,11 @@ export function SoundsCreationForm() {
                 onChange={(e) => setBpm(e.target.value)}
               />
               <div className="flex shrink-0 items-center gap-1.5">
-                <Switch id="sound-bpm-auto" checked={bpmAuto} onCheckedChange={setBpmAuto} />
+                <Switch
+                  id="sound-bpm-auto"
+                  checked={bpmAuto}
+                  onCheckedChange={setBpmAuto}
+                />
                 <Label htmlFor="sound-bpm-auto">Auto</Label>
               </div>
             </div>
@@ -166,25 +177,51 @@ export function SoundsCreationForm() {
         </div>
       )}
 
-      {(status.kind === "info" || status.kind === "success") && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {status.message}
+      {formError && (
+        <p role="alert" className="text-sm text-destructive">
+          {formError}
         </p>
       )}
-      {status.kind === "error" && (
-        <p role="alert" className="text-sm text-destructive">
-          {status.message}
+      {generation.state.phase === "polling" && (
+        <GenerationProgress
+          estimatedSeconds={generation.state.estimatedSeconds}
+          modelName={modelName}
+          progress={generation.state.progress}
+        />
+      )}
+      {generation.state.phase === "success" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Your new clips are ready in the workspace.
         </p>
+      )}
+      {generation.state.phase === "error" && (
+        <GenerationError
+          message={generation.state.message}
+          onRetry={generation.retry}
+          onDismiss={generation.reset}
+        />
       )}
 
-      <Button
-        type="button"
-        className="w-fit"
-        disabled={!canSubmit || isSubmitting || modelLoading}
-        onClick={handleCreate}
-      >
-        {isSubmitting ? "Creating..." : "Create"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          className="w-fit"
+          disabled={!canSubmit || busy || modelLoading}
+          onClick={handleCreate}
+        >
+          {busy ? "Creating..." : "Create"}
+        </Button>
+        {/* ponytail: inline Clear all — resets every Sounds field to its default. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={clearAll}
+        >
+          Clear all
+        </Button>
+      </div>
     </div>
   )
 }

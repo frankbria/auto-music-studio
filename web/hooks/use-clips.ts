@@ -23,7 +23,10 @@ import {
  */
 export function useClips(
   params: ClipSearchParams,
-  { enabled = true }: { enabled?: boolean } = {}
+  {
+    enabled = true,
+    refreshKey = 0,
+  }: { enabled?: boolean; refreshKey?: number } = {}
 ) {
   const { accessToken, isLoading: authLoading } = useAuth()
   const query = buildClipQuery(params)
@@ -32,6 +35,8 @@ export function useClips(
   // the skeleton shows again on the next attempt (instead of being suppressed).
   const [errorQuery, setErrorQuery] = useState<string | null>(null)
 
+  // `refreshKey` forces a refetch without changing the query — bumped by the
+  // Create page when a generation completes so new clips appear (US-16.7).
   useEffect(() => {
     if (!enabled || authLoading || !accessToken) return
     let active = true
@@ -54,7 +59,7 @@ export function useClips(
     return () => {
       active = false
     }
-  }, [query, enabled, accessToken, authLoading])
+  }, [query, enabled, accessToken, authLoading, refreshKey])
 
   const error = errorQuery === query
   // Deferred (not yet enabled), first load (no data), and changed-query states
@@ -62,8 +67,7 @@ export function useClips(
   // drops out of loading so the empty/error state can show instead of an endless
   // skeleton.
   const loading =
-    authLoading ||
-    (!!accessToken && (!enabled || (data === null && !error)))
+    authLoading || (!!accessToken && (!enabled || (data === null && !error)))
 
   return { data, loading, error }
 }

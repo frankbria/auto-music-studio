@@ -9,7 +9,11 @@ vi.mock("@/hooks/use-auth", () => ({
 }))
 
 vi.mock("@/contexts/model-selection-context", () => ({
-  useModelSelection: () => ({ selectedModel: "base", isLoading: false }),
+  useModelSelection: () => ({
+    models: [{ key: "base", display_name: "Base" }],
+    selectedModel: "base",
+    isLoading: false,
+  }),
 }))
 
 // Stubbed so the unauthorized path's router.push("/login") never throws.
@@ -22,9 +26,15 @@ vi.mock("@/lib/generate", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/generate")>()
   return {
     ...actual,
-    submitSoundsGeneration: (...args: unknown[]) => submitSoundsGeneration(...args),
+    submitSoundsGeneration: (...args: unknown[]) =>
+      submitSoundsGeneration(...args),
   }
 })
+
+const fetchJobStatus = vi.fn()
+vi.mock("@/lib/job-status", () => ({
+  fetchJobStatus: (...args: unknown[]) => fetchJobStatus(...args),
+}))
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -61,29 +71,53 @@ describe("SoundsCreationForm", () => {
     expect(screen.getByLabelText("Key")).toBeInTheDocument()
   })
 
-  it("submits a one-shot and reports success", async () => {
-    submitSoundsGeneration.mockResolvedValue({ status: "accepted", jobId: "job-1" })
+  it("submits a one-shot, polls, and surfaces the completed clips", async () => {
+    submitSoundsGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "job-1",
+      estimatedSeconds: 5,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["c1", "c2"],
+    })
+    const onGenerated = vi.fn()
     const user = userEvent.setup()
-    render(<SoundsCreationForm />)
+    render(<SoundsCreationForm onGenerated={onGenerated} />)
 
     await user.type(screen.getByLabelText("Sound description"), "a punchy kick")
     await user.click(oneShot())
     await user.click(createButton())
 
     expect(submitSoundsGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({ description: "a punchy kick", soundType: "one-shot" }),
+      expect.objectContaining({
+        description: "a punchy kick",
+        soundType: "one-shot",
+      }),
       "tok",
       "base"
     )
-    expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
+    expect(await screen.findByText(/clips are ready/i)).toBeInTheDocument()
+    expect(onGenerated).toHaveBeenCalledOnce()
   })
 
   it("sends loop tempo and key with the request", async () => {
-    submitSoundsGeneration.mockResolvedValue({ status: "accepted", jobId: "job-2" })
+    submitSoundsGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "job-2",
+      estimatedSeconds: 5,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["c1", "c2"],
+    })
     const user = userEvent.setup()
     render(<SoundsCreationForm />)
 
-    await user.type(screen.getByLabelText("Sound description"), "a driving bass loop")
+    await user.type(
+      screen.getByLabelText("Sound description"),
+      "a driving bass loop"
+    )
     await user.click(loop())
     await user.click(screen.getByRole("switch", { name: "Auto" })) // turn Auto off
     await user.type(screen.getByLabelText("BPM"), "128")
@@ -91,16 +125,22 @@ describe("SoundsCreationForm", () => {
     await user.click(createButton())
 
     expect(submitSoundsGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({ soundType: "loop", bpm: "128", key: "A minor" }),
+      expect.objectContaining({
+        soundType: "loop",
+        bpm: "128",
+        key: "A minor",
+      }),
       "tok",
       "base"
     )
-    // Guard the loop success-message branch separately from the one-shot one.
-    expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
+    expect(await screen.findByText(/clips are ready/i)).toBeInTheDocument()
   })
 
   it("surfaces an error notice when generation fails", async () => {
-    submitSoundsGeneration.mockResolvedValue({ status: "error", detail: "Server error" })
+    submitSoundsGeneration.mockResolvedValue({
+      status: "error",
+      detail: "Server error",
+    })
     const user = userEvent.setup()
     render(<SoundsCreationForm />)
 
@@ -109,5 +149,18 @@ describe("SoundsCreationForm", () => {
     await user.click(createButton())
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/server error/i)
+  })
+
+  it("Clear all resets the description and type", async () => {
+    const user = userEvent.setup()
+    render(<SoundsCreationForm />)
+    const description = screen.getByLabelText("Sound description")
+    await user.type(description, "a punchy kick")
+    await user.click(oneShot())
+    expect(createButton()).toBeEnabled()
+
+    await user.click(screen.getByRole("button", { name: /clear all/i }))
+    expect(screen.getByLabelText("Sound description")).toHaveValue("")
+    expect(createButton()).toBeDisabled()
   })
 })

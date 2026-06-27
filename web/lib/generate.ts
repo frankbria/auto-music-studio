@@ -49,7 +49,9 @@ export type GenerationPayload = {
 }
 
 export type SubmitResult =
-  | { status: "accepted"; jobId: string }
+  // `estimatedSeconds` is the backend's model-aware time estimate from the 202
+  // body; the form shows it during polling (US-16.7). 0 when absent.
+  | { status: "accepted"; jobId: string; estimatedSeconds: number }
   | { status: "unauthorized" }
   | { status: "invalid"; detail: string }
   | { status: "error"; detail: string }
@@ -113,7 +115,9 @@ export function combineStyles(styles: string, tags: string[]): string {
  * UI-only fields (vocal gender, exclude styles, song title, workspace) are never
  * included — the backend uses `extra="forbid"`.
  */
-export function buildAdvancedPayload(data: AdvancedFormData): GenerationPayload {
+export function buildAdvancedPayload(
+  data: AdvancedFormData
+): GenerationPayload {
   const style = combineStyles(data.styles, data.selectedTags)
   const lyrics = data.lyricsMode === "manual" ? data.lyrics.trim() : ""
 
@@ -161,7 +165,11 @@ export function validateAdvanced(data: AdvancedFormData): string | null {
   }
   if (data.duration.trim()) {
     const duration = Number(data.duration)
-    if (!Number.isFinite(duration) || duration < DURATION_MIN || duration > DURATION_MAX) {
+    if (
+      !Number.isFinite(duration) ||
+      duration < DURATION_MIN ||
+      duration > DURATION_MAX
+    ) {
       return `Duration must be between ${DURATION_MIN} and ${DURATION_MAX} seconds.`
     }
   }
@@ -171,7 +179,10 @@ export function validateAdvanced(data: AdvancedFormData): string | null {
   if (data.weirdness < WEIRDNESS_MIN || data.weirdness > WEIRDNESS_MAX) {
     return `Weirdness must be between ${WEIRDNESS_MIN} and ${WEIRDNESS_MAX}.`
   }
-  if (data.styleInfluence < STYLE_INFLUENCE_MIN || data.styleInfluence > STYLE_INFLUENCE_MAX) {
+  if (
+    data.styleInfluence < STYLE_INFLUENCE_MIN ||
+    data.styleInfluence > STYLE_INFLUENCE_MAX
+  ) {
     return `Style influence must be between ${STYLE_INFLUENCE_MIN} and ${STYLE_INFLUENCE_MAX}.`
   }
   return null
@@ -197,7 +208,10 @@ function extractDetail(body: unknown, fallback: string): string {
  * falsy model is omitted so the backend applies its own default (an empty
  * `model` would 422). Returns a new object so the caller's payload is untouched.
  */
-function withModel(payload: GenerationPayload, model?: string): GenerationPayload {
+function withModel(
+  payload: GenerationPayload,
+  model?: string
+): GenerationPayload {
   return model ? { ...payload, model } : { ...payload }
 }
 
@@ -207,7 +221,10 @@ export function submitGeneration(
   accessToken: string,
   model?: string
 ): Promise<SubmitResult> {
-  return postGeneration(withModel(buildGenerationPayload(data), model), accessToken)
+  return postGeneration(
+    withModel(buildGenerationPayload(data), model),
+    accessToken
+  )
 }
 
 /** Submit the Advanced creation form through the BFF proxy. */
@@ -216,7 +233,10 @@ export function submitAdvancedGeneration(
   accessToken: string,
   model?: string
 ): Promise<SubmitResult> {
-  return postGeneration(withModel(buildAdvancedPayload(data), model), accessToken)
+  return postGeneration(
+    withModel(buildAdvancedPayload(data), model),
+    accessToken
+  )
 }
 
 /** Form state for the Sounds creation form (US-16.3): short one-shots and loops. */
@@ -310,19 +330,32 @@ async function postGeneration(
 
   if (res.status === 202) {
     const body = await res.json().catch(() => ({}))
-    const jobId = (body as { job_id?: string }).job_id
+    const { job_id: jobId, estimated_time_seconds: estimated } = body as {
+      job_id?: string
+      estimated_time_seconds?: number
+    }
     // A 202 with no usable job id is unexpected (non-JSON body, schema drift) —
     // treat it as an error rather than report a hollow success US-16.7 can't poll.
     if (!jobId) {
-      return { status: "error", detail: "Server returned an unexpected response." }
+      return {
+        status: "error",
+        detail: "Server returned an unexpected response.",
+      }
     }
-    return { status: "accepted", jobId }
+    return {
+      status: "accepted",
+      jobId,
+      estimatedSeconds: typeof estimated === "number" ? estimated : 0,
+    }
   }
   if (res.status === 401) return { status: "unauthorized" }
 
   const body = await res.json().catch(() => ({}))
   if (res.status === 422) {
-    return { status: "invalid", detail: extractDetail(body, "Please check your input.") }
+    return {
+      status: "invalid",
+      detail: extractDetail(body, "Please check your input."),
+    }
   }
   return {
     status: "error",

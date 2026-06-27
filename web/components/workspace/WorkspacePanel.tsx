@@ -40,8 +40,11 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
  */
 export function WorkspacePanel({
   onNavigateWorkspaces,
+  refreshKey,
 }: {
   onNavigateWorkspaces?: () => void
+  /** Bumped by the Create page on a completed generation to refetch clips (US-16.7). */
+  refreshKey?: number
 }) {
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState<ClipFilters>(EMPTY_FILTERS)
@@ -73,7 +76,11 @@ export function WorkspacePanel({
   // unscoped clips (across all workspaces). Gating on `defaultWorkspace` also
   // covers the workspace-fetch-error and zero-workspace cases, where
   // `workspacesLoading` is false but the id is still unknown.
-  const { data, loading: clipsLoading, error: clipsError } = useClips(
+  const {
+    data,
+    loading: clipsLoading,
+    error: clipsError,
+  } = useClips(
     {
       workspace_id: defaultWorkspace?.id,
       search: debouncedSearch,
@@ -81,7 +88,7 @@ export function WorkspacePanel({
       page,
       per_page: PER_PAGE,
     },
-    { enabled: defaultWorkspace !== null }
+    { enabled: defaultWorkspace !== null, refreshKey }
   )
 
   const { state } = usePlayer()
@@ -126,7 +133,11 @@ export function WorkspacePanel({
         />
       </div>
 
-      <PaginationControls page={page} totalPages={totalPages} onPageChange={setPage} />
+      <PaginationControls
+        page={page}
+        totalPages={totalPages}
+        onPageChange={setPage}
+      />
     </div>
   )
 }
