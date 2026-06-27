@@ -198,7 +198,7 @@ function extractDetail(body: unknown, fallback: string): string {
  * `model` would 422). Returns a new object so the caller's payload is untouched.
  */
 function withModel(payload: GenerationPayload, model?: string): GenerationPayload {
-  return model ? { ...payload, model } : payload
+  return model ? { ...payload, model } : { ...payload }
 }
 
 /** Submit the Simple creation form through the BFF proxy. */

@@ -4,7 +4,9 @@ import {
   buildAdvancedPayload,
   buildGenerationPayload,
   buildSoundsPayload,
+  submitAdvancedGeneration,
   submitGeneration,
+  submitSoundsGeneration,
   validateAdvanced,
   validateSounds,
   type AdvancedFormData,
@@ -328,6 +330,23 @@ describe("submitGeneration", () => {
     await submitGeneration(data, "tok", "")
     const [, opts] = fetchMock.mock.calls[0]
     expect("model" in JSON.parse(opts.body)).toBe(false)
+  })
+
+  it("threads the model through the Advanced and Sounds submitters too", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "j" }), { status: 202 })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await submitAdvancedGeneration(advancedData({ styles: "rock" }), "tok", "xl-sft")
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe("xl-sft")
+
+    await submitSoundsGeneration(
+      soundsData({ description: "kick", soundType: "one-shot" }),
+      "tok",
+      "turbo"
+    )
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).model).toBe("turbo")
   })
 
   it("treats a 202 with no job id as an error", async () => {

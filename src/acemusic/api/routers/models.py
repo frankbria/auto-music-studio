@@ -75,7 +75,12 @@ def _build_models() -> list[ModelInfo]:
     return out
 
 
+# MODELS and _DISPLAY are immutable module constants, so the response is built
+# once at import time rather than per request.
+_MODELS_LIST: list[ModelInfo] = _build_models()
+
+
 @router.get("", response_model=ModelsListResponse)
 def list_models() -> ModelsListResponse:
     """Return all model variants with display metadata for the UI selector."""
-    return ModelsListResponse(models=_build_models())
+    return ModelsListResponse(models=_MODELS_LIST)
