@@ -26,7 +26,7 @@ _HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$")
 # Only these fields are writable through the profile-update path. Everything else
 # on the User document (email, subscription_tier, oauth_*) is off-limits here so a
 # PATCH body cannot escalate privileges or hijack an OAuth identity.
-_UPDATABLE_FIELDS = ("display_name", "handle", "bio", "style_tags")
+_UPDATABLE_FIELDS = ("display_name", "handle", "bio", "style_tags", "default_model")
 
 
 class HandleValidationError(ValueError):

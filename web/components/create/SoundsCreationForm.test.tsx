@@ -8,6 +8,10 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+vi.mock("@/contexts/model-selection-context", () => ({
+  useModelSelection: () => ({ selectedModel: "base", isLoading: false }),
+}))
+
 // Stubbed so the unauthorized path's router.push("/login") never throws.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -68,7 +72,8 @@ describe("SoundsCreationForm", () => {
 
     expect(submitSoundsGeneration).toHaveBeenCalledWith(
       expect.objectContaining({ description: "a punchy kick", soundType: "one-shot" }),
-      "tok"
+      "tok",
+      "base"
     )
     expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
   })
@@ -87,7 +92,8 @@ describe("SoundsCreationForm", () => {
 
     expect(submitSoundsGeneration).toHaveBeenCalledWith(
       expect.objectContaining({ soundType: "loop", bpm: "128", key: "A minor" }),
-      "tok"
+      "tok",
+      "base"
     )
     // Guard the loop success-message branch separately from the one-shot one.
     expect(await screen.findByRole("status")).toHaveTextContent(/started/i)

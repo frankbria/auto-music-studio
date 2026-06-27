@@ -14,6 +14,7 @@ export type UserProfile = {
   style_tags: string[]
   avatar_url: string | null
   subscription_tier: string
+  default_model: string | null
   created_at: string
   updated_at: string | null
 }
@@ -24,6 +25,7 @@ export type UserProfileUpdate = {
   handle?: string | null
   bio?: string
   style_tags?: string[]
+  default_model?: string | null
 }
 
 export const DISPLAY_NAME_MAX_LENGTH = 100

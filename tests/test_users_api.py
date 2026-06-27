@@ -79,6 +79,46 @@ class TestUpdateProfile:
         assert body["bio"] == "b"
         assert body["style_tags"] == ["edm"]
 
+    async def test_default_model_defaults_to_null(self, client, settings):
+        user = await _make_user("dm-default@example.com")
+        resp = await client.get(f"{API_V1_PREFIX}/users/me", headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        assert resp.json()["default_model"] is None
+
+    async def test_updates_default_model(self, client, settings):
+        user = await _make_user("dm-set@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"default_model": "xl-base"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["default_model"] == "xl-base"
+
+    async def test_invalid_default_model_returns_422(self, client, settings):
+        user = await _make_user("dm-bad@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"default_model": "not-a-real-model"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
+    async def test_default_model_can_be_cleared(self, client, settings):
+        user = await _make_user("dm-clear@example.com")
+        await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"default_model": "turbo"},
+            headers=_auth_headers(user, settings),
+        )
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/users/me",
+            json={"default_model": None},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["default_model"] is None
+
     async def test_invalid_handle_returns_422(self, client, settings):
         user = await _make_user("bad-handle@example.com")
         resp = await client.patch(

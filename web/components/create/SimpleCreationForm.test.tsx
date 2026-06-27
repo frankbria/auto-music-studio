@@ -8,6 +8,10 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+vi.mock("@/contexts/model-selection-context", () => ({
+  useModelSelection: () => ({ selectedModel: "base", isLoading: false }),
+}))
+
 const submitGeneration = vi.fn()
 vi.mock("@/lib/generate", () => ({
   submitGeneration: (...args: unknown[]) => submitGeneration(...args),
@@ -83,7 +87,8 @@ describe("SimpleCreationForm", () => {
 
     expect(submitGeneration).toHaveBeenCalledWith(
       expect.objectContaining({ description: "dreamy", instrumental: true }),
-      "tok"
+      "tok",
+      "base"
     )
     expect(await screen.findByRole("status")).toHaveTextContent(/started/i)
   })

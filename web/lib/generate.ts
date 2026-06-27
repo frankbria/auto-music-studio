@@ -31,6 +31,8 @@ export type GenerationFormData = {
 /** Subset of the backend GenerationRequest these forms send (extra keys forbidden). */
 export type GenerationPayload = {
   prompt: string
+  /** Model variant key (US-16.4); omitted lets the backend pick its default. */
+  model?: string
   style?: string
   lyrics?: string
   instrumental: boolean
@@ -190,20 +192,31 @@ function extractDetail(body: unknown, fallback: string): string {
   return fallback
 }
 
+/**
+ * Return a copy of the payload with the selected model (US-16.4) attached. A
+ * falsy model is omitted so the backend applies its own default (an empty
+ * `model` would 422). Returns a new object so the caller's payload is untouched.
+ */
+function withModel(payload: GenerationPayload, model?: string): GenerationPayload {
+  return model ? { ...payload, model } : { ...payload }
+}
+
 /** Submit the Simple creation form through the BFF proxy. */
 export function submitGeneration(
   data: GenerationFormData,
-  accessToken: string
+  accessToken: string,
+  model?: string
 ): Promise<SubmitResult> {
-  return postGeneration(buildGenerationPayload(data), accessToken)
+  return postGeneration(withModel(buildGenerationPayload(data), model), accessToken)
 }
 
 /** Submit the Advanced creation form through the BFF proxy. */
 export function submitAdvancedGeneration(
   data: AdvancedFormData,
-  accessToken: string
+  accessToken: string,
+  model?: string
 ): Promise<SubmitResult> {
-  return postGeneration(buildAdvancedPayload(data), accessToken)
+  return postGeneration(withModel(buildAdvancedPayload(data), model), accessToken)
 }
 
 /** Form state for the Sounds creation form (US-16.3): short one-shots and loops. */
@@ -268,9 +281,10 @@ export function validateSounds(data: SoundsFormData): string | null {
 /** Submit the Sounds creation form through the BFF proxy. */
 export function submitSoundsGeneration(
   data: SoundsFormData,
-  accessToken: string
+  accessToken: string,
+  model?: string
 ): Promise<SubmitResult> {
-  return postGeneration(buildSoundsPayload(data), accessToken)
+  return postGeneration(withModel(buildSoundsPayload(data), model), accessToken)
 }
 
 /** POST a built payload through the BFF proxy and classify the response. */

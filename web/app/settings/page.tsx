@@ -35,12 +35,15 @@ import {
   type UserProfile,
   type UserProfileUpdate,
 } from "@/lib/profile"
+import { fetchModels, type ModelInfo } from "@/lib/models"
 
 type FormState = {
   display_name: string
   handle: string
   bio: string
   style_tags: string[]
+  /** "" = no preference (cleared); otherwise a model key (US-16.4). */
+  default_model: string
 }
 
 function toForm(p: UserProfile): FormState {
@@ -49,6 +52,7 @@ function toForm(p: UserProfile): FormState {
     handle: p.handle ?? "",
     bio: p.bio ?? "",
     style_tags: p.style_tags,
+    default_model: p.default_model ?? "",
   }
 }
 
@@ -62,6 +66,7 @@ function SettingsForm({
   const initial = useMemo(() => toForm(profile), [profile])
   const [form, setForm] = useState<FormState>(initial)
   const [baseline, setBaseline] = useState<FormState>(initial)
+  const [models, setModels] = useState<ModelInfo[]>([])
   const [errors, setErrors] = useState<FieldErrors>({})
   const [handleHint, setHandleHint] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -72,6 +77,20 @@ function SettingsForm({
     () => JSON.stringify(form) !== JSON.stringify(baseline),
     [form, baseline]
   )
+
+  // Populate the default-model dropdown (US-16.4). Failure leaves it empty, so
+  // the field just shows "No preference" and the rest of the form still works.
+  useEffect(() => {
+    let active = true
+    fetchModels()
+      .then((list) => {
+        if (active) setModels(list)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   // Real-time (debounced) handle format feedback. Server uniqueness is only
   // known on save, surfaced as a 409 below.
@@ -122,6 +141,9 @@ function SettingsForm({
     if (trimmedBio !== baseline.bio) payload.bio = trimmedBio
     if (JSON.stringify(form.style_tags) !== JSON.stringify(baseline.style_tags))
       payload.style_tags = form.style_tags
+    // "" means "clear preference" → send null so the backend unsets it.
+    if (form.default_model !== baseline.default_model)
+      payload.default_model = form.default_model === "" ? null : form.default_model
 
     // Nothing actually changed once normalized — just re-sync the form to the
     // trimmed values and report success without a wasted round-trip.
@@ -268,6 +290,31 @@ function SettingsForm({
                 onChange={(next) => update("style_tags", next)}
               />
               <FieldError message={errors.style_tags} />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="default_model">Default model</Label>
+              {/* Disabled until the list loads: with an empty list the select
+                  would show "No preference" while the saved value is still set,
+                  so a click could silently clear the user's real preference. */}
+              <select
+                id="default_model"
+                value={form.default_model}
+                onChange={(e) => update("default_model", e.target.value)}
+                disabled={models.length === 0}
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">No preference</option>
+                {models.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.display_name}
+                    {m.pro_only ? " (Pro)" : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Used as the starting model on the Create page.
+              </p>
             </div>
           </fieldset>
         </CardContent>

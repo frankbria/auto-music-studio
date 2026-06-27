@@ -37,6 +37,10 @@ class User(Document):
     bio: str | None = None
     style_tags: list[str] = Field(default_factory=list)
     avatar_url: str | None = None
+    # US-16.4: the user's preferred default generation model (a key in
+    # constants.MODELS), used to seed the creation-page model selector. Null
+    # means "no preference"; the UI falls back to its own default.
+    default_model: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime | None = None
 
