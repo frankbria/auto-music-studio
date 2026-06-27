@@ -71,6 +71,12 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
   // their tier for Pro-lock display). Skipped if the user already picked one.
   // The no-token case is handled in the isLoading derivation below (no seeding
   // to wait for), so this effect only runs the authenticated fetch.
+  //
+  // ponytail: deliberately does NOT reset seedResolved/userTouched when
+  // accessToken changes. In this app accessToken flips null→token once on mount
+  // (auth-context restores it once; logout navigates away and unmounts this
+  // provider), so the re-fetch window never occurs in practice — and resetting
+  // userTouched would risk clobbering a model the user explicitly picked.
   useEffect(() => {
     if (authLoading || !accessToken) return
     let active = true
