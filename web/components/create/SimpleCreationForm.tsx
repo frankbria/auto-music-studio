@@ -10,37 +10,36 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useGeneration } from "@/hooks/use-generation"
 import { useModelSelection } from "@/contexts/model-selection-context"
 import { submitGeneration } from "@/lib/generate"
 import { InspirationTags } from "@/components/create/InspirationTags"
-
-// A user-facing message only. Whether a request is in flight is tracked
-// separately (isSubmitting) so a non-error notice — e.g. the +Audio placeholder
-// — can't clobber the in-flight state and re-enable Create mid-request.
-type Status =
-  | { kind: "idle" }
-  | { kind: "info"; message: string }
-  | { kind: "success"; message: string }
-  | { kind: "error"; message: string }
+import { GenerationProgress } from "@/components/create/GenerationProgress"
+import { GenerationError } from "@/components/create/GenerationError"
 
 /**
  * The Simple creation form (US-16.1): describe a song in plain language and go.
  * A controlled form whose Create button enables as soon as there's a description
- * or lyrics, then enqueues a generation request through the BFF proxy. Progress
- * and result rendering are deferred to US-16.7 — success just reports the job id.
+ * or lyrics, then drives the full generation lifecycle (US-16.7) via useGeneration:
+ * submit → poll → progress/estimate → clips. `onGenerated` fires once clips exist
+ * so the Create page can refresh the workspace panel.
  */
-export function SimpleCreationForm() {
+export function SimpleCreationForm({
+  onGenerated,
+}: { onGenerated?: () => void } = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel, isLoading: modelLoading } = useModelSelection()
+  const { models, selectedModel, isLoading: modelLoading } = useModelSelection()
+  const generation = useGeneration({ onComplete: onGenerated })
 
   const [description, setDescription] = useState("")
   const [instrumental, setInstrumental] = useState(false)
   const [lyrics, setLyrics] = useState("")
   const [showLyrics, setShowLyrics] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [status, setStatus] = useState<Status>({ kind: "idle" })
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  // Neutral notice for non-generation messages (e.g. the +Audio placeholder),
+  // kept separate from the generation state machine.
+  const [notice, setNotice] = useState<string | null>(null)
 
   // Lyrics only count when the field is open — hiding it shouldn't keep Create
   // enabled (and then submit an empty prompt). Use this one value everywhere.
@@ -50,39 +49,38 @@ export function SimpleCreationForm() {
   // toggle don't gate submission (per the acceptance criteria).
   const canSubmit =
     description.trim().length > 0 || effectiveLyrics.trim().length > 0
+  const busy =
+    generation.state.phase === "submitting" ||
+    generation.state.phase === "polling"
+  const modelName = models.find((m) => m.key === selectedModel)?.display_name
 
   async function handleCreate() {
     // Block until the model context settles so a saved default isn't missed.
-    if (!canSubmit || isSubmitting || modelLoading) return
+    if (!canSubmit || busy || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
     }
-    setIsSubmitting(true)
-    try {
-      const result = await submitGeneration(
-        { description, lyrics: effectiveLyrics, instrumental, selectedTags },
-        accessToken,
-        selectedModel
-      )
-      switch (result.status) {
-        case "accepted":
-          setStatus({
-            kind: "success",
-            message: "Generation started. We'll let you know when it's ready.",
-          })
-          break
-        case "unauthorized":
-          router.push("/login")
-          break
-        case "invalid":
-        case "error":
-          setStatus({ kind: "error", message: result.detail })
-          break
-      }
-    } finally {
-      setIsSubmitting(false)
-    }
+    setNotice(null)
+    await generation.submit(
+      () =>
+        submitGeneration(
+          { description, lyrics: effectiveLyrics, instrumental, selectedTags },
+          accessToken,
+          selectedModel
+        ),
+      accessToken
+    )
+  }
+
+  function clearAll() {
+    setDescription("")
+    setInstrumental(false)
+    setLyrics("")
+    setShowLyrics(false)
+    setSelectedTags([])
+    setNotice(null)
+    generation.reset()
   }
 
   return (
@@ -116,10 +114,8 @@ export function SimpleCreationForm() {
           type="button"
           variant="outline"
           size="sm"
-          disabled={isSubmitting}
-          onClick={() =>
-            setStatus({ kind: "info", message: "Audio input is coming soon." })
-          }
+          disabled={busy}
+          onClick={() => setNotice("Audio input is coming soon.")}
         >
           <HugeiconsIcon icon={MusicNote01Icon} data-icon="inline-start" />
           Audio
@@ -146,27 +142,51 @@ export function SimpleCreationForm() {
 
       <InspirationTags selectedTags={selectedTags} onChange={setSelectedTags} />
 
-      {/* Neutral notices (info/success) are polite status; only real failures
-          use the assertive, destructive alert. */}
-      {(status.kind === "info" || status.kind === "success") && (
+      {notice && (
         <p role="status" className="text-sm text-muted-foreground">
-          {status.message}
+          {notice}
         </p>
       )}
-      {status.kind === "error" && (
-        <p role="alert" className="text-sm text-destructive">
-          {status.message}
+      {generation.state.phase === "polling" && (
+        <GenerationProgress
+          estimatedSeconds={generation.state.estimatedSeconds}
+          modelName={modelName}
+          progress={generation.state.progress}
+        />
+      )}
+      {generation.state.phase === "success" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Your new clips are ready in the workspace.
         </p>
+      )}
+      {generation.state.phase === "error" && (
+        <GenerationError
+          message={generation.state.message}
+          onRetry={generation.retry}
+          onDismiss={generation.reset}
+        />
       )}
 
-      <Button
-        type="button"
-        className="w-fit"
-        disabled={!canSubmit || isSubmitting || modelLoading}
-        onClick={handleCreate}
-      >
-        {isSubmitting ? "Creating..." : "Create"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          className="w-fit"
+          disabled={!canSubmit || busy || modelLoading}
+          onClick={handleCreate}
+        >
+          {busy ? "Creating..." : "Create"}
+        </Button>
+        {/* ponytail: inline Clear all — a one-line reset, no component needed. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={clearAll}
+        >
+          Clear all
+        </Button>
+      </div>
     </div>
   )
 }

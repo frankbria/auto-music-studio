@@ -16,12 +16,20 @@ const authValue = {
 }
 
 function wrapper({ children }: { children: ReactNode }) {
-  return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+  )
 }
 
 function listRes(clips: unknown[] = []) {
   return new Response(
-    JSON.stringify({ clips, total: clips.length, page: 1, per_page: 20, total_pages: 1 }),
+    JSON.stringify({
+      clips,
+      total: clips.length,
+      page: 1,
+      per_page: 20,
+      total_pages: 1,
+    }),
     { status: 200 }
   )
 }
@@ -42,25 +50,49 @@ describe("useClips", () => {
     expect(result.current.data?.clips).toHaveLength(1)
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/clips?workspace_id=w1&sort=oldest&page=2")
-    expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
   })
 
   it("refetches when the query params change", async () => {
     const fetchMock = vi.fn().mockResolvedValue(listRes())
     vi.stubGlobal("fetch", fetchMock)
 
-    const { result, rerender } = renderHook((p: { search: string }) => useClips(p), {
-      wrapper,
-      initialProps: { search: "a" },
-    })
+    const { result, rerender } = renderHook(
+      (p: { search: string }) => useClips(p),
+      {
+        wrapper,
+        initialProps: { search: "a" },
+      }
+    )
     await waitFor(() => expect(result.current.loading).toBe(false))
     rerender({ search: "b" })
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock.mock.calls[1][0]).toBe("/api/clips?search=b")
   })
 
+  it("refetches when refreshKey is bumped (without changing the query)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(listRes())
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { result, rerender } = renderHook(
+      (p: { refreshKey: number }) => useClips({ workspace_id: "w1" }, p),
+      { wrapper, initialProps: { refreshKey: 0 } }
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    rerender({ refreshKey: 1 })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/clips?workspace_id=w1")
+  })
+
   it("flags an error when the fetch fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 500 }))
+    )
     const { result } = renderHook(() => useClips({}), { wrapper })
     await waitFor(() => expect(result.current.error).toBe(true))
   })
@@ -70,7 +102,8 @@ describe("useClips", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const { result, rerender } = renderHook(
-      (p: { enabled: boolean }) => useClips({ workspace_id: "w1" }, { enabled: p.enabled }),
+      (p: { enabled: boolean }) =>
+        useClips({ workspace_id: "w1" }, { enabled: p.enabled }),
       { wrapper, initialProps: { enabled: false } }
     )
     // Deferred: no fetch yet, and the hook reports loading so the caller shows a skeleton.
@@ -88,10 +121,13 @@ describe("useClips", () => {
       .mockResolvedValue(listRes([{ id: "c1" }]))
     vi.stubGlobal("fetch", fetchMock)
 
-    const { result, rerender } = renderHook((p: { search: string }) => useClips(p), {
-      wrapper,
-      initialProps: { search: "a" },
-    })
+    const { result, rerender } = renderHook(
+      (p: { search: string }) => useClips(p),
+      {
+        wrapper,
+        initialProps: { search: "a" },
+      }
+    )
     await waitFor(() => expect(result.current.error).toBe(true))
 
     // A new query supersedes the stale error: loading flips back on for the retry.

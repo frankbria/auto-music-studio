@@ -1,5 +1,6 @@
 "use client"
 
+import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -14,6 +15,12 @@ import { ModelSelectionProvider } from "@/contexts/model-selection-context"
 export default function CreatePage() {
   const { isLoading, isAuthenticated } = useRequireAuth()
   const router = useRouter()
+
+  // Bumped whenever a creation form finishes a generation, so the workspace panel
+  // refetches and the new clips appear (US-16.7). Stable callback so it doesn't
+  // re-create the forms' generation hooks each render.
+  const [refreshKey, setRefreshKey] = useState(0)
+  const onGenerated = useCallback(() => setRefreshKey((k) => k + 1), [])
 
   // ponytail: render nothing until authed — useRequireAuth redirects otherwise,
   // and this avoids flashing protected content during the check.
@@ -36,13 +43,13 @@ export default function CreatePage() {
               <TabsTrigger value="sounds">Sounds</TabsTrigger>
             </TabsList>
             <TabsContent value="simple">
-              <SimpleCreationForm />
+              <SimpleCreationForm onGenerated={onGenerated} />
             </TabsContent>
             <TabsContent value="advanced">
-              <AdvancedCreationForm />
+              <AdvancedCreationForm onGenerated={onGenerated} />
             </TabsContent>
             <TabsContent value="sounds">
-              <SoundsCreationForm />
+              <SoundsCreationForm onGenerated={onGenerated} />
             </TabsContent>
           </Tabs>
         </div>
@@ -52,7 +59,10 @@ export default function CreatePage() {
           aria-label="Clip library"
           className="hidden w-80 shrink-0 flex-col border-l border-border p-4 lg:flex"
         >
-          <WorkspacePanel onNavigateWorkspaces={() => router.push("/studio")} />
+          <WorkspacePanel
+            onNavigateWorkspaces={() => router.push("/studio")}
+            refreshKey={refreshKey}
+          />
         </aside>
       </div>
     </ModelSelectionProvider>

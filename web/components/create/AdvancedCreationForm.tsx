@@ -3,7 +3,11 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { ArrowTurnBackwardIcon, MagicWand01Icon, SparklesIcon } from "@hugeicons/core-free-icons"
+import {
+  ArrowTurnBackwardIcon,
+  MagicWand01Icon,
+  SparklesIcon,
+} from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,10 +15,16 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
+import { useGeneration } from "@/hooks/use-generation"
 import { useModelSelection } from "@/contexts/model-selection-context"
 import { InspirationTags } from "@/components/create/InspirationTags"
-import { MoreOptionsSection, type MoreOptions } from "@/components/create/MoreOptionsSection"
+import {
+  MoreOptionsSection,
+  type MoreOptions,
+} from "@/components/create/MoreOptionsSection"
 import { useUndoableField } from "@/components/create/useUndoableField"
+import { GenerationProgress } from "@/components/create/GenerationProgress"
+import { GenerationError } from "@/components/create/GenerationError"
 import {
   combineStyles,
   submitAdvancedGeneration,
@@ -27,12 +37,6 @@ import {
   WEIRDNESS_DEFAULT,
 } from "@/lib/constants/generation"
 import { SELECT_CLASS } from "@/lib/constants/ui"
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "info"; message: string }
-  | { kind: "success"; message: string }
-  | { kind: "error"; message: string }
 
 const STUB_NOTICE = "This feature is coming soon."
 
@@ -57,10 +61,13 @@ const initialOptions: MoreOptions = {
  * parameter the backend accepts. Mirrors SimpleCreationForm's controlled-state,
  * BFF-submit pattern; lyrics and styles each get single-step undo.
  */
-export function AdvancedCreationForm() {
+export function AdvancedCreationForm({
+  onGenerated,
+}: { onGenerated?: () => void } = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel, isLoading: modelLoading } = useModelSelection()
+  const { models, selectedModel, isLoading: modelLoading } = useModelSelection()
+  const generation = useGeneration({ onComplete: onGenerated })
 
   const lyricsField = useUndoableField("")
   const stylesField = useUndoableField("")
@@ -69,8 +76,10 @@ export function AdvancedCreationForm() {
   const [vocalLanguage, setVocalLanguage] = useState("")
   const [instrumental, setInstrumental] = useState(false)
   const [options, setOptions] = useState<MoreOptions>(initialOptions)
-  const [status, setStatus] = useState<Status>({ kind: "idle" })
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  // Neutral notice (stub features) and pre-submit validation message, both kept
+  // separate from the generation state machine.
+  const [notice, setNotice] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [showEnhance, setShowEnhance] = useState(false)
   const [enhancePrompt, setEnhancePrompt] = useState("")
 
@@ -81,7 +90,12 @@ export function AdvancedCreationForm() {
   const effectiveLyrics = lyricsMode === "manual" ? lyricsField.value : ""
   // Enabled the moment there's a style or lyrics to build a prompt from; range
   // validation runs on submit so out-of-range values surface a message.
-  const canSubmit = effectiveStyle.trim().length > 0 || effectiveLyrics.trim().length > 0
+  const canSubmit =
+    effectiveStyle.trim().length > 0 || effectiveLyrics.trim().length > 0
+  const busy =
+    generation.state.phase === "submitting" ||
+    generation.state.phase === "polling"
+  const modelName = models.find((m) => m.key === selectedModel)?.display_name
 
   function formData(): AdvancedFormData {
     return {
@@ -104,7 +118,7 @@ export function AdvancedCreationForm() {
   }
 
   async function handleCreate() {
-    if (!canSubmit || isSubmitting || modelLoading) return
+    if (!canSubmit || busy || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
@@ -112,30 +126,30 @@ export function AdvancedCreationForm() {
     const data = formData()
     const error = validateAdvanced(data)
     if (error) {
-      setStatus({ kind: "error", message: error })
+      setFormError(error)
       return
     }
-    setIsSubmitting(true)
-    try {
-      const result = await submitAdvancedGeneration(data, accessToken, selectedModel)
-      switch (result.status) {
-        case "accepted":
-          setStatus({
-            kind: "success",
-            message: "Generation started. We'll let you know when it's ready.",
-          })
-          break
-        case "unauthorized":
-          router.push("/login")
-          break
-        case "invalid":
-        case "error":
-          setStatus({ kind: "error", message: result.detail })
-          break
-      }
-    } finally {
-      setIsSubmitting(false)
-    }
+    setFormError(null)
+    setNotice(null)
+    await generation.submit(
+      () => submitAdvancedGeneration(data, accessToken, selectedModel),
+      accessToken
+    )
+  }
+
+  function clearAll() {
+    lyricsField.setValue("")
+    stylesField.setValue("")
+    setSelectedTags([])
+    setLyricsMode("manual")
+    setVocalLanguage("")
+    setInstrumental(false)
+    setOptions(initialOptions)
+    setShowEnhance(false)
+    setEnhancePrompt("")
+    setNotice(null)
+    setFormError(null)
+    generation.reset()
   }
 
   return (
@@ -199,10 +213,18 @@ export function AdvancedCreationForm() {
             disabled={!lyricsField.canUndo}
             onClick={lyricsField.undo}
           >
-            <HugeiconsIcon icon={ArrowTurnBackwardIcon} data-icon="inline-start" />
+            <HugeiconsIcon
+              icon={ArrowTurnBackwardIcon}
+              data-icon="inline-start"
+            />
             Undo
           </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => lyricsField.setValue("")}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => lyricsField.setValue("")}
+          >
             Clear
           </Button>
         </div>
@@ -217,7 +239,7 @@ export function AdvancedCreationForm() {
             <Button
               type="button"
               size="sm"
-              onClick={() => setStatus({ kind: "info", message: STUB_NOTICE })}
+              onClick={() => setNotice(STUB_NOTICE)}
             >
               Apply
             </Button>
@@ -244,7 +266,7 @@ export function AdvancedCreationForm() {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setStatus({ kind: "info", message: STUB_NOTICE })}
+            onClick={() => setNotice(STUB_NOTICE)}
           >
             <HugeiconsIcon icon={MagicWand01Icon} data-icon="inline-start" />
             Magic wand
@@ -256,14 +278,26 @@ export function AdvancedCreationForm() {
             disabled={!stylesField.canUndo}
             onClick={stylesField.undo}
           >
-            <HugeiconsIcon icon={ArrowTurnBackwardIcon} data-icon="inline-start" />
+            <HugeiconsIcon
+              icon={ArrowTurnBackwardIcon}
+              data-icon="inline-start"
+            />
             Undo
           </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => stylesField.setValue("")}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => stylesField.setValue("")}
+          >
             Clear
           </Button>
           <div className="ml-auto flex items-center gap-2">
-            <Switch id="adv-instrumental" checked={instrumental} onCheckedChange={setInstrumental} />
+            <Switch
+              id="adv-instrumental"
+              checked={instrumental}
+              onCheckedChange={setInstrumental}
+            />
             <Label htmlFor="adv-instrumental">Instrumental</Label>
           </div>
         </div>
@@ -271,25 +305,56 @@ export function AdvancedCreationForm() {
 
       <MoreOptionsSection value={options} onChange={updateOptions} />
 
-      {(status.kind === "info" || status.kind === "success") && (
+      {notice && (
         <p role="status" className="text-sm text-muted-foreground">
-          {status.message}
+          {notice}
         </p>
       )}
-      {status.kind === "error" && (
+      {formError && (
         <p role="alert" className="text-sm text-destructive">
-          {status.message}
+          {formError}
         </p>
+      )}
+      {generation.state.phase === "polling" && (
+        <GenerationProgress
+          estimatedSeconds={generation.state.estimatedSeconds}
+          modelName={modelName}
+          progress={generation.state.progress}
+        />
+      )}
+      {generation.state.phase === "success" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Your new clips are ready in the workspace.
+        </p>
+      )}
+      {generation.state.phase === "error" && (
+        <GenerationError
+          message={generation.state.message}
+          onRetry={generation.retry}
+          onDismiss={generation.reset}
+        />
       )}
 
-      <Button
-        type="button"
-        className="w-fit"
-        disabled={!canSubmit || isSubmitting || modelLoading}
-        onClick={handleCreate}
-      >
-        {isSubmitting ? "Creating..." : "Create"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          className="w-fit"
+          disabled={!canSubmit || busy || modelLoading}
+          onClick={handleCreate}
+        >
+          {busy ? "Creating..." : "Create"}
+        </Button>
+        {/* ponytail: inline Clear all — resets every Advanced field to its default. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={clearAll}
+        >
+          Clear all
+        </Button>
+      </div>
     </div>
   )
 }

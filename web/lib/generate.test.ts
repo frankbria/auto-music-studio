@@ -16,7 +16,9 @@ import {
 afterEach(() => vi.restoreAllMocks())
 
 /** A valid baseline; individual tests override only what they exercise. */
-function advancedData(overrides: Partial<AdvancedFormData> = {}): AdvancedFormData {
+function advancedData(
+  overrides: Partial<AdvancedFormData> = {}
+): AdvancedFormData {
   return {
     lyrics: "",
     lyricsMode: "manual",
@@ -79,7 +81,10 @@ describe("buildGenerationPayload", () => {
 describe("buildAdvancedPayload", () => {
   it("combines free-text styles and tags into the style string and prompt", () => {
     const payload = buildAdvancedPayload(
-      advancedData({ styles: "cinematic, epic", selectedTags: ["lo-fi", "ambient"] })
+      advancedData({
+        styles: "cinematic, epic",
+        selectedTags: ["lo-fi", "ambient"],
+      })
     )
     expect(payload.style).toBe("cinematic, epic, lo-fi, ambient")
     // With no description field, the combined style string becomes the prompt.
@@ -106,7 +111,9 @@ describe("buildAdvancedPayload", () => {
       buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: true }))
     ).not.toHaveProperty("bpm")
     expect(
-      buildAdvancedPayload(advancedData({ styles: "rock", bpmAuto: false, bpm: "120" })).bpm
+      buildAdvancedPayload(
+        advancedData({ styles: "rock", bpmAuto: false, bpm: "120" })
+      ).bpm
     ).toBe(120)
   })
 
@@ -139,7 +146,11 @@ describe("buildAdvancedPayload", () => {
     // Lyrics may be up to 5000 chars but prompt is capped at 2000; a lyrics-only
     // submission must not build an over-long prompt that the backend would 422.
     const payload = buildAdvancedPayload(
-      advancedData({ styles: "", lyricsMode: "manual", lyrics: "x".repeat(5000) })
+      advancedData({
+        styles: "",
+        lyricsMode: "manual",
+        lyrics: "x".repeat(5000),
+      })
     )
     expect(payload.prompt.length).toBe(2000)
     expect(payload.lyrics).toHaveLength(5000)
@@ -163,7 +174,11 @@ describe("buildAdvancedPayload", () => {
 
 describe("validateAdvanced", () => {
   it("accepts a valid form", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "120" }))).toBeNull()
+    expect(
+      validateAdvanced(
+        advancedData({ styles: "rock", bpmAuto: false, bpm: "120" })
+      )
+    ).toBeNull()
   })
 
   it("requires a style or lyrics", () => {
@@ -171,32 +186,48 @@ describe("validateAdvanced", () => {
   })
 
   it("rejects an out-of-range BPM", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "300" }))).toMatch(
-      /bpm/i
-    )
-    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: false, bpm: "10" }))).toMatch(
-      /bpm/i
-    )
+    expect(
+      validateAdvanced(
+        advancedData({ styles: "rock", bpmAuto: false, bpm: "300" })
+      )
+    ).toMatch(/bpm/i)
+    expect(
+      validateAdvanced(
+        advancedData({ styles: "rock", bpmAuto: false, bpm: "10" })
+      )
+    ).toMatch(/bpm/i)
   })
 
   it("ignores BPM bounds when Auto is on", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", bpmAuto: true, bpm: "300" }))).toBeNull()
+    expect(
+      validateAdvanced(
+        advancedData({ styles: "rock", bpmAuto: true, bpm: "300" })
+      )
+    ).toBeNull()
   })
 
   it("rejects an out-of-range duration", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", duration: "5" }))).toMatch(/duration/i)
-    expect(validateAdvanced(advancedData({ styles: "rock", duration: "999" }))).toMatch(/duration/i)
+    expect(
+      validateAdvanced(advancedData({ styles: "rock", duration: "5" }))
+    ).toMatch(/duration/i)
+    expect(
+      validateAdvanced(advancedData({ styles: "rock", duration: "999" }))
+    ).toMatch(/duration/i)
   })
 
   it("rejects an over-long key", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", key: "x".repeat(60) }))).toMatch(/key/i)
+    expect(
+      validateAdvanced(advancedData({ styles: "rock", key: "x".repeat(60) }))
+    ).toMatch(/key/i)
   })
 
   it("rejects out-of-range weirdness and style influence", () => {
-    expect(validateAdvanced(advancedData({ styles: "rock", weirdness: 200 }))).toMatch(/weirdness/i)
-    expect(validateAdvanced(advancedData({ styles: "rock", styleInfluence: -1 }))).toMatch(
-      /influence/i
-    )
+    expect(
+      validateAdvanced(advancedData({ styles: "rock", weirdness: 200 }))
+    ).toMatch(/weirdness/i)
+    expect(
+      validateAdvanced(advancedData({ styles: "rock", styleInfluence: -1 }))
+    ).toMatch(/influence/i)
   })
 })
 
@@ -214,7 +245,9 @@ function soundsData(overrides: Partial<SoundsFormData> = {}): SoundsFormData {
 
 describe("buildSoundsPayload", () => {
   it("maps description to prompt and fixes mode to sound (instrumental)", () => {
-    const payload = buildSoundsPayload(soundsData({ description: "  warm pad  " }))
+    const payload = buildSoundsPayload(
+      soundsData({ description: "  warm pad  " })
+    )
     expect(payload).toMatchObject({
       prompt: "warm pad",
       mode: "sound",
@@ -226,7 +259,12 @@ describe("buildSoundsPayload", () => {
   it("never sends bpm or key for a one-shot (backend forbids them)", () => {
     // Even if stray loop values are present, a one-shot must omit tempo/tonal keys.
     const payload = buildSoundsPayload(
-      soundsData({ soundType: "one-shot", bpmAuto: false, bpm: "120", key: "C major" })
+      soundsData({
+        soundType: "one-shot",
+        bpmAuto: false,
+        bpm: "120",
+        key: "C major",
+      })
     )
     expect(payload).not.toHaveProperty("bpm")
     expect(payload).not.toHaveProperty("key")
@@ -234,9 +272,18 @@ describe("buildSoundsPayload", () => {
 
   it("sends bpm and key for a loop", () => {
     const payload = buildSoundsPayload(
-      soundsData({ soundType: "loop", bpmAuto: false, bpm: "128", key: "A minor" })
+      soundsData({
+        soundType: "loop",
+        bpmAuto: false,
+        bpm: "128",
+        key: "A minor",
+      })
     )
-    expect(payload).toMatchObject({ sound_type: "loop", bpm: 128, key: "A minor" })
+    expect(payload).toMatchObject({
+      sound_type: "loop",
+      bpm: 128,
+      key: "A minor",
+    })
   })
 
   it("omits bpm for a loop when Auto is on, and key when Any", () => {
@@ -252,7 +299,9 @@ describe("validateSounds", () => {
   it("accepts a valid one-shot and a valid loop", () => {
     expect(validateSounds(soundsData())).toBeNull()
     expect(
-      validateSounds(soundsData({ soundType: "loop", bpmAuto: false, bpm: "120" }))
+      validateSounds(
+        soundsData({ soundType: "loop", bpmAuto: false, bpm: "120" })
+      )
     ).toBeNull()
   })
 
@@ -261,24 +310,30 @@ describe("validateSounds", () => {
   })
 
   it("requires a description", () => {
-    expect(validateSounds(soundsData({ description: "  " }))).toMatch(/description/i)
-  })
-
-  it("rejects an over-long description (the prompt bound)", () => {
-    expect(validateSounds(soundsData({ description: "x".repeat(2001) }))).toMatch(
+    expect(validateSounds(soundsData({ description: "  " }))).toMatch(
       /description/i
     )
   })
 
+  it("rejects an over-long description (the prompt bound)", () => {
+    expect(
+      validateSounds(soundsData({ description: "x".repeat(2001) }))
+    ).toMatch(/description/i)
+  })
+
   it("rejects an out-of-range loop BPM", () => {
     expect(
-      validateSounds(soundsData({ soundType: "loop", bpmAuto: false, bpm: "300" }))
+      validateSounds(
+        soundsData({ soundType: "loop", bpmAuto: false, bpm: "300" })
+      )
     ).toMatch(/bpm/i)
   })
 
   it("ignores BPM bounds when Auto is on", () => {
     expect(
-      validateSounds(soundsData({ soundType: "loop", bpmAuto: true, bpm: "300" }))
+      validateSounds(
+        soundsData({ soundType: "loop", bpmAuto: true, bpm: "300" })
+      )
     ).toBeNull()
   })
 })
@@ -291,29 +346,43 @@ describe("submitGeneration", () => {
     selectedTags: [],
   }
 
-  it("returns the job id on 202 and sends the Bearer token", async () => {
+  it("returns the job id and time estimate on 202, sending the Bearer token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ job_id: "job-123", status: "queued" }), {
-        status: 202,
-      })
+      new Response(
+        JSON.stringify({
+          job_id: "job-123",
+          status: "queued",
+          estimated_time_seconds: 12,
+        }),
+        { status: 202 }
+      )
     )
     vi.stubGlobal("fetch", fetchMock)
 
     const result = await submitGeneration(data, "tok")
-    expect(result).toEqual({ status: "accepted", jobId: "job-123" })
+    expect(result).toEqual({
+      status: "accepted",
+      jobId: "job-123",
+      estimatedSeconds: 12,
+    })
 
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/generate")
     expect((opts.headers as Record<string, string>).authorization).toBe(
       "Bearer tok"
     )
-    expect(JSON.parse(opts.body)).toEqual({ prompt: "song", instrumental: false })
+    expect(JSON.parse(opts.body)).toEqual({
+      prompt: "song",
+      instrumental: false,
+    })
   })
 
   it("includes the selected model in the payload (US-16.4)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
     await submitGeneration(data, "tok", "xl-base")
@@ -322,9 +391,11 @@ describe("submitGeneration", () => {
   })
 
   it("omits model when none is selected so the backend default applies", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "job-9" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
     await submitGeneration(data, "tok", "")
@@ -333,12 +404,18 @@ describe("submitGeneration", () => {
   })
 
   it("threads the model through the Advanced and Sounds submitters too", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ job_id: "j" }), { status: 202 })
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "j" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
-    await submitAdvancedGeneration(advancedData({ styles: "rock" }), "tok", "xl-sft")
+    await submitAdvancedGeneration(
+      advancedData({ styles: "rock" }),
+      "tok",
+      "xl-sft"
+    )
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe("xl-sft")
 
     await submitSoundsGeneration(
