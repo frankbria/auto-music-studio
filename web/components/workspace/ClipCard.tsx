@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
@@ -132,12 +132,21 @@ export function ClipCard({
   onPublishToggle,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
-  const liked = state.likedIds.includes(clip.id)
+  // likedIds re-renders every player tick; scan a Set (cf. applyClientFilters).
+  const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
+  const liked = likedSet.has(clip.id)
 
-  const [title, setTitle] = useState(clip.title)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
-  const [isPublic, setIsPublic] = useState(clip.is_public)
+  // Editing cancelled (Escape) — checked in the single onBlur commit path.
+  const cancelRef = useRef(false)
+  // Optimistic overlays: null means "show the prop". This keeps an idle card in
+  // sync with parent/refetch updates while still reflecting a user's own edit.
+  // A real resync (e.g. a failed save) lands when backend mutation routes exist.
+  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
+  const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
+  const title = optimisticTitle ?? clip.title
+  const isPublic = optimisticPublic ?? clip.is_public
 
   const versionLabel = clip.model
     ? (VERSION_LABELS[clip.model] ?? clip.model)
@@ -154,15 +163,21 @@ export function ClipCard({
     setEditing(true)
   }
 
+  // Single commit path: Enter/Escape both blur the input, so onBlur is the only
+  // place a rename is saved (cancelRef distinguishes Escape). Avoids the
+  // double-save / stale-closure race of committing from both keydown and blur.
   function commitEdit() {
-    if (!editing) return
     setEditing(false)
+    if (cancelRef.current) {
+      cancelRef.current = false
+      return
+    }
     const next = draft.trim()
     if (next && next !== (title ?? "")) {
       onTitleChange?.(clip.id, next)
       // Reflect the rename locally only when a parent can persist it — otherwise
       // the edit has nowhere to go and shouldn't look saved.
-      if (onTitleChange) setTitle(next)
+      if (onTitleChange) setOptimisticTitle(next)
     }
   }
 
@@ -174,7 +189,7 @@ export function ClipCard({
     const next = !isPublic
     onPublishToggle?.(clip.id, next)
     // Only reflect the new visibility when a parent persists it.
-    if (onPublishToggle) setIsPublic(next)
+    if (onPublishToggle) setOptimisticPublic(next)
   }
 
   return (
@@ -215,8 +230,11 @@ export function ClipCard({
             onFocus={(e) => e.currentTarget.select()}
             onBlur={commitEdit}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitEdit()
-              else if (e.key === "Escape") setEditing(false)
+              if (e.key === "Enter") e.currentTarget.blur()
+              else if (e.key === "Escape") {
+                cancelRef.current = true
+                e.currentTarget.blur()
+              }
             }}
             className="h-7"
           />
@@ -352,27 +370,11 @@ export function ClipCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Remix / Edit</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {REMIX_ITEMS.map((item) => (
-                      <DropdownMenuItem
-                        key={item.action}
-                        onSelect={() => emitMenu(item.action)}
-                      >
-                        {item.label}
-                        {item.pro && (
-                          <Badge
-                            variant="outline"
-                            className="ml-auto text-[10px]"
-                          >
-                            Pro
-                          </Badge>
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
+                {/* Remix/Edit opens the remix flow; the generation actions below
+                    are the flat §9.2 items (the primary CTA is the shortcut). */}
+                <DropdownMenuItem onSelect={() => emitMenu("remix-edit")}>
+                  Remix / Edit
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => emitMenu("open-studio")}>
                   Open in Studio

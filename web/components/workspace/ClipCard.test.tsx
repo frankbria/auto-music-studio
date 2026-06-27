@@ -181,6 +181,23 @@ describe("ClipCard", () => {
     expect(menu).toBeInTheDocument()
   })
 
+  it("does not duplicate generation actions in the more-options menu", async () => {
+    renderCard()
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    // Each §9.2 item appears exactly once (no submenu re-listing the flat items).
+    expect(screen.getAllByText("Cover")).toHaveLength(1)
+    expect(screen.getAllByText("Open in Studio")).toHaveLength(1)
+    expect(screen.getAllByText("Sample from Song")).toHaveLength(1)
+  })
+
+  it("dispatches remix-edit from the more-options menu", async () => {
+    const onMenuAction = vi.fn()
+    renderCard({ onMenuAction })
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remix / Edit" }))
+    expect(onMenuAction).toHaveBeenCalledWith("remix-edit", "c1")
+  })
+
   it("dispatches a menu action from the Remix/Edit primary CTA", async () => {
     const onMenuAction = vi.fn()
     renderCard({ onMenuAction })
