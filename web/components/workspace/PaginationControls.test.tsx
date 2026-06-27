@@ -21,6 +21,12 @@ describe("PaginationControls", () => {
     expect(screen.getByLabelText("Next page")).toBeDisabled()
   })
 
+  it("clamps an empty result to 'Page 1 of 1' and disables Next", () => {
+    render(<PaginationControls page={1} totalPages={0} onPageChange={vi.fn()} />)
+    expect(screen.getByText("Page 1 of 1")).toBeInTheDocument()
+    expect(screen.getByLabelText("Next page")).toBeDisabled()
+  })
+
   it("requests the next/previous page on click", async () => {
     const onPageChange = vi.fn()
     render(<PaginationControls page={2} totalPages={5} onPageChange={onPageChange} />)

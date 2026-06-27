@@ -15,6 +15,9 @@ export function PaginationControls({
   totalPages: number
   onPageChange: (page: number) => void
 }) {
+  // Clamp once so an empty result (total_pages: 0) shows "Page 1 of 1" *and*
+  // disables Next, rather than leaving Next clickable into an empty page 2.
+  const clampedTotalPages = Math.max(totalPages, 1)
   return (
     <div className="flex items-center justify-between gap-2">
       <Button
@@ -28,12 +31,12 @@ export function PaginationControls({
         Prev
       </Button>
       <span className="text-sm text-muted-foreground" aria-live="polite">
-        Page {page} of {Math.max(totalPages, 1)}
+        Page {page} of {clampedTotalPages}
       </span>
       <Button
         variant="outline"
         size="sm"
-        disabled={page >= totalPages}
+        disabled={page >= clampedTotalPages}
         onClick={() => onPageChange(page + 1)}
         aria-label="Next page"
       >

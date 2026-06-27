@@ -103,6 +103,14 @@ describe("WorkspacePanel", () => {
     ).toBeInTheDocument()
   })
 
+  it("surfaces a load error instead of an empty-library message", () => {
+    clipsResult = { data: null, loading: false, fetching: false, error: true }
+    render(<WorkspacePanel />)
+    expect(
+      screen.getByText("Couldn't load clips. Please try again.")
+    ).toBeInTheDocument()
+  })
+
   it("renders the pagination indicator", () => {
     render(<WorkspacePanel />)
     expect(within(screen.getByTestId("workspace-panel")).getByText("Page 1 of 1")).toBeInTheDocument()

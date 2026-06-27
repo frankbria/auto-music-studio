@@ -69,9 +69,11 @@ export function WorkspacePanel({
   }
 
   const { defaultWorkspace, loading: workspacesLoading } = useWorkspaces()
-  // Defer the clip fetch until the workspace is known, so we don't briefly fetch
-  // unscoped clips across all workspaces before refetching with the workspace id.
-  const { data, loading: clipsLoading } = useClips(
+  // Defer the clip fetch until a workspace is resolved, so we never fetch
+  // unscoped clips (across all workspaces). Gating on `defaultWorkspace` also
+  // covers the workspace-fetch-error and zero-workspace cases, where
+  // `workspacesLoading` is false but the id is still unknown.
+  const { data, loading: clipsLoading, error: clipsError } = useClips(
     {
       workspace_id: defaultWorkspace?.id,
       search: debouncedSearch,
@@ -79,7 +81,7 @@ export function WorkspacePanel({
       page,
       per_page: PER_PAGE,
     },
-    { enabled: !workspacesLoading }
+    { enabled: defaultWorkspace !== null }
   )
 
   const { state } = usePlayer()
@@ -111,10 +113,15 @@ export function WorkspacePanel({
           clips={visibleClips}
           loading={loading}
           emptyMessage={
-            // Filters run client-side over the fetched page (the backend has no
-            // params for them yet), so scope the wording to this page rather
-            // than implying the whole library is empty.
-            narrowed ? "No clips on this page match your filters." : "No clips yet."
+            // A failed load shouldn't masquerade as an empty library. Filters
+            // run client-side over the fetched page (the backend has no params
+            // for them yet), so scope that wording to this page rather than
+            // implying the whole library is empty.
+            clipsError
+              ? "Couldn't load clips. Please try again."
+              : narrowed
+                ? "No clips on this page match your filters."
+                : "No clips yet."
           }
         />
       </div>
