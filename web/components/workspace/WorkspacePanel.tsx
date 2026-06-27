@@ -60,15 +60,27 @@ export function WorkspacePanel({
     setSort(value)
     setPage(1)
   }
+  // Filters run client-side over the fetched page, so jump back to the first
+  // page when one changes (mirrors search/sort) — otherwise a filter toggled on
+  // a later page would narrow an unrelated slice of clips.
+  const onFiltersChange = (next: ClipFilters) => {
+    setFilters(next)
+    setPage(1)
+  }
 
   const { defaultWorkspace, loading: workspacesLoading } = useWorkspaces()
-  const { data, loading: clipsLoading } = useClips({
-    workspace_id: defaultWorkspace?.id,
-    search: debouncedSearch,
-    sort,
-    page,
-    per_page: PER_PAGE,
-  })
+  // Defer the clip fetch until the workspace is known, so we don't briefly fetch
+  // unscoped clips across all workspaces before refetching with the workspace id.
+  const { data, loading: clipsLoading } = useClips(
+    {
+      workspace_id: defaultWorkspace?.id,
+      search: debouncedSearch,
+      sort,
+      page,
+      per_page: PER_PAGE,
+    },
+    { enabled: !workspacesLoading }
+  )
 
   const { state } = usePlayer()
   const visibleClips = useMemo(
@@ -78,7 +90,9 @@ export function WorkspacePanel({
 
   const loading = workspacesLoading || clipsLoading
   const totalPages = data?.total_pages ?? 1
-  const narrowed = activeFilterCount(filters) > 0 || debouncedSearch.length > 0
+  // Use the live search term (not the debounced one) for the empty-state copy so
+  // the wording is right immediately while a new search is still debouncing.
+  const narrowed = activeFilterCount(filters) > 0 || search.length > 0
 
   return (
     <div data-testid="workspace-panel" className="flex h-full flex-col gap-3">
@@ -88,7 +102,7 @@ export function WorkspacePanel({
       />
       <ClipSearchInput value={search} onChange={onSearchChange} />
       <div className="flex items-center justify-between gap-2">
-        <FiltersButton filters={filters} onFiltersChange={setFilters} />
+        <FiltersButton filters={filters} onFiltersChange={onFiltersChange} />
         <SortDropdown value={sort} onChange={onSortChange} />
       </div>
 

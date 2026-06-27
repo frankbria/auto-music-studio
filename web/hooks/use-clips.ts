@@ -15,16 +15,25 @@ import {
  * page) changes. Previous data is kept across refetches so paging/typing doesn't
  * blank the list. Use behind an auth guard (e.g. useRequireAuth).
  *
+ * Pass `enabled: false` to defer the fetch (e.g. until the workspace id is known)
+ * — while deferred the hook reports `loading` so the caller shows a skeleton
+ * rather than a spurious unscoped fetch.
+ *
  * Search debouncing is the caller's job — pass an already-debounced `search`.
  */
-export function useClips(params: ClipSearchParams) {
+export function useClips(
+  params: ClipSearchParams,
+  { enabled = true }: { enabled?: boolean } = {}
+) {
   const { accessToken, isLoading: authLoading } = useAuth()
   const query = buildClipQuery(params)
   const [data, setData] = useState<ClipListResponse | null>(null)
-  const [error, setError] = useState(false)
+  // The query a fetch error belongs to; a later query change makes it stale so
+  // the skeleton shows again on the next attempt (instead of being suppressed).
+  const [errorQuery, setErrorQuery] = useState<string | null>(null)
 
   useEffect(() => {
-    if (authLoading || !accessToken) return
+    if (!enabled || authLoading || !accessToken) return
     let active = true
     fetch(`/api/clips${query ? `?${query}` : ""}`, {
       headers: { authorization: `Bearer ${accessToken}` },
@@ -36,19 +45,25 @@ export function useClips(params: ClipSearchParams) {
       .then((next) => {
         if (active) {
           setData(next)
-          setError(false)
+          setErrorQuery(null)
         }
       })
       .catch(() => {
-        if (active) setError(true)
+        if (active) setErrorQuery(query)
       })
     return () => {
       active = false
     }
-  }, [query, accessToken, authLoading])
+  }, [query, enabled, accessToken, authLoading])
 
-  // First load (no data yet) shows the skeleton; later refetches keep prior data.
-  const loading = authLoading || (!!accessToken && data === null && !error)
+  const error = errorQuery === query
+  // Deferred (not yet enabled), first load (no data), and changed-query states
+  // show the skeleton; later refetches keep prior data. A failed first load
+  // drops out of loading so the empty/error state can show instead of an endless
+  // skeleton.
+  const loading =
+    authLoading ||
+    (!!accessToken && (!enabled || (data === null && !error)))
 
   return { data, loading, error }
 }

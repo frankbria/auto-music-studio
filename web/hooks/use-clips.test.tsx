@@ -64,4 +64,39 @@ describe("useClips", () => {
     const { result } = renderHook(() => useClips({}), { wrapper })
     await waitFor(() => expect(result.current.error).toBe(true))
   })
+
+  it("does not fetch while disabled, then fetches when enabled", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(listRes())
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { result, rerender } = renderHook(
+      (p: { enabled: boolean }) => useClips({ workspace_id: "w1" }, { enabled: p.enabled }),
+      { wrapper, initialProps: { enabled: false } }
+    )
+    // Deferred: no fetch yet, and the hook reports loading so the caller shows a skeleton.
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(true)
+
+    rerender({ enabled: true })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+  })
+
+  it("shows the skeleton again on the next query after an error", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 500 }))
+      .mockResolvedValue(listRes([{ id: "c1" }]))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { result, rerender } = renderHook((p: { search: string }) => useClips(p), {
+      wrapper,
+      initialProps: { search: "a" },
+    })
+    await waitFor(() => expect(result.current.error).toBe(true))
+
+    // A new query supersedes the stale error: loading flips back on for the retry.
+    rerender({ search: "b" })
+    await waitFor(() => expect(result.current.loading).toBe(true))
+    await waitFor(() => expect(result.current.data?.clips).toHaveLength(1))
+  })
 })
