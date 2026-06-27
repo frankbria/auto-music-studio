@@ -29,10 +29,15 @@ function clip(overrides: Partial<Clip> = {}): Clip {
   }
 }
 
-/** Surfaces the global player's current track id so play wiring is observable. */
+/** Surfaces the global player's current track so play wiring is observable. */
 function PlayerProbe() {
   const { state } = usePlayer()
-  return <div data-testid="current-track">{state.current?.id ?? "none"}</div>
+  return (
+    <>
+      <div data-testid="current-track">{state.current?.id ?? "none"}</div>
+      <div data-testid="current-title">{state.current?.title ?? "none"}</div>
+    </>
+  )
 }
 
 function renderCard(props: Partial<ClipCardProps> = {}) {
@@ -78,6 +83,17 @@ describe("ClipCard", () => {
     expect(screen.getByTestId("current-track")).toHaveTextContent("none")
     await userEvent.click(screen.getByRole("button", { name: /play/i }))
     expect(screen.getByTestId("current-track")).toHaveTextContent("c1")
+  })
+
+  it("sends the optimistic title to the player after a rename", async () => {
+    const onTitleChange = vi.fn()
+    renderCard({ onTitleChange })
+    await userEvent.click(screen.getByRole("button", { name: /edit title/i }))
+    const input = screen.getByRole("textbox", { name: /title/i })
+    await userEvent.clear(input)
+    await userEvent.type(input, "New Name{Enter}")
+    await userEvent.click(screen.getByRole("button", { name: /play/i }))
+    expect(screen.getByTestId("current-title")).toHaveTextContent("New Name")
   })
 
   it("saves an inline title edit on Enter", async () => {
@@ -137,16 +153,16 @@ describe("ClipCard", () => {
 
   it("shows Get Full Song only for clips under 60s", async () => {
     const onGetFullSong = vi.fn()
-    const { rerender } = render(
+    const { unmount } = render(
       <PlayerProvider>
         <ClipCard clip={clip({ duration: 30 })} onGetFullSong={onGetFullSong} />
       </PlayerProvider>
     )
-    const btn = screen.getByRole("button", { name: /get full song/i })
-    await userEvent.click(btn)
+    await userEvent.click(screen.getByRole("button", { name: /get full song/i }))
     expect(onGetFullSong).toHaveBeenCalledWith("c1")
+    unmount()
 
-    rerender(
+    render(
       <PlayerProvider>
         <ClipCard clip={clip({ duration: 120 })} onGetFullSong={onGetFullSong} />
       </PlayerProvider>

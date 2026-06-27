@@ -201,7 +201,14 @@ export function ClipCard({
       <button
         type="button"
         aria-label="Play"
-        onClick={() => dispatch({ type: "play/track", track: trackFromClip(clip) })}
+        onClick={() =>
+          dispatch({
+            type: "play/track",
+            // Use the resolved (optimistic) title so the now-playing bar matches
+            // what the card shows after an inline rename.
+            track: { ...trackFromClip(clip), title: title ?? "Untitled clip" },
+          })
+        }
         className="group/thumb relative flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <HugeiconsIcon
