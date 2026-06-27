@@ -60,7 +60,7 @@ const initialOptions: MoreOptions = {
 export function AdvancedCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel } = useModelSelection()
+  const { selectedModel, isLoading: modelLoading } = useModelSelection()
 
   const lyricsField = useUndoableField("")
   const stylesField = useUndoableField("")
@@ -104,7 +104,7 @@ export function AdvancedCreationForm() {
   }
 
   async function handleCreate() {
-    if (!canSubmit || isSubmitting) return
+    if (!canSubmit || isSubmitting || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
@@ -285,7 +285,7 @@ export function AdvancedCreationForm() {
       <Button
         type="button"
         className="w-fit"
-        disabled={!canSubmit || isSubmitting}
+        disabled={!canSubmit || isSubmitting || modelLoading}
         onClick={handleCreate}
       >
         {isSubmitting ? "Creating..." : "Create"}

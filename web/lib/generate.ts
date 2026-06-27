@@ -193,12 +193,12 @@ function extractDetail(body: unknown, fallback: string): string {
 }
 
 /**
- * Attach the selected model (US-16.4) to a built payload. A falsy model is
- * omitted so the backend applies its own default (an empty `model` would 422).
+ * Return a copy of the payload with the selected model (US-16.4) attached. A
+ * falsy model is omitted so the backend applies its own default (an empty
+ * `model` would 422). Returns a new object so the caller's payload is untouched.
  */
 function withModel(payload: GenerationPayload, model?: string): GenerationPayload {
-  if (model) payload.model = model
-  return payload
+  return model ? { ...payload, model } : payload
 }
 
 /** Submit the Simple creation form through the BFF proxy. */

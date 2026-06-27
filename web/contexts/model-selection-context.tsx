@@ -30,11 +30,16 @@ type ModelSelectionValue = {
 const ModelSelectionContext = createContext<ModelSelectionValue | null>(null)
 
 export function ModelSelectionProvider({ children }: { children: ReactNode }) {
-  const { accessToken } = useAuth()
+  const { accessToken, isLoading: authLoading } = useAuth()
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModelState] = useState<string>(DEFAULT_MODEL_KEY)
   const [subscriptionTier, setSubscriptionTier] = useState("free")
-  const [isLoading, setIsLoading] = useState(true)
+  // Two independent fetches gate readiness: the public models list and the
+  // profile (which seeds the saved default). isLoading stays true until BOTH
+  // settle so a user with a saved default can't submit "base" in the window
+  // before the profile arrives — consumers disable submission while loading.
+  const [modelsLoading, setModelsLoading] = useState(true)
+  const [seedResolved, setSeedResolved] = useState(false)
   // Once the user picks a model, a late-arriving profile default must not clobber
   // their choice — this guards the default-seeding effect.
   const userTouched = useRef(false)
@@ -55,7 +60,7 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
         // Leave models empty; the selector renders a graceful empty state.
       })
       .finally(() => {
-        if (active) setIsLoading(false)
+        if (active) setModelsLoading(false)
       })
     return () => {
       active = false
@@ -64,8 +69,10 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
 
   // Seed the initial selection from the user's saved default_model (and read
   // their tier for Pro-lock display). Skipped if the user already picked one.
+  // The no-token case is handled in the isLoading derivation below (no seeding
+  // to wait for), so this effect only runs the authenticated fetch.
   useEffect(() => {
-    if (!accessToken) return
+    if (authLoading || !accessToken) return
     let active = true
     fetch("/api/users/me", {
       headers: { authorization: `Bearer ${accessToken}` },
@@ -81,10 +88,19 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
       .catch(() => {
         // No profile → keep the fallback default and "free" tier.
       })
+      .finally(() => {
+        if (active) setSeedResolved(true)
+      })
     return () => {
       active = false
     }
-  }, [accessToken])
+  }, [accessToken, authLoading])
+
+  // Loading until the models list settles and — when there's a user whose saved
+  // default could still arrive — the profile seed resolves. With no token (auth
+  // settled) there's no default to wait for, so only the models gate applies.
+  const isLoading =
+    authLoading || modelsLoading || (!!accessToken && !seedResolved)
 
   return (
     <ModelSelectionContext.Provider

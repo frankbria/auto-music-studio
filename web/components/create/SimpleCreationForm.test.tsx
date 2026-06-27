@@ -9,7 +9,7 @@ vi.mock("@/hooks/use-auth", () => ({
 }))
 
 vi.mock("@/contexts/model-selection-context", () => ({
-  useModelSelection: () => ({ selectedModel: "base" }),
+  useModelSelection: () => ({ selectedModel: "base", isLoading: false }),
 }))
 
 const submitGeneration = vi.fn()

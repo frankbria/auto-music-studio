@@ -32,7 +32,7 @@ type Status =
 export function SimpleCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel } = useModelSelection()
+  const { selectedModel, isLoading: modelLoading } = useModelSelection()
 
   const [description, setDescription] = useState("")
   const [instrumental, setInstrumental] = useState(false)
@@ -52,7 +52,8 @@ export function SimpleCreationForm() {
     description.trim().length > 0 || effectiveLyrics.trim().length > 0
 
   async function handleCreate() {
-    if (!canSubmit || isSubmitting) return
+    // Block until the model context settles so a saved default isn't missed.
+    if (!canSubmit || isSubmitting || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
@@ -161,7 +162,7 @@ export function SimpleCreationForm() {
       <Button
         type="button"
         className="w-fit"
-        disabled={!canSubmit || isSubmitting}
+        disabled={!canSubmit || isSubmitting || modelLoading}
         onClick={handleCreate}
       >
         {isSubmitting ? "Creating..." : "Create"}

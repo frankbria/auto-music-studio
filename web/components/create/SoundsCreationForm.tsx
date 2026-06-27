@@ -36,7 +36,7 @@ const SOUND_TYPES = [
 export function SoundsCreationForm() {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const { selectedModel } = useModelSelection()
+  const { selectedModel, isLoading: modelLoading } = useModelSelection()
 
   const [description, setDescription] = useState("")
   const [soundType, setSoundType] = useState<SoundsFormData["soundType"]>("")
@@ -57,7 +57,7 @@ export function SoundsCreationForm() {
   }
 
   async function handleCreate() {
-    if (!canSubmit || isSubmitting) return
+    if (!canSubmit || isSubmitting || modelLoading) return
     if (!accessToken) {
       router.push("/login")
       return
@@ -180,7 +180,7 @@ export function SoundsCreationForm() {
       <Button
         type="button"
         className="w-fit"
-        disabled={!canSubmit || isSubmitting}
+        disabled={!canSubmit || isSubmitting || modelLoading}
         onClick={handleCreate}
       >
         {isSubmitting ? "Creating..." : "Create"}
