@@ -27,7 +27,9 @@ async def main() -> None:
             pro = "  [Pro]" if m["pro_only"] else ""
             print(f"  {m['key']:<9} {m['display_name']:<32} cat={m['category']:<9} {m['vram']:>7}{pro}")
         keys = {m["key"] for m in body["models"]}
-        print(f"\n  models returned: {len(body['models'])}  ==  registry size: {len(MODELS)}: {keys == set(MODELS.keys())}")
+        print(
+            f"\n  models returned: {len(body['models'])}  ==  registry size: {len(MODELS)}: {keys == set(MODELS.keys())}"
+        )
         pro_keys = sorted(m["key"] for m in body["models"] if m["pro_only"])
         print(f"  pro-only (lock + badge for free tier): {pro_keys}")
 
