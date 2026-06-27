@@ -74,8 +74,13 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (authLoading || !accessToken) return
     let active = true
+    // Bound the fetch: isLoading is gated on seedResolved (set in .finally), so a
+    // hung profile request would otherwise leave the Create buttons permanently
+    // disabled. On abort, .catch keeps the default model/free tier and .finally
+    // still resolves the seed.
     fetch("/api/users/me", {
       headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5000),
     })
       .then(async (res) => (res.ok ? ((await res.json()) as UserProfile) : null))
       .then((profile) => {
