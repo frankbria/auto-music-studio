@@ -7,7 +7,6 @@ Pro-only flags the UI renders.
 """
 
 import asyncio
-import json
 
 import httpx
 
