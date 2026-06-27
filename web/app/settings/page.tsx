@@ -294,11 +294,15 @@ function SettingsForm({
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="default_model">Default model</Label>
+              {/* Disabled until the list loads: with an empty list the select
+                  would show "No preference" while the saved value is still set,
+                  so a click could silently clear the user's real preference. */}
               <select
                 id="default_model"
                 value={form.default_model}
                 onChange={(e) => update("default_model", e.target.value)}
-                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                disabled={models.length === 0}
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="">No preference</option>
                 {models.map((m) => (

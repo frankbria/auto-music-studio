@@ -146,6 +146,23 @@ describe("SettingsPage", () => {
     expect(JSON.parse(patch[1].body)).toEqual({ default_model: "xl-base" })
   })
 
+  it("disables the default-model select when the models list fails to load", async () => {
+    // Route /api/models to a 500 so the dropdown can't populate; the select must
+    // disable rather than show "No preference" over a still-set saved value.
+    const fetchMock = vi.fn((url: unknown) =>
+      Promise.resolve(
+        typeof url === "string" && url.includes("/api/models")
+          ? jsonRes({}, 500)
+          : jsonRes(PROFILE)
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    renderPage()
+
+    const select = await screen.findByLabelText("Default model")
+    expect(select).toBeDisabled()
+  })
+
   it("gives real-time format feedback on the handle as you type", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes(PROFILE)))
     const user = userEvent.setup()
