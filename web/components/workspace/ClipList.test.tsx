@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import { ClipList } from "@/components/workspace/ClipList"
+import { PlayerProvider } from "@/contexts/player-context"
 import type { Clip } from "@/lib/workspace-clips"
 
 function clip(id: string): Clip {
@@ -38,7 +39,11 @@ describe("ClipList", () => {
   })
 
   it("renders a card per clip", () => {
-    render(<ClipList clips={[clip("a"), clip("b")]} loading={false} />)
+    render(
+      <PlayerProvider>
+        <ClipList clips={[clip("a"), clip("b")]} loading={false} />
+      </PlayerProvider>
+    )
     expect(screen.getAllByTestId("clip-card")).toHaveLength(2)
   })
 })
