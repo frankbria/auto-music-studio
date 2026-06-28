@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–14 complete on `main`; Stage 15 in progress (US-15.1 Next.js Nova scaffold). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stage 15): Next.js Shadcn Nova scaffold (US-15.1).
+**Current progress:** Stages 1–16 complete on `main`; Stage 17 in progress (US-17.1 Song Detail Page). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stages 15–16): Next.js Nova scaffold, app shell, OAuth login, sidebar nav, global playbar, profile settings, creation flow (simple/advanced/sounds), model selector, workspace panel, clip cards, audio input modals.
 
 ## Commands
 
@@ -138,7 +138,7 @@ tests/
   test_workspace.py # Workspace command tests
   features/         # pytest-bdd feature files (not yet populated)
 
-web/                # Next.js frontend (Layer 3) — Shadcn Nova scaffold (US-15.1)
+web/                # Next.js frontend (Layer 3) — Stages 15–16 complete; Stage 17 in progress (US-17.1)
 plugin/             # JUCE VST3 plugin (placeholder, Layer 4)
 docs/               # Demo docs, spec evidence, and story artifacts
 ```
@@ -230,7 +230,7 @@ Package manager: `uv` with `hatchling` build backend
 ## Agent Notes
 
 - The `plugin/` directory is a placeholder — don't expect working code there yet
-- `web/` is the scaffolded Next.js app (US-15.1, Shadcn Nova); run with `cd web && npm install && npm run dev`
+- `web/` is the Next.js app (Stages 15–16 complete, Stage 17 in progress); run with `cd web && npm install && npm run dev`
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions
