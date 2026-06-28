@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, MusicNote01Icon } from "@hugeicons/core-free-icons"
+import { Add01Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -16,6 +16,11 @@ import { submitGeneration } from "@/lib/generate"
 import { InspirationTags } from "@/components/create/InspirationTags"
 import { GenerationProgress } from "@/components/create/GenerationProgress"
 import { GenerationError } from "@/components/create/GenerationError"
+import {
+  AudioInputs,
+  EMPTY_AUDIO_INPUTS,
+  type AudioInputsValue,
+} from "@/components/create/AudioInputs"
 
 /**
  * The Simple creation form (US-16.1): describe a song in plain language and go.
@@ -37,8 +42,11 @@ export function SimpleCreationForm({
   const [lyrics, setLyrics] = useState("")
   const [showLyrics, setShowLyrics] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  // Neutral notice for non-generation messages (e.g. the +Audio placeholder),
-  // kept separate from the generation state machine.
+  // Attached reference audio / voice / inspiration (US-16.8). Tracked here so
+  // Clear all resets them and they persist across Simple/Advanced tab switches.
+  const [inputs, setInputs] = useState<AudioInputsValue>(EMPTY_AUDIO_INPUTS)
+  // Neutral notice for non-generation messages, kept separate from the
+  // generation state machine.
   const [notice, setNotice] = useState<string | null>(null)
 
   // Lyrics only count when the field is open — hiding it shouldn't keep Create
@@ -79,6 +87,7 @@ export function SimpleCreationForm({
     setLyrics("")
     setShowLyrics(false)
     setSelectedTags([])
+    setInputs(EMPTY_AUDIO_INPUTS)
     setNotice(null)
     generation.reset()
   }
@@ -110,16 +119,11 @@ export function SimpleCreationForm({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
+        <AudioInputs
+          value={inputs}
+          onChange={(patch) => setInputs((v) => ({ ...v, ...patch }))}
           disabled={busy}
-          onClick={() => setNotice("Audio input is coming soon.")}
-        >
-          <HugeiconsIcon icon={MusicNote01Icon} data-icon="inline-start" />
-          Audio
-        </Button>
+        />
         <Button
           type="button"
           variant="outline"
