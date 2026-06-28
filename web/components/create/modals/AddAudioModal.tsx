@@ -287,13 +287,23 @@ function RecordTab({
     }
   }
 
-  // Stop any in-flight recording / timer when the modal closes or unmounts.
+  // Stop any in-flight recording when the modal closes (active=false) or the tab
+  // unmounts — otherwise the microphone keeps capturing until the browser tears
+  // the stream down. The recorder's onstop stops the stream tracks, so stopping
+  // the recorder also ends the getUserMedia capture. Inlined (refs are stable) to
+  // keep the dependency array honest.
   useEffect(() => {
-    if (!active) {
-      if (recorderRef.current?.state === "recording") recorderRef.current.stop()
-      stopTimer()
+    function teardown() {
+      if (recorderRef.current?.state === "recording") {
+        recorderRef.current.stop()
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
     }
-    return stopTimer
+    if (!active) teardown()
+    return teardown
   }, [active])
 
   async function start() {
