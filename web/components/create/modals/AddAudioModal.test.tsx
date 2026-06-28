@@ -37,6 +37,9 @@ function clip(partial: Partial<Clip> & { id: string }): Clip {
   }
 }
 
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+
 beforeEach(() => {
   URL.createObjectURL = vi.fn(() => "blob:mock")
   URL.revokeObjectURL = vi.fn()
@@ -50,7 +53,11 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  URL.createObjectURL = originalCreateObjectURL
+  URL.revokeObjectURL = originalRevokeObjectURL
+  vi.clearAllMocks()
+})
 
 describe("AddAudioModal", () => {
   it("opens with Remix, Upload, and Record tabs", () => {
@@ -149,6 +156,42 @@ describe("AddAudioModal", () => {
       expect.objectContaining({ kind: "record", label: "Recording" })
     )
     expect(trackStop).toHaveBeenCalled()
+  })
+
+  it("releases the mic if the tab unmounts before getUserMedia resolves", async () => {
+    let resolveStream: (s: unknown) => void = () => {}
+    const trackStop = vi.fn()
+    const getUserMedia = vi.fn(
+      () => new Promise((res) => (resolveStream = res))
+    )
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    })
+    const recorderCtor = vi.fn()
+    class FakeMediaRecorder {
+      state = "inactive"
+      constructor() {
+        recorderCtor()
+      }
+      start() {}
+      stop() {}
+    }
+    vi.stubGlobal("MediaRecorder", FakeMediaRecorder)
+
+    const user = userEvent.setup()
+    const { unmount } = render(
+      <AddAudioModal open onOpenChange={() => {}} onSelect={() => {}} />
+    )
+    await user.click(screen.getByRole("tab", { name: "Record" }))
+    await user.click(screen.getByRole("button", { name: /^record$/i }))
+
+    // Tab/modal goes away while the permission prompt is still open.
+    unmount()
+    resolveStream({ getTracks: () => [{ stop: trackStop }] })
+
+    await waitFor(() => expect(trackStop).toHaveBeenCalled())
+    expect(recorderCtor).not.toHaveBeenCalled()
   })
 
   it("shows a permission-denied message when the mic is blocked", async () => {

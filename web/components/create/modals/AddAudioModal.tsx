@@ -186,10 +186,17 @@ function UploadTab({
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
 
+  // Clearing React state isn't enough: an <input type=file> keeps its value, so
+  // re-picking the same file wouldn't fire onChange again. Reset it too.
+  function resetInput() {
+    if (inputRef.current) inputRef.current.value = ""
+  }
+
   function accept(candidate: File | undefined) {
     if (!candidate) return
     if (!isAcceptedAudioFile(candidate.name)) {
       setFile(null)
+      resetInput()
       setError(
         `Unsupported file type. Use ${ACCEPTED_AUDIO_EXTENSIONS.join(", ")}.`
       )
@@ -205,7 +212,10 @@ function UploadTab({
         <AudioPreview
           source={file}
           label={file.name}
-          onClear={() => setFile(null)}
+          onClear={() => {
+            setFile(null)
+            resetInput()
+          }}
         />
         <Button
           type="button"
@@ -275,10 +285,20 @@ function RecordTab({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Set once the tab unmounts, so a getUserMedia() that resolves after teardown
+  // doesn't arm a recorder/timer (or touch state) with no UI left to stop them.
+  const disposedRef = useRef(false)
   const [recording, setRecording] = useState(false)
+  const [starting, setStarting] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [blob, setBlob] = useState<Blob | null>(null)
   const [denied, setDenied] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      disposedRef.current = true
+    }
+  }, [])
 
   function stopTimer() {
     if (timerRef.current) {
@@ -308,8 +328,15 @@ function RecordTab({
 
   async function start() {
     setDenied(false)
+    setStarting(true)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // The tab may have unmounted while the permission prompt was open — if so,
+      // release the stream immediately instead of arming a recorder no one owns.
+      if (disposedRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       const recorder = new MediaRecorder(stream)
       chunksRef.current = []
       recorder.ondataavailable = (e) => {
@@ -326,7 +353,9 @@ function RecordTab({
       setRecording(true)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
     } catch {
-      setDenied(true)
+      if (!disposedRef.current) setDenied(true)
+    } finally {
+      if (!disposedRef.current) setStarting(false)
     }
   }
 
@@ -375,7 +404,7 @@ function RecordTab({
               Stop
             </Button>
           ) : (
-            <Button type="button" onClick={start}>
+            <Button type="button" onClick={start} disabled={starting}>
               <HugeiconsIcon icon={RecordIcon} data-icon="inline-start" />
               Record
             </Button>

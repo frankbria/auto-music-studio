@@ -14,6 +14,7 @@ export const ACCEPTED_AUDIO_EXTENSIONS = [
   ".ogg",
   ".aac",
   ".aiff",
+  ".aif",
 ] as const
 
 /** A reference audio the user attached, by source. `label` is what the chip shows. */

@@ -4,13 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AudioPreview } from "@/components/create/AudioPreview"
 
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+
 beforeEach(() => {
   // jsdom doesn't implement object URLs.
   URL.createObjectURL = vi.fn(() => "blob:mock")
   URL.revokeObjectURL = vi.fn()
 })
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  // Restore the globals so the mock doesn't leak into later suites.
+  URL.createObjectURL = originalCreateObjectURL
+  URL.revokeObjectURL = originalRevokeObjectURL
+  vi.clearAllMocks()
+})
 
 describe("AudioPreview", () => {
   it("renders an audio element with a string source", () => {

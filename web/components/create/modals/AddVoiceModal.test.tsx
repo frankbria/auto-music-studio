@@ -5,12 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { AddVoiceModal } from "@/components/create/modals/AddVoiceModal"
 import { MOCK_VOICES } from "@/lib/audio-inputs"
 
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+
 beforeEach(() => {
   URL.createObjectURL = vi.fn(() => "blob:mock")
   URL.revokeObjectURL = vi.fn()
 })
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  URL.createObjectURL = originalCreateObjectURL
+  URL.revokeObjectURL = originalRevokeObjectURL
+  vi.clearAllMocks()
+})
 
 describe("AddVoiceModal", () => {
   it("lists the available voice models", () => {

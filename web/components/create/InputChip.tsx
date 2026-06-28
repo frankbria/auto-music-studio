@@ -37,7 +37,9 @@ export function InputChip({
   return (
     <Badge variant="secondary" className="max-w-[14rem] gap-1.5 pr-1">
       <HugeiconsIcon icon={ICONS[type]} className="shrink-0" />
-      <span className="truncate" title={label}>
+      {/* min-w-0 lets the label shrink so `truncate` actually clips inside the
+          flex badge instead of overflowing. */}
+      <span className="min-w-0 truncate" title={label}>
         {label}
       </span>
       <button
