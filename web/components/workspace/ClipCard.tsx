@@ -29,7 +29,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { usePlayer } from "@/contexts/player-context"
-import { clipArtworkUrl, clipAudioUrl, formatTime, type Track } from "@/lib/clips"
+import { modeLabel, versionLabel } from "@/lib/clip-labels"
+import { formatTime, trackFromClip } from "@/lib/clips"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
@@ -73,25 +74,6 @@ export type ClipCardProps = {
 
 const FULL_SONG_MAX_SECONDS = 60
 
-/** Model id → short version badge label. Unmapped models show their raw id. */
-const VERSION_LABELS: Record<string, string> = {
-  "ace-step-v1": "XL",
-  "ace-step-v1-turbo": "XL Turbo",
-}
-
-/** generation_mode → metadata badge label. Plain "generate"/null show nothing. */
-const MODE_LABELS: Record<string, string> = {
-  cover: "Cover",
-  extend: "Extend",
-  remix: "Remix",
-  mashup: "Mashup",
-  sample: "Sample",
-  upload: "Upload",
-  studio: "Studio",
-  mastered: "Mastered",
-  full_song: "Full Song",
-}
-
 /** Remix/Edit sub-options, shared by the primary CTA and the ⋯ submenu. */
 const REMIX_ITEMS: { action: ClipMenuAction; label: string; pro?: boolean }[] = [
   { action: "open-studio", label: "Open in Studio" },
@@ -108,18 +90,6 @@ const DOWNLOAD_ITEMS: { action: ClipMenuAction; label: string }[] = [
   { action: "download-flac", label: "FLAC" },
   { action: "download-stems", label: "Stems" },
 ]
-
-/** Build a playable Track from a clip (artist/artwork are placeholders today). */
-function trackFromClip(clip: Clip): Track {
-  return {
-    id: clip.id,
-    title: clip.title ?? "Untitled clip",
-    artist: "Unknown artist",
-    audioUrl: clipAudioUrl(clip.id),
-    artworkUrl: clipArtworkUrl(clip.id),
-    duration: clip.duration ?? undefined,
-  }
-}
 
 /** Full clip card: metadata, playback, inline rename, and action menus. */
 export function ClipCard({
@@ -148,12 +118,8 @@ export function ClipCard({
   const title = optimisticTitle ?? clip.title
   const isPublic = optimisticPublic ?? clip.is_public
 
-  const versionLabel = clip.model
-    ? (VERSION_LABELS[clip.model] ?? clip.model)
-    : null
-  const metadataLabel = clip.generation_mode
-    ? MODE_LABELS[clip.generation_mode]
-    : null
+  const version = versionLabel(clip.model)
+  const metadataLabel = modeLabel(clip.generation_mode)
   const styleText = clip.style_tags.join(", ")
   const showFullSong =
     clip.duration != null && clip.duration < FULL_SONG_MAX_SECONDS
@@ -264,11 +230,11 @@ export function ClipCard({
         )}
 
         {/* Badges. */}
-        {(versionLabel || metadataLabel) && (
+        {(version || metadataLabel) && (
           <div className="flex flex-wrap items-center gap-1">
-            {versionLabel && (
+            {version && (
               <Badge variant="secondary" className="text-[10px]">
-                {versionLabel}
+                {version}
               </Badge>
             )}
             {metadataLabel && (
