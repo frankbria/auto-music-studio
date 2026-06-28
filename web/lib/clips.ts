@@ -21,6 +21,22 @@ export type Track = {
   duration?: number
 }
 
+/** Build a playable Track from a clip (artist/artwork are placeholders today). */
+export function trackFromClip(clip: {
+  id: string
+  title: string | null
+  duration: number | null
+}): Track {
+  return {
+    id: clip.id,
+    title: clip.title ?? "Untitled clip",
+    artist: "Unknown artist",
+    audioUrl: clipAudioUrl(clip.id),
+    artworkUrl: clipArtworkUrl(clip.id),
+    duration: clip.duration ?? undefined,
+  }
+}
+
 /** Backend audio stream path for a clip. */
 export function clipAudioUrl(id: string): string {
   return `/api/v1/clips/${encodeURIComponent(id)}/audio`

@@ -34,6 +34,43 @@ A persistent bottom player that keeps playing across client-side navigation.
 - `lib/clips.ts` builds the backend media URLs; `lib/demo-tracks.ts` +
   `public/demo/sample.wav` seed a demo queue until a clip-browsing UI exists.
 
+## Song Detail Page (US-17.1)
+
+The `/song/[id]` route renders a full-page view of a single clip.
+
+- `app/song/[id]/page.tsx` — thin route shim: extracts `id` from params and
+  delegates to `SongDetail`.
+- `components/song/SongDetail.tsx` — top-level component; owns auth guard, data
+  fetching, and the three-column layout (header + player + metadata / lyrics /
+  related songs).
+- `components/song/SongHeader.tsx` — title, artist placeholder, style/version/
+  mode badges, and the inline like/dislike/share/publish row.
+- `components/song/SongPlayer.tsx` — play/pause + `SongWaveform` + time readout,
+  driven through the global `usePlayer` store.
+- `components/song/SongWaveform.tsx` — canvas waveform (deterministic bars
+  seeded by clip id via `lib/waveform.ts`); click-to-seek when the clip is the
+  current player track.
+- `components/song/SongMetadata.tsx` — model/BPM/key/duration/created/visibility
+  grid (null fields omitted).
+- `components/song/SongLyrics.tsx` — scrollable lyrics with structure tags
+  (`[Verse]`/`[Chorus]`) formatted as section labels.
+- `components/song/RelatedSongs.tsx` — "Related songs" panel fed by
+  `useSimilarClips`.
+- `hooks/use-clip.ts` — fetches a single clip from the same-origin BFF; tags
+  results with the requested id to prevent stale renders across `/song/:id`
+  navigations.
+- `hooks/use-similar-clips.ts` — fetches similar clips from the BFF.
+- `app/api/clips/[id]/route.ts` — same-origin BFF proxy for
+  `GET /api/v1/clips/{id}`; forwards the Bearer token, keeps the backend URL
+  server-side.
+- `app/api/clips/[id]/similar/route.ts` — same-origin BFF proxy for
+  `GET /api/v1/clips/{id}/similar`; whitelists and bounds `scope`/`limit`
+  before forwarding.
+- `lib/waveform.ts` — `barHeights`, the seeded waveform bar generator (shared
+  with the player `MiniWaveform`).
+- `lib/clip-labels.ts` — display-label maps for clip model/generation_mode.
+- `lib/proxy-fetch.ts` — `fetchWithTimeout` used by BFF routes.
+
 ## Adding components
 
 To add components to your app, run the following command:

@@ -1,16 +1,25 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 import { usePlayer } from "@/contexts/player-context"
 import { WAVEFORM_BARS as BARS, barHeights } from "@/lib/waveform"
 
-/** Canvas mini-waveform with click-to-seek; played bars use the accent color. */
-export function MiniWaveform() {
+// Detail-page waveform (US-17.1). Unlike the player's MiniWaveform — which is
+// always bound to the *current* track — this is seeded by an explicit `clipId`
+// so it renders the right shape for the song on the page even before playback
+// starts. Click-to-seek only acts when this clip is the one playing (otherwise
+// there is no playhead to move).
+
+export function SongWaveform({ clipId }: { clipId: string }) {
   const { state, dispatch } = usePlayer()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const trackId = state.current?.id ?? ""
-  const progress = state.duration > 0 ? state.currentTime / state.duration : 0
+  const isCurrent = state.current?.id === clipId
+  const progress =
+    isCurrent && state.duration > 0 ? state.currentTime / state.duration : 0
+  // Pure function of clipId — memoize so it isn't recomputed on every audio
+  // tick (progress changes ~4Hz during playback, but the bars never do).
+  const heights = useMemo(() => barHeights(clipId), [clipId])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -25,14 +34,11 @@ export function MiniWaveform() {
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, w, hgt)
 
-    // These resolve to complete color strings (e.g. "oklch(0.205 0 0)"), so
-    // use them directly — don't re-wrap in oklch().
     const styles = getComputedStyle(canvas)
     const played = styles.getPropertyValue("--primary").trim() || "#888"
     const unplayed =
       styles.getPropertyValue("--muted-foreground").trim() || "#ccc"
 
-    const heights = trackId ? barHeights(trackId) : new Array(BARS).fill(0.2)
     const gap = 2
     const barW = (w - gap * (BARS - 1)) / BARS
     for (let i = 0; i < BARS; i++) {
@@ -41,10 +47,10 @@ export function MiniWaveform() {
       ctx.globalAlpha = i / BARS < progress ? 0.9 : 0.4
       ctx.fillRect(i * (barW + gap), (hgt - bh) / 2, barW, bh)
     }
-  }, [trackId, progress])
+  }, [heights, progress])
 
   function seekFromClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!state.current || state.duration <= 0) return
+    if (!isCurrent || state.duration <= 0) return
     const rect = e.currentTarget.getBoundingClientRect()
     const ratio = (e.clientX - rect.left) / rect.width
     dispatch({ type: "seek/request", time: ratio * state.duration })
@@ -56,7 +62,7 @@ export function MiniWaveform() {
       role="img"
       aria-label="Waveform"
       onClick={seekFromClick}
-      className="h-9 w-full cursor-pointer"
+      className="h-16 w-full cursor-pointer"
     />
   )
 }
