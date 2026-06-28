@@ -19,12 +19,13 @@ type SimilarClipsResponse = {
  * mounted across /song/:id navigations, the previous song's suggestions aren't
  * shown under the new clip while its fetch is in flight.
  */
+type Result = { id: string; clips: Clip[]; error: boolean }
+
 export function useSimilarClips(id: string | undefined, limit = 6) {
   const { accessToken, isLoading: authLoading } = useAuth()
-  const [result, setResult] = useState<{ id: string; clips: Clip[] } | null>(
-    null
-  )
-  const [errorId, setErrorId] = useState<string | null>(null)
+  // Error folded into the result (not a separate errorId) so a successful
+  // retry for the same id can't leave a stale error flag set.
+  const [result, setResult] = useState<Result | null>(null)
 
   useEffect(() => {
     if (authLoading || !accessToken || !id) return
@@ -37,13 +38,10 @@ export function useSimilarClips(id: string | undefined, limit = 6) {
         return (await res.json()) as SimilarClipsResponse
       })
       .then((next) => {
-        if (active) setResult({ id, clips: next.clips ?? [] })
+        if (active) setResult({ id, clips: next.clips ?? [], error: false })
       })
       .catch(() => {
-        if (active) {
-          setErrorId(id)
-          setResult({ id, clips: [] })
-        }
+        if (active) setResult({ id, clips: [], error: true })
       })
     return () => {
       active = false
@@ -52,7 +50,7 @@ export function useSimilarClips(id: string | undefined, limit = 6) {
 
   const matches = result !== null && result.id === id
   const clips = matches ? result.clips : []
-  const error = errorId === id
+  const error = matches && result.error
   const loading = authLoading || (!!accessToken && !!id && !matches)
 
   return { clips, loading, error }

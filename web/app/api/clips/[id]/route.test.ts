@@ -9,7 +9,10 @@ function req(url: string, init: RequestInit = {}): NextRequest {
 
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) })
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe("GET /api/clips/[id]", () => {
   it("401s without an Authorization header", async () => {

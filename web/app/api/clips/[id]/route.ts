@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id} (US-17.1). The client holds
 // the access token in memory and sends it as a Bearer header; this route
@@ -20,9 +21,10 @@ export async function GET(
   const { id } = await ctx.params
   let res: Response
   try {
-    res = await fetch(`${BACKEND_URL}/api/v1/clips/${encodeURIComponent(id)}`, {
-      headers: { authorization: auth, accept: "application/json" },
-    })
+    res = await fetchWithTimeout(
+      `${BACKEND_URL}/api/v1/clips/${encodeURIComponent(id)}`,
+      { headers: { authorization: auth, accept: "application/json" } }
+    )
   } catch {
     return NextResponse.json(
       { detail: "Clip service is unavailable." },

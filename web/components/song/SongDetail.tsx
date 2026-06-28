@@ -53,7 +53,12 @@ export function SongDetail({ clipId }: { clipId: string }) {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-8 p-8 lg:flex-row">
+    // key by clip id so per-song local state (e.g. SongHeader's optimistic
+    // like/publish) resets cleanly when navigating between songs.
+    <div
+      key={clip.id}
+      className="mx-auto flex max-w-6xl flex-col gap-8 p-8 lg:flex-row"
+    >
       <main className="flex min-w-0 flex-1 flex-col gap-6">
         <SongHeader clip={clip} />
         <SongPlayer clip={clip} />

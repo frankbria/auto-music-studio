@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 import { usePlayer } from "@/contexts/player-context"
 import { WAVEFORM_BARS as BARS, barHeights } from "@/lib/waveform"
@@ -17,6 +17,9 @@ export function SongWaveform({ clipId }: { clipId: string }) {
   const isCurrent = state.current?.id === clipId
   const progress =
     isCurrent && state.duration > 0 ? state.currentTime / state.duration : 0
+  // Pure function of clipId — memoize so it isn't recomputed on every audio
+  // tick (progress changes ~4Hz during playback, but the bars never do).
+  const heights = useMemo(() => barHeights(clipId), [clipId])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -36,7 +39,6 @@ export function SongWaveform({ clipId }: { clipId: string }) {
     const unplayed =
       styles.getPropertyValue("--muted-foreground").trim() || "#ccc"
 
-    const heights = barHeights(clipId)
     const gap = 2
     const barW = (w - gap * (BARS - 1)) / BARS
     for (let i = 0; i < BARS; i++) {
@@ -45,7 +47,7 @@ export function SongWaveform({ clipId }: { clipId: string }) {
       ctx.globalAlpha = i / BARS < progress ? 0.9 : 0.4
       ctx.fillRect(i * (barW + gap), (hgt - bh) / 2, barW, bh)
     }
-  }, [clipId, progress])
+  }, [heights, progress])
 
   function seekFromClick(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!isCurrent || state.duration <= 0) return

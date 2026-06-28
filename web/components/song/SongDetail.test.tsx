@@ -65,7 +65,10 @@ function renderDetail(clipId = "c1") {
   )
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe("SongDetail", () => {
   it("loads and renders the song's data", async () => {
