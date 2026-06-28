@@ -165,11 +165,24 @@ describe("SimpleCreationForm", () => {
     expect(createButton()).toBeDisabled()
   })
 
-  it("shows the +Audio placeholder as a neutral notice, not an error", async () => {
+  it("opens the Add audio modal from the +Audio button", async () => {
     const user = userEvent.setup()
     render(<SimpleCreationForm />)
     await user.click(screen.getByRole("button", { name: /audio/i }))
-    expect(screen.getByRole("status")).toHaveTextContent(/coming soon/i)
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole("dialog", { name: /add audio/i })
+    ).toBeInTheDocument()
+  })
+
+  it("attaches a voice as a removable chip and Clear all wipes it", async () => {
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+
+    await user.click(screen.getByRole("button", { name: /voice/i }))
+    await user.click(screen.getByRole("button", { name: /aria/i }))
+    expect(screen.getByLabelText("Attached inputs")).toHaveTextContent("Aria")
+
+    await user.click(screen.getByRole("button", { name: /clear all/i }))
+    expect(screen.queryByLabelText("Attached inputs")).not.toBeInTheDocument()
   })
 })

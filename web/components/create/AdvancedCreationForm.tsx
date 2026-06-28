@@ -26,6 +26,11 @@ import { useUndoableField } from "@/components/create/useUndoableField"
 import { GenerationProgress } from "@/components/create/GenerationProgress"
 import { GenerationError } from "@/components/create/GenerationError"
 import {
+  AudioInputs,
+  EMPTY_AUDIO_INPUTS,
+  type AudioInputsValue,
+} from "@/components/create/AudioInputs"
+import {
   combineStyles,
   submitAdvancedGeneration,
   validateAdvanced,
@@ -76,6 +81,9 @@ export function AdvancedCreationForm({
   const [vocalLanguage, setVocalLanguage] = useState("")
   const [instrumental, setInstrumental] = useState(false)
   const [options, setOptions] = useState<MoreOptions>(initialOptions)
+  // Attached reference audio / voice / inspiration (US-16.8). Tracked here so
+  // Clear all resets them and they persist across Simple/Advanced tab switches.
+  const [inputs, setInputs] = useState<AudioInputsValue>(EMPTY_AUDIO_INPUTS)
   // Neutral notice (stub features) and pre-submit validation message, both kept
   // separate from the generation state machine.
   const [notice, setNotice] = useState<string | null>(null)
@@ -145,6 +153,7 @@ export function AdvancedCreationForm({
     setVocalLanguage("")
     setInstrumental(false)
     setOptions(initialOptions)
+    setInputs(EMPTY_AUDIO_INPUTS)
     setShowEnhance(false)
     setEnhancePrompt("")
     setNotice(null)
@@ -260,6 +269,11 @@ export function AdvancedCreationForm({
         <InspirationTags
           selectedTags={selectedTags}
           onChange={(next) => setSelectedTags(next)}
+        />
+        <AudioInputs
+          value={inputs}
+          onChange={(patch) => setInputs((v) => ({ ...v, ...patch }))}
+          disabled={busy}
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button
