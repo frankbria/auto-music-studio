@@ -14,12 +14,17 @@ type SimilarClipsResponse = {
  * (/api/clips/{id}/similar) for the song-detail "Related songs" panel
  * (US-17.1). Empty/error both resolve to an empty list — related songs are a
  * nice-to-have, so the panel degrades quietly rather than blocking the page.
+ *
+ * The result is tagged with the id it belongs to so that, when the page stays
+ * mounted across /song/:id navigations, the previous song's suggestions aren't
+ * shown under the new clip while its fetch is in flight.
  */
 export function useSimilarClips(id: string | undefined, limit = 6) {
   const { accessToken, isLoading: authLoading } = useAuth()
-  const [clips, setClips] = useState<Clip[]>([])
-  const [error, setError] = useState(false)
-  const [loaded, setLoaded] = useState(false)
+  const [result, setResult] = useState<{ id: string; clips: Clip[] } | null>(
+    null
+  )
+  const [errorId, setErrorId] = useState<string | null>(null)
 
   useEffect(() => {
     if (authLoading || !accessToken || !id) return
@@ -32,18 +37,12 @@ export function useSimilarClips(id: string | undefined, limit = 6) {
         return (await res.json()) as SimilarClipsResponse
       })
       .then((next) => {
-        if (active) {
-          // Reset in the async callback, not the effect body (lint:
-          // react-hooks/set-state-in-effect).
-          setError(false)
-          setClips(next.clips ?? [])
-          setLoaded(true)
-        }
+        if (active) setResult({ id, clips: next.clips ?? [] })
       })
       .catch(() => {
         if (active) {
-          setError(true)
-          setLoaded(true)
+          setErrorId(id)
+          setResult({ id, clips: [] })
         }
       })
     return () => {
@@ -51,7 +50,10 @@ export function useSimilarClips(id: string | undefined, limit = 6) {
     }
   }, [id, accessToken, authLoading, limit])
 
-  const loading = authLoading || (!!accessToken && !!id && !loaded)
+  const matches = result !== null && result.id === id
+  const clips = matches ? result.clips : []
+  const error = errorId === id
+  const loading = authLoading || (!!accessToken && !!id && !matches)
 
   return { clips, loading, error }
 }

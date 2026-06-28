@@ -71,6 +71,17 @@ describe("SongHeader", () => {
     ).toBeInTheDocument()
   })
 
+  it("toggles publish inline even without a callback (no persisting parent)", async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    await user.click(
+      screen.getByRole("button", { name: "Publish (make public)" })
+    )
+    expect(
+      screen.getByRole("button", { name: "Unpublish (make private)" })
+    ).toHaveAttribute("aria-pressed", "true")
+  })
+
   it("emits dislike and share callbacks", async () => {
     const user = userEvent.setup()
     const onDislike = vi.fn()

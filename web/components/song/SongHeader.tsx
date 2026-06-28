@@ -54,7 +54,10 @@ export function SongHeader({
   function togglePublish() {
     const next = !isPublic
     onPublishToggle?.(clip.id, next)
-    if (onPublishToggle) setOptimisticPublic(next)
+    // Reflect locally so the inline control visibly works on the detail page
+    // (which has no persisting parent yet); a real resync lands when the publish
+    // route exists (US-17.6). Mirrors the local dislike toggle above.
+    setOptimisticPublic(next)
   }
 
   return (

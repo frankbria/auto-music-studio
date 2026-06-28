@@ -125,6 +125,43 @@ describe("SongDetail", () => {
     expect(await screen.findByText("Related One")).toBeInTheDocument()
   })
 
+  it("does not show the previous song when the id changes mid-fetch", async () => {
+    // First clip resolves; the second id's fetch never resolves, so the page
+    // must fall back to loading rather than keep rendering the first song.
+    const fetchMock = vi.fn((input: string) => {
+      const url = String(input)
+      if (url.includes("/similar")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ clips: [] }), { status: 200 })
+        )
+      }
+      if (url.includes("/c1")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(clip()), { status: 200 })
+        )
+      }
+      return new Promise<Response>(() => {}) // c2 hangs
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const { rerender } = render(
+      <PlayerProvider>
+        <SongDetail clipId="c1" />
+      </PlayerProvider>
+    )
+    await screen.findByText("Midnight Drive")
+
+    rerender(
+      <PlayerProvider>
+        <SongDetail clipId="c2" />
+      </PlayerProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("song-loading")).toBeInTheDocument()
+    )
+    expect(screen.queryByText("Midnight Drive")).not.toBeInTheDocument()
+  })
+
   it("shows a not-found state for a 404", async () => {
     stubFetch({ clip: clip(), clipStatus: 404 })
     renderDetail()
