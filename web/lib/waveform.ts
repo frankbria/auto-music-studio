@@ -9,15 +9,15 @@
 
 export const WAVEFORM_BARS = 64
 
-/** `count` bar heights in 0.25..0.96, deterministic for a given `seed`. */
-export function barHeights(seed: string, count: number = WAVEFORM_BARS): number[] {
+/** WAVEFORM_BARS bar heights in ~0.25..0.96, deterministic for a given `seed`. */
+export function barHeights(seed: string): number[] {
   let h = 2166136261
   for (let i = 0; i < seed.length; i++) {
     h ^= seed.charCodeAt(i)
     h = Math.imul(h, 16777619)
   }
   const out: number[] = []
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < WAVEFORM_BARS; i++) {
     h ^= h << 13
     h ^= h >>> 17
     h ^= h << 5

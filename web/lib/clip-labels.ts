@@ -2,13 +2,13 @@
 // header (US-17.1) so a clip's model/mode reads the same everywhere.
 
 /** Model id → short version badge label. Unmapped models show their raw id. */
-export const VERSION_LABELS: Record<string, string> = {
+const VERSION_LABELS: Record<string, string> = {
   "ace-step-v1": "XL",
   "ace-step-v1-turbo": "XL Turbo",
 }
 
 /** generation_mode → badge label. Plain "generate"/null show nothing. */
-export const MODE_LABELS: Record<string, string> = {
+const MODE_LABELS: Record<string, string> = {
   cover: "Cover",
   extend: "Extend",
   remix: "Remix",

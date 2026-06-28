@@ -7,8 +7,6 @@ import type { Clip } from "@/lib/workspace-clips"
 
 type SimilarClipsResponse = {
   clips: Clip[]
-  total: number
-  limit: number
 }
 
 /**
