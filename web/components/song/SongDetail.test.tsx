@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -221,11 +221,12 @@ describe("SongDetail full action menu (US-17.2)", () => {
     stubFetch({ clip: clip() })
     renderDetail()
     await openActions()
-    await userEvent.click(screen.getByRole("menuitem", { name: /remaster/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: /^crop$/i }))
 
     const dialog = await screen.findByRole("dialog")
-    expect(dialog).toHaveTextContent("Remaster")
-    expect(dialog).toHaveTextContent(/isn't available yet/i)
+    expect(dialog).toHaveTextContent("Crop")
+    expect(within(dialog).getByLabelText("Start")).toBeInTheDocument()
+    expect(within(dialog).getByLabelText("End")).toBeInTheDocument()
   })
 
   it("navigates to the studio from the menu", async () => {
@@ -283,7 +284,7 @@ describe("SongDetail full action menu (US-17.2)", () => {
     stubFetch({ clip: clip() })
     renderDetail()
     await openActions()
-    await userEvent.click(screen.getByRole("menuitem", { name: /remaster/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: /^cover$/i }))
     await screen.findByRole("dialog")
 
     await userEvent.keyboard("{Escape}")

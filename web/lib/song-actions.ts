@@ -68,7 +68,7 @@ export type SongActionCategory = "edit" | "create" | "audio" | "export" | "manag
  * How an action is carried out when selected:
  * - `modal`      — opens a workflow modal (content lands in US-17.3+)
  * - `navigation` — routes to another page (editor/studio)
- * - `inline`     — acts in place (publish toggle, delete confirmation)
+ * - `inline`     — acts in place (remaster one-click, publish toggle, delete confirmation)
  * - `download`   — fetches the clip's audio as a file
  */
 export type SongActionWorkflow = "modal" | "navigation" | "inline" | "download"
@@ -151,10 +151,12 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
     actions: [
       { id: "add-vocal", label: "Add Vocal", icon: VoiceIcon, workflow: "modal" },
       {
+        // One-click, no modal (US-17.3): remaster runs immediately with the
+        // default -14 LUFS target and shows inline progress.
         id: "remaster",
         label: "Remaster",
         icon: MagicWand01Icon,
-        workflow: "modal",
+        workflow: "inline",
       },
       {
         id: "replace-section",

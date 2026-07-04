@@ -74,8 +74,10 @@ describe("SONG_ACTION_GROUPS", () => {
     )
   })
 
-  it("routes studio to navigation and publish/delete inline", () => {
+  it("routes studio to navigation and remaster/publish/delete inline", () => {
     expect(findSongAction("open-studio")?.workflow).toBe("navigation")
+    // Remaster is one-click (US-17.3) — inline submit, no modal.
+    expect(findSongAction("remaster")?.workflow).toBe("inline")
     expect(findSongAction("publish-toggle")?.workflow).toBe("inline")
     expect(findSongAction("delete")?.workflow).toBe("inline")
   })
@@ -92,7 +94,6 @@ describe("SONG_ACTION_GROUPS", () => {
       "sample",
       "use-inspiration",
       "add-vocal",
-      "remaster",
       "replace-section",
       "crop",
       "adjust-speed",

@@ -27,6 +27,13 @@ proto.setPointerCapture ??= () => {}
 proto.releasePointerCapture ??= () => {}
 proto.scrollIntoView ??= () => {}
 
+// jsdom lacks ResizeObserver, which Radix's Slider observes on mount (US-17.3).
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 afterEach(() => {
   cleanup()
   routerMock.pathname = "/"

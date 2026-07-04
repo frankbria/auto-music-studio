@@ -4,6 +4,7 @@ import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
 import { RelatedSongs } from "@/components/song/RelatedSongs"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { SongActionsMenu } from "@/components/song/SongActionsMenu"
+import { RemasterStatus } from "@/components/song/RemasterStatus"
 import { SongHeader } from "@/components/song/SongHeader"
 import { SongLyrics } from "@/components/song/SongLyrics"
 import { SongMetadata } from "@/components/song/SongMetadata"
@@ -91,6 +92,10 @@ function SongDetailContent({ clip }: { clip: Clip }) {
             {actions.actionError}
           </p>
         )}
+        <RemasterStatus
+          state={actions.remasterState}
+          onDismiss={actions.dismissRemaster}
+        />
         <SongPlayer clip={clip} />
         <section aria-label="Details" className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold">Details</h2>
@@ -105,6 +110,7 @@ function SongDetailContent({ clip }: { clip: Clip }) {
         <RelatedSongs clipId={clip.id} />
       </aside>
       <SongActionModal
+        clip={clip}
         action={actions.activeModal}
         onClose={actions.closeModal}
       />
