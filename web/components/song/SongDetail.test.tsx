@@ -256,6 +256,42 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(
       screen.getByRole("button", { name: "Unpublish (make private)" })
     ).toBeInTheDocument()
+
+    // And the other direction: the header button updates the menu label.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unpublish (make private)" })
+    )
+    await openActions()
+    expect(screen.getByRole("menuitem", { name: /^publish$/i })).toBeInTheDocument()
+  })
+
+  it("closes the workflow modal with Escape", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /remaster/i }))
+    await screen.findByRole("dialog")
+
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+  })
+
+  it("cancels delete without calling the backend", async () => {
+    const fetchMock = stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /delete/i }))
+    await screen.findByRole("dialog")
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
+    ).toHaveLength(0)
   })
 
   it("deletes the song after confirmation and navigates home", async () => {
