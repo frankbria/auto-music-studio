@@ -67,6 +67,26 @@ describe("useClipEdit", () => {
     expect(fetchJobStatus).not.toHaveBeenCalled()
   })
 
+  it("drops an accepted result and never starts polling after unmount", async () => {
+    // A submit whose request is still pending when the modal unmounts must not
+    // begin polling — the epoch bump on unmount invalidates the continuation.
+    let resolveSubmit: (r: EditSubmitResult) => void = () => {}
+    const pending = new Promise<EditSubmitResult>((r) => (resolveSubmit = r))
+    const { result, unmount } = renderHook(() => useClipEdit())
+
+    let submitting: Promise<void> = Promise.resolve()
+    await act(async () => {
+      submitting = result.current.submit(() => pending, "tok")
+    })
+    unmount()
+    await act(async () => {
+      resolveSubmit({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+      await submitting
+    })
+
+    expect(fetchJobStatus).not.toHaveBeenCalled()
+  })
+
   it("maps insufficient credits to an actionable error", async () => {
     const { result } = renderHook(() => useClipEdit())
     await act(async () => {
