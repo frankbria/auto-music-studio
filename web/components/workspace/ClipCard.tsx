@@ -39,25 +39,11 @@ import type { Clip } from "@/lib/workspace-clips"
 // LikeButton). Everything else is exposed as a callback prop because the backend
 // has no like/dislike/share/publish/title/menu endpoints proxied in web/ yet;
 // the parent (or a future hook) wires those when the routes land.
+// The action vocabulary lives in lib/song-actions (US-17.2) and is re-exported
+// here so existing imports keep working.
 
-/** Every action reachable from the clip card menus (spec §9.2). */
-export type ClipMenuAction =
-  | "remix-edit"
-  | "open-studio"
-  | "open-editor"
-  | "cover"
-  | "extend"
-  | "mashup"
-  | "sample"
-  | "use-inspiration"
-  | "send-mastering"
-  | "export-daw"
-  | "create-video"
-  | "download-mp3"
-  | "download-wav"
-  | "download-flac"
-  | "download-stems"
-  | "delete"
+export type { ClipMenuAction } from "@/lib/song-actions"
+import type { ClipMenuAction } from "@/lib/song-actions"
 
 export type ClipCardProps = {
   clip: Clip
