@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -41,7 +41,7 @@ export function CropModal({
   const fadeInError = validateTimeField(fadeIn, "Fade in")
   const fadeOutError = validateTimeField(fadeOut, "Fade out")
   const error = rangeError || fadeInError || fadeOutError
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

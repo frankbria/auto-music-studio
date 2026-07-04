@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -55,7 +55,7 @@ export function SpeedModal({
       ? `Speed must be between ${SPEED_MULTIPLIER_MIN}× and ${SPEED_MULTIPLIER_MAX}×.`
       : null
   const error = multiplierError || bpmError
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

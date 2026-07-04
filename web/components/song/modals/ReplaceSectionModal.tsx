@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
@@ -37,7 +37,7 @@ export function ReplaceSectionModal({
 
   const rangeError = validateRange(start, end, durationMs || null)
   const error = rangeError || (prompt.trim() ? null : "Replacement instructions are required.")
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

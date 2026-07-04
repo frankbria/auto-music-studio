@@ -53,7 +53,7 @@ export function ExtendModal({
   }, [mode, timestamp, durationMs])
 
   const error = durationError || timestampError
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

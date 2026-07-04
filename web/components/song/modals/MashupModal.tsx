@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -48,7 +48,7 @@ export function MashupModal({
         : !unique
           ? "Clips must be unique."
           : null
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

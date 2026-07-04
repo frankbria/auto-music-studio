@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -54,7 +54,7 @@ export function SampleModal({
       ? null
       : `Number of clips must be between ${SAMPLE_NUM_CLIPS_MIN} and ${SAMPLE_NUM_CLIPS_MAX}.`
   const error = rangeError || promptError || numClipsError
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

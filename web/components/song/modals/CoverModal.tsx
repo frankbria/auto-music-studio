@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
@@ -30,7 +30,7 @@ export function CoverModal({
   const [lyricsOverride, setLyricsOverride] = useState("")
 
   const error = !style.trim() ? "Target style is required." : null
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return

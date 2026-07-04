@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
@@ -30,7 +30,7 @@ export function AddVocalModal({
   const [vocalStyle, setVocalStyle] = useState("")
 
   const error = lyrics.trim() ? null : "Lyrics are required."
-  const canSubmit = useMemo(() => !error, [error])
+  const canSubmit = !error
 
   function handleSubmit() {
     if (!accessToken || error) return
