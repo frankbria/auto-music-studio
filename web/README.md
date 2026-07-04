@@ -100,6 +100,39 @@ edit, remix, audio, export, and manage operation on a song in one place.
   in-memory token and hands the blob to the browser via a temporary
   object-URL anchor.
 
+## Editing Workflow Modals (US-17.3)
+
+Modal-based UIs for every editing/iterative operation reachable from the full
+action menu, plus a one-click inline remaster.
+
+- `lib/editing.ts` — typed client: one `submit*` function per operation
+  (crop, speed, remaster, extend, cover, remix, repaint, sample, add-vocal,
+  mashup), each posting a payload to its BFF route and classifying the
+  response into an `EditSubmitResult` (accepted/unauthorized/invalid/
+  insufficient-credits/error).
+- `hooks/use-clip-edit.ts` — `useClipEdit`, a self-contained state machine
+  (idle → submitting → polling → success/error) any modal can drop in; polls
+  the job-status endpoint after a 202 and exposes the resulting clip ids.
+- `components/song/SongActionModal.tsx` — dispatches the selected action id
+  to its modal (`repaint` and `replace-section` both open Replace Section);
+  actions whose workflows land in later stories still show the "not
+  available yet" placeholder.
+- `components/song/modals/` — one modal per operation (`CropModal`,
+  `SpeedModal`, `ExtendModal`, `CoverModal`, `RemixModal`,
+  `ReplaceSectionModal`, `SampleModal`, `AddVocalModal`, `MashupModal`), built
+  on shared pieces: `EditModalShell` (phase-driven chrome: form → spinner →
+  success-with-link → error-with-retry), `RangeSelector` (waveform range
+  picker), `TimeDurationInput`, `StyleTextarea`, and `ClipMultiSelector`
+  (mashup's 2+ clip picker).
+- `components/song/RemasterStatus.tsx` — inline progress/success/error for
+  the one-click Remaster action, which has no modal of its own.
+- `lib/editing-validation.ts` / `lib/constants/editing.ts` — per-modal form
+  validation and shared option lists (blend modes, sample roles).
+- `lib/edit-proxy.ts` — `forwardEdit` / `clipEditRoute`, the shared same-origin
+  proxy powering `app/api/clips/[id]/{crop,speed,remaster,extend,cover,remix,
+  repaint,sample,add-vocal}/route.ts` and `app/api/mashup/route.ts`; forwards
+  the Bearer token and passes backend status/body through unchanged.
+
 ## Adding components
 
 To add components to your app, run the following command:

@@ -4,7 +4,9 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { useAuth } from "@/hooks/use-auth"
+import { useClipEdit } from "@/hooks/use-clip-edit"
 import { downloadClipAudio, type DownloadFormat } from "@/lib/clips"
+import { submitRemaster } from "@/lib/editing"
 import { findSongAction, type SongActionId } from "@/lib/song-actions"
 import type { Clip } from "@/lib/workspace-clips"
 
@@ -22,6 +24,7 @@ const DOWNLOAD_FORMAT: Partial<Record<SongActionId, DownloadFormat>> = {
 export function useSongActions(clip: Clip) {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const remaster = useClipEdit()
   const [activeModal, setActiveModal] = useState<SongActionId | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -53,7 +56,23 @@ export function useSongActions(clip: Clip) {
       return
     }
     // Inline actions.
-    if (action === "publish-toggle") {
+    if (action === "remaster") {
+      // One-click remaster (US-17.3): submit immediately with the default -14
+      // LUFS streaming target and drive progress inline — no modal.
+      if (!accessToken) return
+      // Ignore repeat clicks while a remaster is already running, so we don't
+      // enqueue a duplicate job and orphan the first (its poll would be dropped).
+      if (
+        remaster.state.phase === "submitting" ||
+        remaster.state.phase === "polling"
+      ) {
+        return
+      }
+      void remaster.submit(
+        () => submitRemaster(clip.id, {}, accessToken),
+        accessToken
+      )
+    } else if (action === "publish-toggle") {
       // Optimistic, like SongHeader/ClipCard — the publish route lands in
       // US-17.6; until then the toggle is local feedback only.
       setOptimisticPublic(!isPublic)
@@ -83,6 +102,9 @@ export function useSongActions(clip: Clip) {
 
   return {
     isPublic,
+    /** One-click remaster lifecycle (US-17.3); drives the inline progress line. */
+    remasterState: remaster.state,
+    dismissRemaster: remaster.reset,
     activeModal,
     closeModal: () => setActiveModal(null),
     confirmingDelete,

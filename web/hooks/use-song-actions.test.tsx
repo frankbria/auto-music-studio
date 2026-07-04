@@ -9,6 +9,16 @@ import type { Clip } from "@/lib/workspace-clips"
 const push = vi.fn()
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 
+const submitRemaster = vi.fn()
+vi.mock("@/lib/editing", () => ({
+  submitRemaster: (...args: unknown[]) => submitRemaster(...args),
+}))
+
+const fetchJobStatus = vi.fn()
+vi.mock("@/lib/job-status", () => ({
+  fetchJobStatus: (...args: unknown[]) => fetchJobStatus(...args),
+}))
+
 const authValue = {
   user: { id: "u1", email: "a@b.co" },
   accessToken: "tok",
@@ -74,11 +84,52 @@ describe("useSongActions", () => {
 
   it("opens and closes the workflow modal for modal actions", () => {
     const { result } = setup()
-    act(() => result.current.handleAction("remaster"))
-    expect(result.current.activeModal).toBe("remaster")
+    act(() => result.current.handleAction("cover"))
+    expect(result.current.activeModal).toBe("cover")
 
     act(() => result.current.closeModal())
     expect(result.current.activeModal).toBeNull()
+  })
+
+  it("runs remaster inline (no modal) and drives its status to success", async () => {
+    submitRemaster.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["remastered-1"] })
+    const { result } = setup()
+
+    await act(async () => {
+      result.current.handleAction("remaster")
+    })
+
+    // No modal opens for the one-click action.
+    expect(result.current.activeModal).toBeNull()
+    await waitFor(() => expect(result.current.remasterState.phase).toBe("success"))
+    expect(submitRemaster).toHaveBeenCalledWith("c1", {}, "tok")
+  })
+
+  it("ignores a repeat remaster while one is already running", async () => {
+    submitRemaster.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    // Job never completes, so the first remaster stays in the polling phase.
+    fetchJobStatus.mockResolvedValue({ kind: "pending" })
+    const { result } = setup()
+
+    await act(async () => {
+      result.current.handleAction("remaster")
+    })
+    await waitFor(() => expect(result.current.remasterState.phase).toBe("polling"))
+
+    // A second click while polling must not enqueue another job.
+    act(() => result.current.handleAction("remaster"))
+    expect(submitRemaster).toHaveBeenCalledTimes(1)
+
+    act(() => result.current.dismissRemaster())
   })
 
   it("toggles publish state optimistically", () => {
