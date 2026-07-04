@@ -18,8 +18,12 @@ export function useSubscriptionTier() {
   useEffect(() => {
     if (authLoading || !accessToken) return
     let active = true
+    // Bound the fetch like the model-selection provider does — a hung profile
+    // request must not leave Pro menu items locked indefinitely; on timeout the
+    // catch keeps the free default and finally resolves the loading state.
     fetch("/api/users/me", {
       headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5000),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error("profile fetch failed")

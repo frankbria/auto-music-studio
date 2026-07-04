@@ -55,6 +55,8 @@ describe("useSubscriptionTier", () => {
     expect(
       (opts.headers as Record<string, string>).authorization
     ).toBe("Bearer tok")
+    // Bounded fetch: a hung profile request must not lock Pro items forever.
+    expect(opts.signal).toBeInstanceOf(AbortSignal)
   })
 
   it("reports free tier for a free profile", async () => {
