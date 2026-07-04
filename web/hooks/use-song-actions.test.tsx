@@ -110,6 +110,28 @@ describe("useSongActions", () => {
     expect(submitRemaster).toHaveBeenCalledWith("c1", {}, "tok")
   })
 
+  it("ignores a repeat remaster while one is already running", async () => {
+    submitRemaster.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    // Job never completes, so the first remaster stays in the polling phase.
+    fetchJobStatus.mockResolvedValue({ kind: "pending" })
+    const { result } = setup()
+
+    await act(async () => {
+      result.current.handleAction("remaster")
+    })
+    await waitFor(() => expect(result.current.remasterState.phase).toBe("polling"))
+
+    // A second click while polling must not enqueue another job.
+    act(() => result.current.handleAction("remaster"))
+    expect(submitRemaster).toHaveBeenCalledTimes(1)
+
+    act(() => result.current.dismissRemaster())
+  })
+
   it("toggles publish state optimistically", () => {
     const { result } = setup()
     expect(result.current.isPublic).toBe(false)

@@ -58,7 +58,7 @@ export function RemixModal({
       canSubmit={canSubmit}
       submitLabel="Remix"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <StyleTextarea
         label="New style"

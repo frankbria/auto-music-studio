@@ -84,7 +84,7 @@ export function SpeedModal({
       onSubmit={handleSubmit}
       canSubmit={canSubmit}
       submitLabel="Apply"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <RadioGroup value={mode} onValueChange={(v) => setMode(v as SpeedMode)}>
         <div className="flex items-center gap-2">

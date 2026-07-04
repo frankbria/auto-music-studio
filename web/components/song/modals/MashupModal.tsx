@@ -80,7 +80,7 @@ export function MashupModal({
       canSubmit={canSubmit}
       submitLabel="Create mashup"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <ClipMultiSelector
         workspaceId={clip.workspace_id}

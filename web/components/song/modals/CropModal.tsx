@@ -73,7 +73,7 @@ export function CropModal({
       onSubmit={handleSubmit}
       canSubmit={canSubmit}
       submitLabel="Crop"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <RangeSelector
         clipId={clip.id}

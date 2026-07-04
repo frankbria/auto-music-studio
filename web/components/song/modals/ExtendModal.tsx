@@ -91,7 +91,7 @@ export function ExtendModal({
       canSubmit={canSubmit}
       submitLabel="Extend"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <div className="flex flex-col gap-2">
         <Label htmlFor={fromPointId}>Extension point</Label>

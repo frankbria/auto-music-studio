@@ -98,17 +98,4 @@ describe("useClipEdit", () => {
     })
     expect(push).toHaveBeenCalledWith("/login")
   })
-
-  it("retries the last submission", async () => {
-    fetchJobStatus.mockResolvedValue({ kind: "pending" })
-    const submitFn = make({ status: "accepted", jobId: "j1", estimatedSeconds: 5 })
-    const { result } = renderHook(() => useClipEdit())
-
-    await act(async () => {
-      await result.current.submit(submitFn, "tok")
-    })
-    act(() => result.current.retry())
-    await waitFor(() => expect(submitFn).toHaveBeenCalledTimes(2))
-    act(() => result.current.reset())
-  })
 })

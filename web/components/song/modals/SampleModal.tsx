@@ -87,7 +87,7 @@ export function SampleModal({
       canSubmit={canSubmit}
       submitLabel="Create sample"
       creditHint={`Uses ${numClips} credit${numClips > 1 ? "s" : ""}`}
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <RangeSelector
         clipId={clip.id}

@@ -59,7 +59,7 @@ export function AddVocalModal({
       canSubmit={canSubmit}
       submitLabel="Add vocal"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <StyleTextarea
         label="Lyrics"

@@ -27,8 +27,6 @@ export type UseClipEdit = {
   state: ClipEditState
   /** Submit an editing request and drive it to completion; `token` is reused for polling. */
   submit: (makeRequest: ClipEditSubmitFn, accessToken: string) => Promise<void>
-  /** Re-run the last submit (for the error state's Retry). No-op if nothing was submitted. */
-  retry: () => void
   /** Clear back to idle (reset after success / dismiss an error). */
   reset: () => void
 }
@@ -49,10 +47,6 @@ export function useClipEdit(): UseClipEdit {
   // re-subscribing; cleared the moment the job is superseded or terminal.
   const jobRef = useRef<{ id: string; token: string; polls: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastArgsRef = useRef<{
-    makeRequest: ClipEditSubmitFn
-    accessToken: string
-  } | null>(null)
   // Holds the latest `poll` so a scheduled timeout can call it without `poll`
   // referencing itself (hook-immutability lint forbids the self-reference).
   const pollRef = useRef<() => void>(() => {})
@@ -117,7 +111,6 @@ export function useClipEdit(): UseClipEdit {
 
   const submit = useCallback(
     async (makeRequest: ClipEditSubmitFn, accessToken: string) => {
-      lastArgsRef.current = { makeRequest, accessToken }
       clearTimer()
       jobRef.current = null
       setState({ phase: "submitting" })
@@ -148,16 +141,11 @@ export function useClipEdit(): UseClipEdit {
     [poll, router]
   )
 
-  const retry = useCallback(() => {
-    const args = lastArgsRef.current
-    if (args) void submit(args.makeRequest, args.accessToken)
-  }, [submit])
-
   const reset = useCallback(() => {
     clearTimer()
     jobRef.current = null
     setState({ phase: "idle" })
   }, [])
 
-  return { state, submit, retry, reset }
+  return { state, submit, reset }
 }

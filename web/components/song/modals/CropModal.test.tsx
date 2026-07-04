@@ -63,4 +63,41 @@ describe("CropModal", () => {
       "tok"
     )
   })
+
+  it("retry resubmits with corrected field values, not the stale payload", async () => {
+    // First attempt fails at the backend; the user then fixes the range and
+    // retries. Try again must send the current values, not the original ones.
+    submitCrop.mockResolvedValue({ status: "invalid", detail: "bad range" })
+
+    render(<CropModal clip={makeClip({ duration: 60 })} open onClose={vi.fn()} />)
+    const end = screen.getByLabelText("End")
+    await userEvent.clear(end)
+    await userEvent.type(end, "20s")
+    await userEvent.click(screen.getByRole("button", { name: "Crop" }))
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("bad range"))
+    expect(submitCrop).toHaveBeenLastCalledWith(
+      "clip-1",
+      expect.objectContaining({ end: "20s" }),
+      "tok"
+    )
+
+    // Correct the field, then retry — the resubmission carries the new value.
+    // Re-query: the form remounts after the spinner, so the earlier node is stale.
+    submitCrop.mockResolvedValue({ status: "accepted", jobId: "j2", estimatedSeconds: 0 })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["cropped-2"] })
+    const endAfterError = screen.getByLabelText("End")
+    await userEvent.clear(endAfterError)
+    await userEvent.type(endAfterError, "45s")
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }))
+
+    await waitFor(() =>
+      expect(screen.getByText("Your new clip is ready.")).toBeInTheDocument()
+    )
+    expect(submitCrop).toHaveBeenLastCalledWith(
+      "clip-1",
+      expect.objectContaining({ end: "45s" }),
+      "tok"
+    )
+  })
 })

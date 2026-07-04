@@ -63,7 +63,7 @@ export function CoverModal({
       canSubmit={canSubmit}
       submitLabel="Create cover"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <StyleTextarea
         label="Target style"

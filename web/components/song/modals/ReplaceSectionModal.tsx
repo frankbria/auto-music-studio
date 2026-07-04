@@ -66,7 +66,7 @@ export function ReplaceSectionModal({
       canSubmit={canSubmit}
       submitLabel="Replace"
       creditHint="Uses 1 credit"
-      onRetry={edit.retry}
+      onRetry={handleSubmit}
     >
       <RangeSelector
         clipId={clip.id}

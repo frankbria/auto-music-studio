@@ -60,6 +60,14 @@ export function useSongActions(clip: Clip) {
       // One-click remaster (US-17.3): submit immediately with the default -14
       // LUFS streaming target and drive progress inline — no modal.
       if (!accessToken) return
+      // Ignore repeat clicks while a remaster is already running, so we don't
+      // enqueue a duplicate job and orphan the first (its poll would be dropped).
+      if (
+        remaster.state.phase === "submitting" ||
+        remaster.state.phase === "polling"
+      ) {
+        return
+      }
       void remaster.submit(
         () => submitRemaster(clip.id, {}, accessToken),
         accessToken
