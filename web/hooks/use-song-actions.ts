@@ -33,11 +33,9 @@ export function useSongActions(clip: Clip) {
   function handleAction(action: SongActionId) {
     const workflow = findSongAction(action)?.workflow
     if (workflow === "navigation") {
-      router.push(
-        action === "open-editor"
-          ? `/editor/${encodeURIComponent(clip.id)}`
-          : `/studio?song=${encodeURIComponent(clip.id)}`
-      )
+      // Only open-studio navigates today; open-editor joins when the editor
+      // page ships (US-18) and its registry entry flips back to navigation.
+      router.push(`/studio?song=${encodeURIComponent(clip.id)}`)
       return
     }
     if (workflow === "modal") {

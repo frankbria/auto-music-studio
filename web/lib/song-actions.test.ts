@@ -74,17 +74,18 @@ describe("SONG_ACTION_GROUPS", () => {
     )
   })
 
-  it("routes editor/studio to navigation and publish/delete inline", () => {
-    expect(findSongAction("open-editor")?.workflow).toBe("navigation")
+  it("routes studio to navigation and publish/delete inline", () => {
     expect(findSongAction("open-studio")?.workflow).toBe("navigation")
     expect(findSongAction("publish-toggle")?.workflow).toBe("inline")
     expect(findSongAction("delete")?.workflow).toBe("inline")
   })
 
-  it("routes generation and audio operations to modals", () => {
+  it("routes unbuilt destinations and generation/audio operations to modals", () => {
     for (const id of [
       "remix",
       "repaint",
+      // open-editor flips to navigation when the editor page ships (US-18).
+      "open-editor",
       "cover",
       "extend",
       "mashup",

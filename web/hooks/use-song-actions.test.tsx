@@ -59,13 +59,17 @@ afterEach(() => {
 })
 
 describe("useSongActions", () => {
-  it("routes navigation actions to the editor and studio pages", () => {
+  it("routes open-studio to the studio page", () => {
     const { result } = setup()
-    act(() => result.current.handleAction("open-editor"))
-    expect(push).toHaveBeenCalledWith("/editor/c1")
-
     act(() => result.current.handleAction("open-studio"))
     expect(push).toHaveBeenCalledWith("/studio?song=c1")
+  })
+
+  it("keeps open-editor on the placeholder modal until the editor ships", () => {
+    const { result } = setup()
+    act(() => result.current.handleAction("open-editor"))
+    expect(push).not.toHaveBeenCalled()
+    expect(result.current.activeModal).toBe("open-editor")
   })
 
   it("opens and closes the workflow modal for modal actions", () => {

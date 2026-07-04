@@ -228,14 +228,28 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(dialog).toHaveTextContent(/isn't available yet/i)
   })
 
-  it("navigates to the editor for a pro user", async () => {
+  it("navigates to the studio from the menu", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /open in studio/i })
+    )
+    expect(push).toHaveBeenCalledWith("/studio?song=c1")
+  })
+
+  it("shows the placeholder modal for Open in Editor (pro user) until US-18", async () => {
     stubFetch({ clip: clip(), tier: "pro" })
     renderDetail()
     await openActions()
     await userEvent.click(
       screen.getByRole("menuitem", { name: /open in editor/i })
     )
-    expect(push).toHaveBeenCalledWith("/editor/c1")
+    // No /editor route exists yet — navigating would 404.
+    expect(push).not.toHaveBeenCalledWith("/editor/c1")
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Open in Editor"
+    )
   })
 
   it("locks Pro-only actions for a free user", async () => {
