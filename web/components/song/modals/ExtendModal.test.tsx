@@ -54,4 +54,14 @@ describe("ExtendModal", () => {
       "tok"
     )
   })
+
+  it("blocks an extend that would exceed the 240s generation cap", async () => {
+    // 200s clip + a 60s extension from the end = 260s > DURATION_MAX (240s).
+    render(<ExtendModal clip={makeClip({ duration: 200 })} open onClose={vi.fn()} />)
+    await userEvent.type(screen.getByLabelText("Duration"), "60s")
+
+    expect(screen.getByText(/can't exceed 240s/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Extend" })).toBeDisabled()
+    expect(submitExtend).not.toHaveBeenCalled()
+  })
 })

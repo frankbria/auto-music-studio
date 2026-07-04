@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Shared same-origin proxy for the editing/iterative endpoints (US-17.3). Every
 // modal submits to an `app/api/...` route that delegates here; the client holds
@@ -25,7 +26,7 @@ export async function forwardEdit(
 
   let res: Response
   try {
-    res = await fetch(`${BACKEND_URL}${backendPath}`, {
+    res = await fetchWithTimeout(`${BACKEND_URL}${backendPath}`, {
       method: "POST",
       headers: {
         authorization: auth,

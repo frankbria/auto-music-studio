@@ -23,6 +23,11 @@ describe("StyleTextarea", () => {
     expect(screen.getByText("6/3")).toHaveClass("text-destructive")
     expect(screen.getByLabelText("Style")).toHaveAttribute("aria-invalid", "true")
   })
+
+  it("hard-caps input via the native maxLength attribute", () => {
+    render(<StyleTextarea label="Lyrics" value="" onChange={vi.fn()} maxLength={5000} />)
+    expect(screen.getByLabelText("Lyrics")).toHaveAttribute("maxlength", "5000")
+  })
 })
 
 describe("TimeDurationInput", () => {

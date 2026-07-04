@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect } from "react"
+
 import { useClips } from "@/hooks/use-clips"
 import { MASHUP_CLIPS_MAX, MASHUP_CLIPS_MIN } from "@/lib/constants/editing"
 
@@ -27,6 +29,17 @@ export function ClipMultiSelector({
   const eligible = (data?.clips ?? []).filter(
     (clip) => clip.format === "wav" && clip.duration != null
   )
+
+  // Once clips load, drop any pre-seeded selection (e.g. the opening clip) that
+  // isn't eligible — otherwise an id with no rendered checkbox would still count
+  // toward the min/max and get submitted in clip_ids, guaranteeing a backend 422.
+  const eligibleKey = eligible.map((c) => c.id).join(",")
+  useEffect(() => {
+    if (loading) return
+    const eligibleIds = new Set(eligibleKey ? eligibleKey.split(",") : [])
+    const pruned = selected.filter((id) => eligibleIds.has(id))
+    if (pruned.length !== selected.length) onChange(pruned)
+  }, [loading, eligibleKey, selected, onChange])
 
   function toggle(id: string) {
     if (selected.includes(id)) {

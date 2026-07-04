@@ -58,8 +58,16 @@ export function useClipEdit(): UseClipEdit {
     }
   }
 
-  // Clean up a pending poll if the modal unmounts mid-edit.
-  useEffect(() => clearTimer, [])
+  // Clean up if the modal unmounts mid-edit: clear the pending timer AND drop the
+  // active job, so a fetchJobStatus already in flight can't pass the staleness
+  // guard and reschedule another poll after the component is gone.
+  useEffect(
+    () => () => {
+      clearTimer()
+      jobRef.current = null
+    },
+    []
+  )
 
   const poll = useCallback(async () => {
     const job = jobRef.current

@@ -54,6 +54,9 @@ export function StyleTextarea({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
+        // Hard-cap input at the backend's field limit so an over-long paste is
+        // truncated in the browser instead of surfacing as an avoidable 422.
+        maxLength={maxLength}
         aria-invalid={overLimit}
       />
     </div>

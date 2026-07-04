@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
+import { DURATION_MAX } from "@/lib/constants/generation"
 import { submitExtend } from "@/lib/editing"
 import { parseTimeString, validateTimeField } from "@/lib/editing-validation"
 import type { Clip } from "@/lib/workspace-clips"
@@ -52,7 +53,20 @@ export function ExtendModal({
     return null
   }, [mode, timestamp, durationMs])
 
-  const error = durationError || timestampError
+  // The backend rejects an extend whose resulting length exceeds the generation
+  // cap (iterative.py: from_point + duration > DURATION_MAX). Mirror that here so
+  // a near-limit extend fails inline instead of round-tripping a 422.
+  const capError = useMemo(() => {
+    if (durationError || timestampError) return null
+    const fromMs = mode === "timestamp" ? (parseTimeString(timestamp) ?? 0) : durationMs
+    const durMs = parseTimeString(duration) ?? 0
+    if (durMs <= 0) return null
+    return fromMs + durMs > DURATION_MAX * 1000
+      ? `The extended clip can't exceed ${DURATION_MAX}s.`
+      : null
+  }, [durationError, timestampError, mode, timestamp, duration, durationMs])
+
+  const error = durationError || timestampError || capError
   const canSubmit = !error
 
   function handleSubmit() {
@@ -128,7 +142,7 @@ export function ExtendModal({
         value={duration}
         onChange={setDuration}
         placeholder="30s"
-        error={duration ? durationError : null}
+        error={duration ? durationError || capError : null}
       />
       <StyleTextarea
         label="Style override"

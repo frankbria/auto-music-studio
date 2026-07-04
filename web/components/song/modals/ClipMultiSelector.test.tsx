@@ -64,6 +64,21 @@ describe("ClipMultiSelector", () => {
     expect(onChange).toHaveBeenCalledWith([])
   })
 
+  it("prunes a pre-seeded selection id that is not eligible", async () => {
+    const onChange = vi.fn()
+    // "a" is eligible; the seeded "ghost" clip is not in the eligible list.
+    mockClips([makeClip({ id: "a", title: "Alpha" })])
+    render(
+      <ClipMultiSelector
+        workspaceId="ws-1"
+        selected={["ghost", "a"]}
+        onChange={onChange}
+      />
+    )
+    // The ineligible id is dropped so it can't be submitted invisibly.
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(["a"]))
+  })
+
   it("disables unselected clips once the max is reached", () => {
     const clips = Array.from({ length: MASHUP_CLIPS_MAX + 1 }, (_, i) =>
       makeClip({ id: `c${i}`, title: `Clip ${i}` })
