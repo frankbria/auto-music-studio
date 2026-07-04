@@ -47,6 +47,46 @@ export function clipArtworkUrl(id: string): string {
   return `/api/v1/clips/${encodeURIComponent(id)}/artwork`
 }
 
+/** Formats the same-origin audio proxy can convert to (US-17.2 downloads). */
+export type DownloadFormat = "mp3" | "wav" | "flac"
+
+/**
+ * Download a clip's audio as a file via the same-origin proxy
+ * (/api/clips/{id}/audio). Fetches with the in-memory Bearer token — a plain
+ * <a href> can't attach one — then hands the bytes to the browser through a
+ * temporary object-URL anchor. Returns false when the fetch fails so the
+ * caller can surface an error state.
+ */
+export async function downloadClipAudio(
+  id: string,
+  format: DownloadFormat,
+  accessToken: string,
+  title: string | null
+): Promise<boolean> {
+  let blob: Blob
+  try {
+    const res = await fetch(
+      `/api/clips/${encodeURIComponent(id)}/audio?format=${format}`,
+      { headers: { authorization: `Bearer ${accessToken}` } }
+    )
+    if (!res.ok) return false
+    blob = await res.blob()
+  } catch {
+    return false
+  }
+
+  const url = URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `${title || id}.${format}`
+    anchor.click()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+  return true
+}
+
 /** Format a number of seconds as `m:ss` (negative/NaN → `0:00`). */
 export function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0

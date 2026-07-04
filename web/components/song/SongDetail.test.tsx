@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { SongDetail } from "@/components/song/SongDetail"
@@ -11,6 +12,12 @@ vi.mock("@/hooks/use-auth", () => ({
     isLoading: false,
     isAuthenticated: true,
   }),
+}))
+
+const push = vi.fn()
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push, replace: vi.fn() }),
+  usePathname: () => "/song/c1",
 }))
 
 function clip(overrides: Partial<Clip> = {}): Clip {
@@ -36,9 +43,15 @@ function clip(overrides: Partial<Clip> = {}): Clip {
   }
 }
 
-/** Stub fetch so the clip endpoint and the similar endpoint each respond. */
-function stubFetch(opts: { clip?: Clip; clipStatus?: number; similar?: Clip[] }) {
-  const fetchMock = vi.fn((input: string) => {
+/** Stub fetch so the clip, similar, profile, and delete endpoints respond. */
+function stubFetch(opts: {
+  clip?: Clip
+  clipStatus?: number
+  similar?: Clip[]
+  tier?: string
+  deleteStatus?: number
+}) {
+  const fetchMock = vi.fn((input: string, init?: RequestInit) => {
     const url = String(input)
     if (url.includes("/similar")) {
       return Promise.resolve(
@@ -46,6 +59,19 @@ function stubFetch(opts: { clip?: Clip; clipStatus?: number; similar?: Clip[] })
           JSON.stringify({ clips: opts.similar ?? [], total: 0, limit: 6 }),
           { status: 200 }
         )
+      )
+    }
+    if (url.includes("/users/me")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ subscription_tier: opts.tier ?? "free" }),
+          { status: 200 }
+        )
+      )
+    }
+    if (init?.method === "DELETE") {
+      return Promise.resolve(
+        new Response(null, { status: opts.deleteStatus ?? 204 })
       )
     }
     const status = opts.clipStatus ?? 200
@@ -171,5 +197,150 @@ describe("SongDetail", () => {
     await waitFor(() =>
       expect(screen.getByTestId("song-not-found")).toBeInTheDocument()
     )
+  })
+})
+
+describe("SongDetail full action menu (US-17.2)", () => {
+  async function openActions() {
+    await screen.findByText("Midnight Drive")
+    await userEvent.click(
+      screen.getByRole("button", { name: /song actions menu/i })
+    )
+  }
+
+  it("renders every category group from the action menu", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    for (const category of ["Edit", "Create", "Audio", "Export", "Manage"]) {
+      expect(screen.getByText(category)).toBeInTheDocument()
+    }
+  })
+
+  it("opens the workflow modal for a modal action", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /remaster/i }))
+
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Remaster")
+    expect(dialog).toHaveTextContent(/isn't available yet/i)
+  })
+
+  it("navigates to the studio from the menu", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /open in studio/i })
+    )
+    expect(push).toHaveBeenCalledWith("/studio?song=c1")
+  })
+
+  it("shows the placeholder modal for Open in Editor (pro user) until US-18", async () => {
+    stubFetch({ clip: clip(), tier: "pro" })
+    renderDetail()
+    await openActions()
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /open in editor/i })
+    )
+    // No /editor route exists yet — navigating would 404.
+    expect(push).not.toHaveBeenCalledWith("/editor/c1")
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Open in Editor"
+    )
+  })
+
+  it("locks Pro-only actions for a free user", async () => {
+    stubFetch({ clip: clip(), tier: "free" })
+    renderDetail()
+    await openActions()
+    expect(
+      screen.getByRole("menuitem", { name: /open in editor/i })
+    ).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("shares publish state between the menu and the header button", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /publish/i }))
+
+    expect(
+      screen.getByRole("button", { name: "Unpublish (make private)" })
+    ).toBeInTheDocument()
+
+    // And the other direction: the header button updates the menu label.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unpublish (make private)" })
+    )
+    await openActions()
+    expect(screen.getByRole("menuitem", { name: /^publish$/i })).toBeInTheDocument()
+  })
+
+  it("closes the workflow modal with Escape", async () => {
+    stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /remaster/i }))
+    await screen.findByRole("dialog")
+
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+  })
+
+  it("cancels delete without calling the backend", async () => {
+    const fetchMock = stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /delete/i }))
+    await screen.findByRole("dialog")
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
+    ).toHaveLength(0)
+  })
+
+  it("deletes the song after confirmation and navigates home", async () => {
+    const fetchMock = stubFetch({ clip: clip() })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /delete/i }))
+
+    // Nothing deleted until confirmed.
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent(/permanently deleted/i)
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
+    ).toHaveLength(0)
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }))
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/"))
+    const deletes = fetchMock.mock.calls.filter(
+      ([, init]) => init?.method === "DELETE"
+    )
+    expect(deletes).toHaveLength(1)
+    expect(String(deletes[0][0])).toBe("/api/clips/c1")
+  })
+
+  it("keeps the confirmation open with an error when delete fails", async () => {
+    stubFetch({ clip: clip(), deleteStatus: 500 })
+    renderDetail()
+    await openActions()
+    await userEvent.click(screen.getByRole("menuitem", { name: /delete/i }))
+    await screen.findByRole("dialog")
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i)
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(push).not.toHaveBeenCalledWith("/")
   })
 })
