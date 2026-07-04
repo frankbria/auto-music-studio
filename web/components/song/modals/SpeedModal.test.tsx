@@ -44,6 +44,17 @@ describe("SpeedModal", () => {
     expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
   })
 
+  it("blocks a target BPM that would fall outside the 0.5x-2.0x rate range", async () => {
+    // clip.bpm 120 → valid target range is 60–240; 300 would need a 2.5x rate.
+    render(<SpeedModal clip={makeClip({ bpm: 120 })} open onClose={vi.fn()} />)
+    await userEvent.click(screen.getByRole("radio", { name: /By target BPM/ }))
+    const bpm = screen.getByLabelText("Target BPM")
+    await userEvent.clear(bpm)
+    await userEvent.type(bpm, "300")
+    expect(screen.getByText(/between 60 and 240/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
+  })
+
   it("submits a multiplier payload and reaches success", async () => {
     submitSpeed.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
     fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["sped-1"] })

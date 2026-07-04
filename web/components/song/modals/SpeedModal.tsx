@@ -43,11 +43,18 @@ export function SpeedModal({
   const [preservePitch, setPreservePitch] = useState(true)
 
   const bpmValue = Number(targetBpm)
+  // The backend resolves multiplier = target_bpm / clip.bpm and rejects a result
+  // outside 0.5×–2.0×, so bound the target to the clip's valid rate range here to
+  // catch it inline instead of via a 422.
+  const bpmMin = clip.bpm != null ? clip.bpm * SPEED_MULTIPLIER_MIN : 0
+  const bpmMax = clip.bpm != null ? clip.bpm * SPEED_MULTIPLIER_MAX : 0
   const bpmError =
     mode === "bpm"
       ? targetBpm.trim() === "" || !Number.isFinite(bpmValue) || bpmValue <= 0
         ? "Enter a target BPM greater than 0."
-        : null
+        : clip.bpm != null && (bpmValue < bpmMin || bpmValue > bpmMax)
+          ? `Target BPM must be between ${Math.ceil(bpmMin)} and ${Math.floor(bpmMax)} for this clip.`
+          : null
       : null
   const multiplierError =
     mode === "multiplier" &&

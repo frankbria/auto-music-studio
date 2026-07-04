@@ -49,6 +49,24 @@ describe("useClipEdit", () => {
     expect(result.current.state.phase).toBe("idle")
   })
 
+  it("drops an accepted result if reset() fired while the request was pending", async () => {
+    // A submit whose makeRequest resolves only after reset() runs must not
+    // resurrect polling for the dismissed operation.
+    let resolveSubmit: (r: EditSubmitResult) => void = () => {}
+    const pending = new Promise<EditSubmitResult>((r) => (resolveSubmit = r))
+    const { result } = renderHook(() => useClipEdit())
+
+    await act(async () => {
+      const submitting = result.current.submit(() => pending, "tok")
+      result.current.reset()
+      resolveSubmit({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+      await submitting
+    })
+
+    expect(result.current.state.phase).toBe("idle")
+    expect(fetchJobStatus).not.toHaveBeenCalled()
+  })
+
   it("maps insufficient credits to an actionable error", async () => {
     const { result } = renderHook(() => useClipEdit())
     await act(async () => {

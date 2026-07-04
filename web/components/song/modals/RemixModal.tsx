@@ -35,7 +35,7 @@ export function RemixModal({
   function handleSubmit() {
     if (!accessToken || error) return
     void edit.submit(
-      () => submitRemix(clip.id, { style }, accessToken),
+      () => submitRemix(clip.id, { style: style.trim() }, accessToken),
       accessToken
     )
   }

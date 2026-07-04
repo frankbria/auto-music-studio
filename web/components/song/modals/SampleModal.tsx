@@ -62,7 +62,7 @@ export function SampleModal({
       () =>
         submitSample(
           clip.id,
-          { start, end, role, prompt, num_clips: numClips },
+          { start, end, role, prompt: prompt.trim(), num_clips: numClips },
           accessToken
         ),
       accessToken

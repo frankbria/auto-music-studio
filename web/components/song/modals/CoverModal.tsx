@@ -38,7 +38,7 @@ export function CoverModal({
       () =>
         submitCover(
           clip.id,
-          { style, lyrics_override: lyricsOverride },
+          { style: style.trim(), lyrics_override: lyricsOverride },
           accessToken
         ),
       accessToken

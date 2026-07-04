@@ -43,7 +43,7 @@ export function ReplaceSectionModal({
     if (!accessToken || error) return
     void edit.submit(
       () =>
-        submitRepaint(clip.id, { start, end, prompt, style }, accessToken),
+        submitRepaint(clip.id, { start, end, prompt: prompt.trim(), style }, accessToken),
       accessToken
     )
   }

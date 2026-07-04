@@ -47,6 +47,12 @@ export function useClipEdit(): UseClipEdit {
   // re-subscribing; cleared the moment the job is superseded or terminal.
   const jobRef = useRef<{ id: string; token: string; polls: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Monotonic epoch bumped on every submit, reset, and unmount. A submit
+  // captures its epoch and, after the async `makeRequest()` resolves, drops the
+  // result if the epoch moved — so a request in flight when the modal closes
+  // (reset/unmount) or is superseded by a newer submit can't resurrect polling
+  // or clobber a newer job.
+  const epochRef = useRef(0)
   // Holds the latest `poll` so a scheduled timeout can call it without `poll`
   // referencing itself (hook-immutability lint forbids the self-reference).
   const pollRef = useRef<() => void>(() => {})
@@ -63,6 +69,7 @@ export function useClipEdit(): UseClipEdit {
   // guard and reschedule another poll after the component is gone.
   useEffect(
     () => () => {
+      epochRef.current += 1
       clearTimer()
       jobRef.current = null
     },
@@ -119,11 +126,14 @@ export function useClipEdit(): UseClipEdit {
 
   const submit = useCallback(
     async (makeRequest: ClipEditSubmitFn, accessToken: string) => {
+      const epoch = (epochRef.current += 1)
       clearTimer()
       jobRef.current = null
       setState({ phase: "submitting" })
 
       const result = await makeRequest()
+      // Dropped if a reset/unmount/newer submit happened during the request.
+      if (epochRef.current !== epoch) return
       switch (result.status) {
         case "accepted":
           jobRef.current = { id: result.jobId, token: accessToken, polls: 0 }
@@ -150,6 +160,7 @@ export function useClipEdit(): UseClipEdit {
   )
 
   const reset = useCallback(() => {
+    epochRef.current += 1
     clearTimer()
     jobRef.current = null
     setState({ phase: "idle" })

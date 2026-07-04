@@ -44,6 +44,12 @@ describe("formatMs", () => {
     expect(formatMs(NaN)).toBe("0s")
   })
 
+  it("carries a rounded 60s remainder into the minutes place", () => {
+    // 119999ms rounds to 120.00s — must render 2m0s, never 1m60s.
+    expect(formatMs(119999)).toBe("2m0s")
+    expect(formatMs(59999)).toBe("1m0s")
+  })
+
   it("round-trips through parseTimeString", () => {
     expect(parseTimeString(formatMs(90000))).toBe(90000)
   })

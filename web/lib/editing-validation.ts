@@ -34,7 +34,9 @@ export function parseTimeString(value: string): number | null {
 /** Format a millisecond duration as a compact "1m30s" / "45s" string. */
 export function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0s"
-  const totalSeconds = ms / 1000
+  // Round to centiseconds first so the split can't leave a 60s remainder that
+  // fails to carry into minutes (e.g. 119999ms → "2m0s", not "1m60s").
+  const totalSeconds = Math.round(ms / 10) / 100
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = Math.round((totalSeconds - minutes * 60) * 100) / 100
   return minutes > 0 ? `${minutes}m${seconds}s` : `${seconds}s`

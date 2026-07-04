@@ -57,6 +57,8 @@ export function StyleTextarea({
         // Hard-cap input at the backend's field limit so an over-long paste is
         // truncated in the browser instead of surfacing as an avoidable 422.
         maxLength={maxLength}
+        required={required}
+        aria-required={required}
         aria-invalid={overLimit}
       />
     </div>

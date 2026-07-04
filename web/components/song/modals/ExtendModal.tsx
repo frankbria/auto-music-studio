@@ -108,9 +108,9 @@ export function ExtendModal({
       onRetry={handleSubmit}
     >
       <div className="flex flex-col gap-2">
-        <Label htmlFor={fromPointId}>Extension point</Label>
+        <Label id={fromPointId}>Extension point</Label>
         <RadioGroup
-          id={fromPointId}
+          aria-labelledby={fromPointId}
           value={mode}
           onValueChange={(v) => setMode(v as "end" | "timestamp")}
         >
