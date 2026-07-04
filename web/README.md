@@ -61,8 +61,8 @@ The `/song/[id]` route renders a full-page view of a single clip.
   navigations.
 - `hooks/use-similar-clips.ts` — fetches similar clips from the BFF.
 - `app/api/clips/[id]/route.ts` — same-origin BFF proxy for
-  `GET /api/v1/clips/{id}`; forwards the Bearer token, keeps the backend URL
-  server-side.
+  `GET`/`DELETE /api/v1/clips/{id}`; forwards the Bearer token, keeps the
+  backend URL server-side.
 - `app/api/clips/[id]/similar/route.ts` — same-origin BFF proxy for
   `GET /api/v1/clips/{id}/similar`; whitelists and bounds `scope`/`limit`
   before forwarding.
@@ -70,6 +70,35 @@ The `/song/[id]` route renders a full-page view of a single clip.
   with the player `MiniWaveform`).
 - `lib/clip-labels.ts` — display-label maps for clip model/generation_mode.
 - `lib/proxy-fetch.ts` — `fetchWithTimeout` used by BFF routes.
+
+## Full Action Menu (US-17.2)
+
+The song detail page's primary action button opens the full action menu — every
+edit, remix, audio, export, and manage operation on a song in one place.
+
+- `lib/song-actions.ts` — the shared action registry: grouped definitions
+  (label, icon, workflow, Pro-gating) that both `SongActionsMenu` and
+  `ClipCard`'s menus draw from, so the two surfaces can't drift apart.
+- `hooks/use-song-actions.ts` — dispatches a selected action to its workflow:
+  navigation (studio today; editor when US-18 ships), a workflow modal, a file
+  download, or an inline operation (optimistic publish toggle, delete with
+  confirmation).
+- `hooks/use-subscription-tier.ts` — lightweight subscription-tier lookup used
+  to lock Pro-only menu items for free-tier users, without mounting the full
+  model-selection context.
+- `components/song/SongActionsMenu.tsx` — the grouped dropdown menu, purely
+  presentational; renders the registry and emits the chosen action id.
+- `components/song/SongActionModal.tsx` — placeholder container for
+  modal-workflow actions; each item already opens a modal, with real workflow
+  content landing story by story in US-17.3+.
+- `components/song/DeleteSongDialog.tsx` — delete confirmation; keeps the
+  dialog open with an error on failure so the user can retry or cancel.
+- `app/api/clips/[id]/audio/route.ts` — same-origin BFF proxy for
+  `GET /api/v1/clips/{id}/audio`; forwards the Bearer token and an optional
+  `format` query (mp3/wav/flac) for the menu's Download items.
+- `lib/clips.ts` — `downloadClipAudio` fetches the audio proxy with the
+  in-memory token and hands the blob to the browser via a temporary
+  object-URL anchor.
 
 ## Adding components
 
