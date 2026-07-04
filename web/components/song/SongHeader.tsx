@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   FavouriteIcon,
@@ -28,6 +28,13 @@ export type SongHeaderProps = {
   onDislike?: (id: string) => void
   onShare?: (id: string) => void
   onPublishToggle?: (id: string, next: boolean) => void
+  /**
+   * Controlled visibility. When the parent owns publish state (US-17.2's
+   * action menu shares it), this wins over the local optimistic toggle.
+   */
+  isPublic?: boolean
+  /** Extra controls rendered at the end of the action row (e.g. the menu). */
+  actions?: ReactNode
 }
 
 export function SongHeader({
@@ -35,13 +42,15 @@ export function SongHeader({
   onDislike,
   onShare,
   onPublishToggle,
+  isPublic: isPublicProp,
+  actions,
 }: SongHeaderProps) {
   const { state, dispatch } = usePlayer()
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
   const liked = likedSet.has(clip.id)
   const [disliked, setDisliked] = useState(false)
   const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
-  const isPublic = optimisticPublic ?? clip.is_public
+  const isPublic = isPublicProp ?? optimisticPublic ?? clip.is_public
 
   const version = versionLabel(clip.model)
   const mode = modeLabel(clip.generation_mode)
@@ -125,6 +134,7 @@ export function SongHeader({
         >
           <HugeiconsIcon icon={GlobeIcon} size={18} />
         </Button>
+        {actions && <div className="ml-auto">{actions}</div>}
       </div>
     </header>
   )
