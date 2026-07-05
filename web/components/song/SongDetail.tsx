@@ -1,6 +1,7 @@
 "use client"
 
 import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
+import { LineageSection } from "@/components/song/LineageSection"
 import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { RelatedSongs } from "@/components/song/RelatedSongs"
 import { SongActionModal } from "@/components/song/SongActionModal"
@@ -107,6 +108,8 @@ function SongDetailContent({ clip }: { clip: Clip }) {
           <h2 className="text-sm font-semibold">Details</h2>
           <SongMetadata clip={clip} />
         </section>
+        {/* Provenance chain — renders nothing for an original clip (US-17.7). */}
+        <LineageSection clip={clip} />
         <section aria-label="Lyrics" className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold">Lyrics</h2>
           <SongLyrics lyrics={clip.lyrics} />
