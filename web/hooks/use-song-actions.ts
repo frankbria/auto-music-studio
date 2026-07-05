@@ -21,7 +21,16 @@ const DOWNLOAD_FORMAT: Partial<Record<SongActionId, DownloadFormat>> = {
   "download-flac": "flac",
 }
 
-export function useSongActions(clip: Clip) {
+export type UseSongActionsOptions = {
+  /**
+   * Where to go after a successful delete. Song detail navigates home (the song
+   * is gone); the clip list (US-17.5) passes a callback to drop the card in place
+   * instead. Defaults to navigating to `/`.
+   */
+  onDeleted?: (id: string) => void
+}
+
+export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
   const remaster = useClipEdit()
@@ -91,7 +100,8 @@ export function useSongActions(clip: Clip) {
         headers: { authorization: `Bearer ${accessToken}` },
       })
       if (res.status !== 204) throw new Error(`delete failed (${res.status})`)
-      router.push("/")
+      if (onDeleted) onDeleted(clip.id)
+      else router.push("/")
     } catch {
       // Keep the dialog open so the user can retry or cancel.
       setActionError("Couldn't delete this song. Please try again.")

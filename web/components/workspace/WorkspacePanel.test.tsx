@@ -2,7 +2,10 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { ReactNode } from "react"
+
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel"
+import { AuthContext } from "@/contexts/auth-context"
 import type { Clip, Workspace } from "@/lib/workspace-clips"
 
 let clipsResult: { data: unknown; loading: boolean; fetching: boolean; error: boolean }
@@ -12,8 +15,27 @@ let likedIds: string[]
 vi.mock("@/hooks/use-clips", () => ({ useClips: () => clipsResult }))
 vi.mock("@/hooks/use-workspaces", () => ({ useWorkspaces: () => wsResult }))
 vi.mock("@/contexts/player-context", () => ({
-  usePlayer: () => ({ state: { likedIds } }),
+  usePlayer: () => ({ state: { likedIds }, dispatch: () => {} }),
 }))
+// The panel reads the tier once for its cards' Pro gating (US-17.5); stub it so
+// no profile fetch runs during these list-focused tests.
+vi.mock("@/hooks/use-subscription-tier", () => ({
+  useSubscriptionTier: () => ({ tier: "free", isFreeTier: true, isLoading: false }),
+}))
+
+// Cards mount a wired context menu (US-17.5) that needs auth context.
+const authValue = {
+  user: { id: "u1", email: "a@b.co" },
+  accessToken: "tok",
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  completeLogin: vi.fn(),
+  logout: vi.fn(),
+}
+function renderPanel(ui: ReactNode = <WorkspacePanel />) {
+  return render(<AuthContext.Provider value={authValue}>{ui}</AuthContext.Provider>)
+}
 
 function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   return {
@@ -72,13 +94,13 @@ afterEach(() => vi.clearAllMocks())
 
 describe("WorkspacePanel", () => {
   it("renders the workspace breadcrumb and one card per clip", () => {
-    render(<WorkspacePanel />)
+    renderPanel()
     expect(screen.getByText("My Beats")).toBeInTheDocument()
     expect(screen.getAllByTestId("clip-card")).toHaveLength(3)
   })
 
   it("narrows the list with the client-side Public filter", async () => {
-    render(<WorkspacePanel />)
+    renderPanel()
     await userEvent.click(screen.getByRole("button", { name: /filters/i }))
     await userEvent.click(screen.getByLabelText("Public"))
     expect(screen.getAllByTestId("clip-card")).toHaveLength(1)
@@ -87,7 +109,7 @@ describe("WorkspacePanel", () => {
 
   it("narrows to liked clips using the player's likedIds", async () => {
     likedIds = ["uploaded-three"]
-    render(<WorkspacePanel />)
+    renderPanel()
     await userEvent.click(screen.getByRole("button", { name: /filters/i }))
     await userEvent.click(screen.getByLabelText("Liked"))
     expect(screen.getAllByTestId("clip-card")).toHaveLength(1)
@@ -95,7 +117,7 @@ describe("WorkspacePanel", () => {
   })
 
   it("shows a filtered empty message when nothing matches", async () => {
-    render(<WorkspacePanel />)
+    renderPanel()
     await userEvent.click(screen.getByRole("button", { name: /filters/i }))
     await userEvent.click(screen.getByLabelText("Liked")) // no liked ids
     expect(
@@ -105,14 +127,14 @@ describe("WorkspacePanel", () => {
 
   it("surfaces a load error instead of an empty-library message", () => {
     clipsResult = { data: null, loading: false, fetching: false, error: true }
-    render(<WorkspacePanel />)
+    renderPanel()
     expect(
       screen.getByText("Couldn't load clips. Please try again.")
     ).toBeInTheDocument()
   })
 
   it("renders the pagination indicator", () => {
-    render(<WorkspacePanel />)
+    renderPanel()
     expect(within(screen.getByTestId("workspace-panel")).getByText("Page 1 of 1")).toBeInTheDocument()
   })
 })

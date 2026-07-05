@@ -58,8 +58,8 @@ function clip(overrides: Partial<Clip> = {}): Clip {
   }
 }
 
-function setup(c: Clip = clip()) {
-  return renderHook(() => useSongActions(c), { wrapper })
+function setup(c: Clip = clip(), opts?: { onDeleted?: (id: string) => void }) {
+  return renderHook(() => useSongActions(c, opts), { wrapper })
 }
 
 afterEach(() => {
@@ -163,6 +163,22 @@ describe("useSongActions", () => {
       (opts.headers as Record<string, string>).authorization
     ).toBe("Bearer tok")
     expect(push).toHaveBeenCalledWith("/")
+  })
+
+  it("calls onDeleted instead of navigating when given (clip-list context)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const onDeleted = vi.fn()
+
+    const { result } = setup(clip(), { onDeleted })
+    act(() => result.current.handleAction("delete"))
+    await act(() => result.current.confirmDelete())
+
+    expect(onDeleted).toHaveBeenCalledWith("c1")
+    // The list drops the card itself, so the hook must not navigate home.
+    expect(push).not.toHaveBeenCalled()
   })
 
   it("surfaces a delete failure and stays on the page", async () => {
