@@ -30,6 +30,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
+import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
+import { ShareModal } from "@/components/song/ShareModal"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { usePlayer } from "@/contexts/player-context"
 import { useSongActions } from "@/hooks/use-song-actions"
@@ -39,12 +41,14 @@ import { isFullSongEligible } from "@/lib/song-structure"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
-// US-16.6 / US-17.5: the reusable clip card. Play + Like are wired to the global
-// player store; like/dislike/share/publish/rename stay callback props (no backend
-// routes proxied for them yet). The ⋯ menu and Remix CTA now dispatch through
-// useSongActions (US-17.5) — the same registry-driven seam the song-detail menu
-// uses — so any menu click opens its modal, navigates, downloads, or confirms a
-// delete wherever a card is rendered, with no per-location wiring.
+// US-16.6 / US-17.5 / US-17.6: the reusable clip card. Play, Like and Dislike are
+// wired to the global player store (Like/Dislike persist in localStorage). Share
+// opens the ShareModal; Publish persists through useSongActions (guarded — needs a
+// title + a style tag to go public). The ⋯ menu and Remix CTA also dispatch
+// through useSongActions (US-17.5) — the same registry-driven seam the song-detail
+// menu uses — so any action opens its modal, navigates, downloads, publishes, or
+// confirms a delete wherever a card is rendered. `onDislike`/`onShare`/
+// `onPublishToggle` remain optional observers for parent analytics/refetch.
 // The action vocabulary lives in lib/song-actions (US-17.2) and is re-exported
 // here so existing imports keep working.
 
@@ -116,23 +120,26 @@ export function ClipCard({
   onDeleted,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
-  // Registry-driven dispatch: modal / navigation / download / delete-confirm.
+  // Registry-driven dispatch: modal / navigation / download / delete-confirm /
+  // publish (persist + guard).
   const actions = useSongActions(clip, { onDeleted })
   // likedIds re-renders every player tick; scan a Set (cf. applyClientFilters).
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
+  const dislikedSet = useMemo(() => new Set(state.dislikedIds), [state.dislikedIds])
   const liked = likedSet.has(clip.id)
+  const disliked = dislikedSet.has(clip.id)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
+  const [shareOpen, setShareOpen] = useState(false)
   // Editing cancelled (Escape) — checked in the single onBlur commit path.
   const cancelRef = useRef(false)
-  // Optimistic overlays: null means "show the prop". This keeps an idle card in
-  // sync with parent/refetch updates while still reflecting a user's own edit.
-  // A real resync (e.g. a failed save) lands when backend mutation routes exist.
+  // Optimistic title overlay: null means "show the prop". Keeps an idle card in
+  // sync with parent/refetch updates while still reflecting the user's own edit.
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
-  const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
   const title = optimisticTitle ?? clip.title
-  const isPublic = optimisticPublic ?? clip.is_public
+  // Publish visibility is owned by useSongActions (optimistic + persisted + rollback).
+  const isPublic = actions.isPublic
 
   const version = versionLabel(clip.model)
   const metadataLabel = modeLabel(clip.generation_mode)
@@ -168,11 +175,22 @@ export function ClipCard({
     onMenuAction?.(action, clip.id)
   }
 
+  function dislike() {
+    dispatch({ type: "dislike/toggle", id: clip.id })
+    onDislike?.(clip.id)
+  }
+
+  function share() {
+    setShareOpen(true)
+    onShare?.(clip.id)
+  }
+
   function togglePublish() {
     const next = !isPublic
-    onPublishToggle?.(clip.id, next)
-    // Only reflect the new visibility when a parent persists it.
-    if (onPublishToggle) setOptimisticPublic(next)
+    onPublishToggle?.(clip.id, next) // optional observer
+    // Persist + guard (needs a title + style tag to go public); optimistic with
+    // rollback lives in useSongActions.
+    actions.togglePublish(clip.id, next)
   }
 
   return (
@@ -292,7 +310,9 @@ export function ClipCard({
             variant="ghost"
             size="icon-sm"
             aria-label="Dislike"
-            onClick={() => onDislike?.(clip.id)}
+            aria-pressed={disliked}
+            onClick={dislike}
+            className={cn(disliked && "text-primary")}
           >
             <HugeiconsIcon icon={ThumbsDownIcon} size={16} />
           </Button>
@@ -300,7 +320,7 @@ export function ClipCard({
             variant="ghost"
             size="icon-sm"
             aria-label="Share"
-            onClick={() => onShare?.(clip.id)}
+            onClick={share}
           >
             <HugeiconsIcon icon={Share01Icon} size={16} />
           </Button>
@@ -469,6 +489,16 @@ export function ClipCard({
         error={actions.actionError}
         onCancel={actions.cancelDelete}
         onConfirm={actions.confirmDelete}
+      />
+      <ShareModal
+        open={shareOpen}
+        clipId={clip.id}
+        clipTitle={title}
+        onClose={() => setShareOpen(false)}
+      />
+      <PublishGuardPrompt
+        guard={actions.publishGuard}
+        onClose={actions.dismissPublishGuard}
       />
     </div>
   )

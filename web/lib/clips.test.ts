@@ -5,6 +5,7 @@ import {
   clipArtworkUrl,
   downloadClipAudio,
   formatTime,
+  updateClipVisibility,
 } from "@/lib/clips"
 
 describe("clip url builders", () => {
@@ -30,6 +31,66 @@ describe("formatTime", () => {
     expect(formatTime(9.9)).toBe("0:09")
     expect(formatTime(-3)).toBe("0:00")
     expect(formatTime(NaN)).toBe("0:00")
+  })
+})
+
+describe("updateClipVisibility", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it("PATCHes the BFF route with the token and is_public body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+          status: 200,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await updateClipVisibility("c1", true, "tok")
+    expect(result).toEqual({ ok: true, isPublic: true })
+
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/clips/c1")
+    expect(opts.method).toBe("PATCH")
+    expect(opts.headers.authorization).toBe("Bearer tok")
+    expect(JSON.parse(opts.body)).toEqual({ is_public: true })
+  })
+
+  it("flags a 422 as a guard failure and carries the detail message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ detail: "Publishing requires a title." }),
+          { status: 422 }
+        )
+      )
+    )
+    const result = await updateClipVisibility("c1", true, "tok")
+    expect(result).toEqual({
+      ok: false,
+      guardFailed: true,
+      message: "Publishing requires a title.",
+    })
+  })
+
+  it("returns a non-guard error on other failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{}", { status: 500 }))
+    )
+    const result = await updateClipVisibility("c1", true, "tok")
+    expect(result).toMatchObject({ ok: false, guardFailed: false })
+  })
+
+  it("returns a non-guard error when the request throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net down")))
+    const result = await updateClipVisibility("c1", false, "tok")
+    expect(result).toMatchObject({ ok: false, guardFailed: false })
   })
 })
 

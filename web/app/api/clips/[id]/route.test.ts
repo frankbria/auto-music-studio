@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { NextRequest } from "next/server"
 
-import { DELETE, GET } from "@/app/api/clips/[id]/route"
+import { DELETE, GET, PATCH } from "@/app/api/clips/[id]/route"
 
 function req(url: string, init: RequestInit = {}): NextRequest {
   return new Request(url, init) as unknown as NextRequest
@@ -67,6 +67,83 @@ describe("GET /api/clips/[id]", () => {
     const res = await GET(
       req("http://localhost/api/clips/c1", {
         headers: { authorization: "Bearer tok" },
+      }),
+      ctx("c1")
+    )
+    expect(res.status).toBe(502)
+  })
+})
+
+describe("PATCH /api/clips/[id]", () => {
+  it("401s without an Authorization header", async () => {
+    const res = await PATCH(
+      req("http://localhost/api/clips/c1", {
+        method: "PATCH",
+        body: JSON.stringify({ is_public: true }),
+      }),
+      ctx("c1")
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it("forwards the token, method, and body to the backend", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+          status: 200,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await PATCH(
+      req("http://localhost/api/clips/c1", {
+        method: "PATCH",
+        headers: { authorization: "Bearer tok" },
+        body: JSON.stringify({ is_public: true }),
+      }),
+      ctx("c1")
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ id: "c1", is_public: true })
+
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toContain("/api/v1/clips/c1")
+    expect(opts.method).toBe("PATCH")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
+    expect(opts.body).toBe(JSON.stringify({ is_public: true }))
+  })
+
+  it("passes the publish-guard 422 through with its detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "Publishing requires a title." }), {
+          status: 422,
+        })
+      )
+    )
+    const res = await PATCH(
+      req("http://localhost/api/clips/c1", {
+        method: "PATCH",
+        headers: { authorization: "Bearer tok" },
+        body: JSON.stringify({ is_public: true }),
+      }),
+      ctx("c1")
+    )
+    expect(res.status).toBe(422)
+    expect((await res.json()).detail).toContain("Publishing requires")
+  })
+
+  it("returns 502 when the backend is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")))
+    const res = await PATCH(
+      req("http://localhost/api/clips/c1", {
+        method: "PATCH",
+        headers: { authorization: "Bearer tok" },
+        body: JSON.stringify({ is_public: true }),
       }),
       ctx("c1")
     )

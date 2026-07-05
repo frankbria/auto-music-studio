@@ -445,6 +445,75 @@ class TestUpdateClip:
 
 
 @pytest.mark.integration
+class TestPublishClip:
+    """US-17.6: ``PATCH /clips/{id}`` also toggles ``is_public`` (the inline
+    Publish control). Going public is guarded — the clip must have a title and at
+    least one style tag — so a half-finished clip can't be published by accident.
+    Unpublishing is never guarded."""
+
+    async def test_publish_persists_when_title_and_style_tags_present(self, client, settings) -> None:
+        user = await _make_user("clips-publish@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title="Ready", style_tags=["lofi"], is_public=False)
+        headers = _auth_headers(user, settings)
+
+        resp = await client.patch(f"{CLIPS_URL}/{clip.id}", json={"is_public": True}, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["is_public"] is True
+        assert (await Clip.get(clip.id)).is_public is True
+
+        # Survives a subsequent GET (the "persist after reload" criterion).
+        fetched = await client.get(f"{CLIPS_URL}/{clip.id}", headers=headers)
+        assert fetched.json()["is_public"] is True
+
+    @pytest.mark.parametrize(
+        ("title", "style_tags"),
+        [(None, ["lofi"]), ("   ", ["lofi"]), ("Ready", [])],
+    )
+    async def test_publish_without_title_or_style_tags_returns_422(self, client, settings, title, style_tags) -> None:
+        user = await _make_user(f"clips-publish-guard-{next(_SEQ)}@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title=title, style_tags=style_tags, is_public=False)
+
+        resp = await client.patch(
+            f"{CLIPS_URL}/{clip.id}", json={"is_public": True}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 422
+        # Guard is fail-closed: the clip stays private.
+        assert (await Clip.get(clip.id)).is_public is False
+
+    async def test_unpublish_is_never_guarded(self, client, settings) -> None:
+        # A clip may have gone public before losing its title/tags; unpublishing
+        # it must always work so it can't get stuck public.
+        user = await _make_user("clips-unpublish@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title=None, style_tags=[], is_public=True)
+
+        resp = await client.patch(
+            f"{CLIPS_URL}/{clip.id}", json={"is_public": False}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["is_public"] is False
+        assert (await Clip.get(clip.id)).is_public is False
+
+    async def test_rename_and_publish_in_one_request_uses_the_new_title(self, client, settings) -> None:
+        # The title supplied in the same PATCH satisfies the publish guard.
+        user = await _make_user("clips-rename-publish@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title=None, style_tags=["ambient"], is_public=False)
+
+        resp = await client.patch(
+            f"{CLIPS_URL}/{clip.id}",
+            json={"title": "Named", "is_public": True},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["title"] == "Named"
+        assert body["is_public"] is True
+
+
+@pytest.mark.integration
 class TestDeleteClip:
     async def test_delete_removes_record_and_stored_audio(self, client, settings, local_storage) -> None:
         user = await _make_user("clips-del@example.com")

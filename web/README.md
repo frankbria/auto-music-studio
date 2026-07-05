@@ -24,8 +24,8 @@ Run the layout smoke tests with `npm run test`.
 A persistent bottom player that keeps playing across client-side navigation.
 
 - `contexts/player-context.tsx` — `PlayerProvider` + `usePlayer`: a reducer
-  store for transport, queue/history, volume, repeat/shuffle, likes; durable
-  preferences persist to `localStorage`.
+  store for transport, queue/history, volume, repeat/shuffle, and likes/dislikes
+  (mutually exclusive per clip); durable preferences persist to `localStorage`.
 - `hooks/use-audio-engine.ts` — owns the single `<audio>` element (mounted once
   at the shell level) and syncs it to the store both ways.
 - `hooks/use-player-shortcuts.ts` — space / arrows / `m`, ignored while typing.
@@ -81,8 +81,9 @@ edit, remix, audio, export, and manage operation on a song in one place.
   `ClipCard`'s menus draw from, so the two surfaces can't drift apart.
 - `hooks/use-song-actions.ts` — dispatches a selected action to its workflow:
   navigation (studio today; editor when US-18 ships), a workflow modal, a file
-  download, or an inline operation (optimistic publish toggle, delete with
-  confirmation).
+  download, or an inline operation (publish toggle — optimistic with a
+  title/style-tag guard and rollback, persisted via `PATCH /clips/{id}`
+  (US-17.6) — and delete with confirmation).
 - `hooks/use-subscription-tier.ts` — lightweight subscription-tier lookup used
   to lock Pro-only menu items for free-tier users, without mounting the full
   model-selection context.

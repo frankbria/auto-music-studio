@@ -38,4 +38,7 @@ afterEach(() => {
   cleanup()
   routerMock.pathname = "/"
   vi.clearAllMocks()
+  // The player store persists likes/dislikes to localStorage; clear it so state
+  // doesn't leak between tests (US-17.6 added the dislike slice).
+  window.localStorage.clear()
 })

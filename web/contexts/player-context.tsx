@@ -32,6 +32,8 @@ export type PlayerState = {
   shuffle: boolean
   isQueueOpen: boolean
   likedIds: string[]
+  /** Disliked clip ids (US-17.6). Mutually exclusive with likedIds per clip. */
+  dislikedIds: string[]
   /** Set by a scrub; the audio engine seeks to it then dispatches "seek/done". */
   seekRequest: number | null
 }
@@ -52,6 +54,7 @@ export const initialPlayerState: PlayerState = {
   shuffle: false,
   isQueueOpen: false,
   likedIds: [],
+  dislikedIds: [],
   seekRequest: null,
 }
 
@@ -82,8 +85,13 @@ export type PlayerAction =
   | { type: "repeat/cycle" }
   | { type: "shuffle/toggle" }
   | { type: "like/toggle"; id: string }
+  | { type: "dislike/toggle"; id: string }
 
 const clampVolume = (v: number) => Math.min(1, Math.max(0, v))
+
+/** Add or remove `id` from a list (toggle). */
+const toggleId = (ids: string[], id: string): string[] =>
+  ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
 
 /** Pick the index of the next track to play from a queue, honoring shuffle. */
 function nextIndex(queueLength: number, shuffle: boolean): number {
@@ -267,13 +275,27 @@ export function playerReducer(
     }
     case "shuffle/toggle":
       return { ...state, shuffle: !state.shuffle }
-    case "like/toggle":
+    case "like/toggle": {
+      const liking = !state.likedIds.includes(action.id)
       return {
         ...state,
-        likedIds: state.likedIds.includes(action.id)
-          ? state.likedIds.filter((id) => id !== action.id)
-          : [...state.likedIds, action.id],
+        likedIds: toggleId(state.likedIds, action.id),
+        // A clip can't be liked and disliked at once — liking clears a dislike.
+        dislikedIds: liking
+          ? state.dislikedIds.filter((id) => id !== action.id)
+          : state.dislikedIds,
       }
+    }
+    case "dislike/toggle": {
+      const disliking = !state.dislikedIds.includes(action.id)
+      return {
+        ...state,
+        dislikedIds: toggleId(state.dislikedIds, action.id),
+        likedIds: disliking
+          ? state.likedIds.filter((id) => id !== action.id)
+          : state.likedIds,
+      }
+    }
     default:
       return state
   }
@@ -290,6 +312,7 @@ type Persisted = Pick<
   | "repeatMode"
   | "shuffle"
   | "likedIds"
+  | "dislikedIds"
 >
 
 function loadPersisted(): Partial<PlayerState> {
@@ -330,6 +353,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       repeatMode: state.repeatMode,
       shuffle: state.shuffle,
       likedIds: state.likedIds,
+      dislikedIds: state.dislikedIds,
     }
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted))
@@ -343,6 +367,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     state.repeatMode,
     state.shuffle,
     state.likedIds,
+    state.dislikedIds,
   ])
 
   const value = useMemo(() => ({ state, dispatch }), [state])

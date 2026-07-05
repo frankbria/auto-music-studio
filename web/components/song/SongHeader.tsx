@@ -11,17 +11,19 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ShareModal } from "@/components/song/ShareModal"
 import { usePlayer } from "@/contexts/player-context"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
-// Song-detail header (US-17.1): title, artist, style/version/mode badges, and
-// the inline Like / Dislike / Share / Publish controls. Like is wired to the
-// global player store (the one backend-free action with a real home, as in
-// ClipCard); dislike/share/publish have no backend yet, so they give local
-// optimistic feedback and emit callbacks the parent wires when routes land
-// (US-17.6). Matches ClipCard's behavior so actions read the same app-wide.
+// Song-detail header (US-17.1 / US-17.6): title, artist, style/version/mode
+// badges, and the inline Like / Dislike / Share / Publish controls. Like and
+// Dislike are wired to the global player store (persisted in localStorage, so
+// they survive a reload — as in ClipCard). Share opens the ShareModal. Publish
+// is prop-driven: SongDetail passes the persisted `isPublic` + a `onPublishToggle`
+// that hits the API with a guard; standalone it falls back to a local optimistic
+// toggle. `onDislike`/`onShare` remain optional observers.
 
 export type SongHeaderProps = {
   clip: Clip
@@ -47,25 +49,33 @@ export function SongHeader({
 }: SongHeaderProps) {
   const { state, dispatch } = usePlayer()
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
+  const dislikedSet = useMemo(() => new Set(state.dislikedIds), [state.dislikedIds])
   const liked = likedSet.has(clip.id)
-  const [disliked, setDisliked] = useState(false)
+  const disliked = dislikedSet.has(clip.id)
   const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
   const isPublic = isPublicProp ?? optimisticPublic ?? clip.is_public
 
   const version = versionLabel(clip.model)
   const mode = modeLabel(clip.generation_mode)
 
   function dislike() {
-    setDisliked((d) => !d)
+    dispatch({ type: "dislike/toggle", id: clip.id })
     onDislike?.(clip.id)
+  }
+
+  function share() {
+    setShareOpen(true)
+    onShare?.(clip.id)
   }
 
   function togglePublish() {
     const next = !isPublic
     onPublishToggle?.(clip.id, next)
-    // Reflect locally so the inline control visibly works on the detail page
-    // (which has no persisting parent yet); a real resync lands when the publish
-    // route exists (US-17.6). Mirrors the local dislike toggle above.
+    // When wired via SongDetail, `isPublic` is controlled by useSongActions
+    // (which persists + guards + rolls back), so this local flip is shadowed and
+    // the hook owns the visible state. It only takes effect for a standalone,
+    // uncontrolled SongHeader (no isPublic prop) as immediate local feedback.
     setOptimisticPublic(next)
   }
 
@@ -120,7 +130,7 @@ export function SongHeader({
           variant="ghost"
           size="icon-sm"
           aria-label="Share"
-          onClick={() => onShare?.(clip.id)}
+          onClick={share}
         >
           <HugeiconsIcon icon={Share01Icon} size={18} />
         </Button>
@@ -136,6 +146,13 @@ export function SongHeader({
         </Button>
         {actions && <div className="ml-auto">{actions}</div>}
       </div>
+
+      <ShareModal
+        open={shareOpen}
+        clipId={clip.id}
+        clipTitle={clip.title}
+        onClose={() => setShareOpen(false)}
+      />
     </header>
   )
 }

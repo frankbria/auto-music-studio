@@ -5,15 +5,34 @@ import { useRouter } from "next/navigation"
 
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
-import { downloadClipAudio, type DownloadFormat } from "@/lib/clips"
+import {
+  downloadClipAudio,
+  updateClipVisibility,
+  type DownloadFormat,
+} from "@/lib/clips"
 import { submitRemaster } from "@/lib/editing"
 import { findSongAction, type SongActionId } from "@/lib/song-actions"
 import type { Clip } from "@/lib/workspace-clips"
 
 // US-17.2: dispatch for the full action menu. Routes a selected action to its
 // workflow: navigation (editor/studio), a workflow modal (content lands in
-// US-17.3+), a file download, or an inline operation (optimistic publish
-// toggle — persistence lands with US-17.6 — and delete-with-confirmation).
+// US-17.3+), a file download, or an inline operation (the US-17.6 publish
+// toggle — optimistic with real persistence + rollback — and delete).
+
+/** Which publish requirements a clip is missing, for the guard prompt (US-17.6). */
+export type PublishGuard = {
+  missingTitle: boolean
+  missingStyleTags: boolean
+}
+
+/** Compute the publish guard for a clip; `null` when it's ready to go public. */
+function publishGuardFor(clip: Clip): PublishGuard | null {
+  const missingTitle = !clip.title?.trim()
+  const missingStyleTags = clip.style_tags.length === 0
+  return missingTitle || missingStyleTags
+    ? { missingTitle, missingStyleTags }
+    : null
+}
 
 const DOWNLOAD_FORMAT: Partial<Record<SongActionId, DownloadFormat>> = {
   "download-mp3": "mp3",
@@ -39,6 +58,9 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   const [deleting, setDeleting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
+  // Set when a publish is blocked (client guard) or rejected (server 422); drives
+  // the PublishGuardPrompt. Null means no prompt.
+  const [publishGuard, setPublishGuard] = useState<PublishGuard | null>(null)
 
   const isPublic = optimisticPublic ?? clip.is_public
 
@@ -82,14 +104,47 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
         accessToken
       )
     } else if (action === "publish-toggle") {
-      // Optimistic, like SongHeader/ClipCard — the publish route lands in
-      // US-17.6; until then the toggle is local feedback only.
-      setOptimisticPublic(!isPublic)
+      void doPublish(!isPublic)
     } else if (action === "delete") {
       // Start the confirmation clean — actionError is shared with the download
       // flow, so a prior download failure must not show up in this dialog.
       setActionError(null)
       setConfirmingDelete(true)
+    }
+  }
+
+  /**
+   * Publish/unpublish the clip with optimistic UI and rollback (US-17.6).
+   * Going public is guarded client-side (needs a title + a style tag) so the
+   * prompt shows before any request; a server 422 (fields changed since load)
+   * rolls back and prompts too. Other failures roll back and surface an error.
+   */
+  async function doPublish(next: boolean) {
+    if (!accessToken) return
+    if (next) {
+      const guard = publishGuardFor(clip)
+      if (guard) {
+        setPublishGuard(guard)
+        return
+      }
+    }
+    const prev = isPublic
+    setOptimisticPublic(next)
+    setActionError(null)
+    const result = await updateClipVisibility(clip.id, next, accessToken)
+    if (!result.ok) {
+      setOptimisticPublic(prev) // rollback
+      // Prefer the client-side guard prompt, which names the missing fields.
+      // But a server 422 can win a race where local `clip` still looks ready
+      // (fields changed since load); recomputing the guard would then be
+      // all-false and render an empty prompt, so fall back to the server's
+      // specific message instead.
+      const guard = result.guardFailed ? publishGuardFor(clip) : null
+      if (guard) {
+        setPublishGuard(guard)
+      } else {
+        setActionError(result.message)
+      }
     }
   }
 
@@ -140,7 +195,10 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
     actionError,
     clearActionError: () => setActionError(null),
     handleAction,
-    /** SongHeader-compatible publish callback (id, next). */
-    togglePublish: (_id: string, next: boolean) => setOptimisticPublic(next),
+    /** SongHeader/ClipCard-compatible publish callback (id, next). Persists. */
+    togglePublish: (_id: string, next: boolean) => void doPublish(next),
+    /** Non-null while the publish guard prompt should show; names what's missing. */
+    publishGuard,
+    dismissPublishGuard: () => setPublishGuard(null),
   }
 }

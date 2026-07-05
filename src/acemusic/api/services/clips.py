@@ -283,11 +283,46 @@ async def list_clips(
     return items, total
 
 
-async def update_clip_title(clip_id: str, user_id: str, title: str) -> Clip:
-    """Rename the clip (title is the only client-writable field, as in the CLI)."""
+def _enforce_publish_guard(clip: Clip) -> None:
+    """Reject going public until the clip is presentable (US-17.6).
+
+    A public clip needs a real title and at least one style tag; publishing a
+    half-finished clip by accident is the failure this guards against. Fail-closed
+    with a 422 that names exactly what's missing so the UI can prompt for it.
+    Unpublishing is never guarded (see ``update_clip_fields``).
+    """
+    missing: list[str] = []
+    if not (clip.title and clip.title.strip()):
+        missing.append("a title")
+    if not clip.style_tags:
+        missing.append("at least one style tag")
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Publishing requires {' and '.join(missing)}.",
+        )
+
+
+async def update_clip_fields(
+    clip_id: str,
+    user_id: str,
+    *,
+    title: str | None = None,
+    is_public: bool | None = None,
+) -> Clip:
+    """Apply the client-writable clip fields — title (rename) and/or is_public
+    (the US-17.6 publish toggle). ``None`` leaves a field unchanged. A title
+    supplied in the same call is applied before the publish guard runs, so a
+    rename-and-publish request is validated against the new title."""
     clip = await get_owned_clip(clip_id, user_id)
-    clip.title = title
-    await clip.save()
+    if title is not None:
+        clip.title = title
+    if is_public:
+        _enforce_publish_guard(clip)
+    if is_public is not None:
+        clip.is_public = is_public
+    if title is not None or is_public is not None:
+        await clip.save()
     return clip
 
 

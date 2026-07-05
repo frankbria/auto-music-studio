@@ -92,4 +92,21 @@ describe("SongHeader", () => {
     expect(onDislike).toHaveBeenCalledWith("c1")
     expect(onShare).toHaveBeenCalledWith("c1")
   })
+
+  it("persists dislike via the player store", async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    const dislike = screen.getByRole("button", { name: "Dislike" })
+    expect(dislike).toHaveAttribute("aria-pressed", "false")
+    await user.click(dislike)
+    expect(dislike).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("opens the share modal with a copyable link", async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    await user.click(screen.getByRole("button", { name: "Share" }))
+    expect(await screen.findByRole("dialog")).toHaveTextContent(/share/i)
+    expect(screen.getByLabelText("Share link")).toBeInTheDocument()
+  })
 })
