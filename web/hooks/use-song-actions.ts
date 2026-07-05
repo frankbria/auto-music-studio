@@ -134,8 +134,14 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
     const result = await updateClipVisibility(clip.id, next, accessToken)
     if (!result.ok) {
       setOptimisticPublic(prev) // rollback
-      if (result.guardFailed) {
-        setPublishGuard(publishGuardFor(clip) ?? { missingTitle: false, missingStyleTags: false })
+      // Prefer the client-side guard prompt, which names the missing fields.
+      // But a server 422 can win a race where local `clip` still looks ready
+      // (fields changed since load); recomputing the guard would then be
+      // all-false and render an empty prompt, so fall back to the server's
+      // specific message instead.
+      const guard = result.guardFailed ? publishGuardFor(clip) : null
+      if (guard) {
+        setPublishGuard(guard)
       } else {
         setActionError(result.message)
       }

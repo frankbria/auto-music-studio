@@ -198,6 +198,32 @@ describe("useSongActions", () => {
       expect(result.current.isPublic).toBe(false)
     })
 
+    it("shows the server message (not an empty guard) on a 422 for a locally-ready clip", async () => {
+      // Race: local clip looks ready, but the server rejects (fields changed
+      // since load). Recomputing the guard would be all-false → empty prompt;
+      // the server's specific message must win instead.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({ detail: "Publishing requires a title." }),
+            { status: 422 }
+          )
+        )
+      )
+      const { result } = setup(ready())
+
+      await act(async () => {
+        result.current.handleAction("publish-toggle")
+      })
+      await waitFor(() =>
+        expect(result.current.actionError).toBe("Publishing requires a title.")
+      )
+      // No empty guard prompt, and the optimistic publish rolled back.
+      expect(result.current.publishGuard).toBeNull()
+      expect(result.current.isPublic).toBe(false)
+    })
+
     it("unpublishes without guarding, even on an incomplete clip", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         new Response(JSON.stringify({ id: "c1", is_public: false }), {

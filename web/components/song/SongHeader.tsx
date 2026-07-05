@@ -72,9 +72,10 @@ export function SongHeader({
   function togglePublish() {
     const next = !isPublic
     onPublishToggle?.(clip.id, next)
-    // Reflect locally so the inline control visibly works on the detail page
-    // (which has no persisting parent yet); a real resync lands when the publish
-    // route exists (US-17.6). Mirrors the local dislike toggle above.
+    // When wired via SongDetail, `isPublic` is controlled by useSongActions
+    // (which persists + guards + rolls back), so this local flip is shadowed and
+    // the hook owns the visible state. It only takes effect for a standalone,
+    // uncontrolled SongHeader (no isPublic prop) as immediate local feedback.
     setOptimisticPublic(next)
   }
 
