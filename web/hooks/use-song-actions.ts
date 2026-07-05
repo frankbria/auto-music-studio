@@ -129,7 +129,12 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
     activeModal,
     closeModal: () => setActiveModal(null),
     confirmingDelete,
-    cancelDelete: () => setConfirmingDelete(false),
+    // Clear the delete error too, so a failed-then-cancelled delete doesn't
+    // linger as a stale below-menu alert (actionError is shared with download).
+    cancelDelete: () => {
+      setActionError(null)
+      setConfirmingDelete(false)
+    },
     confirmDelete,
     deleting,
     actionError,

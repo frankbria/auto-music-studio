@@ -76,7 +76,12 @@ function toSongAction(action: ClipMenuAction): SongActionId {
   return action === "remix-edit" ? "remix" : action
 }
 
-/** Remix/Edit sub-options, shared by the primary CTA and the ⋯ submenu. */
+/**
+ * Remix/Edit sub-options for the primary CTA dropdown. The flat ⋯ menu below is
+ * a deliberately different shape (full §9.2 list with separators) and hardcodes
+ * its own open-editor Pro lock / sample Beta badge — keep those in sync with the
+ * `pro`/`beta` flags here by hand until a third consumer justifies a shared renderer.
+ */
 const REMIX_ITEMS: {
   action: ClipMenuAction
   label: string

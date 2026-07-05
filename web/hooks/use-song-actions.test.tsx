@@ -219,6 +219,8 @@ describe("useSongActions", () => {
 
     act(() => result.current.cancelDelete())
     expect(result.current.confirmingDelete).toBe(false)
+    // Cancelling clears the error so it doesn't linger as a below-menu alert.
+    expect(result.current.actionError).toBeNull()
   })
 
   it("downloads audio in the requested format", async () => {
