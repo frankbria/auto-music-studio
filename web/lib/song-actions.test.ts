@@ -40,6 +40,7 @@ describe("SONG_ACTION_GROUPS", () => {
       "extend",
       "mashup",
       "sample",
+      "get-full-song",
       "use-inspiration",
     ])
     expect(ids.audio).toEqual([

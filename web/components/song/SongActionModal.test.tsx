@@ -34,6 +34,9 @@ vi.mock("@/components/song/modals/AddVocalModal", () => ({
 vi.mock("@/components/song/modals/MashupModal", () => ({
   MashupModal: () => <div data-testid="mashup-modal" />,
 }))
+vi.mock("@/components/song/full-song/FullSongWizardModal", () => ({
+  FullSongWizardModal: () => <div data-testid="full-song-modal" />,
+}))
 
 const clip = makeClip()
 
@@ -56,6 +59,7 @@ describe("SongActionModal dispatch", () => {
     ["sample", "sample-modal"],
     ["add-vocal", "add-vocal-modal"],
     ["mashup", "mashup-modal"],
+    ["get-full-song", "full-song-modal"],
   ] as const)("routes %s to its modal", (action, testId) => {
     render(<SongActionModal clip={clip} action={action} onClose={vi.fn()} />)
     expect(screen.getByTestId(testId)).toBeInTheDocument()

@@ -1,5 +1,6 @@
 import type { IconSvgElement } from "@hugeicons/react"
 import {
+  Album01Icon,
   ArrowExpand01Icon,
   AudioWave01Icon,
   CropIcon,
@@ -60,6 +61,7 @@ export type SongActionId =
   | "replace-section"
   | "crop"
   | "adjust-speed"
+  | "get-full-song"
   | "publish-toggle"
 
 export type SongActionCategory = "edit" | "create" | "audio" | "export" | "manage"
@@ -135,6 +137,14 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         id: "sample",
         label: "Sample from Song",
         icon: AudioWave01Icon,
+        workflow: "modal",
+      },
+      {
+        // Only meaningful for short seeds (<60s); SongDetail hides it otherwise
+        // via SongActionsMenu's hiddenActionIds (US-17.4).
+        id: "get-full-song",
+        label: "Get Full Song",
+        icon: Album01Icon,
         workflow: "modal",
       },
       {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 
 import { ClipList } from "@/components/workspace/ClipList"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
+import { FullSongWizardModal } from "@/components/song/full-song/FullSongWizardModal"
 import { FiltersButton } from "@/components/workspace/FiltersButton"
 import { PaginationControls } from "@/components/workspace/PaginationControls"
 import { SortDropdown } from "@/components/workspace/SortDropdown"
@@ -15,6 +16,7 @@ import {
   activeFilterCount,
   applyClientFilters,
   EMPTY_FILTERS,
+  type Clip,
   type ClipFilters,
   type SortOrder,
 } from "@/lib/workspace-clips"
@@ -50,6 +52,8 @@ export function WorkspacePanel({
   const [filters, setFilters] = useState<ClipFilters>(EMPTY_FILTERS)
   const [sort, setSort] = useState<SortOrder>("newest")
   const [page, setPage] = useState(1)
+  // The clip whose Get Full Song wizard is open, if any (US-17.4).
+  const [fullSongClip, setFullSongClip] = useState<Clip | null>(null)
 
   const debouncedSearch = useDebouncedValue(search, 300)
 
@@ -119,6 +123,10 @@ export function WorkspacePanel({
         <ClipList
           clips={visibleClips}
           loading={loading}
+          onGetFullSong={(id) => {
+            const seed = visibleClips.find((c) => c.id === id)
+            if (seed) setFullSongClip(seed)
+          }}
           emptyMessage={
             // A failed load shouldn't masquerade as an empty library. Filters
             // run client-side over the fetched page (the backend has no params
@@ -138,6 +146,14 @@ export function WorkspacePanel({
         totalPages={totalPages}
         onPageChange={setPage}
       />
+
+      {fullSongClip && (
+        <FullSongWizardModal
+          clip={fullSongClip}
+          open
+          onClose={() => setFullSongClip(null)}
+        />
+      )}
     </div>
   )
 }

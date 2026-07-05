@@ -31,6 +31,7 @@ import {
 import { usePlayer } from "@/contexts/player-context"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { formatTime, trackFromClip } from "@/lib/clips"
+import { isFullSongEligible } from "@/lib/song-structure"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
@@ -57,8 +58,6 @@ export type ClipCardProps = {
   /** Publish toggle; `next` is the requested visibility. */
   onPublishToggle?: (id: string, next: boolean) => void
 }
-
-const FULL_SONG_MAX_SECONDS = 60
 
 /** Remix/Edit sub-options, shared by the primary CTA and the ⋯ submenu. */
 const REMIX_ITEMS: { action: ClipMenuAction; label: string; pro?: boolean }[] = [
@@ -107,8 +106,7 @@ export function ClipCard({
   const version = versionLabel(clip.model)
   const metadataLabel = modeLabel(clip.generation_mode)
   const styleText = clip.style_tags.join(", ")
-  const showFullSong =
-    clip.duration != null && clip.duration < FULL_SONG_MAX_SECONDS
+  const showFullSong = isFullSongEligible(clip)
 
   function startEdit() {
     setDraft(title ?? "")

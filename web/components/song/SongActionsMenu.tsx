@@ -41,13 +41,17 @@ export type SongActionsMenuProps = {
   /** Free-tier users see Pro-only actions locked (badge + lock, disabled). */
   isFreeTier: boolean
   onAction: (action: SongActionId) => void
+  /** Actions to omit entirely — e.g. Get Full Song on a clip too long to seed one (US-17.4). */
+  hiddenActionIds?: readonly SongActionId[]
 }
 
 export function SongActionsMenu({
   isPublic,
   isFreeTier,
   onAction,
+  hiddenActionIds,
 }: SongActionsMenuProps) {
+  const hidden = new Set(hiddenActionIds)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -63,15 +67,17 @@ export function SongActionsMenu({
             <DropdownMenuLabel className="text-xs text-muted-foreground">
               {group.label}
             </DropdownMenuLabel>
-            {group.actions.map((action) => (
-              <ActionItem
-                key={action.id}
-                action={action}
-                isPublic={isPublic}
-                isFreeTier={isFreeTier}
-                onAction={onAction}
-              />
-            ))}
+            {group.actions
+              .filter((action) => !hidden.has(action.id))
+              .map((action) => (
+                <ActionItem
+                  key={action.id}
+                  action={action}
+                  isPublic={isPublic}
+                  isFreeTier={isFreeTier}
+                  onAction={onAction}
+                />
+              ))}
             {group.category === "export" && (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
