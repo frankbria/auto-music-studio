@@ -75,11 +75,11 @@ describe("useSongActions", () => {
     expect(push).toHaveBeenCalledWith("/studio?song=c1")
   })
 
-  it("keeps open-editor on the placeholder modal until the editor ships", () => {
+  it("routes open-editor to the waveform editor (US-18.1)", () => {
     const { result } = setup()
     act(() => result.current.handleAction("open-editor"))
-    expect(push).not.toHaveBeenCalled()
-    expect(result.current.activeModal).toBe("open-editor")
+    expect(push).toHaveBeenCalledWith("/editor/c1")
+    expect(result.current.activeModal).toBeNull()
   })
 
   it("opens and closes the workflow modal for modal actions", () => {

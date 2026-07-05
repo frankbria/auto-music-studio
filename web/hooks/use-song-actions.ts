@@ -67,9 +67,9 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   function handleAction(action: SongActionId) {
     const workflow = findSongAction(action)?.workflow
     if (workflow === "navigation") {
-      // Only open-studio navigates today; open-editor joins when the editor
-      // page ships (US-18) and its registry entry flips back to navigation.
-      router.push(`/studio?song=${encodeURIComponent(clip.id)}`)
+      // open-editor → the waveform editor (US-18.1); open-studio → the studio.
+      const id = encodeURIComponent(clip.id)
+      router.push(action === "open-editor" ? `/editor/${id}` : `/studio?song=${id}`)
       return
     }
     if (workflow === "modal") {

@@ -77,6 +77,8 @@ describe("SONG_ACTION_GROUPS", () => {
 
   it("routes studio to navigation and remaster/publish/delete inline", () => {
     expect(findSongAction("open-studio")?.workflow).toBe("navigation")
+    // Open in Editor navigates to /editor/{id} (US-18.1).
+    expect(findSongAction("open-editor")?.workflow).toBe("navigation")
     // Remaster is one-click (US-17.3) — inline submit, no modal.
     expect(findSongAction("remaster")?.workflow).toBe("inline")
     expect(findSongAction("publish-toggle")?.workflow).toBe("inline")
@@ -87,8 +89,6 @@ describe("SONG_ACTION_GROUPS", () => {
     for (const id of [
       "remix",
       "repaint",
-      // open-editor flips to navigation when the editor page ships (US-18).
-      "open-editor",
       "cover",
       "extend",
       "mashup",

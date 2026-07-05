@@ -25,8 +25,9 @@ import type { Clip } from "@/lib/workspace-clips"
 // (crop/speed/extend/cover/remix/replace-section/sample/add-vocal/mashup).
 // `repaint` and `replace-section` are the same regenerate-a-range operation, so
 // both open the Replace Section modal. Actions whose modals ship in later
-// stories (open-editor, use-inspiration, export/mastering/video, stems) keep the
-// "not available yet" placeholder so a menu click never dead-ends.
+// stories (use-inspiration, export/mastering/video, stems) keep the "not
+// available yet" placeholder so a menu click never dead-ends. (open-editor is a
+// navigation action now — it routes to /editor/{id} before reaching here.)
 
 export type SongActionModalProps = {
   clip: Clip

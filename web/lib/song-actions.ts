@@ -105,12 +105,11 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         workflow: "modal",
       },
       {
-        // Becomes "navigation" to /editor/{id} when the editor page ships
-        // (US-18); until then the placeholder modal keeps users off a 404.
+        // Navigates to /editor/{id}, the waveform editor (US-18.1).
         id: "open-editor",
         label: "Open in Editor",
         icon: PencilEdit02Icon,
-        workflow: "modal",
+        workflow: "navigation",
         proOnly: true,
       },
       {

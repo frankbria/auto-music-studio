@@ -239,18 +239,14 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(push).toHaveBeenCalledWith("/studio?song=c1")
   })
 
-  it("shows the placeholder modal for Open in Editor (pro user) until US-18", async () => {
+  it("navigates a pro user to the waveform editor for Open in Editor (US-18.1)", async () => {
     stubFetch({ clip: clip(), tier: "pro" })
     renderDetail()
     await openActions()
     await userEvent.click(
       screen.getByRole("menuitem", { name: /open in editor/i })
     )
-    // No /editor route exists yet — navigating would 404.
-    expect(push).not.toHaveBeenCalledWith("/editor/c1")
-    expect(await screen.findByRole("dialog")).toHaveTextContent(
-      "Open in Editor"
-    )
+    expect(push).toHaveBeenCalledWith("/editor/c1")
   })
 
   it("locks Pro-only actions for a free user", async () => {
