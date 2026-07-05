@@ -11,6 +11,7 @@ import { SortDropdown } from "@/components/workspace/SortDropdown"
 import { WorkspaceBreadcrumb } from "@/components/workspace/WorkspaceBreadcrumb"
 import { usePlayer } from "@/contexts/player-context"
 import { useClips } from "@/hooks/use-clips"
+import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 import { useWorkspaces } from "@/hooks/use-workspaces"
 import {
   activeFilterCount,
@@ -54,6 +55,8 @@ export function WorkspacePanel({
   const [page, setPage] = useState(1)
   // The clip whose Get Full Song wizard is open, if any (US-17.4).
   const [fullSongClip, setFullSongClip] = useState<Clip | null>(null)
+  // Bumped on a context-menu delete to refetch and drop the removed card (US-17.5).
+  const [deleteBump, setDeleteBump] = useState(0)
 
   const debouncedSearch = useDebouncedValue(search, 300)
 
@@ -92,9 +95,15 @@ export function WorkspacePanel({
       page,
       per_page: PER_PAGE,
     },
-    { enabled: defaultWorkspace !== null, refreshKey }
+    {
+      enabled: defaultWorkspace !== null,
+      // Combine the parent's generation refresh with local delete bumps so both
+      // force a refetch through the same channel.
+      refreshKey: (refreshKey ?? 0) + deleteBump,
+    }
   )
 
+  const { isFreeTier } = useSubscriptionTier()
   const { state } = usePlayer()
   const visibleClips = useMemo(
     () => applyClientFilters(data?.clips ?? [], filters, state.likedIds),
@@ -123,6 +132,8 @@ export function WorkspacePanel({
         <ClipList
           clips={visibleClips}
           loading={loading}
+          isFreeTier={isFreeTier}
+          onDeleted={() => setDeleteBump((n) => n + 1)}
           onGetFullSong={(id) => {
             const seed = visibleClips.find((c) => c.id === id)
             if (seed) setFullSongClip(seed)

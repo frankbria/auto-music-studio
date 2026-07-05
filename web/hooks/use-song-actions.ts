@@ -21,7 +21,16 @@ const DOWNLOAD_FORMAT: Partial<Record<SongActionId, DownloadFormat>> = {
   "download-flac": "flac",
 }
 
-export function useSongActions(clip: Clip) {
+export type UseSongActionsOptions = {
+  /**
+   * Where to go after a successful delete. Song detail navigates home (the song
+   * is gone); the clip list (US-17.5) passes a callback to drop the card in place
+   * instead. Defaults to navigating to `/`.
+   */
+  onDeleted?: (id: string) => void
+}
+
+export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
   const remaster = useClipEdit()
@@ -77,6 +86,9 @@ export function useSongActions(clip: Clip) {
       // US-17.6; until then the toggle is local feedback only.
       setOptimisticPublic(!isPublic)
     } else if (action === "delete") {
+      // Start the confirmation clean — actionError is shared with the download
+      // flow, so a prior download failure must not show up in this dialog.
+      setActionError(null)
       setConfirmingDelete(true)
     }
   }
@@ -91,7 +103,16 @@ export function useSongActions(clip: Clip) {
         headers: { authorization: `Bearer ${accessToken}` },
       })
       if (res.status !== 204) throw new Error(`delete failed (${res.status})`)
-      router.push("/")
+      if (onDeleted) {
+        // List context: the card is dropped by an async refetch, so close the
+        // dialog now — otherwise it lingers with a live Delete button on an
+        // already-deleted clip and a second click fires a redundant DELETE.
+        onDeleted(clip.id)
+        setConfirmingDelete(false)
+      } else {
+        // Song-detail context: navigating home unmounts the dialog.
+        router.push("/")
+      }
     } catch {
       // Keep the dialog open so the user can retry or cancel.
       setActionError("Couldn't delete this song. Please try again.")
@@ -108,7 +129,12 @@ export function useSongActions(clip: Clip) {
     activeModal,
     closeModal: () => setActiveModal(null),
     confirmingDelete,
-    cancelDelete: () => setConfirmingDelete(false),
+    // Clear the delete error too, so a failed-then-cancelled delete doesn't
+    // linger as a stale below-menu alert (actionError is shared with download).
+    cancelDelete: () => {
+      setActionError(null)
+      setConfirmingDelete(false)
+    },
     confirmDelete,
     deleting,
     actionError,

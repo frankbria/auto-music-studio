@@ -58,8 +58,8 @@ function clip(overrides: Partial<Clip> = {}): Clip {
   }
 }
 
-function setup(c: Clip = clip()) {
-  return renderHook(() => useSongActions(c), { wrapper })
+function setup(c: Clip = clip(), opts?: { onDeleted?: (id: string) => void }) {
+  return renderHook(() => useSongActions(c, opts), { wrapper })
 }
 
 afterEach(() => {
@@ -165,6 +165,42 @@ describe("useSongActions", () => {
     expect(push).toHaveBeenCalledWith("/")
   })
 
+  it("calls onDeleted instead of navigating when given (clip-list context)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const onDeleted = vi.fn()
+
+    const { result } = setup(clip(), { onDeleted })
+    act(() => result.current.handleAction("delete"))
+    await act(() => result.current.confirmDelete())
+
+    expect(onDeleted).toHaveBeenCalledWith("c1")
+    // The list drops the card itself, so the hook must not navigate home.
+    expect(push).not.toHaveBeenCalled()
+    // Dialog must close so it can't fire a redundant DELETE on the gone clip.
+    expect(result.current.confirmingDelete).toBe(false)
+  })
+
+  it("clears a stale download error when the delete dialog opens", async () => {
+    // 404 makes the real downloadClipAudio return false and seed actionError.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 404 }))
+    )
+    const { result } = setup()
+
+    act(() => {
+      result.current.handleAction("download-mp3")
+    })
+    await waitFor(() => expect(result.current.actionError).toMatch(/download/i))
+
+    // Opening the delete confirmation must start clean, not show the download error.
+    act(() => result.current.handleAction("delete"))
+    expect(result.current.actionError).toBeNull()
+  })
+
   it("surfaces a delete failure and stays on the page", async () => {
     vi.stubGlobal(
       "fetch",
@@ -183,6 +219,8 @@ describe("useSongActions", () => {
 
     act(() => result.current.cancelDelete())
     expect(result.current.confirmingDelete).toBe(false)
+    // Cancelling clears the error so it doesn't linger as a below-menu alert.
+    expect(result.current.actionError).toBeNull()
   })
 
   it("downloads audio in the requested format", async () => {

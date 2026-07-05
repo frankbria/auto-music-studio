@@ -8,6 +8,7 @@ import {
   Edit02Icon,
   FavouriteIcon,
   GlobeIcon,
+  LockIcon,
   MoreHorizontalIcon,
   MusicNote01Icon,
   PlayIcon,
@@ -28,45 +29,71 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
+import { SongActionModal } from "@/components/song/SongActionModal"
 import { usePlayer } from "@/contexts/player-context"
+import { useSongActions } from "@/hooks/use-song-actions"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { formatTime, trackFromClip } from "@/lib/clips"
 import { isFullSongEligible } from "@/lib/song-structure"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
-// US-16.6: the reusable clip card. Play + Like are wired to the global player
-// store (the only backend-free actions that already have a home — see
-// LikeButton). Everything else is exposed as a callback prop because the backend
-// has no like/dislike/share/publish/title/menu endpoints proxied in web/ yet;
-// the parent (or a future hook) wires those when the routes land.
+// US-16.6 / US-17.5: the reusable clip card. Play + Like are wired to the global
+// player store; like/dislike/share/publish/rename stay callback props (no backend
+// routes proxied for them yet). The ⋯ menu and Remix CTA now dispatch through
+// useSongActions (US-17.5) — the same registry-driven seam the song-detail menu
+// uses — so any menu click opens its modal, navigates, downloads, or confirms a
+// delete wherever a card is rendered, with no per-location wiring.
 // The action vocabulary lives in lib/song-actions (US-17.2) and is re-exported
 // here so existing imports keep working.
 
 export type { ClipMenuAction } from "@/lib/song-actions"
-import type { ClipMenuAction } from "@/lib/song-actions"
+import type { ClipMenuAction, SongActionId } from "@/lib/song-actions"
 
 export type ClipCardProps = {
   clip: Clip
   /** Inline-rename committed (blur/Enter). */
   onTitleChange?: (id: string, title: string) => void
-  /** Any menu item from the Remix/Edit CTA or the ⋯ menu. */
+  /**
+   * Observer for menu selections (analytics / parent refetch). The action is
+   * also dispatched internally through useSongActions — this fires alongside it.
+   */
   onMenuAction?: (action: ClipMenuAction, clipId: string) => void
   onGetFullSong?: (id: string) => void
   onDislike?: (id: string) => void
   onShare?: (id: string) => void
   /** Publish toggle; `next` is the requested visibility. */
   onPublishToggle?: (id: string, next: boolean) => void
+  /** Free-tier users see Pro-only menu items locked (badge + lock, disabled). */
+  isFreeTier?: boolean
+  /** Called after this clip is deleted so the list can drop the card. */
+  onDeleted?: (id: string) => void
 }
 
-/** Remix/Edit sub-options, shared by the primary CTA and the ⋯ submenu. */
-const REMIX_ITEMS: { action: ClipMenuAction; label: string; pro?: boolean }[] = [
+/** Map the clip-menu vocabulary to a registry action id (only remix-edit differs). */
+function toSongAction(action: ClipMenuAction): SongActionId {
+  return action === "remix-edit" ? "remix" : action
+}
+
+/**
+ * Remix/Edit sub-options for the primary CTA dropdown. The flat ⋯ menu below is
+ * a deliberately different shape (full §9.2 list with separators) and hardcodes
+ * its own open-editor Pro lock / sample Beta badge — keep those in sync with the
+ * `pro`/`beta` flags here by hand until a third consumer justifies a shared renderer.
+ */
+const REMIX_ITEMS: {
+  action: ClipMenuAction
+  label: string
+  pro?: boolean
+  beta?: boolean
+}[] = [
   { action: "open-studio", label: "Open in Studio" },
   { action: "open-editor", label: "Open in Editor", pro: true },
   { action: "cover", label: "Cover" },
   { action: "extend", label: "Extend" },
   { action: "mashup", label: "Mashup" },
-  { action: "sample", label: "Sample from Song" },
+  { action: "sample", label: "Sample from Song", beta: true },
 ]
 
 const DOWNLOAD_ITEMS: { action: ClipMenuAction; label: string }[] = [
@@ -85,8 +112,12 @@ export function ClipCard({
   onDislike,
   onShare,
   onPublishToggle,
+  isFreeTier = false,
+  onDeleted,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
+  // Registry-driven dispatch: modal / navigation / download / delete-confirm.
+  const actions = useSongActions(clip, { onDeleted })
   // likedIds re-renders every player tick; scan a Set (cf. applyClientFilters).
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
   const liked = likedSet.has(clip.id)
@@ -132,6 +163,8 @@ export function ClipCard({
   }
 
   function emitMenu(action: ClipMenuAction) {
+    // Dispatch to the shared workflow seam, then notify any observer.
+    actions.handleAction(toSongAction(action))
     onMenuAction?.(action, clip.id)
   }
 
@@ -303,19 +336,31 @@ export function ClipCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {REMIX_ITEMS.map((item) => (
-                  <DropdownMenuItem
-                    key={item.action}
-                    onSelect={() => emitMenu(item.action)}
-                  >
-                    {item.label}
-                    {item.pro && (
-                      <Badge variant="outline" className="ml-auto text-[10px]">
-                        Pro
-                      </Badge>
-                    )}
-                  </DropdownMenuItem>
-                ))}
+                {REMIX_ITEMS.map((item) => {
+                  const locked = !!item.pro && isFreeTier
+                  return (
+                    <DropdownMenuItem
+                      key={item.action}
+                      disabled={locked}
+                      onSelect={() => emitMenu(item.action)}
+                    >
+                      {item.label}
+                      {item.pro && (
+                        <Badge variant="outline" className="ml-auto text-[10px]">
+                          {locked && (
+                            <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />
+                          )}
+                          Pro
+                        </Badge>
+                      )}
+                      {item.beta && (
+                        <Badge variant="secondary" className="ml-auto text-[10px]">
+                          Beta
+                        </Badge>
+                      )}
+                    </DropdownMenuItem>
+                  )
+                })}
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -336,9 +381,15 @@ export function ClipCard({
                 <DropdownMenuItem onSelect={() => emitMenu("open-studio")}>
                   Open in Studio
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("open-editor")}>
+                <DropdownMenuItem
+                  disabled={isFreeTier}
+                  onSelect={() => emitMenu("open-editor")}
+                >
                   Open in Editor
                   <Badge variant="outline" className="ml-auto text-[10px]">
+                    {isFreeTier && (
+                      <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />
+                    )}
                     Pro
                   </Badge>
                 </DropdownMenuItem>
@@ -353,6 +404,9 @@ export function ClipCard({
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => emitMenu("sample")}>
                   Sample from Song
+                  <Badge variant="secondary" className="ml-auto text-[10px]">
+                    Beta
+                  </Badge>
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => emitMenu("use-inspiration")}>
                   Use as Inspiration
@@ -393,7 +447,29 @@ export function ClipCard({
             </DropdownMenu>
           </div>
         </div>
+
+        {/* Download failures surface here; delete errors show in their dialog. */}
+        {actions.actionError && !actions.confirmingDelete && (
+          <p role="alert" className="text-xs text-destructive">
+            {actions.actionError}
+          </p>
+        )}
       </div>
+
+      {/* Modal-workflow actions (extend/cover/…) and delete confirmation. */}
+      <SongActionModal
+        clip={clip}
+        action={actions.activeModal}
+        onClose={actions.closeModal}
+      />
+      <DeleteSongDialog
+        open={actions.confirmingDelete}
+        title={title}
+        deleting={actions.deleting}
+        error={actions.actionError}
+        onCancel={actions.cancelDelete}
+        onConfirm={actions.confirmDelete}
+      />
     </div>
   )
 }

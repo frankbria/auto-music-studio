@@ -1,10 +1,45 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
+import type { ReactNode } from "react"
 
 import { ClipCard, type ClipCardProps } from "@/components/workspace/ClipCard"
+import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
 import type { Clip } from "@/lib/workspace-clips"
+
+// The ⋯ menu now dispatches through useSongActions (US-17.5): navigation uses the
+// router, downloads call downloadClipAudio, delete hits the DELETE proxy. Capture
+// the router push and stub the download so those effects are observable/inert.
+const push = vi.fn()
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+
+const downloadClipAudio = vi.fn<(...args: unknown[]) => Promise<boolean>>(() =>
+  Promise.resolve(true)
+)
+vi.mock("@/lib/clips", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/clips")>()),
+  downloadClipAudio: (...args: unknown[]) => downloadClipAudio(...args),
+}))
+
+const authValue = {
+  user: { id: "u1", email: "a@b.co" },
+  accessToken: "tok",
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  completeLogin: vi.fn(),
+  logout: vi.fn(),
+}
+
+/** Auth + player context every card needs now that the menu is wired. */
+function AllProviders({ children }: { children: ReactNode }) {
+  return (
+    <AuthContext.Provider value={authValue}>
+      <PlayerProvider>{children}</PlayerProvider>
+    </AuthContext.Provider>
+  )
+}
 
 function clip(overrides: Partial<Clip> = {}): Clip {
   return {
@@ -42,10 +77,10 @@ function PlayerProbe() {
 
 function renderCard(props: Partial<ClipCardProps> = {}) {
   return render(
-    <PlayerProvider>
+    <AllProviders>
       <ClipCard clip={clip()} {...props} />
       <PlayerProbe />
-    </PlayerProvider>
+    </AllProviders>
   )
 }
 
@@ -59,20 +94,20 @@ describe("ClipCard", () => {
 
   it("falls back to a placeholder title for untitled clips", () => {
     render(
-      <PlayerProvider>
+      <AllProviders>
         <ClipCard clip={clip({ title: null })} />
-      </PlayerProvider>
+      </AllProviders>
     )
     expect(screen.getByText("Untitled clip")).toBeInTheDocument()
   })
 
   it("renders version and metadata badges from model/generation_mode", () => {
     render(
-      <PlayerProvider>
+      <AllProviders>
         <ClipCard
           clip={clip({ model: "ace-step-v1", generation_mode: "extend" })}
         />
-      </PlayerProvider>
+      </AllProviders>
     )
     expect(screen.getByText("XL")).toBeInTheDocument()
     expect(screen.getByText("Extend")).toBeInTheDocument()
@@ -154,18 +189,18 @@ describe("ClipCard", () => {
   it("shows Get Full Song only for clips under 60s", async () => {
     const onGetFullSong = vi.fn()
     const { unmount } = render(
-      <PlayerProvider>
+      <AllProviders>
         <ClipCard clip={clip({ duration: 30 })} onGetFullSong={onGetFullSong} />
-      </PlayerProvider>
+      </AllProviders>
     )
     await userEvent.click(screen.getByRole("button", { name: /get full song/i }))
     expect(onGetFullSong).toHaveBeenCalledWith("c1")
     unmount()
 
     render(
-      <PlayerProvider>
+      <AllProviders>
         <ClipCard clip={clip({ duration: 120 })} onGetFullSong={onGetFullSong} />
-      </PlayerProvider>
+      </AllProviders>
     )
     expect(
       screen.queryByRole("button", { name: /get full song/i })
@@ -231,5 +266,68 @@ describe("ClipCard", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
     await userEvent.click(screen.getByRole("menuitem", { name: "WAV" }))
     expect(onMenuAction).toHaveBeenCalledWith("download-wav", "c1")
+  })
+
+  // US-17.5: the ⋯ menu is now wired to real workflows, not just an observer.
+  it("navigates to the studio for Open in Studio", async () => {
+    renderCard()
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open in Studio" }))
+    expect(push).toHaveBeenCalledWith("/studio?song=c1")
+  })
+
+  it("opens a workflow modal for an editing action", async () => {
+    renderCard()
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Use as Inspiration" })
+    )
+    // Placeholder modal until the workflow ships — proves modal dispatch is wired.
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      /Use as Inspiration/i
+    )
+  })
+
+  it("downloads the clip's audio in the chosen format", async () => {
+    renderCard()
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "MP3" }))
+    expect(downloadClipAudio).toHaveBeenCalledWith("c1", "mp3", "tok", "Midnight")
+  })
+
+  it("confirms before deleting, then calls the proxy and drops the card", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ status: 204 } as Response))
+    vi.stubGlobal("fetch", fetchMock)
+    const onDeleted = vi.fn()
+    renderCard({ onDeleted })
+
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }))
+    // A confirmation dialog gates the delete — nothing is called yet.
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      /Delete this song\?/i
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }))
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/clips/c1",
+        expect.objectContaining({ method: "DELETE" })
+      )
+    )
+    expect(onDeleted).toHaveBeenCalledWith("c1")
+    vi.unstubAllGlobals()
+  })
+
+  it("locks Pro-only items and flags Beta for free-tier users", async () => {
+    renderCard({ isFreeTier: true })
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    expect(screen.getByText("Beta")).toBeInTheDocument()
+    // Open in Editor is Pro-gated: disabled so a click can never dispatch it.
+    expect(
+      screen.getByRole("menuitem", { name: /Open in Editor/i })
+    ).toHaveAttribute("aria-disabled", "true")
   })
 })

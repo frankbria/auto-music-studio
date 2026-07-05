@@ -9,12 +9,18 @@ export function ClipList({
   loading,
   emptyMessage = "No clips found.",
   onGetFullSong,
+  isFreeTier,
+  onDeleted,
 }: {
   clips: Clip[]
   loading: boolean
   emptyMessage?: string
   /** Open the Get Full Song wizard for an eligible clip (US-17.4). */
   onGetFullSong?: (id: string) => void
+  /** Locks Pro-only context-menu items for free-tier users (US-17.5). */
+  isFreeTier?: boolean
+  /** Drop a card after its clip is deleted from the context menu (US-17.5). */
+  onDeleted?: (id: string) => void
 }) {
   if (loading) {
     return (
@@ -37,7 +43,13 @@ export function ClipList({
   return (
     <div className="flex flex-col gap-2">
       {clips.map((clip) => (
-        <ClipCard key={clip.id} clip={clip} onGetFullSong={onGetFullSong} />
+        <ClipCard
+          key={clip.id}
+          clip={clip}
+          onGetFullSong={onGetFullSong}
+          isFreeTier={isFreeTier}
+          onDeleted={onDeleted}
+        />
       ))}
     </div>
   )

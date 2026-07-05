@@ -1,9 +1,30 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
+import type { ReactNode } from "react"
 
 import { ClipList } from "@/components/workspace/ClipList"
+import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider } from "@/contexts/player-context"
 import type { Clip } from "@/lib/workspace-clips"
+
+// Cards render a wired context menu (US-17.5), which needs auth + player context.
+const authValue = {
+  user: { id: "u1", email: "a@b.co" },
+  accessToken: "tok",
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  completeLogin: vi.fn(),
+  logout: vi.fn(),
+}
+function AllProviders({ children }: { children: ReactNode }) {
+  return (
+    <AuthContext.Provider value={authValue}>
+      <PlayerProvider>{children}</PlayerProvider>
+    </AuthContext.Provider>
+  )
+}
 
 function clip(id: string): Clip {
   return {
@@ -40,9 +61,9 @@ describe("ClipList", () => {
 
   it("renders a card per clip", () => {
     render(
-      <PlayerProvider>
+      <AllProviders>
         <ClipList clips={[clip("a"), clip("b")]} loading={false} />
-      </PlayerProvider>
+      </AllProviders>
     )
     expect(screen.getAllByTestId("clip-card")).toHaveLength(2)
   })
