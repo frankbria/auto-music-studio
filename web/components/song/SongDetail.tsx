@@ -112,7 +112,7 @@ function SongDetailContent({ clip }: { clip: Clip }) {
         </section>
       </main>
       <aside className="w-full shrink-0 lg:w-80">
-        <RelatedSongs clipId={clip.id} />
+        <RelatedSongs clipId={clip.id} isFreeTier={isFreeTier} />
       </aside>
       <SongActionModal
         clip={clip}

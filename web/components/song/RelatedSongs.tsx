@@ -8,7 +8,14 @@ import { useSimilarClips } from "@/hooks/use-similar-clips"
 // skeletons; an empty/failed result hides the panel rather than showing a dead
 // "no results" block — related songs are supplementary.
 
-export function RelatedSongs({ clipId }: { clipId: string }) {
+export function RelatedSongs({
+  clipId,
+  isFreeTier,
+}: {
+  clipId: string
+  /** Threaded to each card so Pro-gating matches the page's main action menu (US-17.5). */
+  isFreeTier?: boolean
+}) {
   const { clips, loading } = useSimilarClips(clipId)
 
   if (loading) {
@@ -28,7 +35,7 @@ export function RelatedSongs({ clipId }: { clipId: string }) {
       <h2 className="text-sm font-semibold">Related songs</h2>
       <div className="flex flex-col gap-2">
         {clips.map((clip) => (
-          <ClipCard key={clip.id} clip={clip} />
+          <ClipCard key={clip.id} clip={clip} isFreeTier={isFreeTier} />
         ))}
       </div>
     </section>

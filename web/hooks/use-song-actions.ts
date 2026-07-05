@@ -86,6 +86,9 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
       // US-17.6; until then the toggle is local feedback only.
       setOptimisticPublic(!isPublic)
     } else if (action === "delete") {
+      // Start the confirmation clean — actionError is shared with the download
+      // flow, so a prior download failure must not show up in this dialog.
+      setActionError(null)
       setConfirmingDelete(true)
     }
   }
@@ -100,8 +103,16 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
         headers: { authorization: `Bearer ${accessToken}` },
       })
       if (res.status !== 204) throw new Error(`delete failed (${res.status})`)
-      if (onDeleted) onDeleted(clip.id)
-      else router.push("/")
+      if (onDeleted) {
+        // List context: the card is dropped by an async refetch, so close the
+        // dialog now — otherwise it lingers with a live Delete button on an
+        // already-deleted clip and a second click fires a redundant DELETE.
+        onDeleted(clip.id)
+        setConfirmingDelete(false)
+      } else {
+        // Song-detail context: navigating home unmounts the dialog.
+        router.push("/")
+      }
     } catch {
       // Keep the dialog open so the user can retry or cancel.
       setActionError("Couldn't delete this song. Please try again.")
