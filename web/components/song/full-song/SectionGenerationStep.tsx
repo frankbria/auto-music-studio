@@ -7,7 +7,7 @@ import { Loading03Icon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
 import { useClipEdit } from "@/hooks/use-clip-edit"
 import { submitExtend } from "@/lib/editing"
-import type { Section } from "@/lib/song-structure"
+import { sectionExtendSeconds, type Section } from "@/lib/song-structure"
 
 // Step 2 of the wizard (US-17.4): generate one section by extending the current
 // cumulative clip. Reuses useClipEdit — the same epoch-guarded submit→poll→
@@ -59,9 +59,7 @@ export function SectionGenerationStep({
         submitExtend(
           cumulativeClipId,
           {
-            // Floor (not round) so the summed sections never push the cumulative
-            // clip past the target — and thus never past the backend's cap.
-            duration: `${Math.max(1, Math.floor(section.durationSeconds))}s`,
+            duration: `${sectionExtendSeconds(section)}s`,
             from_point: "end",
             style_override: styleOverride,
           },

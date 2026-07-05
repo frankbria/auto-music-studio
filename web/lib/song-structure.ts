@@ -92,6 +92,17 @@ export function planSections(
 }
 
 /**
+ * The whole-second duration actually requested when extending for a section.
+ * Floored (not rounded) so summed sections never push the cumulative clip past
+ * the backend's generation cap; every section still gets at least one second.
+ * Shared by the generation step (what to send) and the completion summary (what
+ * was assembled).
+ */
+export function sectionExtendSeconds(section: Section): number {
+  return Math.max(1, Math.floor(section.durationSeconds))
+}
+
+/**
  * A clip is eligible for the Full Song flow when it has a known duration under
  * MAX_SEED_DURATION — the flow grows a short seed into a full song, so it only
  * makes sense for short clips.

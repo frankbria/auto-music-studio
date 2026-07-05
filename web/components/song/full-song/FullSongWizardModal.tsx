@@ -13,7 +13,11 @@ import {
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/hooks/use-auth"
 import { useFullSongFlow } from "@/hooks/use-full-song-flow"
-import { DEFAULT_TARGET_DURATION, planSections } from "@/lib/song-structure"
+import {
+  DEFAULT_TARGET_DURATION,
+  planSections,
+  sectionExtendSeconds,
+} from "@/lib/song-structure"
 import type { Clip } from "@/lib/workspace-clips"
 
 import { CompletionStep } from "./CompletionStep"
@@ -132,7 +136,15 @@ export function FullSongWizardModal({
           <CompletionStep
             finalClipId={state.finalClipId}
             seedTitle={seedTitle}
-            totalDuration={state.targetDuration}
+            // The assembled length: the seed plus what each section actually
+            // requested (floored), not the raw target the user picked.
+            totalDuration={
+              seedDuration +
+              state.plannedSections.reduce(
+                (total, section) => total + sectionExtendSeconds(section),
+                0
+              )
+            }
             sectionsCompleted={flow.totalSections}
             creditsUsed={state.creditsUsed}
             onOpenSongDetail={() => {

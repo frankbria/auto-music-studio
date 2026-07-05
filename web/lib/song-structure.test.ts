@@ -7,6 +7,7 @@ import {
   MIN_SECTION_SECONDS,
   planSections,
   SECTION_CONFIG,
+  sectionExtendSeconds,
   SONG_STRUCTURE,
 } from "@/lib/song-structure"
 import { makeClip } from "@/test/clip-factory"
@@ -96,6 +97,26 @@ describe("planSections", () => {
     const sections = planSections(30, 210)
     expect(sections[0].styleHint).toBe(SECTION_CONFIG.intro[1])
     for (const s of sections) expect(s.styleHint.trim()).not.toBe("")
+  })
+})
+
+describe("sectionExtendSeconds", () => {
+  it("floors to whole seconds so summed sections never overshoot", () => {
+    expect(
+      sectionExtendSeconds({ name: "intro", durationSeconds: 15.6, styleHint: "x" })
+    ).toBe(15)
+  })
+
+  it("never returns less than one second", () => {
+    expect(
+      sectionExtendSeconds({ name: "outro", durationSeconds: 0.2, styleHint: "x" })
+    ).toBe(1)
+  })
+
+  it("keeps the assembled plan at or under (target - seed)", () => {
+    const sections = planSections(30, 210)
+    const assembled = sections.reduce((n, s) => n + sectionExtendSeconds(s), 0)
+    expect(assembled).toBeLessThanOrEqual(210 - 30)
   })
 })
 
