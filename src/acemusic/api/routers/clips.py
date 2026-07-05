@@ -2,12 +2,13 @@
 
 * ``GET    /clips``           → paginated list with search/filter/sort (US-9.4)
 * ``GET    /clips/{id}``      → clip metadata (404 if missing/not owned)
-* ``PATCH  /clips/{id}``      → rename (title is the only writable field)
+* ``PATCH  /clips/{id}``      → rename and/or publish (title, is_public; US-17.6)
 * ``DELETE /clips/{id}``      → remove the record and its stored audio
 * ``GET    /clips/{id}/audio``→ stream audio, byte ranges + ``?format=`` (US-9.3)
 
-CRUD is owner-scoped; only the audio endpoint honors ``is_public``. Access and
-filter rules live in :mod:`acemusic.api.services.clips`.
+CRUD is owner-scoped; the audio/stream endpoints honor ``is_public``, which the
+PATCH publish toggle sets (guarded — see :func:`acemusic.api.services.clips.update_clip_fields`).
+Access and filter rules live in :mod:`acemusic.api.services.clips`.
 """
 
 import asyncio
@@ -87,11 +88,16 @@ class ClipSearchParams(BaseModel):
 
 
 class ClipUpdate(BaseModel):
-    """Rename payload. ``extra="forbid"`` rejects any non-title field with 422."""
+    """Clip edit payload. ``extra="forbid"`` rejects any field other than the two
+    client-writable ones (title, is_public) with 422. Both are optional; an
+    omitted field is left unchanged."""
 
     model_config = ConfigDict(extra="forbid")
 
     title: Annotated[str, Field(min_length=1, max_length=CLIP_TITLE_MAX_LENGTH)] | None = None
+    # US-17.6 publish toggle. Going public is guarded (title + style tags) in the
+    # service; unpublishing is always allowed.
+    is_public: bool | None = None
 
     @field_validator("title")
     @classmethod
@@ -321,11 +327,9 @@ async def update_clip(
     body: ClipUpdate,
     current: CurrentUser = Depends(require_existing_user),
 ) -> ClipResponse:
-    """Rename the clip; an empty body is a no-op returning the current state."""
-    if body.title is None:
-        clip = await clip_service.get_owned_clip(clip_id, current.user_id)
-    else:
-        clip = await clip_service.update_clip_title(clip_id, current.user_id, body.title)
+    """Rename and/or publish the clip; an empty body is a no-op returning the
+    current state. Going public without a title or style tags is rejected 422."""
+    clip = await clip_service.update_clip_fields(clip_id, current.user_id, title=body.title, is_public=body.is_public)
     return ClipResponse.from_clip(clip)
 
 

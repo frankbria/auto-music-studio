@@ -1,6 +1,7 @@
 "use client"
 
 import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
+import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { RelatedSongs } from "@/components/song/RelatedSongs"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { SongActionsMenu } from "@/components/song/SongActionsMenu"
@@ -126,6 +127,10 @@ function SongDetailContent({ clip }: { clip: Clip }) {
         error={actions.actionError}
         onCancel={actions.cancelDelete}
         onConfirm={actions.confirmDelete}
+      />
+      <PublishGuardPrompt
+        guard={actions.publishGuard}
+        onClose={actions.dismissPublishGuard}
       />
     </div>
   )

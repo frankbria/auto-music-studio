@@ -132,15 +132,93 @@ describe("useSongActions", () => {
     act(() => result.current.dismissRemaster())
   })
 
-  it("toggles publish state optimistically", () => {
-    const { result } = setup()
-    expect(result.current.isPublic).toBe(false)
+  describe("publish toggle (US-17.6)", () => {
+    const ready = () => clip({ title: "My Song", style_tags: ["lofi"] })
 
-    act(() => result.current.handleAction("publish-toggle"))
-    expect(result.current.isPublic).toBe(true)
+    it("persists an optimistic publish when the clip is ready", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+          status: 200,
+        })
+      )
+      vi.stubGlobal("fetch", fetchMock)
+      const { result } = setup(ready())
+      expect(result.current.isPublic).toBe(false)
 
-    act(() => result.current.handleAction("publish-toggle"))
-    expect(result.current.isPublic).toBe(false)
+      await act(async () => {
+        result.current.handleAction("publish-toggle")
+      })
+      await waitFor(() => expect(result.current.isPublic).toBe(true))
+
+      const [url, opts] = fetchMock.mock.calls[0]
+      expect(url).toBe("/api/clips/c1")
+      expect(opts.method).toBe("PATCH")
+      expect(JSON.parse(opts.body as string)).toEqual({ is_public: true })
+      expect(result.current.publishGuard).toBeNull()
+    })
+
+    it("prompts (no request) when a style tag is missing", () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal("fetch", fetchMock)
+      const { result } = setup(clip({ title: "My Song", style_tags: [] }))
+
+      act(() => result.current.handleAction("publish-toggle"))
+      expect(result.current.publishGuard).toEqual({
+        missingTitle: false,
+        missingStyleTags: true,
+      })
+      expect(result.current.isPublic).toBe(false)
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      act(() => result.current.dismissPublishGuard())
+      expect(result.current.publishGuard).toBeNull()
+    })
+
+    it("flags a missing title in the guard", () => {
+      const { result } = setup(clip({ title: null, style_tags: ["lofi"] }))
+      act(() => result.current.handleAction("publish-toggle"))
+      expect(result.current.publishGuard).toEqual({
+        missingTitle: true,
+        missingStyleTags: false,
+      })
+    })
+
+    it("rolls back and surfaces an error when the request fails", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response("{}", { status: 500 }))
+      )
+      const { result } = setup(ready())
+
+      await act(async () => {
+        result.current.handleAction("publish-toggle")
+      })
+      await waitFor(() => expect(result.current.actionError).toBeTruthy())
+      // Optimistic publish reverted after the failure.
+      expect(result.current.isPublic).toBe(false)
+    })
+
+    it("unpublishes without guarding, even on an incomplete clip", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", is_public: false }), {
+          status: 200,
+        })
+      )
+      vi.stubGlobal("fetch", fetchMock)
+      const { result } = setup(
+        clip({ title: null, style_tags: [], is_public: true })
+      )
+      expect(result.current.isPublic).toBe(true)
+
+      await act(async () => {
+        result.current.handleAction("publish-toggle")
+      })
+      await waitFor(() => expect(result.current.isPublic).toBe(false))
+      expect(result.current.publishGuard).toBeNull()
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+        is_public: false,
+      })
+    })
   })
 
   it("asks for confirmation before deleting, then deletes and leaves", async () => {

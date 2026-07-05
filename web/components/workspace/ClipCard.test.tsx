@@ -174,16 +174,67 @@ describe("ClipCard", () => {
     expect(onShare).toHaveBeenCalledWith("c1")
   })
 
-  it("toggles publish and reports the next visibility", async () => {
+  it("publishes a ready clip, persisting via the PATCH proxy", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+          status: 200,
+        })
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
     const onPublishToggle = vi.fn()
     renderCard({ onPublishToggle })
+
     const publish = screen.getByRole("button", { name: /publish|make public/i })
     expect(publish).toHaveAttribute("aria-pressed", "false")
     await userEvent.click(publish)
+
     expect(onPublishToggle).toHaveBeenCalledWith("c1", true)
-    expect(
-      screen.getByRole("button", { name: /publish|make public|public/i })
-    ).toHaveAttribute("aria-pressed", "true")
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /unpublish|make private/i })
+      ).toHaveAttribute("aria-pressed", "true")
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/clips/c1",
+      expect.objectContaining({ method: "PATCH" })
+    )
+    vi.unstubAllGlobals()
+  })
+
+  it("prompts instead of publishing an incomplete clip", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ style_tags: [] })} />
+      </AllProviders>
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: /publish|make public/i })
+    )
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      /before publishing/i
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it("persists dislike via the player store", async () => {
+    renderCard()
+    const dislike = screen.getByRole("button", { name: /dislike/i })
+    expect(dislike).toHaveAttribute("aria-pressed", "false")
+    await userEvent.click(dislike)
+    expect(dislike).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("opens the share modal with a copyable link", async () => {
+    renderCard()
+    await userEvent.click(screen.getByRole("button", { name: /share/i }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent(/share/i)
+    expect(screen.getByLabelText("Share link")).toBeInTheDocument()
   })
 
   it("shows Get Full Song only for clips under 60s", async () => {

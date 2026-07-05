@@ -198,4 +198,24 @@ describe("playerReducer modes + likes", () => {
     s = playerReducer(s, { type: "like/toggle", id: "x" })
     expect(s.likedIds).not.toContain("x")
   })
+
+  it("toggles dislike state for a track id", () => {
+    let s = base()
+    s = playerReducer(s, { type: "dislike/toggle", id: "x" })
+    expect(s.dislikedIds).toContain("x")
+    s = playerReducer(s, { type: "dislike/toggle", id: "x" })
+    expect(s.dislikedIds).not.toContain("x")
+  })
+
+  it("like and dislike are mutually exclusive per clip", () => {
+    let s = base({ dislikedIds: ["x"] })
+    // Liking a disliked clip clears the dislike.
+    s = playerReducer(s, { type: "like/toggle", id: "x" })
+    expect(s.likedIds).toContain("x")
+    expect(s.dislikedIds).not.toContain("x")
+    // Disliking a liked clip clears the like.
+    s = playerReducer(s, { type: "dislike/toggle", id: "x" })
+    expect(s.dislikedIds).toContain("x")
+    expect(s.likedIds).not.toContain("x")
+  })
 })

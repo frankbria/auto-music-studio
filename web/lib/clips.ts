@@ -87,6 +87,48 @@ export async function downloadClipAudio(
   return true
 }
 
+/** Outcome of a publish-toggle attempt (US-17.6). */
+export type VisibilityResult =
+  | { ok: true; isPublic: boolean }
+  | { ok: false; guardFailed: boolean; message: string }
+
+/**
+ * Persist a clip's public/private state via `PATCH /api/clips/{id}` (US-17.6).
+ * A 422 is the backend publish guard (missing title/style tags) — surfaced as
+ * `guardFailed` so the caller can prompt for the missing fields instead of
+ * showing a generic error. All other failures return `guardFailed: false`.
+ */
+export async function updateClipVisibility(
+  id: string,
+  isPublic: boolean,
+  accessToken: string
+): Promise<VisibilityResult> {
+  let res: Response
+  try {
+    res = await fetch(`/api/clips/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ is_public: isPublic }),
+    })
+  } catch {
+    return {
+      ok: false,
+      guardFailed: false,
+      message: "Couldn't reach the server. Please try again.",
+    }
+  }
+  if (res.ok) return { ok: true, isPublic }
+  const detail = (await res.json().catch(() => ({}))) as { detail?: unknown }
+  const message =
+    typeof detail.detail === "string"
+      ? detail.detail
+      : "Couldn't update visibility. Please try again."
+  return { ok: false, guardFailed: res.status === 422, message }
+}
+
 /** Format a number of seconds as `m:ss` (negative/NaN → `0:00`). */
 export function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
