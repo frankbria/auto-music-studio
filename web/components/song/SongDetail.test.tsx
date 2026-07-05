@@ -332,6 +332,25 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(String(deletes[0][0])).toBe("/api/clips/c1")
   })
 
+  it("hides Get Full Song for a clip too long to seed one", async () => {
+    stubFetch({ clip: clip({ duration: 95 }) })
+    renderDetail()
+    await openActions()
+    expect(
+      screen.queryByRole("menuitem", { name: /get full song/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it("offers Get Full Song for a short clip and opens the wizard", async () => {
+    stubFetch({ clip: clip({ duration: 30 }) })
+    renderDetail()
+    await openActions()
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /get full song/i })
+    )
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Get Full Song")
+  })
+
   it("keeps the confirmation open with an error when delete fails", async () => {
     stubFetch({ clip: clip(), deleteStatus: 500 })
     renderDetail()

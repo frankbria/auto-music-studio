@@ -60,6 +60,19 @@ describe("SongActionsMenu", () => {
     }
   })
 
+  it("hides actions listed in hiddenActionIds (e.g. Get Full Song on a long clip)", async () => {
+    renderMenu({ hiddenActionIds: ["get-full-song"] })
+    await openMenu()
+    expect(screen.getByText("Cover")).toBeInTheDocument()
+    expect(screen.queryByText("Get Full Song")).not.toBeInTheDocument()
+  })
+
+  it("shows Get Full Song when it isn't hidden", async () => {
+    renderMenu()
+    await openMenu()
+    expect(screen.getByText("Get Full Song")).toBeInTheDocument()
+  })
+
   it("emits the action id when an item is selected", async () => {
     const { onAction } = renderMenu()
     await openMenu()

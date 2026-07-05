@@ -8,10 +8,13 @@ export function ClipList({
   clips,
   loading,
   emptyMessage = "No clips found.",
+  onGetFullSong,
 }: {
   clips: Clip[]
   loading: boolean
   emptyMessage?: string
+  /** Open the Get Full Song wizard for an eligible clip (US-17.4). */
+  onGetFullSong?: (id: string) => void
 }) {
   if (loading) {
     return (
@@ -34,7 +37,7 @@ export function ClipList({
   return (
     <div className="flex flex-col gap-2">
       {clips.map((clip) => (
-        <ClipCard key={clip.id} clip={clip} />
+        <ClipCard key={clip.id} clip={clip} onGetFullSong={onGetFullSong} />
       ))}
     </div>
   )

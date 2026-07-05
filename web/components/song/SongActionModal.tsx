@@ -11,6 +11,7 @@ import { AddVocalModal } from "@/components/song/modals/AddVocalModal"
 import { CoverModal } from "@/components/song/modals/CoverModal"
 import { CropModal } from "@/components/song/modals/CropModal"
 import { ExtendModal } from "@/components/song/modals/ExtendModal"
+import { FullSongWizardModal } from "@/components/song/full-song/FullSongWizardModal"
 import { MashupModal } from "@/components/song/modals/MashupModal"
 import { RemixModal } from "@/components/song/modals/RemixModal"
 import { ReplaceSectionModal } from "@/components/song/modals/ReplaceSectionModal"
@@ -42,6 +43,8 @@ export function SongActionModal({ clip, action, onClose }: SongActionModalProps)
       return <SpeedModal clip={clip} open onClose={onClose} />
     case "extend":
       return <ExtendModal clip={clip} open onClose={onClose} />
+    case "get-full-song":
+      return <FullSongWizardModal clip={clip} open onClose={onClose} />
     case "cover":
       return <CoverModal clip={clip} open onClose={onClose} />
     case "remix":

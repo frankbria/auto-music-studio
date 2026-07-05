@@ -13,6 +13,7 @@ import { useClip } from "@/hooks/use-clip"
 import { useRequireAuth } from "@/hooks/use-require-auth"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
+import { isFullSongEligible } from "@/lib/song-structure"
 import type { Clip } from "@/lib/workspace-clips"
 
 // Song-detail view (US-17.1). Holds all the data/auth logic so the App Router
@@ -83,6 +84,10 @@ function SongDetailContent({ clip }: { clip: Clip }) {
               isPublic={actions.isPublic}
               isFreeTier={isFreeTier}
               onAction={actions.handleAction}
+              // Full Song only makes sense for a short seed; hide it otherwise.
+              hiddenActionIds={
+                isFullSongEligible(clip) ? undefined : ["get-full-song"]
+              }
             />
           }
         />
