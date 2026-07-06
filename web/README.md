@@ -80,8 +80,9 @@ edit, remix, audio, export, and manage operation on a song in one place.
   (label, icon, workflow, Pro-gating) that both `SongActionsMenu` and
   `ClipCard`'s menus draw from, so the two surfaces can't drift apart.
 - `hooks/use-song-actions.ts` — dispatches a selected action to its workflow:
-  navigation (studio today; editor when US-18 ships), a workflow modal, a file
-  download, or an inline operation (publish toggle — optimistic with a
+  navigation (studio, or the waveform editor via `open-editor` — US-18.1), a
+  workflow modal, a file download, or an inline operation (publish toggle —
+  optimistic with a
   title/style-tag guard and rollback, persisted via `PATCH /clips/{id}`
   (US-17.6) — and delete with confirmation).
 - `hooks/use-subscription-tier.ts` — lightweight subscription-tier lookup used
