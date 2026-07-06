@@ -53,6 +53,16 @@ describe("EditToolbar", () => {
     expect(p.onGainPreview).toHaveBeenLastCalledWith(null) // preview cleared on close
   })
 
+  it("closing the gain popover without Apply reverts and commits nothing", () => {
+    const p = renderToolbar()
+    fireEvent.click(btn("Gain"))
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Gain in decibels" }), {
+      key: "Escape",
+    })
+    expect(p.onGainPreview).toHaveBeenLastCalledWith(null) // preview reverted
+    expect(p.onGainApply).not.toHaveBeenCalled() // nothing committed
+  })
+
   it("applies a crossfade at the default duration (100 ms)", () => {
     const p = renderToolbar()
     fireEvent.click(btn("Crossfade"))
