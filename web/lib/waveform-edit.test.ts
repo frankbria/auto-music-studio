@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest"
 
 import type { ClipAudio } from "@/lib/audio-peaks"
 import {
+  applyCrossfade,
+  applyFadeIn,
+  applyFadeOut,
+  applyGain,
+  applyNormalize,
+  applySilence,
+  dbToGain,
   insertRegion,
   normalizeRegion,
   removeRegion,
@@ -16,6 +23,17 @@ function ramp(): ClipAudio {
     mono: Float32Array.from({ length: 10 }, (_, i) => i),
     sampleRate: 10,
     duration: 1,
+  }
+}
+
+// A clip with explicit fractional samples (real audio lives in [-1, 1]); 10Hz so
+// 0.1s === 1 sample. For the amplitude ops, where the ramp's 0..9 values would
+// all clamp to 1.
+function clip(samples: number[]): ClipAudio {
+  return {
+    mono: Float32Array.from(samples),
+    sampleRate: 10,
+    duration: samples.length / 10,
   }
 }
 
@@ -73,9 +91,90 @@ describe("insertRegion", () => {
 describe("cut → paste round-trip", () => {
   it("copy then remove then insert relocates the region intact", () => {
     const src = ramp()
-    const clip = sliceRegion(src, 0.3, 0.6) // [3,4,5]
+    const region = sliceRegion(src, 0.3, 0.6) // [3,4,5]
     const cut = removeRegion(src, 0.3, 0.6) // [0,1,2,6,7,8,9]
-    const pasted = insertRegion(cut, cut.duration, clip) // append at new end
+    const pasted = insertRegion(cut, cut.duration, region) // append at new end
     expect([...pasted.mono]).toEqual([0, 1, 2, 6, 7, 8, 9, 3, 4, 5])
+  })
+})
+
+// --- Processing ops (US-18.3) --------------------------------------------
+
+const close = (out: ClipAudio, expected: number[]) => {
+  expect(out.mono.length).toBe(expected.length)
+  expected.forEach((v, i) => expect(out.mono[i]).toBeCloseTo(v, 5))
+}
+
+describe("dbToGain", () => {
+  it("maps dB to a linear factor", () => {
+    expect(dbToGain(0)).toBeCloseTo(1)
+    expect(dbToGain(6.0206)).toBeCloseTo(2) // +6 dB ≈ ×2
+    expect(dbToGain(-6.0206)).toBeCloseTo(0.5)
+  })
+})
+
+describe("applyFadeIn", () => {
+  it("ramps the region silence → full, hitting both endpoints exactly", () => {
+    const out = applyFadeIn(clip([1, 1, 1, 1]), 0, 0.4)
+    close(out, [0, 1 / 3, 2 / 3, 1])
+    expect(out.duration).toBeCloseTo(0.4) // length preserved
+  })
+})
+
+describe("applyFadeOut", () => {
+  it("ramps the region full → true silence at the end", () => {
+    close(applyFadeOut(clip([1, 1, 1, 1]), 0, 0.4), [1, 2 / 3, 1 / 3, 0])
+  })
+})
+
+describe("applyGain", () => {
+  it("scales only the selected region", () => {
+    // +6 dB ≈ ×2 over samples 1..2 (0.1s..0.3s).
+    close(applyGain(clip([0.1, 0.2, 0.3, 0.4]), 0.1, 0.3, 6.0206), [
+      0.1, 0.4, 0.6, 0.4,
+    ])
+  })
+  it("clamps to [-1, 1] so a boost can't exceed full scale", () => {
+    close(applyGain(clip([0.8, -0.8]), 0, 0.2, 6.0206), [1, -1])
+  })
+})
+
+describe("applySilence", () => {
+  it("zeroes the selection but keeps the length", () => {
+    const out = applySilence(clip([1, 1, 1, 1]), 0.1, 0.3)
+    close(out, [1, 0, 0, 1])
+    expect(out.duration).toBeCloseTo(0.4)
+  })
+})
+
+describe("applyNormalize", () => {
+  it("scales the region so its peak reaches the target (0 dBFS)", () => {
+    // peak 0.5 → ×2 to hit 1.0.
+    close(applyNormalize(clip([0.1, 0.2, 0.5, 0.25]), 0, 0.4, 0), [
+      0.2, 0.4, 1, 0.5,
+    ])
+  })
+  it("is a no-op on a silent region (no divide-by-zero)", () => {
+    close(applyNormalize(clip([0, 0, 0]), 0, 0.3, 0), [0, 0, 0])
+  })
+})
+
+describe("applyCrossfade", () => {
+  it("overlap-mixes the two windows and shortens by the duration", () => {
+    // pos 0.3s (sample 3), dur 0.2s (2 samples): pre [0.2,0.2] fades out, post
+    // [0.8,0.8] fades in; result loses 2 samples.
+    const out = applyCrossfade(clip([0.2, 0.2, 0.2, 0.8, 0.8, 0.8]), 0.3, 0.2)
+    expect(out.mono.length).toBe(4)
+    expect(out.duration).toBeCloseTo(0.4)
+    expect(out.mono[0]).toBeCloseTo(0.2) // untouched head
+    expect(out.mono[1]).toBeCloseTo(0.2) // start of fade (all pre)
+    expect(out.mono[2]).toBeCloseTo(0.7071, 3) // equal-power midpoint blend
+    expect(out.mono[3]).toBeCloseTo(0.8) // untouched tail
+  })
+  it("clamps the window to the clip and no-ops when it can't fit", () => {
+    // position at the very start: nothing before it, so a copy.
+    const src = clip([0.5, 0.5, 0.5])
+    const out = applyCrossfade(src, 0, 0.2)
+    close(out, [0.5, 0.5, 0.5])
   })
 })

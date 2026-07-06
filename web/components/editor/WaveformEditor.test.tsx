@@ -73,6 +73,11 @@ function editedDuration() {
     document.querySelector("[data-edited-duration]")?.getAttribute("data-edited-duration")
   )
 }
+function opCount() {
+  return Number(
+    document.querySelector("[data-op-count]")?.getAttribute("data-op-count")
+  )
+}
 function key(k: string, opts: { ctrlKey?: boolean } = {}) {
   fireEvent.keyDown(document.body, { key: k, ...opts })
 }
@@ -180,5 +185,59 @@ describe("WaveformEditor", () => {
     expect(
       document.querySelector("[data-clipboard-samples]")?.getAttribute("data-clipboard-samples")
     ).toBe("240")
+  })
+
+  // --- Processing toolbar (US-18.3) ----------------------------------------
+
+  it("Fade In records an op and keeps the duration, then clears the selection", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Fade In" }))
+    expect(opCount()).toBe(1)
+    expect(editedDuration()).toBeCloseTo(10) // amplitude-only, no length change
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+  })
+
+  it("Silence keeps the length (unlike Delete which removes samples)", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Silence" }))
+    expect(editedDuration()).toBeCloseTo(10)
+    expect(opCount()).toBe(1)
+  })
+
+  it("Normalize works on the whole clip when nothing is selected", () => {
+    renderEditor()
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Normalize" }))
+    expect(opCount()).toBe(1) // whole-clip fallback, no selection required
+  })
+
+  it("Gain applies to the selection and records an op", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Gain" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply gain" }))
+    expect(opCount()).toBe(1)
+    expect(editedDuration()).toBeCloseTo(10) // amplitude-only
+  })
+
+  it("Crossfade at the clip start no-ops and logs nothing (no-fit guard)", () => {
+    renderEditor()
+    // Playhead sits at 0 (no real audio in jsdom), so the window can't fit and
+    // the guard must skip the commit — no ghost op in the save seam.
+    fireEvent.click(screen.getByRole("button", { name: "Crossfade" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply crossfade" }))
+    expect(opCount()).toBe(0)
+    expect(editedDuration()).toBeCloseTo(10)
+  })
+
+  it("region tools are disabled until there is a selection", () => {
+    renderEditor()
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Gain" })).toBeDisabled()
+    dragSelect(2, 5)
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Gain" })).toBeEnabled()
   })
 })
