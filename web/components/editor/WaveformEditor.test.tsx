@@ -150,6 +150,27 @@ describe("WaveformEditor", () => {
     expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(3, 1)
   })
 
+  it("paste clamps the playhead into the edited timeline", () => {
+    renderEditor()
+    dragSelect(2, 5) // 3s clipboard
+    key("c", { ctrlKey: true })
+    // Move the playhead to 8s (clears the selection; the clipboard persists).
+    fireEvent.pointerDown(canvas(), { clientX: 8 * 80, pointerId: 1 })
+    fireEvent.pointerUp(canvas(), { clientX: 8 * 80, pointerId: 1 })
+    key("v", { ctrlKey: true }) // insert 3s at 8s → new duration 13, playhead 11
+    expect(editedDuration()).toBeCloseTo(13)
+    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(11, 1)
+  })
+
+  it("a drag that collapses back to its origin creates no selection", () => {
+    renderEditor()
+    fireEvent.pointerDown(canvas(), { clientX: 240, pointerId: 1 })
+    fireEvent.pointerMove(canvas(), { clientX: 300, pointerId: 1 }) // sweep out
+    fireEvent.pointerMove(canvas(), { clientX: 240, pointerId: 1 }) // back to origin
+    fireEvent.pointerUp(canvas(), { clientX: 240, pointerId: 1 })
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+  })
+
   it("Ctrl+X copies then removes (clipboard filled, audio shortened)", () => {
     renderEditor()
     dragSelect(2, 5)

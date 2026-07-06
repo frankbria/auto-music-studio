@@ -121,19 +121,26 @@ export function WaveformEditor({
   // --- Selection + clipboard (US-18.2) -------------------------------------
   const clampSec = (sec: number) => Math.max(0, Math.min(duration, sec))
 
+  // A clamped, ordered region — or null when it collapses to zero width, so a
+  // drag-back-to-origin or a handle dropped on its twin never leaves a 0-length
+  // selection that would log no-op cut/delete operations.
+  const regionOrNull = (a: number, b: number): Region | null => {
+    const r = normalizeRegion(clampSec(a), clampSec(b))
+    return r.endSec > r.startSec ? r : null
+  }
+
   // A drag on the canvas sweeps a new selection.
-  const select = (a: number, b: number) =>
-    setSelection(normalizeRegion(clampSec(a), clampSec(b)))
+  const select = (a: number, b: number) => setSelection(regionOrNull(a, b))
 
   // A handle drag moves one edge; re-normalize so start ≤ end if they cross.
   const adjustEdge = (edge: "start" | "end", sec: number) =>
-    setSelection((cur) => {
-      if (!cur) return cur
-      const s = clampSec(sec)
-      return edge === "start"
-        ? normalizeRegion(s, cur.endSec)
-        : normalizeRegion(cur.startSec, s)
-    })
+    setSelection((cur) =>
+      cur === null
+        ? cur
+        : edge === "start"
+          ? regionOrNull(sec, cur.endSec)
+          : regionOrNull(cur.startSec, sec)
+    )
 
   // A bare click (seek) clears the selection, like clicking off it.
   const seekAndClear = (sec: number) => {
@@ -161,12 +168,20 @@ export function WaveformEditor({
 
   const paste = () => {
     if (!clipboard || clipboard.length === 0) return
-    const atSec = playheadSec
+    // Clamp into the *current* (possibly already-edited) timeline so the insert
+    // point, the logged op, and the seek all agree — playheadSec can sit past
+    // the end after a delete shortened the clip.
+    const atSec = clampSec(playheadSec)
     const durationSec = clipboard.length / edited.sampleRate
-    setEdited(insertRegion(edited, atSec, clipboard))
+    const next = insertRegion(edited, atSec, clipboard)
+    setEdited(next)
     setOperations((ops) => [...ops, { kind: "paste", atSec, durationSec }])
     setSelection(null)
-    seek(atSec + durationSec) // move playhead to the end of the pasted region
+    // Move the playhead to the end of the pasted region, in the NEW timeline.
+    dispatch({
+      type: "seek/request",
+      time: Math.min(next.duration, atSec + durationSec),
+    })
   }
 
   useEditorShortcuts({
@@ -227,6 +242,7 @@ export function WaveformEditor({
                 viewport={vp}
                 width={width}
                 height={CANVAS_HEIGHT}
+                duration={duration}
                 onAdjust={adjustEdge}
               />
             </div>

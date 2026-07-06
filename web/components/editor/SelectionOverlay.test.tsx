@@ -16,6 +16,7 @@ function setup(selection: { startSec: number; endSec: number } | null) {
       viewport={viewport}
       width={800}
       height={160}
+      duration={10}
       onAdjust={onAdjust}
     />
   )
@@ -43,5 +44,36 @@ describe("SelectionOverlay", () => {
     fireEvent.pointerMove(startHandle, { clientX: 240, pointerId: 1 })
     // xToSec(240) = 0 + 240/80 = 3s.
     expect(onAdjust).toHaveBeenCalledWith("start", 3)
+  })
+
+  it("nudges an edge by a fine step with Arrow keys", () => {
+    const { onAdjust } = setup({ startSec: 2, endSec: 5 })
+    const startHandle = screen.getByRole("slider", { name: "Selection start handle" })
+    fireEvent.keyDown(startHandle, { key: "ArrowRight" })
+    expect(onAdjust).toHaveBeenLastCalledWith("start", expect.closeTo(2.05))
+    fireEvent.keyDown(startHandle, { key: "ArrowLeft" })
+    expect(onAdjust).toHaveBeenLastCalledWith("start", expect.closeTo(1.95))
+  })
+
+  it("keeps both handles mounted when an edge scrolls out of view", () => {
+    const onAdjust = vi.fn()
+    render(
+      <SelectionOverlay
+        selection={{ startSec: 2, endSec: 5 }}
+        viewport={{ pxPerSec: 80, scrollSec: 3 }} // start at x = -80 (off-left)
+        width={800}
+        height={160}
+        duration={10}
+        onAdjust={onAdjust}
+      />
+    )
+    // The start handle must stay mounted so an in-progress drag keeps its
+    // pointer capture instead of freezing at the edge.
+    expect(
+      screen.getByRole("slider", { name: "Selection start handle" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("slider", { name: "Selection end handle" })
+    ).toBeInTheDocument()
   })
 })
