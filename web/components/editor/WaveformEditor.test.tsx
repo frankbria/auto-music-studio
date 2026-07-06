@@ -30,8 +30,10 @@ function fakeClip(): Clip {
   } as Clip
 }
 
+// 800 samples @ 80Hz = exactly 10s, so removeRegion/insertRegion recompute a
+// duration consistent with the fixture (mono.length / sampleRate).
 function fakeAudio(): ClipAudio {
-  return { mono: new Float32Array(800), sampleRate: 8000, duration: 10 }
+  return { mono: new Float32Array(800), sampleRate: 80, duration: 10 }
 }
 
 /** Surfaces player state so tests can assert the editor drives it. */
@@ -59,6 +61,25 @@ function canvas() {
 }
 function pxPerSec() {
   return Number(canvas().getAttribute("data-px-per-sec"))
+}
+/** At fit (80 px/sec, scrollSec 0) drag from `fromSec` to `toSec` to select. */
+function dragSelect(fromSec: number, toSec: number) {
+  fireEvent.pointerDown(canvas(), { clientX: fromSec * 80, pointerId: 1 })
+  fireEvent.pointerMove(canvas(), { clientX: toSec * 80, pointerId: 1 })
+  fireEvent.pointerUp(canvas(), { clientX: toSec * 80, pointerId: 1 })
+}
+function editedDuration() {
+  return Number(
+    document.querySelector("[data-edited-duration]")?.getAttribute("data-edited-duration")
+  )
+}
+function opCount() {
+  return Number(
+    document.querySelector("[data-op-count]")?.getAttribute("data-op-count")
+  )
+}
+function key(k: string, opts: { ctrlKey?: boolean } = {}) {
+  fireEvent.keyDown(document.body, { key: k, ...opts })
 }
 
 describe("WaveformEditor", () => {
@@ -105,5 +126,118 @@ describe("WaveformEditor", () => {
     expect(
       screen.getByRole("slider", { name: "Scroll waveform" })
     ).toBeInTheDocument()
+  })
+
+  it("shows the selection info and overlay after a click-and-drag", () => {
+    renderEditor()
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    dragSelect(2, 5)
+    expect(screen.getByTestId("selection-overlay")).toBeInTheDocument()
+    expect(screen.getByTestId("selection-info")).toHaveTextContent("Duration 0:03.000")
+  })
+
+  it("Delete removes the selected region and shortens the audio", () => {
+    renderEditor()
+    expect(editedDuration()).toBeCloseTo(10)
+    dragSelect(2, 5) // 3s region
+    key("Delete")
+    expect(editedDuration()).toBeCloseTo(7)
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument() // cleared
+  })
+
+  it("Ctrl+C then Ctrl+V duplicates the region at the playhead (lengthens audio)", () => {
+    renderEditor()
+    dragSelect(2, 5) // 3s region
+    key("c", { ctrlKey: true })
+    key("v", { ctrlKey: true }) // playhead at 0 → inserts 3s at the start
+    expect(editedDuration()).toBeCloseTo(13)
+    // seek moved the playhead to the end of the pasted region (3s).
+    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(3, 1)
+  })
+
+  it("paste clamps the playhead into the edited timeline", () => {
+    renderEditor()
+    dragSelect(2, 5) // 3s clipboard
+    key("c", { ctrlKey: true })
+    // Move the playhead to 8s (clears the selection; the clipboard persists).
+    fireEvent.pointerDown(canvas(), { clientX: 8 * 80, pointerId: 1 })
+    fireEvent.pointerUp(canvas(), { clientX: 8 * 80, pointerId: 1 })
+    key("v", { ctrlKey: true }) // insert 3s at 8s → new duration 13, playhead 11
+    expect(editedDuration()).toBeCloseTo(13)
+    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(11, 1)
+  })
+
+  it("a drag that collapses back to its origin creates no selection", () => {
+    renderEditor()
+    fireEvent.pointerDown(canvas(), { clientX: 240, pointerId: 1 })
+    fireEvent.pointerMove(canvas(), { clientX: 300, pointerId: 1 }) // sweep out
+    fireEvent.pointerMove(canvas(), { clientX: 240, pointerId: 1 }) // back to origin
+    fireEvent.pointerUp(canvas(), { clientX: 240, pointerId: 1 })
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+  })
+
+  it("Ctrl+X copies then removes (clipboard filled, audio shortened)", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    key("x", { ctrlKey: true })
+    expect(editedDuration()).toBeCloseTo(7)
+    // 3s @ 80Hz = 240 samples now on the clipboard, ready to paste.
+    expect(
+      document.querySelector("[data-clipboard-samples]")?.getAttribute("data-clipboard-samples")
+    ).toBe("240")
+  })
+
+  // --- Processing toolbar (US-18.3) ----------------------------------------
+
+  it("Fade In records an op and keeps the duration, then clears the selection", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Fade In" }))
+    expect(opCount()).toBe(1)
+    expect(editedDuration()).toBeCloseTo(10) // amplitude-only, no length change
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+  })
+
+  it("Silence keeps the length (unlike Delete which removes samples)", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Silence" }))
+    expect(editedDuration()).toBeCloseTo(10)
+    expect(opCount()).toBe(1)
+  })
+
+  it("Normalize works on the whole clip when nothing is selected", () => {
+    renderEditor()
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Normalize" }))
+    expect(opCount()).toBe(1) // whole-clip fallback, no selection required
+  })
+
+  it("Gain applies to the selection and records an op", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Gain" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply gain" }))
+    expect(opCount()).toBe(1)
+    expect(editedDuration()).toBeCloseTo(10) // amplitude-only
+  })
+
+  it("Crossfade at the clip start no-ops and logs nothing (no-fit guard)", () => {
+    renderEditor()
+    // Playhead sits at 0 (no real audio in jsdom), so the window can't fit and
+    // the guard must skip the commit — no ghost op in the save seam.
+    fireEvent.click(screen.getByRole("button", { name: "Crossfade" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply crossfade" }))
+    expect(opCount()).toBe(0)
+    expect(editedDuration()).toBeCloseTo(10)
+  })
+
+  it("region tools are disabled until there is a selection", () => {
+    renderEditor()
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Gain" })).toBeDisabled()
+    dragSelect(2, 5)
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Gain" })).toBeEnabled()
   })
 })
