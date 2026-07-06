@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
+import { EditToolbar } from "@/components/editor/EditToolbar"
 import { SelectionInfo } from "@/components/editor/SelectionInfo"
 import { SelectionOverlay } from "@/components/editor/SelectionOverlay"
 import { TimeRuler } from "@/components/editor/TimeRuler"
@@ -13,6 +14,12 @@ import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import type { ClipAudio } from "@/lib/audio-peaks"
 import { trackFromClip } from "@/lib/clips"
 import {
+  applyCrossfade,
+  applyFadeIn,
+  applyFadeOut,
+  applyGain,
+  applyNormalize,
+  applySilence,
   insertRegion,
   normalizeRegion,
   removeRegion,
@@ -61,6 +68,9 @@ export function WaveformEditor({
   const [selection, setSelection] = useState<Region | null>(null)
   const [clipboard, setClipboard] = useState<Float32Array | null>(null)
   const [operations, setOperations] = useState<EditOperation[]>([])
+  // Pending gain (dB) while the Gain popover is open — drives a live, throwaway
+  // waveform preview; null when nothing is being previewed. (US-18.3)
+  const [gainPreview, setGainPreview] = useState<number | null>(null)
 
   const duration = edited.duration
 
@@ -191,6 +201,72 @@ export function WaveformEditor({
     onDelete: () => removeSelected("delete"),
   })
 
+  // --- Processing ops (US-18.3) --------------------------------------------
+  // Commit an amplitude transform: swap in the new audio, log the intent for the
+  // US-18.4 save seam, and clear the selection (the edit is now baked in).
+  const commit = (next: ClipAudio, op: EditOperation) => {
+    setEdited(next)
+    setOperations((ops) => [...ops, op])
+    setSelection(null)
+  }
+
+  const fadeIn = () => {
+    if (!selection) return
+    const { startSec, endSec } = selection
+    commit(applyFadeIn(edited, startSec, endSec), { kind: "fade-in", startSec, endSec })
+  }
+  const fadeOut = () => {
+    if (!selection) return
+    const { startSec, endSec } = selection
+    commit(applyFadeOut(edited, startSec, endSec), { kind: "fade-out", startSec, endSec })
+  }
+  const silence = () => {
+    if (!selection) return
+    const { startSec, endSec } = selection
+    commit(applySilence(edited, startSec, endSec), { kind: "silence", startSec, endSec })
+  }
+  const gain = (gainDb: number) => {
+    if (!selection) return
+    const { startSec, endSec } = selection
+    commit(applyGain(edited, startSec, endSec, gainDb), {
+      kind: "gain",
+      startSec,
+      endSec,
+      gainDb,
+    })
+  }
+  // Normalize the selection, or the whole clip when nothing is selected.
+  const normalize = () => {
+    const startSec = selection?.startSec ?? 0
+    const endSec = selection?.endSec ?? duration
+    commit(applyNormalize(edited, startSec, endSec, 0), {
+      kind: "normalize",
+      startSec,
+      endSec,
+      targetDb: 0,
+    })
+  }
+  // Crossfade at the current playhead (clamped inside the transform). Skip the
+  // commit when the window can't fit (playhead at the very start/end), so a
+  // no-op never logs a ghost op into the US-18.4 save seam.
+  const crossfade = (durationSec: number) => {
+    const next = applyCrossfade(edited, playheadSec, durationSec)
+    if (next.mono.length === edited.mono.length) return
+    commit(next, { kind: "crossfade", positionSec: playheadSec, durationSec })
+  }
+
+  // The audio shown on the canvas: while a gain preview is live, apply it to the
+  // selection so the pending change is visible before Apply. Memoized so the
+  // buffer copy only runs when the preview or audio actually changes — not on
+  // every unrelated re-render while the Gain popover is open.
+  const shown = useMemo(
+    () =>
+      gainPreview !== null && selection
+        ? applyGain(edited, selection.startSec, selection.endSec, gainPreview)
+        : edited,
+    [edited, selection, gainPreview]
+  )
+
   const atMin = !vp || vp.pxPerSec <= fitPx + 1e-6
   const atMax = !!vp && vp.pxPerSec >= MAX_PX_PER_SEC - 1e-6
 
@@ -218,6 +294,17 @@ export function WaveformEditor({
         />
       </div>
 
+      <EditToolbar
+        hasSelection={selection !== null}
+        onFadeIn={fadeIn}
+        onFadeOut={fadeOut}
+        onSilence={silence}
+        onNormalize={normalize}
+        onGainPreview={setGainPreview}
+        onGainApply={gain}
+        onCrossfade={crossfade}
+      />
+
       <div
         ref={containerRef}
         className="overflow-hidden rounded-lg border border-border bg-card"
@@ -227,7 +314,7 @@ export function WaveformEditor({
             <TimeRuler viewport={vp} width={width} duration={duration} />
             <div className="relative">
               <WaveformCanvas
-                audio={edited}
+                audio={shown}
                 viewport={vp}
                 width={width}
                 height={CANVAS_HEIGHT}
