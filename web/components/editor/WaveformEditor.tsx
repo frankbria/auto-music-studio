@@ -203,7 +203,9 @@ export function WaveformEditor({
 
   // --- Processing ops (US-18.3) --------------------------------------------
   // Commit an amplitude transform: swap in the new audio, log the intent for the
-  // US-18.4 save seam, and clear the selection (the edit is now baked in).
+  // US-18.4 save seam, and clear the selection. The clear is deliberate for every
+  // op — the buffer changed, so the old selection's coordinates are stale (this
+  // includes crossfade, which is playhead-based and ignores the selection).
   const commit = (next: ClipAudio, op: EditOperation) => {
     setEdited(next)
     setOperations((ops) => [...ops, op])

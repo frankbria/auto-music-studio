@@ -213,6 +213,25 @@ describe("WaveformEditor", () => {
     expect(opCount()).toBe(1) // whole-clip fallback, no selection required
   })
 
+  it("Gain applies to the selection and records an op", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    fireEvent.click(screen.getByRole("button", { name: "Gain" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply gain" }))
+    expect(opCount()).toBe(1)
+    expect(editedDuration()).toBeCloseTo(10) // amplitude-only
+  })
+
+  it("Crossfade at the clip start no-ops and logs nothing (no-fit guard)", () => {
+    renderEditor()
+    // Playhead sits at 0 (no real audio in jsdom), so the window can't fit and
+    // the guard must skip the commit — no ghost op in the save seam.
+    fireEvent.click(screen.getByRole("button", { name: "Crossfade" }))
+    fireEvent.click(screen.getByRole("button", { name: "Apply crossfade" }))
+    expect(opCount()).toBe(0)
+    expect(editedDuration()).toBeCloseTo(10)
+  })
+
   it("region tools are disabled until there is a selection", () => {
     renderEditor()
     expect(screen.getByRole("button", { name: "Fade In" })).toBeDisabled()

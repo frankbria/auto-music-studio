@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -49,11 +49,32 @@ export function EditToolbar({
   const [gainOpen, setGainOpen] = useState(false)
   const [crossfadeOpen, setCrossfadeOpen] = useState(false)
 
+  // The preview recompute upstream copies the whole mono buffer, but the slider
+  // fires per pointer-move. Coalesce those into one rAF so a drag triggers at
+  // most one recompute per frame — the dB readout still updates instantly off
+  // local state. Open/Apply/close report their preview values directly (below).
+  const previewRaf = useRef<number | null>(null)
+  const schedulePreview = (gainDb: number) => {
+    if (previewRaf.current !== null) cancelAnimationFrame(previewRaf.current)
+    previewRaf.current = requestAnimationFrame(() => {
+      previewRaf.current = null
+      onGainPreview(gainDb)
+    })
+  }
+  const cancelPreview = () => {
+    if (previewRaf.current !== null) {
+      cancelAnimationFrame(previewRaf.current)
+      previewRaf.current = null
+    }
+  }
+  useEffect(() => cancelPreview, [])
+
   // Reset + drop any live preview whenever the gain popover closes; commit only
   // happens through Apply. Opening starts from a clean 0 dB. Controlled so Apply
   // can close it (else a second Apply would fire on a now-cleared selection).
   const onGainOpenChange = (open: boolean) => {
     setGainOpen(open)
+    cancelPreview()
     if (open) {
       setGainDb(0)
       onGainPreview(0)
@@ -122,7 +143,7 @@ export function EditToolbar({
             value={[gainDb]}
             onValueChange={([v]) => {
               setGainDb(v)
-              onGainPreview(v)
+              schedulePreview(v)
             }}
           />
           <Button
@@ -131,6 +152,7 @@ export function EditToolbar({
             className="w-full"
             aria-label="Apply gain"
             onClick={() => {
+              cancelPreview()
               onGainApply(gainDb)
               onGainPreview(null) // controlled close won't fire onOpenChange
               setGainOpen(false)

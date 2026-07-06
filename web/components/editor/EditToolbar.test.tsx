@@ -59,4 +59,26 @@ describe("EditToolbar", () => {
     fireEvent.click(btn("Apply crossfade"))
     expect(p.onCrossfade).toHaveBeenCalledWith(0.1)
   })
+
+  it("carries a non-default gain slider value through to Apply", () => {
+    const p = renderToolbar()
+    fireEvent.click(btn("Gain"))
+    const slider = screen.getByRole("slider", { name: "Gain in decibels" })
+    slider.focus()
+    fireEvent.keyDown(slider, { key: "ArrowRight" }) // +0.5 dB step
+    fireEvent.click(btn("Apply gain"))
+    expect(p.onGainApply).toHaveBeenCalledWith(0.5)
+  })
+
+  it("carries a non-default crossfade slider value through to Apply", () => {
+    const p = renderToolbar()
+    fireEvent.click(btn("Crossfade"))
+    const slider = screen.getByRole("slider", {
+      name: "Crossfade duration in milliseconds",
+    })
+    slider.focus()
+    fireEvent.keyDown(slider, { key: "ArrowRight" }) // +10 ms step → 110 ms
+    fireEvent.click(btn("Apply crossfade"))
+    expect(p.onCrossfade).toHaveBeenCalledWith(0.11)
+  })
 })

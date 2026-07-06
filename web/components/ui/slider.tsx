@@ -7,6 +7,10 @@ import { cn } from "@/lib/utils"
 
 function Slider({
   className,
+  // Forward the label to the Thumb — it's the element with role="slider", so a
+  // label on Root alone never reaches assistive tech (or getByRole name lookups).
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledby,
   ...props
 }: React.ComponentProps<typeof SliderPrimitive.Root>) {
   return (
@@ -29,6 +33,8 @@ function Slider({
       </SliderPrimitive.Track>
       <SliderPrimitive.Thumb
         data-slot="slider-thumb"
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledby}
         className="block size-4 shrink-0 rounded-full border border-primary bg-background shadow-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none"
       />
     </SliderPrimitive.Root>
