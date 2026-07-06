@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 import type { ClipAudio } from "@/lib/audio-peaks"
 import { columnPeaks } from "@/lib/audio-peaks"
@@ -53,6 +53,19 @@ export function WaveformCanvas({
     cbRef.current = { onSeek, onZoom, onScrollSec }
   }, [onSeek, onZoom, onScrollSec])
 
+  // Re-bucket peaks only when the audio or the visible window changes — NOT on
+  // every playhead tick (~4Hz during playback), which would rescan millions of
+  // samples just to move the cursor line. The draw effect below reruns each
+  // tick, but only to repaint the (cheap) bars + cursor from this cached array.
+  const peaks = useMemo(() => {
+    if (width <= 0) return new Float32Array(0)
+    const columns = Math.max(1, Math.floor(width))
+    const visibleSec = width / viewport.pxPerSec
+    const startSample = viewport.scrollSec * audio.sampleRate
+    const endSample = (viewport.scrollSec + visibleSec) * audio.sampleRate
+    return columnPeaks(audio.mono, startSample, endSample, columns)
+  }, [audio, viewport, width])
+
   // --- Drawing -------------------------------------------------------------
   useEffect(() => {
     const canvas = canvasRef.current
@@ -71,12 +84,7 @@ export function WaveformCanvas({
     const unplayed =
       styles.getPropertyValue("--muted-foreground").trim() || "#9ca3af"
 
-    const columns = Math.max(1, Math.floor(width))
-    const visibleSec = width / viewport.pxPerSec
-    const startSample = viewport.scrollSec * audio.sampleRate
-    const endSample = (viewport.scrollSec + visibleSec) * audio.sampleRate
-    const peaks = columnPeaks(audio.mono, startSample, endSample, columns)
-
+    const columns = peaks.length
     const mid = height / 2
     const playheadX = secToX(playheadSec, viewport)
     for (let x = 0; x < columns; x++) {
@@ -92,7 +100,7 @@ export function WaveformCanvas({
       ctx.fillStyle = played
       ctx.fillRect(Math.floor(playheadX), 0, 1.5, height)
     }
-  }, [audio, viewport, width, height, playheadSec])
+  }, [peaks, viewport, width, height, playheadSec])
 
   // --- Pointer input (click / drag / pinch) --------------------------------
   const pointers = useRef(new Map<number, number>()) // pointerId → clientX
