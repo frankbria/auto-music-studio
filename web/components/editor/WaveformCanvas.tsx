@@ -11,9 +11,11 @@ import { secToX, xToSec, type Viewport } from "@/lib/waveform-viewport"
 // window each render, so it stays accurate from full-clip overview to
 // sample-level zoom without a giant off-screen canvas. Input maps to callbacks
 // the editor turns into viewport/seek changes:
-//   click        → seek        drag           → pan
+//   click        → seek        drag           → select a region (US-18.2)
 //   Ctrl+wheel   → zoom        wheel/trackpad → horizontal scroll
 //   two-finger pinch → zoom (touch)
+// Panning moved to the wheel/trackpad + scrollbar when US-18.2 made this an
+// editor: plain drag now sweeps out a selection (DAW convention).
 // Latest props are read through refs so the non-passive wheel listener (needed
 // to preventDefault) attaches once instead of on every zoom tick.
 
@@ -29,6 +31,7 @@ export function WaveformCanvas({
   onSeek,
   onZoom,
   onScrollSec,
+  onSelect,
 }: {
   audio: ClipAudio
   viewport: Viewport
@@ -38,6 +41,8 @@ export function WaveformCanvas({
   onSeek: (sec: number) => void
   onZoom: (nextPx: number, anchorX: number) => void
   onScrollSec: (sec: number) => void
+  /** A drag swept a region: both times in seconds (start may be > end mid-drag). */
+  onSelect: (startSec: number, endSec: number) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -45,13 +50,13 @@ export function WaveformCanvas({
   // updated in effects (never during render) so the native wheel listener can
   // attach once yet always read fresh state.
   const vpRef = useRef(viewport)
-  const cbRef = useRef({ onSeek, onZoom, onScrollSec })
+  const cbRef = useRef({ onSeek, onZoom, onScrollSec, onSelect })
   useEffect(() => {
     vpRef.current = viewport
   }, [viewport])
   useEffect(() => {
-    cbRef.current = { onSeek, onZoom, onScrollSec }
-  }, [onSeek, onZoom, onScrollSec])
+    cbRef.current = { onSeek, onZoom, onScrollSec, onSelect }
+  }, [onSeek, onZoom, onScrollSec, onSelect])
 
   // Re-bucket peaks only when the audio or the visible window changes — NOT on
   // every playhead tick (~4Hz during playback), which would rescan millions of
@@ -104,7 +109,7 @@ export function WaveformCanvas({
 
   // --- Pointer input (click / drag / pinch) --------------------------------
   const pointers = useRef(new Map<number, number>()) // pointerId → clientX
-  const drag = useRef<{ startX: number; startScroll: number; moved: boolean } | null>(
+  const drag = useRef<{ startX: number; startSec: number; moved: boolean } | null>(
     null
   )
   const pinchDist = useRef<number | null>(null)
@@ -120,7 +125,7 @@ export function WaveformCanvas({
     if (pointers.current.size === 1) {
       drag.current = {
         startX: e.clientX,
-        startScroll: vpRef.current.scrollSec,
+        startSec: xToSec(rectX(e.clientX), vpRef.current),
         moved: false,
       }
     } else {
@@ -149,7 +154,8 @@ export function WaveformCanvas({
     const dx = e.clientX - d.startX
     if (Math.abs(dx) > DRAG_THRESHOLD_PX) d.moved = true
     if (d.moved) {
-      cbRef.current.onScrollSec(d.startScroll - dx / vpRef.current.pxPerSec)
+      // Sweep out a selection from where the drag began to the pointer now.
+      cbRef.current.onSelect(d.startSec, xToSec(rectX(e.clientX), vpRef.current))
     }
   }
 
@@ -197,7 +203,7 @@ export function WaveformCanvas({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       style={{ width, height }}
-      className="w-full touch-none cursor-pointer select-none"
+      className="w-full touch-none cursor-crosshair select-none"
     />
   )
 }

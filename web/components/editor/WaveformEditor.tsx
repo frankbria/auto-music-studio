@@ -2,13 +2,24 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
+import { SelectionInfo } from "@/components/editor/SelectionInfo"
+import { SelectionOverlay } from "@/components/editor/SelectionOverlay"
 import { TimeRuler } from "@/components/editor/TimeRuler"
 import { WaveformCanvas } from "@/components/editor/WaveformCanvas"
 import { WaveformScrollbar } from "@/components/editor/WaveformScrollbar"
 import { ZoomControls } from "@/components/editor/ZoomControls"
 import { usePlayer } from "@/contexts/player-context"
+import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import type { ClipAudio } from "@/lib/audio-peaks"
 import { trackFromClip } from "@/lib/clips"
+import {
+  insertRegion,
+  normalizeRegion,
+  removeRegion,
+  sliceRegion,
+  type EditOperation,
+  type Region,
+} from "@/lib/waveform-edit"
 import {
   MAX_PX_PER_SEC,
   clampPxPerSec,
@@ -19,15 +30,18 @@ import {
 } from "@/lib/waveform-viewport"
 import type { Clip } from "@/lib/workspace-clips"
 
-// The waveform editor panel (US-18.1). Owns the viewport (zoom + scroll) and
-// wires the canvas / ruler / zoom controls / scrollbar together. Playback state
-// is borrowed from the shared player store — entering the editor loads the clip
-// as the current track so the playhead follows real playback and click-to-seek
-// drives the same <audio> element the Playbar uses (no second audio engine).
+// The waveform editor panel (US-18.1 + US-18.2). Owns the viewport (zoom +
+// scroll) and — from US-18.2 — the region selection, the in-app clipboard, and
+// the edited audio. Playback state is borrowed from the shared player store.
+//
+// Edits (cut / delete / paste) splice the decoded samples directly, so the
+// canvas renders the *real* edited waveform with no operation-stack replay. They
+// are non-destructive: the original `audio` prop is untouched; the edit lives in
+// `edited` state and the `operations` log is the handoff seam for save (US-18.4).
 //
 // The stored viewport is the user's *intent* (absolute px/sec + scrollSec); the
 // effective viewport is derived + clamped against the measured width each
-// render, so a resize self-corrects without an effect or cascading setState.
+// render, so a resize — or an edit that changes the duration — self-corrects.
 
 const CANVAS_HEIGHT = 160
 const BUTTON_ZOOM_FACTOR = 1.6
@@ -40,7 +54,15 @@ export function WaveformEditor({
   audio: ClipAudio
 }) {
   const { state, dispatch } = usePlayer()
-  const duration = audio.duration
+
+  // The audio actually shown/edited. Starts as the decoded prop; cut/paste/delete
+  // replace it. ClipEditor keys this subtree by clip id, so it resets per clip.
+  const [edited, setEdited] = useState<ClipAudio>(audio)
+  const [selection, setSelection] = useState<Region | null>(null)
+  const [clipboard, setClipboard] = useState<Float32Array | null>(null)
+  const [operations, setOperations] = useState<EditOperation[]>([])
+
+  const duration = edited.duration
 
   // Load this clip into the player so the playhead + seek reuse the real audio
   // engine. Async dispatch (not synchronous setState), only on clip change.
@@ -96,11 +118,74 @@ export function WaveformEditor({
   }
   const fit = () => setIntent({ pxPerSec: fitPx, scrollSec: 0 })
 
+  // --- Selection + clipboard (US-18.2) -------------------------------------
+  const clampSec = (sec: number) => Math.max(0, Math.min(duration, sec))
+
+  // A drag on the canvas sweeps a new selection.
+  const select = (a: number, b: number) =>
+    setSelection(normalizeRegion(clampSec(a), clampSec(b)))
+
+  // A handle drag moves one edge; re-normalize so start ≤ end if they cross.
+  const adjustEdge = (edge: "start" | "end", sec: number) =>
+    setSelection((cur) => {
+      if (!cur) return cur
+      const s = clampSec(sec)
+      return edge === "start"
+        ? normalizeRegion(s, cur.endSec)
+        : normalizeRegion(cur.startSec, s)
+    })
+
+  // A bare click (seek) clears the selection, like clicking off it.
+  const seekAndClear = (sec: number) => {
+    setSelection(null)
+    seek(sec)
+  }
+
+  const copy = () => {
+    if (!selection) return
+    setClipboard(sliceRegion(edited, selection.startSec, selection.endSec))
+  }
+
+  const removeSelected = (kind: "cut" | "delete") => {
+    if (!selection) return
+    if (kind === "cut") {
+      setClipboard(sliceRegion(edited, selection.startSec, selection.endSec))
+    }
+    setEdited(removeRegion(edited, selection.startSec, selection.endSec))
+    setOperations((ops) => [
+      ...ops,
+      { kind, startSec: selection.startSec, endSec: selection.endSec },
+    ])
+    setSelection(null)
+  }
+
+  const paste = () => {
+    if (!clipboard || clipboard.length === 0) return
+    const atSec = playheadSec
+    const durationSec = clipboard.length / edited.sampleRate
+    setEdited(insertRegion(edited, atSec, clipboard))
+    setOperations((ops) => [...ops, { kind: "paste", atSec, durationSec }])
+    setSelection(null)
+    seek(atSec + durationSec) // move playhead to the end of the pasted region
+  }
+
+  useEditorShortcuts({
+    onCut: () => removeSelected("cut"),
+    onCopy: copy,
+    onPaste: paste,
+    onDelete: () => removeSelected("delete"),
+  })
+
   const atMin = !vp || vp.pxPerSec <= fitPx + 1e-6
   const atMax = !!vp && vp.pxPerSec >= MAX_PX_PER_SEC - 1e-6
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className="flex flex-col gap-2"
+      data-edited-duration={duration.toFixed(3)}
+      data-op-count={operations.length}
+      data-clipboard-samples={clipboard?.length ?? 0}
+    >
       <div className="flex items-center justify-between gap-2">
         <h1 className="truncate text-lg font-semibold">
           {clip.title ?? "Untitled clip"}
@@ -125,20 +210,34 @@ export function WaveformEditor({
         {vp ? (
           <>
             <TimeRuler viewport={vp} width={width} duration={duration} />
-            <WaveformCanvas
-              audio={audio}
-              viewport={vp}
-              width={width}
-              height={CANVAS_HEIGHT}
-              playheadSec={playheadSec}
-              onSeek={seek}
-              onZoom={zoomAt}
-              onScrollSec={scrollTo}
-            />
+            <div className="relative">
+              <WaveformCanvas
+                audio={edited}
+                viewport={vp}
+                width={width}
+                height={CANVAS_HEIGHT}
+                playheadSec={playheadSec}
+                onSeek={seekAndClear}
+                onZoom={zoomAt}
+                onScrollSec={scrollTo}
+                onSelect={select}
+              />
+              <SelectionOverlay
+                selection={selection}
+                viewport={vp}
+                width={width}
+                height={CANVAS_HEIGHT}
+                onAdjust={adjustEdge}
+              />
+            </div>
           </>
         ) : (
           <div style={{ height: CANVAS_HEIGHT + 20 }} />
         )}
+      </div>
+
+      <div className="flex min-h-4 items-center justify-between gap-2">
+        <SelectionInfo selection={selection} />
       </div>
 
       {vp && (

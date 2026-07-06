@@ -30,8 +30,10 @@ function fakeClip(): Clip {
   } as Clip
 }
 
+// 800 samples @ 80Hz = exactly 10s, so removeRegion/insertRegion recompute a
+// duration consistent with the fixture (mono.length / sampleRate).
 function fakeAudio(): ClipAudio {
-  return { mono: new Float32Array(800), sampleRate: 8000, duration: 10 }
+  return { mono: new Float32Array(800), sampleRate: 80, duration: 10 }
 }
 
 /** Surfaces player state so tests can assert the editor drives it. */
@@ -59,6 +61,20 @@ function canvas() {
 }
 function pxPerSec() {
   return Number(canvas().getAttribute("data-px-per-sec"))
+}
+/** At fit (80 px/sec, scrollSec 0) drag from `fromSec` to `toSec` to select. */
+function dragSelect(fromSec: number, toSec: number) {
+  fireEvent.pointerDown(canvas(), { clientX: fromSec * 80, pointerId: 1 })
+  fireEvent.pointerMove(canvas(), { clientX: toSec * 80, pointerId: 1 })
+  fireEvent.pointerUp(canvas(), { clientX: toSec * 80, pointerId: 1 })
+}
+function editedDuration() {
+  return Number(
+    document.querySelector("[data-edited-duration]")?.getAttribute("data-edited-duration")
+  )
+}
+function key(k: string, opts: { ctrlKey?: boolean } = {}) {
+  fireEvent.keyDown(document.body, { key: k, ...opts })
 }
 
 describe("WaveformEditor", () => {
@@ -105,5 +121,43 @@ describe("WaveformEditor", () => {
     expect(
       screen.getByRole("slider", { name: "Scroll waveform" })
     ).toBeInTheDocument()
+  })
+
+  it("shows the selection info and overlay after a click-and-drag", () => {
+    renderEditor()
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    dragSelect(2, 5)
+    expect(screen.getByTestId("selection-overlay")).toBeInTheDocument()
+    expect(screen.getByTestId("selection-info")).toHaveTextContent("Duration 0:03.000")
+  })
+
+  it("Delete removes the selected region and shortens the audio", () => {
+    renderEditor()
+    expect(editedDuration()).toBeCloseTo(10)
+    dragSelect(2, 5) // 3s region
+    key("Delete")
+    expect(editedDuration()).toBeCloseTo(7)
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument() // cleared
+  })
+
+  it("Ctrl+C then Ctrl+V duplicates the region at the playhead (lengthens audio)", () => {
+    renderEditor()
+    dragSelect(2, 5) // 3s region
+    key("c", { ctrlKey: true })
+    key("v", { ctrlKey: true }) // playhead at 0 → inserts 3s at the start
+    expect(editedDuration()).toBeCloseTo(13)
+    // seek moved the playhead to the end of the pasted region (3s).
+    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(3, 1)
+  })
+
+  it("Ctrl+X copies then removes (clipboard filled, audio shortened)", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    key("x", { ctrlKey: true })
+    expect(editedDuration()).toBeCloseTo(7)
+    // 3s @ 80Hz = 240 samples now on the clipboard, ready to paste.
+    expect(
+      document.querySelector("[data-clipboard-samples]")?.getAttribute("data-clipboard-samples")
+    ).toBe("240")
   })
 })

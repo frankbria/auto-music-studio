@@ -16,6 +16,7 @@ function setup() {
   const onSeek = vi.fn()
   const onZoom = vi.fn()
   const onScrollSec = vi.fn()
+  const onSelect = vi.fn()
   render(
     <WaveformCanvas
       audio={audio}
@@ -26,28 +27,35 @@ function setup() {
       onSeek={onSeek}
       onZoom={onZoom}
       onScrollSec={onScrollSec}
+      onSelect={onSelect}
     />
   )
-  return { canvas: screen.getByRole("img", { name: "Waveform" }), onSeek, onZoom, onScrollSec }
+  return {
+    canvas: screen.getByRole("img", { name: "Waveform" }),
+    onSeek,
+    onZoom,
+    onScrollSec,
+    onSelect,
+  }
 }
 
 describe("WaveformCanvas input", () => {
   it("seeks on a tap with no movement", () => {
-    const { canvas, onSeek, onScrollSec } = setup()
+    const { canvas, onSeek, onSelect } = setup()
     fireEvent.pointerDown(canvas, { clientX: 240, pointerId: 1 })
     fireEvent.pointerUp(canvas, { clientX: 240, pointerId: 1 })
     // xToSec(240) = scrollSec 5 + 240/80 = 8s.
     expect(onSeek).toHaveBeenCalledWith(8)
-    expect(onScrollSec).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
-  it("pans (not seeks) when the pointer drags past the threshold", () => {
-    const { canvas, onSeek, onScrollSec } = setup()
+  it("selects (not seeks) when the pointer drags past the threshold", () => {
+    const { canvas, onSeek, onSelect } = setup()
     fireEvent.pointerDown(canvas, { clientX: 400, pointerId: 1 })
-    fireEvent.pointerMove(canvas, { clientX: 320, pointerId: 1 }) // dragged -80px
-    fireEvent.pointerUp(canvas, { clientX: 320, pointerId: 1 })
-    // scrollSec = startScroll 5 - (-80)/80 = 6.
-    expect(onScrollSec).toHaveBeenLastCalledWith(6)
+    fireEvent.pointerMove(canvas, { clientX: 480, pointerId: 1 }) // dragged +80px
+    fireEvent.pointerUp(canvas, { clientX: 480, pointerId: 1 })
+    // start xToSec(400) = 5 + 400/80 = 10s; end xToSec(480) = 5 + 480/80 = 11s.
+    expect(onSelect).toHaveBeenLastCalledWith(10, 11)
     expect(onSeek).not.toHaveBeenCalled()
   })
 
