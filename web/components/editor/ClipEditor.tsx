@@ -1,10 +1,13 @@
 "use client"
 
+import Link from "next/link"
+
 import { WaveformEditor } from "@/components/editor/WaveformEditor"
 import { useAuth } from "@/hooks/use-auth"
 import { useClip } from "@/hooks/use-clip"
 import { useClipAudio } from "@/hooks/use-clip-audio"
 import { useRequireAuth } from "@/hooks/use-require-auth"
+import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 import type { Clip } from "@/lib/workspace-clips"
 
 // Waveform-editor view (US-18.1). Mirrors SongDetail's shape: holds all the
@@ -13,9 +16,39 @@ import type { Clip } from "@/lib/workspace-clips"
 
 export function ClipEditor({ clipId }: { clipId: string }) {
   const { isLoading: authLoading, isAuthenticated } = useRequireAuth()
+  const { isFreeTier, isLoading: tierLoading } = useSubscriptionTier()
   const { clip, loading, error, notFound } = useClip(clipId)
 
   if (authLoading || !isAuthenticated) return null
+
+  // "Open in Editor" is Pro-only (song-actions). The menu locks it for free
+  // users, but that alone doesn't stop a direct visit to /editor/{id}, so gate
+  // the route itself here — before any audio is fetched or decoded. Default is
+  // free until the tier resolves, so wait for it rather than flash the editor.
+  if (tierLoading) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-3 p-8" data-testid="editor-loading">
+        <div className="h-8 w-64 animate-pulse rounded bg-muted" />
+        <div className="h-48 animate-pulse rounded-lg bg-muted" />
+      </div>
+    )
+  }
+  if (isFreeTier) {
+    return (
+      <div className="mx-auto max-w-6xl p-8" data-testid="editor-locked">
+        <h1 className="text-xl font-semibold">The editor is a Pro feature</h1>
+        <p className="text-sm text-muted-foreground">
+          Upgrade to Pro to open clips in the waveform editor.
+        </p>
+        <Link
+          href="/settings"
+          className="mt-3 inline-block text-sm font-medium text-primary underline"
+        >
+          Manage subscription
+        </Link>
+      </div>
+    )
+  }
 
   if (loading) {
     return (
