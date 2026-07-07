@@ -80,8 +80,9 @@ edit, remix, audio, export, and manage operation on a song in one place.
   (label, icon, workflow, Pro-gating) that both `SongActionsMenu` and
   `ClipCard`'s menus draw from, so the two surfaces can't drift apart.
 - `hooks/use-song-actions.ts` — dispatches a selected action to its workflow:
-  navigation (studio today; editor when US-18 ships), a workflow modal, a file
-  download, or an inline operation (publish toggle — optimistic with a
+  navigation (studio, or the waveform editor via `open-editor` — US-18.1), a
+  workflow modal, a file download, or an inline operation (publish toggle —
+  optimistic with a
   title/style-tag guard and rollback, persisted via `PATCH /clips/{id}`
   (US-17.6) — and delete with confirmation).
 - `hooks/use-subscription-tier.ts` — lightweight subscription-tier lookup used
@@ -133,6 +134,31 @@ action menu, plus a one-click inline remaster.
   proxy powering `app/api/clips/[id]/{crop,speed,remaster,extend,cover,remix,
   repaint,sample,add-vocal}/route.ts` and `app/api/mashup/route.ts`; forwards
   the Bearer token and passes backend status/body through unchanged.
+
+## Waveform Editor (US-18.1)
+
+The `/editor/[id]` route is the waveform editor — the foundation of Stage 18.
+Reached from the song menu's Pro-only "Open in Editor" action (`open-editor`,
+now a `navigation` workflow in `lib/song-actions.ts`).
+
+- `app/editor/[id]/page.tsx` — thin route shim; delegates to `ClipEditor`.
+- `components/editor/ClipEditor.tsx` — owns the auth guard, the **Pro-tier gate**
+  (`useSubscriptionTier`, enforced before any audio is fetched — direct
+  navigation can't bypass the menu lock), clip fetch, and audio-decode states.
+- `components/editor/WaveformEditor.tsx` — owns the viewport (zoom + scroll),
+  loads the clip into the global `usePlayer` store so the playhead + click-to-seek
+  reuse the real audio engine, and composes the ruler / canvas / controls / scrollbar.
+- `components/editor/WaveformCanvas.tsx` — virtual-scrolled canvas (viewport-sized,
+  re-buckets only the visible window) with click-seek, drag-pan, Ctrl+wheel zoom,
+  and pinch. Unlike `SongWaveform`, it draws **real** peaks.
+- `components/editor/TimeRuler.tsx` / `ZoomControls.tsx` / `WaveformScrollbar.tsx`.
+- `lib/audio-peaks.ts` — `decodeClipAudio` (fetches the authed `/api/clips/{id}/audio`
+  proxy and decodes via Web Audio) + `columnPeaks` (per-pixel amplitude peaks;
+  accurate at any zoom). This is the real waveform; `lib/waveform.ts`'s seeded
+  bars still back the mini-player / song page.
+- `lib/waveform-viewport.ts` — pure zoom/scroll/tick math (fit, anchor-preserving
+  zoom, scroll clamp, adaptive `chooseTickInterval`).
+- `hooks/use-clip-audio.ts` — id-tagged decode hook (mirrors `useClip`).
 
 ## Adding components
 
