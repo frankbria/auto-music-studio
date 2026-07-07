@@ -1,10 +1,17 @@
 import { fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WaveformEditor } from "./WaveformEditor"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
 import type { ClipAudio } from "@/lib/audio-peaks"
 import type { Clip } from "@/lib/workspace-clips"
+
+// The always-mounted SaveVersionModal reads the auth context; stub it so the
+// editor renders without an AuthProvider (the modal stays closed here — its own
+// submit flow is covered in editing/SaveVersionModal tests).
+vi.mock("@/hooks/use-auth", () => ({
+  useAuth: () => ({ accessToken: "test-token" }),
+}))
 
 // jsdom reports clientWidth as 0, so the viewport never initializes. Stub a real
 // width so the canvas + controls render like they do in a browser.
@@ -78,8 +85,17 @@ function opCount() {
     document.querySelector("[data-op-count]")?.getAttribute("data-op-count")
   )
 }
-function key(k: string, opts: { ctrlKey?: boolean } = {}) {
+function key(k: string, opts: { ctrlKey?: boolean; shiftKey?: boolean } = {}) {
   fireEvent.keyDown(document.body, { key: k, ...opts })
+}
+function undoBtn() {
+  return screen.getByRole("button", { name: "Undo" })
+}
+function redoBtn() {
+  return screen.getByRole("button", { name: "Redo" })
+}
+function saveBtn() {
+  return screen.getByRole("button", { name: /Save as new version/i })
 }
 
 describe("WaveformEditor", () => {
@@ -239,5 +255,92 @@ describe("WaveformEditor", () => {
     dragSelect(2, 5)
     expect(screen.getByRole("button", { name: "Fade In" })).toBeEnabled()
     expect(screen.getByRole("button", { name: "Gain" })).toBeEnabled()
+  })
+
+  // --- Undo / redo + save (US-18.4) ----------------------------------------
+
+  it("undo reverts the last edit and redo re-applies it", () => {
+    renderEditor()
+    dragSelect(2, 5) // 3s region
+    key("Delete")
+    expect(editedDuration()).toBeCloseTo(7)
+    expect(opCount()).toBe(1)
+
+    fireEvent.click(undoBtn())
+    expect(editedDuration()).toBeCloseTo(10) // original restored
+    expect(opCount()).toBe(0)
+
+    fireEvent.click(redoBtn())
+    expect(editedDuration()).toBeCloseTo(7) // edit re-applied
+    expect(opCount()).toBe(1)
+  })
+
+  it("multiple undos walk back through the full operation history", () => {
+    renderEditor()
+    dragSelect(2, 5) // delete 3s → 7
+    key("Delete")
+    const afterFirst = editedDuration()
+    expect(afterFirst).toBeCloseTo(7)
+    // The viewport re-fits after the length change, so a second drag selects a
+    // different span — its exact size doesn't matter, only that it walks back.
+    dragSelect(1, 2)
+    key("Delete")
+    const afterSecond = editedDuration()
+    expect(afterSecond).toBeLessThan(afterFirst)
+    expect(opCount()).toBe(2)
+
+    fireEvent.click(undoBtn())
+    expect(editedDuration()).toBeCloseTo(afterFirst)
+    fireEvent.click(undoBtn())
+    expect(editedDuration()).toBeCloseTo(10) // back to the pristine original
+    expect(opCount()).toBe(0)
+  })
+
+  it("a fresh edit after undo discards the redo branch", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    key("Delete") // → 7
+    fireEvent.click(undoBtn()) // → 10, redo available
+    expect(redoBtn()).toBeEnabled()
+    dragSelect(0, 2)
+    key("Delete") // new branch → 8
+    expect(editedDuration()).toBeCloseTo(8)
+    expect(redoBtn()).toBeDisabled() // old redo branch dropped
+  })
+
+  it("undo/redo buttons are disabled at the stack boundaries", () => {
+    renderEditor()
+    expect(undoBtn()).toBeDisabled() // nothing to undo yet
+    expect(redoBtn()).toBeDisabled()
+
+    dragSelect(2, 5)
+    key("Delete")
+    expect(undoBtn()).toBeEnabled()
+    expect(redoBtn()).toBeDisabled() // at the tip
+
+    fireEvent.click(undoBtn())
+    expect(undoBtn()).toBeDisabled() // back at the origin
+    expect(redoBtn()).toBeEnabled()
+  })
+
+  it("Ctrl+Z undoes and Ctrl+Shift+Z redoes", () => {
+    renderEditor()
+    dragSelect(2, 5)
+    key("Delete")
+    expect(editedDuration()).toBeCloseTo(7)
+    key("z", { ctrlKey: true })
+    expect(editedDuration()).toBeCloseTo(10)
+    key("z", { ctrlKey: true, shiftKey: true })
+    expect(editedDuration()).toBeCloseTo(7)
+  })
+
+  it("Save as new version is disabled until an edit is made", () => {
+    renderEditor()
+    expect(saveBtn()).toBeDisabled()
+    dragSelect(2, 5)
+    key("Delete")
+    expect(saveBtn()).toBeEnabled()
+    fireEvent.click(undoBtn()) // no edits applied again
+    expect(saveBtn()).toBeDisabled()
   })
 })

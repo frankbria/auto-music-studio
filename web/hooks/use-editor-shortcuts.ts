@@ -2,8 +2,9 @@
 
 import { useEffect, useRef } from "react"
 
-// Keyboard shortcuts for the waveform editor (US-18.2): Ctrl/Cmd+X/C/V and
-// Delete/Backspace → cut / copy / paste / delete. A single window keydown
+// Keyboard shortcuts for the waveform editor: Ctrl/Cmd+X/C/V and
+// Delete/Backspace → cut / copy / paste / delete (US-18.2); Ctrl/Cmd+Z → undo
+// and Ctrl/Cmd+Shift+Z (or Ctrl+Y) → redo (US-18.4). A single window keydown
 // listener attached once; the latest actions are read through a ref (same
 // pattern as the canvas's wheel handler) so re-renders don't re-bind. Ignores
 // keystrokes aimed at a text field so typing elsewhere isn't hijacked.
@@ -13,6 +14,8 @@ export type EditorShortcutActions = {
   onCopy: () => void
   onPaste: () => void
   onDelete: () => void
+  onUndo: () => void
+  onRedo: () => void
 }
 
 /** True when the event targets an editable field (input/textarea/contenteditable). */
@@ -41,7 +44,11 @@ export function useEditorShortcuts(actions: EditorShortcutActions): void {
       const a = ref.current
       const key = e.key.toLowerCase()
 
-      if (mod && key === "x") a.onCut()
+      // Redo before undo: Ctrl/Cmd+Shift+Z is a superset match of the Z key.
+      if (mod && key === "z" && e.shiftKey) a.onRedo()
+      else if (mod && key === "y" && !e.shiftKey) a.onRedo()
+      else if (mod && key === "z" && !e.shiftKey) a.onUndo()
+      else if (mod && key === "x") a.onCut()
       else if (mod && key === "c") a.onCopy()
       else if (mod && key === "v") a.onPaste()
       else if (!mod && (e.key === "Delete" || e.key === "Backspace")) a.onDelete()
