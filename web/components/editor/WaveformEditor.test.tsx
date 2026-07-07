@@ -448,4 +448,28 @@ describe("WaveformEditor", () => {
     key("z", { ctrlKey: true }) // keyboard undo is a no-op too
     expect(opCount()).toBe(1) // unchanged — the intervening undo was blocked
   })
+
+  it("stays frozen through the decode window, not just the poll", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    // Hold the decode open so we can inspect the window between job-complete and
+    // the result landing — the freeze must persist across it.
+    let resolveDecode: (a: unknown) => void = () => {}
+    decodeClipAudio.mockReturnValue(new Promise((res) => { resolveDecode = res }))
+
+    renderEditor()
+    dragSelect(2, 5)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+
+    // Job completed, decode in flight ("Applying…"): edits must still be frozen.
+    await screen.findByText(/Applying/)
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeDisabled()
+
+    // Finish the decode → the result lands and editing unfreezes.
+    resolveDecode({ mono: new Float32Array(480), sampleRate: 80, duration: 6 })
+    await waitFor(() => expect(editedDuration()).toBeCloseTo(6))
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeEnabled()
+  })
 })

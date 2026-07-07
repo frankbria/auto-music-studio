@@ -59,6 +59,10 @@ export function RepaintPanel({
   // audio before it can be shown; a distinct phase so the spinner stays up.
   const [applying, setApplying] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
+  // The completed job's child clip id, retained so a decode-only failure can
+  // retry the fetch without resubmitting (and re-charging) the generation. State,
+  // not a ref, so the retry button can branch on it during render.
+  const [childId, setChildId] = useState<string | null>(null)
 
   // What we actually submitted, so the recorded op + decode target don't drift if
   // the fields change during the async job.
@@ -66,9 +70,6 @@ export function RepaintPanel({
   // One-shot guard: `useClipEdit`'s success state persists across the frequent
   // re-renders the player's time-tick drives, so the decode must run exactly once.
   const appliedRef = useRef(false)
-  // The completed job's child clip id, retained so a decode-only failure can
-  // retry the fetch without resubmitting (and re-charging) the generation.
-  const childIdRef = useRef<string | null>(null)
   // `onRepainted` in a ref so a changing parent closure doesn't re-arm the apply
   // effect (which would cancel an in-flight decode and drop the result).
   const onRepaintedRef = useRef(onRepainted)
@@ -82,10 +83,13 @@ export function RepaintPanel({
   const overStyle = style.length > STYLE_MAX_LENGTH
   const valid = prompt.trim().length > 0 && !overPrompt && !overStyle
 
-  // Active == the poll is running. This must outlive a selection clear, so the
-  // editor keeps the panel mounted while it's true. (`applying`/success come
-  // after the poll; the decode promise survives an unmount on its own.)
-  const active = edit.state.phase === "submitting" || edit.state.phase === "polling"
+  // Active == a job is in flight, through both the poll AND the decode/apply that
+  // follows it. Reported up so the editor keeps this panel mounted and freezes
+  // other edits for the whole window — `applying` is included so the freeze
+  // doesn't lift during the decode (a fetch + decodeAudioData), which would
+  // reopen the concurrent-edit hole one step past the poll.
+  const active =
+    edit.state.phase === "submitting" || edit.state.phase === "polling" || applying
   useEffect(() => {
     onActiveChange?.(active)
   }, [active, onActiveChange])
@@ -99,16 +103,16 @@ export function RepaintPanel({
   // the decode-failure branch can retry just the fetch — the job (and its paid
   // child clip) already succeeded server-side.
   const applyChild = useCallback(
-    (childId: string) => {
+    (id: string) => {
       const submitted = submittedRef.current
-      if (!childId || !accessToken || !submitted) {
+      if (!id || !accessToken || !submitted) {
         setApplyError("Repaint finished but returned no clip.")
         return
       }
-      childIdRef.current = childId
+      setChildId(id)
       setApplyError(null)
       setApplying(true)
-      decodeClipAudio(childId, accessToken)
+      decodeClipAudio(id, accessToken)
         .then((audio) => {
           const op: EditOperation = {
             kind: "repaint",
@@ -139,7 +143,7 @@ export function RepaintPanel({
   function handleSubmit() {
     if (!accessToken || !valid) return
     appliedRef.current = false
-    childIdRef.current = null
+    setChildId(null)
     setApplyError(null)
     const p = prompt.trim()
     const s = style.trim()
@@ -153,14 +157,12 @@ export function RepaintPanel({
     void edit.submit(() => submitRepaint(clipId, payload, accessToken), accessToken)
   }
 
-  // A decode-only failure means the job succeeded but the fetch/decode afterward
-  // failed — retry just that, never a new (paid) generation.
-  const onRetry = applyError
-    ? () => {
-        if (childIdRef.current) applyChild(childIdRef.current)
-      }
-    : handleSubmit
-  const retryDisabled = applyError ? false : !valid
+  // A decode-only failure (job succeeded, we have the child id) retries just the
+  // fetch — never a new (paid) generation. A job failure, or the odd success with
+  // no clip id, falls back to a fresh submit so "Try again" is never a dead click.
+  const canRetryDecode = applyError !== null && childId !== null
+  const onRetry = canRetryDecode ? () => applyChild(childId) : handleSubmit
+  const retryDisabled = canRetryDecode ? false : !valid
 
   return (
     <div
