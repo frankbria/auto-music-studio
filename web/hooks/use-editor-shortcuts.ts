@@ -31,14 +31,25 @@ function isEditableTarget(target: EventTarget | null): boolean {
   )
 }
 
-export function useEditorShortcuts(actions: EditorShortcutActions): void {
+export function useEditorShortcuts(
+  actions: EditorShortcutActions,
+  enabled = true
+): void {
   const ref = useRef(actions)
   useEffect(() => {
     ref.current = actions
   }, [actions])
+  // Read through a ref so the once-bound listener sees the latest value without
+  // re-binding — mirrors `actions`. Lets the parent freeze buffer-mutating
+  // shortcuts (cut/paste/delete/undo/redo) while a repaint job is in flight.
+  const enabledRef = useRef(enabled)
+  useEffect(() => {
+    enabledRef.current = enabled
+  }, [enabled])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (!enabledRef.current) return
       if (isEditableTarget(e.target)) return
       const mod = e.metaKey || e.ctrlKey
       const a = ref.current

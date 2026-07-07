@@ -265,14 +265,20 @@ export function WaveformEditor({
     })
   }
 
-  useEditorShortcuts({
-    onCut: () => removeSelected("cut"),
-    onCopy: copy,
-    onPaste: paste,
-    onDelete: () => removeSelected("delete"),
-    onUndo: undo,
-    onRedo: redo,
-  })
+  // Freeze buffer-mutating shortcuts while a repaint job is in flight — its
+  // result will replace the buffer wholesale, so an intervening edit would be
+  // silently reverted yet still logged in the save provenance. (US-18.5)
+  useEditorShortcuts(
+    {
+      onCut: () => removeSelected("cut"),
+      onCopy: copy,
+      onPaste: paste,
+      onDelete: () => removeSelected("delete"),
+      onUndo: undo,
+      onRedo: redo,
+    },
+    !repaintActive
+  )
 
   // --- Processing ops (US-18.3) --------------------------------------------
   // Commit an amplitude transform through the undo/redo history (US-18.4). The
@@ -364,6 +370,7 @@ export function WaveformEditor({
             onRedo={redo}
             canUndo={canUndo}
             canRedo={canRedo}
+            disabled={repaintActive}
           />
           <Button
             type="button"
@@ -390,6 +397,7 @@ export function WaveformEditor({
 
       <EditToolbar
         hasSelection={selection !== null}
+        disabled={repaintActive}
         onFadeIn={fadeIn}
         onFadeOut={fadeOut}
         onSilence={silence}

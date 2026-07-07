@@ -422,4 +422,30 @@ describe("WaveformEditor", () => {
     expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
     expect(screen.getByTestId("repaint-panel")).toBeInTheDocument()
   })
+
+  it("freezes other edits while a repaint is in flight", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
+
+    renderEditor()
+    // One prior edit so Undo would otherwise be available.
+    dragSelect(2, 5)
+    key("Delete")
+    expect(opCount()).toBe(1)
+
+    // Start a repaint on a fresh selection.
+    dragSelect(1, 3)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await screen.findByRole("status") // job in flight
+
+    // The buffer is about to be replaced wholesale — every mutating affordance is
+    // frozen so an intervening edit can't be silently reverted (and mislogged).
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeDisabled()
+    expect(undoBtn()).toBeDisabled()
+    key("z", { ctrlKey: true }) // keyboard undo is a no-op too
+    expect(opCount()).toBe(1) // unchanged — the intervening undo was blocked
+  })
 })

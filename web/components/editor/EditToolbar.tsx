@@ -24,6 +24,8 @@ const CROSSFADE_DEFAULT_MS = 100
 
 export type EditToolbarProps = {
   hasSelection: boolean
+  /** Freeze the whole toolbar (e.g. while a repaint job is in flight). */
+  disabled?: boolean
   onFadeIn: () => void
   onFadeOut: () => void
   onSilence: () => void
@@ -36,6 +38,7 @@ export type EditToolbarProps = {
 
 export function EditToolbar({
   hasSelection,
+  disabled = false,
   onFadeIn,
   onFadeOut,
   onSilence,
@@ -90,7 +93,7 @@ export function EditToolbar({
         variant="outline"
         size="sm"
         onClick={onFadeIn}
-        disabled={!hasSelection}
+        disabled={disabled || !hasSelection}
       >
         Fade In
       </Button>
@@ -99,7 +102,7 @@ export function EditToolbar({
         variant="outline"
         size="sm"
         onClick={onFadeOut}
-        disabled={!hasSelection}
+        disabled={disabled || !hasSelection}
       >
         Fade Out
       </Button>
@@ -108,11 +111,17 @@ export function EditToolbar({
         variant="outline"
         size="sm"
         onClick={onSilence}
-        disabled={!hasSelection}
+        disabled={disabled || !hasSelection}
       >
         Silence
       </Button>
-      <Button type="button" variant="outline" size="sm" onClick={onNormalize}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onNormalize}
+        disabled={disabled}
+      >
         Normalize
       </Button>
 
@@ -122,7 +131,7 @@ export function EditToolbar({
             type="button"
             variant="outline"
             size="sm"
-            disabled={!hasSelection}
+            disabled={disabled || !hasSelection}
           >
             Gain
           </Button>
@@ -165,7 +174,7 @@ export function EditToolbar({
 
       <Popover open={crossfadeOpen} onOpenChange={setCrossfadeOpen}>
         <PopoverTrigger asChild>
-          <Button type="button" variant="outline" size="sm">
+          <Button type="button" variant="outline" size="sm" disabled={disabled}>
             Crossfade
           </Button>
         </PopoverTrigger>
