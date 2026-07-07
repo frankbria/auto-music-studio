@@ -4,18 +4,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { useEditorShortcuts } from "./use-editor-shortcuts"
 
 function makeActions() {
-  return { onCut: vi.fn(), onCopy: vi.fn(), onPaste: vi.fn(), onDelete: vi.fn() }
+  return {
+    onCut: vi.fn(),
+    onCopy: vi.fn(),
+    onPaste: vi.fn(),
+    onDelete: vi.fn(),
+    onUndo: vi.fn(),
+    onRedo: vi.fn(),
+  }
 }
 
 /** Dispatch a keydown on window; returns whether default was prevented. */
 function press(
   key: string,
-  opts: { ctrlKey?: boolean; metaKey?: boolean; target?: EventTarget } = {}
+  opts: {
+    ctrlKey?: boolean
+    metaKey?: boolean
+    shiftKey?: boolean
+    target?: EventTarget
+  } = {}
 ) {
   const e = new KeyboardEvent("keydown", {
     key,
     ctrlKey: opts.ctrlKey,
     metaKey: opts.metaKey,
+    shiftKey: opts.shiftKey,
     cancelable: true,
     bubbles: true,
   })
@@ -47,6 +60,18 @@ describe("useEditorShortcuts", () => {
     press("Backspace")
     expect(actions.onCut).toHaveBeenCalledOnce()
     expect(actions.onDelete).toHaveBeenCalledOnce()
+  })
+
+  it("maps Ctrl+Z to undo and Ctrl+Shift+Z / Ctrl+Y to redo", () => {
+    press("z", { ctrlKey: true })
+    expect(actions.onUndo).toHaveBeenCalledOnce()
+    expect(actions.onRedo).not.toHaveBeenCalled()
+
+    press("z", { ctrlKey: true, shiftKey: true })
+    press("y", { ctrlKey: true })
+    expect(actions.onRedo).toHaveBeenCalledTimes(2)
+    // Shift+Z must not also fire undo.
+    expect(actions.onUndo).toHaveBeenCalledOnce()
   })
 
   it("prevents default for bound keys only", () => {

@@ -2,13 +2,19 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
+import { HugeiconsIcon } from "@hugeicons/react"
+import { FloppyDiskIcon } from "@hugeicons/core-free-icons"
+
 import { EditToolbar } from "@/components/editor/EditToolbar"
+import { SaveVersionModal } from "@/components/editor/SaveVersionModal"
 import { SelectionInfo } from "@/components/editor/SelectionInfo"
 import { SelectionOverlay } from "@/components/editor/SelectionOverlay"
 import { TimeRuler } from "@/components/editor/TimeRuler"
+import { UndoRedoControls } from "@/components/editor/UndoRedoControls"
 import { WaveformCanvas } from "@/components/editor/WaveformCanvas"
 import { WaveformScrollbar } from "@/components/editor/WaveformScrollbar"
 import { ZoomControls } from "@/components/editor/ZoomControls"
+import { Button } from "@/components/ui/button"
 import { usePlayer } from "@/contexts/player-context"
 import { useEditorShortcuts } from "@/hooks/use-editor-shortcuts"
 import type { ClipAudio } from "@/lib/audio-peaks"
@@ -41,10 +47,12 @@ import type { Clip } from "@/lib/workspace-clips"
 // scroll) and — from US-18.2 — the region selection, the in-app clipboard, and
 // the edited audio. Playback state is borrowed from the shared player store.
 //
-// Edits (cut / delete / paste) splice the decoded samples directly, so the
-// canvas renders the *real* edited waveform with no operation-stack replay. They
-// are non-destructive: the original `audio` prop is untouched; the edit lives in
-// `edited` state and the `operations` log is the handoff seam for save (US-18.4).
+// Edits (cut / delete / paste / fade / gain / …) splice or transform the decoded
+// samples directly, so the canvas renders the *real* edited waveform with no
+// operation-stack replay. They are non-destructive: the original `audio` prop is
+// untouched; each edit produces a fresh ClipAudio pushed onto the undo/redo
+// history (US-18.4), and the per-snapshot operation log is the handoff seam for
+// "Save as new version".
 //
 // The stored viewport is the user's *intent* (absolute px/sec + scrollSec); the
 // effective viewport is derived + clamped against the measured width each
@@ -52,6 +60,11 @@ import type { Clip } from "@/lib/workspace-clips"
 
 const CANVAS_HEIGHT = 160
 const BUTTON_ZOOM_FACTOR = 1.6
+
+// One point in the edit timeline: the audio at that point plus the operation
+// that produced it (null for the pristine original at index 0).
+type Snapshot = { audio: ClipAudio; op: EditOperation | null }
+type EditHistory = { snapshots: Snapshot[]; cursor: number }
 
 export function WaveformEditor({
   clip,
@@ -62,17 +75,64 @@ export function WaveformEditor({
 }) {
   const { state, dispatch } = usePlayer()
 
-  // The audio actually shown/edited. Starts as the decoded prop; cut/paste/delete
-  // replace it. ClipEditor keys this subtree by clip id, so it resets per clip.
-  const [edited, setEdited] = useState<ClipAudio>(audio)
+  // Undo/redo history (US-18.4). Each edit is a pure, non-destructive
+  // ClipAudio→ClipAudio transform, so the edited buffer *is* a complete
+  // snapshot — history is a stack of snapshots + a cursor, no command replay.
+  // snapshots[0] is the untouched decoded prop, so undoing to the start restores
+  // the original and the source clip is never mutated. ClipEditor keys this
+  // subtree by clip id, so the whole stack resets per clip.
+  // ponytail: the stack is unbounded per the "unlimited undo" spec; each entry
+  // holds one full buffer, so memory grows with edit count — add a drop-oldest
+  // cap if a long-clip session ever pressures memory.
+  const [history, setHistory] = useState<EditHistory>(() => ({
+    snapshots: [{ audio, op: null }],
+    cursor: 0,
+  }))
   const [selection, setSelection] = useState<Region | null>(null)
   const [clipboard, setClipboard] = useState<Float32Array | null>(null)
-  const [operations, setOperations] = useState<EditOperation[]>([])
   // Pending gain (dB) while the Gain popover is open — drives a live, throwaway
   // waveform preview; null when nothing is being previewed. (US-18.3)
   const [gainPreview, setGainPreview] = useState<number | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+
+  const { snapshots, cursor } = history
+  const edited = snapshots[cursor].audio
+  const canUndo = cursor > 0
+  const canRedo = cursor < snapshots.length - 1
+  const isDirty = cursor > 0
+  // The operations applied to reach the current snapshot (index 0 is pristine),
+  // in order — what "Save as new version" ships as provenance.
+  const operations = useMemo(
+    () => snapshots.slice(1, cursor + 1).map((s) => s.op as EditOperation),
+    [snapshots, cursor]
+  )
 
   const duration = edited.duration
+
+  // --- Undo/redo history (US-18.4) -----------------------------------------
+  // Apply an edit: drop any redo tail, push the new snapshot, advance the
+  // cursor. Every edit routes through here, so undo/redo covers them uniformly.
+  // The selection is cleared because the buffer changed under it (the old code
+  // cleared it per-op).
+  const pushEdit = (nextAudio: ClipAudio, op: EditOperation) => {
+    setHistory((h) => {
+      const kept = h.snapshots.slice(0, h.cursor + 1)
+      return { snapshots: [...kept, { audio: nextAudio, op }], cursor: kept.length }
+    })
+    setSelection(null)
+  }
+  const undo = () => {
+    setHistory((h) => (h.cursor > 0 ? { ...h, cursor: h.cursor - 1 } : h))
+    setSelection(null)
+    setGainPreview(null)
+  }
+  const redo = () => {
+    setHistory((h) =>
+      h.cursor < h.snapshots.length - 1 ? { ...h, cursor: h.cursor + 1 } : h
+    )
+    setSelection(null)
+    setGainPreview(null)
+  }
 
   // Load this clip into the player so the playhead + seek reuse the real audio
   // engine. Async dispatch (not synchronous setState), only on clip change.
@@ -168,12 +228,11 @@ export function WaveformEditor({
     if (kind === "cut") {
       setClipboard(sliceRegion(edited, selection.startSec, selection.endSec))
     }
-    setEdited(removeRegion(edited, selection.startSec, selection.endSec))
-    setOperations((ops) => [
-      ...ops,
-      { kind, startSec: selection.startSec, endSec: selection.endSec },
-    ])
-    setSelection(null)
+    pushEdit(removeRegion(edited, selection.startSec, selection.endSec), {
+      kind,
+      startSec: selection.startSec,
+      endSec: selection.endSec,
+    })
   }
 
   const paste = () => {
@@ -184,9 +243,7 @@ export function WaveformEditor({
     const atSec = clampSec(playheadSec)
     const durationSec = clipboard.length / edited.sampleRate
     const next = insertRegion(edited, atSec, clipboard)
-    setEdited(next)
-    setOperations((ops) => [...ops, { kind: "paste", atSec, durationSec }])
-    setSelection(null)
+    pushEdit(next, { kind: "paste", atSec, durationSec })
     // Move the playhead to the end of the pasted region, in the NEW timeline.
     dispatch({
       type: "seek/request",
@@ -199,18 +256,16 @@ export function WaveformEditor({
     onCopy: copy,
     onPaste: paste,
     onDelete: () => removeSelected("delete"),
+    onUndo: undo,
+    onRedo: redo,
   })
 
   // --- Processing ops (US-18.3) --------------------------------------------
-  // Commit an amplitude transform: swap in the new audio, log the intent for the
-  // US-18.4 save seam, and clear the selection. The clear is deliberate for every
-  // op — the buffer changed, so the old selection's coordinates are stale (this
-  // includes crossfade, which is playhead-based and ignores the selection).
-  const commit = (next: ClipAudio, op: EditOperation) => {
-    setEdited(next)
-    setOperations((ops) => [...ops, op])
-    setSelection(null)
-  }
+  // Commit an amplitude transform through the undo/redo history (US-18.4). The
+  // selection clear happens in pushEdit — deliberate for every op, since the
+  // buffer changed and the old selection's coordinates are stale (crossfade
+  // included, which is playhead-based and ignores the selection).
+  const commit = (next: ClipAudio, op: EditOperation) => pushEdit(next, op)
 
   const fadeIn = () => {
     if (!selection) return
@@ -283,17 +338,34 @@ export function WaveformEditor({
         <h1 className="truncate text-lg font-semibold">
           {clip.title ?? "Untitled clip"}
         </h1>
-        <ZoomControls
-          onZoomIn={() =>
-            zoomAt((vp ? vp.pxPerSec : fitPx) * BUTTON_ZOOM_FACTOR, width / 2)
-          }
-          onZoomOut={() =>
-            zoomAt((vp ? vp.pxPerSec : fitPx) / BUTTON_ZOOM_FACTOR, width / 2)
-          }
-          onFit={fit}
-          atMin={atMin}
-          atMax={atMax}
-        />
+        <div className="flex items-center gap-2">
+          <UndoRedoControls
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setSaveOpen(true)}
+            disabled={!isDirty}
+          >
+            <HugeiconsIcon icon={FloppyDiskIcon} data-icon="inline-start" />
+            Save as new version
+          </Button>
+          <ZoomControls
+            onZoomIn={() =>
+              zoomAt((vp ? vp.pxPerSec : fitPx) * BUTTON_ZOOM_FACTOR, width / 2)
+            }
+            onZoomOut={() =>
+              zoomAt((vp ? vp.pxPerSec : fitPx) / BUTTON_ZOOM_FACTOR, width / 2)
+            }
+            onFit={fit}
+            atMin={atMin}
+            atMax={atMax}
+          />
+        </div>
       </div>
 
       <EditToolbar
@@ -353,6 +425,14 @@ export function WaveformEditor({
           onScroll={scrollTo}
         />
       )}
+
+      <SaveVersionModal
+        clipId={clip.id}
+        audio={edited}
+        operations={operations}
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+      />
     </div>
   )
 }
