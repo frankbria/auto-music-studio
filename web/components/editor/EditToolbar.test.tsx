@@ -80,6 +80,31 @@ describe("EditToolbar", () => {
     expect(p.onGainApply).toHaveBeenCalledWith(0.5)
   })
 
+  it("freezes the whole toolbar (incl. open-popover Apply) when disabled", () => {
+    const onGainApply = vi.fn()
+    const base: EditToolbarProps = {
+      hasSelection: true,
+      onFadeIn: vi.fn(),
+      onFadeOut: vi.fn(),
+      onSilence: vi.fn(),
+      onNormalize: vi.fn(),
+      onGainPreview: vi.fn(),
+      onGainApply,
+      onCrossfade: vi.fn(),
+    }
+    const { rerender } = render(<EditToolbar {...base} disabled={false} />)
+    // Open the Gain popover while enabled, then a repaint starts (disabled=true).
+    fireEvent.click(btn("Gain"))
+    expect(btn("Apply gain")).toBeEnabled()
+
+    rerender(<EditToolbar {...base} disabled />)
+    // Triggers freeze, and the already-open Apply must not commit an edit either.
+    expect(btn("Normalize")).toBeDisabled()
+    expect(btn("Apply gain")).toBeDisabled()
+    fireEvent.click(btn("Apply gain"))
+    expect(onGainApply).not.toHaveBeenCalled()
+  })
+
   it("carries a non-default crossfade slider value through to Apply", () => {
     const p = renderToolbar()
     fireEvent.click(btn("Crossfade"))

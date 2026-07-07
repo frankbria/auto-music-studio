@@ -160,6 +160,9 @@ export function EditToolbar({
             size="sm"
             className="w-full"
             aria-label="Apply gain"
+            // Guard the commit itself, not just the trigger: an already-open
+            // popover must not commit an edit once the toolbar is frozen.
+            disabled={disabled}
             onClick={() => {
               cancelPreview()
               onGainApply(gainDb)
@@ -198,6 +201,7 @@ export function EditToolbar({
             size="sm"
             className="w-full"
             aria-label="Apply crossfade"
+            disabled={disabled}
             onClick={() => {
               onCrossfade(crossfadeMs / 1000)
               setCrossfadeOpen(false)
