@@ -8,11 +8,12 @@ import type { ClipAudio } from "@/lib/audio-peaks"
 
 const BYTES_PER_SAMPLE = 2 // 16-bit PCM
 
-/** Clamp to [-1, 1] and quantize to a signed 16-bit integer. */
+/** Clamp to [-1, 1] and quantize to the nearest signed 16-bit integer. */
 function toInt16(sample: number): number {
   const s = Math.max(-1, Math.min(1, sample))
-  // Asymmetric range: negative floor is -32768, positive ceiling +32767.
-  return s < 0 ? s * 0x8000 : s * 0x7fff
+  // Round (not truncate — setInt16 would truncate toward zero, biasing every
+  // sample down by up to ~1 LSB). Asymmetric range: floor -32768, ceiling +32767.
+  return s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7fff)
 }
 
 /** Serialize mono `ClipAudio` as a 16-bit PCM WAV `Blob`. */

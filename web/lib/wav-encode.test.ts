@@ -50,4 +50,14 @@ describe("encodeWav", () => {
     expect(view.getInt16(44 + 2 * 2, true)).toBe(-0x8000) // -1.0
     expect(view.getInt16(44 + 3 * 2, true)).toBe(0x7fff) // clamped
   })
+
+  it("rounds to the nearest int16 rather than truncating toward zero", async () => {
+    // 0.5 * 32767 = 16383.5 → 16384 rounded (truncation would give 16383).
+    const view = await encodeToView({
+      mono: new Float32Array([0.5]),
+      sampleRate: 8000,
+      duration: 1 / 8000,
+    })
+    expect(view.getInt16(44, true)).toBe(16384)
+  })
 })
