@@ -17,11 +17,14 @@ export function UndoRedoControls({
   onRedo,
   canUndo,
   canRedo,
+  disabled = false,
 }: {
   onUndo: () => void
   onRedo: () => void
   canUndo: boolean
   canRedo: boolean
+  /** Freeze both controls (e.g. while a repaint job is in flight). */
+  disabled?: boolean
 }) {
   return (
     <div className="flex items-center gap-1">
@@ -32,7 +35,7 @@ export function UndoRedoControls({
         aria-label="Undo"
         title="Undo (Ctrl+Z)"
         onClick={onUndo}
-        disabled={!canUndo}
+        disabled={disabled || !canUndo}
       >
         <HugeiconsIcon icon={Undo02Icon} />
       </Button>
@@ -43,7 +46,7 @@ export function UndoRedoControls({
         aria-label="Redo"
         title="Redo (Ctrl+Shift+Z)"
         onClick={onRedo}
-        disabled={!canRedo}
+        disabled={disabled || !canRedo}
       >
         <HugeiconsIcon icon={Redo02Icon} />
       </Button>

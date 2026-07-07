@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WaveformEditor } from "./WaveformEditor"
@@ -13,6 +14,25 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "test-token" }),
 }))
 
+// Repaint (US-18.5) reuses the real submit→poll pipeline; mock only its network
+// edges so a completed job flows back into the editor's undo stack. importActual
+// keeps the rest of these modules (SaveVersionModal's saveClipVersion, the real
+// peak helpers) intact.
+const submitRepaint = vi.fn()
+const decodeClipAudio = vi.fn()
+const fetchJobStatus = vi.fn()
+vi.mock("@/lib/editing", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/editing")>()),
+  submitRepaint: (...args: unknown[]) => submitRepaint(...args),
+}))
+vi.mock("@/lib/audio-peaks", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/audio-peaks")>()),
+  decodeClipAudio: (...args: unknown[]) => decodeClipAudio(...args),
+}))
+vi.mock("@/lib/job-status", () => ({
+  fetchJobStatus: (...args: unknown[]) => fetchJobStatus(...args),
+}))
+
 // jsdom reports clientWidth as 0, so the viewport never initializes. Stub a real
 // width so the canvas + controls render like they do in a browser.
 let widthSpy: PropertyDescriptor | undefined
@@ -25,6 +45,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   if (widthSpy) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthSpy)
+  vi.clearAllMocks()
 })
 
 function fakeClip(): Clip {
@@ -342,5 +363,113 @@ describe("WaveformEditor", () => {
     expect(saveBtn()).toBeEnabled()
     fireEvent.click(undoBtn()) // no edits applied again
     expect(saveBtn()).toBeDisabled()
+  })
+
+  // --- Repaint mode (US-18.5) ----------------------------------------------
+
+  it("shows the repaint panel only while a region is selected", () => {
+    renderEditor()
+    expect(screen.queryByTestId("repaint-panel")).not.toBeInTheDocument()
+    dragSelect(2, 5)
+    expect(screen.getByTestId("repaint-panel")).toBeInTheDocument()
+  })
+
+  it("applies a completed repaint as an undoable edit", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    // The child clip is the full crossfade-blended result; a 6s duration lets us
+    // see it land in the editor's buffer (and undo back to the original 10s).
+    decodeClipAudio.mockResolvedValue({ mono: new Float32Array(480), sampleRate: 80, duration: 6 })
+
+    renderEditor()
+    dragSelect(2, 5)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+
+    // The decoded child replaces the buffer as a recorded repaint op.
+    await waitFor(() => expect(editedDuration()).toBeCloseTo(6))
+    expect(opCount()).toBe(1)
+    expect(submitRepaint).toHaveBeenCalledWith(
+      "c1",
+      expect.objectContaining({ start: "2s", end: "5s", prompt: "make it jazzy" }),
+      "test-token"
+    )
+
+    // Undoable: back to the pristine original, op log cleared.
+    fireEvent.click(undoBtn())
+    expect(editedDuration()).toBeCloseTo(10)
+    expect(opCount()).toBe(0)
+  })
+
+  it("keeps the repaint job alive when the selection is cleared mid-poll", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
+
+    renderEditor()
+    dragSelect(2, 5)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await screen.findByRole("status") // reached submitting/polling
+
+    // A bare canvas click seeks and clears the selection mid-generation.
+    fireEvent.pointerDown(canvas(), { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(canvas(), { clientX: 160, pointerId: 1 })
+
+    // Selection readout is gone, but the panel — and its poll — must survive so
+    // the paid result isn't silently dropped.
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    expect(screen.getByTestId("repaint-panel")).toBeInTheDocument()
+  })
+
+  it("freezes other edits while a repaint is in flight", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
+
+    renderEditor()
+    // One prior edit so Undo would otherwise be available.
+    dragSelect(2, 5)
+    key("Delete")
+    expect(opCount()).toBe(1)
+
+    // Start a repaint on a fresh selection.
+    dragSelect(1, 3)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await screen.findByRole("status") // job in flight
+
+    // The buffer is about to be replaced wholesale — every mutating affordance is
+    // frozen so an intervening edit can't be silently reverted (and mislogged).
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Fade In" })).toBeDisabled()
+    expect(undoBtn()).toBeDisabled()
+    key("z", { ctrlKey: true }) // keyboard undo is a no-op too
+    expect(opCount()).toBe(1) // unchanged — the intervening undo was blocked
+  })
+
+  it("stays frozen through the decode window, not just the poll", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    // Hold the decode open so we can inspect the window between job-complete and
+    // the result landing — the freeze must persist across it.
+    let resolveDecode: (a: unknown) => void = () => {}
+    decodeClipAudio.mockReturnValue(new Promise((res) => { resolveDecode = res }))
+
+    renderEditor()
+    dragSelect(2, 5)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+
+    // Job completed, decode in flight ("Applying…"): edits must still be frozen.
+    await screen.findByText(/Applying/)
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeDisabled()
+
+    // Finish the decode → the result lands and editing unfreezes.
+    resolveDecode({ mono: new Float32Array(480), sampleRate: 80, duration: 6 })
+    await waitFor(() => expect(editedDuration()).toBeCloseTo(6))
+    expect(screen.getByRole("button", { name: "Normalize" })).toBeEnabled()
   })
 })
