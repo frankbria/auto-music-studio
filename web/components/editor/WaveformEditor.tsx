@@ -6,6 +6,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { FloppyDiskIcon } from "@hugeicons/core-free-icons"
 
 import { EditToolbar } from "@/components/editor/EditToolbar"
+import { RepaintPanel } from "@/components/editor/RepaintPanel"
 import { SaveVersionModal } from "@/components/editor/SaveVersionModal"
 import { SelectionInfo } from "@/components/editor/SelectionInfo"
 import { SelectionOverlay } from "@/components/editor/SelectionOverlay"
@@ -416,6 +417,17 @@ export function WaveformEditor({
       <div className="flex min-h-4 items-center justify-between gap-2">
         <SelectionInfo selection={selection} />
       </div>
+
+      {/* Repaint mode (US-18.5): a live selection unlocks AI section-regenerate.
+          The backend returns a full crossfade-blended child clip; we decode it
+          and push it through the same undo stack as every other edit. */}
+      {selection && (
+        <RepaintPanel
+          selection={selection}
+          clipId={clip.id}
+          onRepainted={(nextAudio, op) => pushEdit(nextAudio, op)}
+        />
+      )}
 
       {vp && (
         <WaveformScrollbar

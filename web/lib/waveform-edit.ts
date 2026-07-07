@@ -29,6 +29,11 @@ export type EditOperation =
   | { kind: "gain"; startSec: number; endSec: number; gainDb: number }
   | { kind: "normalize"; startSec: number; endSec: number; targetDb: number }
   | { kind: "crossfade"; positionSec: number; durationSec: number }
+  // US-18.5 AI repaint. Unlike the transforms above, the new samples come from
+  // the backend (a full crossfade-blended child clip) rather than a local buffer
+  // math op; recorded here so the section-regenerate rides the same undo stack +
+  // save-provenance seam as every other edit.
+  | { kind: "repaint"; startSec: number; endSec: number; prompt: string; style?: string }
 
 /** Order two times into a Region with start ≤ end. */
 export function normalizeRegion(a: number, b: number): Region {
