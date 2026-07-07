@@ -130,7 +130,16 @@ async function postEdit(
   } catch {
     return { status: "error", detail: "Something went wrong. Please try again." }
   }
+  return classifyEditResponse(res)
+}
 
+/**
+ * Classify a BFF editing response into an `EditSubmitResult` — 202 (accepted
+ * job), 401, 402 (credits), 422 (validation), else error. Shared by the
+ * JSON `postEdit` above and the multipart `saveClipVersion` below so both hit
+ * the same status → UI mapping.
+ */
+async function classifyEditResponse(res: Response): Promise<EditSubmitResult> {
   if (res.status === 202) {
     const body = await res.json().catch(() => ({}))
     const { job_id: jobId, estimated_time_seconds: estimated } = body as {
@@ -217,4 +226,43 @@ export function submitAddVocal(clipId: string, payload: AddVocalPayload, token: 
 
 export function submitMashup(payload: MashupPayload, token: string) {
   return postEdit("/api/mashup", compact(payload), token)
+}
+
+// --- Save as new version (US-18.4) ---
+
+/** Operation metadata sent alongside the audio for lineage/provenance. */
+export type VersionOperationSummary = { kind: string } & Record<string, unknown>
+
+/**
+ * Save the editor's current audio as a new clip version (US-18.4). Unlike the
+ * param-based edits above, the edited buffer only exists in the browser, so this
+ * uploads the encoded WAV as multipart form data (with an optional title and the
+ * operation log for provenance) to the clip-scoped `version` BFF route. The
+ * backend `POST /clips/{id}/version` endpoint that persists it with lineage is
+ * the deferred half of this seam — until it lands the call surfaces a normal
+ * error result, exactly like any other unavailable editing endpoint.
+ */
+export async function saveClipVersion(
+  clipId: string,
+  wav: Blob,
+  meta: { title?: string; operations: VersionOperationSummary[] },
+  accessToken: string
+): Promise<EditSubmitResult> {
+  const form = new FormData()
+  form.append("file", wav, "version.wav")
+  if (meta.title && meta.title.trim() !== "") form.append("title", meta.title.trim())
+  form.append("operations", JSON.stringify(meta.operations))
+
+  let res: Response
+  try {
+    // No explicit content-type: the browser sets multipart/form-data + boundary.
+    res = await fetch(clipPath(clipId, "version"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+      body: form,
+    })
+  } catch {
+    return { status: "error", detail: "Something went wrong. Please try again." }
+  }
+  return classifyEditResponse(res)
 }

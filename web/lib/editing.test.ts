@@ -138,3 +138,57 @@ describe("submitMashup", () => {
     })
   })
 })
+
+import { saveClipVersion } from "@/lib/editing"
+
+describe("saveClipVersion", () => {
+  const wav = () => new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" })
+
+  it("uploads the WAV + metadata as multipart to the version route and returns the job", async () => {
+    const fetchMock = stubFetch(
+      new Response(JSON.stringify({ job_id: "v1", status: "queued" }), { status: 202 })
+    )
+
+    const result = await saveClipVersion(
+      "clip-xyz",
+      wav(),
+      { title: "  Radio edit  ", operations: [{ kind: "delete", startSec: 1, endSec: 2 }] },
+      "tok"
+    )
+
+    expect(result).toEqual({ status: "accepted", jobId: "v1", estimatedSeconds: 0 })
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/clips/clip-xyz/version")
+    expect(opts.method).toBe("POST")
+    expect(opts.headers.authorization).toBe("Bearer tok")
+    // No explicit content-type: the browser sets multipart + boundary itself.
+    expect(opts.headers["content-type"]).toBeUndefined()
+
+    const form = opts.body as FormData
+    expect(form).toBeInstanceOf(FormData)
+    expect(form.get("title")).toBe("Radio edit") // trimmed
+    expect(JSON.parse(form.get("operations") as string)).toEqual([
+      { kind: "delete", startSec: 1, endSec: 2 },
+    ])
+    expect(form.get("file")).toBeInstanceOf(Blob)
+  })
+
+  it("omits a blank title", async () => {
+    const fetchMock = stubFetch(new Response("{}", { status: 202 }))
+    await saveClipVersion("c", wav(), { title: "   ", operations: [] }, "tok")
+    const form = fetchMock.mock.calls[0][1].body as FormData
+    expect(form.get("title")).toBeNull()
+  })
+
+  it("classifies a 404 (endpoint not yet deployed) as an error result", async () => {
+    stubFetch(new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 }))
+    const result = await saveClipVersion("c", wav(), { operations: [] }, "tok")
+    expect(result).toEqual({ status: "error", detail: "Not Found" })
+  })
+
+  it("returns an error result when the network throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")))
+    const result = await saveClipVersion("c", wav(), { operations: [] }, "tok")
+    expect(result.status).toBe("error")
+  })
+})
