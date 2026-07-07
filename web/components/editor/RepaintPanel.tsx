@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
@@ -27,17 +27,29 @@ import type { EditOperation, Region } from "@/lib/waveform-edit"
 // repaint for free rather than needing a separate navigation-based undo. The
 // selected region's readout is the editor's own SelectionInfo, rendered directly
 // above this panel — no need to duplicate it here.
+//
+// The submit → poll job can run for minutes and consumes a credit, but a bare
+// canvas click or any other edit clears the selection, which would unmount this
+// panel. So it reports its active (polling) state up via `onActiveChange`; the
+// editor keeps it mounted while a job is in flight so the paid result is never
+// silently dropped.
 
 type RepaintSubmitted = { prompt: string; style?: string; startSec: number; endSec: number }
+
+// Round seconds to millisecond precision so the "Ns" payload stays tidy
+// (e.g. "15.238s", not "15.23835616438356s" straight off the pixel→sec math).
+const coord = (sec: number) => `${Math.round(sec * 1000) / 1000}s`
 
 export function RepaintPanel({
   selection,
   clipId,
   onRepainted,
+  onActiveChange,
 }: {
   selection: Region
   clipId: string
   onRepainted: (audio: ClipAudio, op: EditOperation) => void
+  onActiveChange?: (active: boolean) => void
 }) {
   const { accessToken } = useAuth()
   const edit = useClipEdit()
@@ -54,6 +66,9 @@ export function RepaintPanel({
   // One-shot guard: `useClipEdit`'s success state persists across the frequent
   // re-renders the player's time-tick drives, so the decode must run exactly once.
   const appliedRef = useRef(false)
+  // The completed job's child clip id, retained so a decode-only failure can
+  // retry the fetch without resubmitting (and re-charging) the generation.
+  const childIdRef = useRef<string | null>(null)
   // `onRepainted` in a ref so a changing parent closure doesn't re-arm the apply
   // effect (which would cancel an in-flight decode and drop the result).
   const onRepaintedRef = useRef(onRepainted)
@@ -67,13 +82,64 @@ export function RepaintPanel({
   const overStyle = style.length > STYLE_MAX_LENGTH
   const valid = prompt.trim().length > 0 && !overPrompt && !overStyle
 
-  const busy = edit.state.phase === "submitting" || edit.state.phase === "polling" || applying
-  const errorMsg =
-    applyError ?? (edit.state.phase === "error" ? edit.state.message : null)
+  // Active == the poll is running. This must outlive a selection clear, so the
+  // editor keeps the panel mounted while it's true. (`applying`/success come
+  // after the poll; the decode promise survives an unmount on its own.)
+  const active = edit.state.phase === "submitting" || edit.state.phase === "polling"
+  useEffect(() => {
+    onActiveChange?.(active)
+  }, [active, onActiveChange])
+
+  const succeeded = edit.state.phase === "success"
+  const busy = active || succeeded || applying
+  const jobError = edit.state.phase === "error" ? edit.state.message : null
+  const errorMsg = applyError ?? jobError
+
+  // Decode the finished child clip and hand it up as a repaint edit. Split out so
+  // the decode-failure branch can retry just the fetch — the job (and its paid
+  // child clip) already succeeded server-side.
+  const applyChild = useCallback(
+    (childId: string) => {
+      const submitted = submittedRef.current
+      if (!childId || !accessToken || !submitted) {
+        setApplyError("Repaint finished but returned no clip.")
+        return
+      }
+      childIdRef.current = childId
+      setApplyError(null)
+      setApplying(true)
+      decodeClipAudio(childId, accessToken)
+        .then((audio) => {
+          const op: EditOperation = {
+            kind: "repaint",
+            startSec: submitted.startSec,
+            endSec: submitted.endSec,
+            prompt: submitted.prompt,
+            ...(submitted.style ? { style: submitted.style } : {}),
+          }
+          if (mountedRef.current) setApplying(false)
+          onRepaintedRef.current(audio, op)
+        })
+        .catch(() => {
+          if (!mountedRef.current) return
+          setApplying(false)
+          setApplyError("Couldn't load the repainted audio. Please try again.")
+        })
+    },
+    [accessToken]
+  )
+
+  // When the job completes, decode + apply exactly once (guarded by appliedRef).
+  useEffect(() => {
+    if (edit.state.phase !== "success" || appliedRef.current) return
+    appliedRef.current = true
+    applyChild(edit.state.clipIds[0])
+  }, [edit.state, applyChild])
 
   function handleSubmit() {
     if (!accessToken || !valid) return
     appliedRef.current = false
+    childIdRef.current = null
     setApplyError(null)
     const p = prompt.trim()
     const s = style.trim()
@@ -83,40 +149,18 @@ export function RepaintPanel({
       startSec: selection.startSec,
       endSec: selection.endSec,
     }
-    const payload = { start: `${selection.startSec}s`, end: `${selection.endSec}s`, prompt: p, ...(s ? { style: s } : {}) }
+    const payload = { start: coord(selection.startSec), end: coord(selection.endSec), prompt: p, ...(s ? { style: s } : {}) }
     void edit.submit(() => submitRepaint(clipId, payload, accessToken), accessToken)
   }
 
-  // When the job completes, pull the child clip's audio and hand it up as a
-  // repaint snapshot. Keyed on the job state (not on the parent closure), guarded
-  // one-shot; the parent clearing the selection through pushEdit unmounts us.
-  useEffect(() => {
-    if (edit.state.phase !== "success" || appliedRef.current) return
-    appliedRef.current = true
-    const childId = edit.state.clipIds[0]
-    const submitted = submittedRef.current
-    if (!childId || !accessToken || !submitted) {
-      setApplyError("Repaint finished but returned no clip.")
-      return
-    }
-    setApplying(true)
-    decodeClipAudio(childId, accessToken)
-      .then((audio) => {
-        const op: EditOperation = {
-          kind: "repaint",
-          startSec: submitted.startSec,
-          endSec: submitted.endSec,
-          prompt: submitted.prompt,
-          ...(submitted.style ? { style: submitted.style } : {}),
-        }
-        onRepaintedRef.current(audio, op)
-      })
-      .catch(() => {
-        if (!mountedRef.current) return
-        setApplying(false)
-        setApplyError("Couldn't load the repainted audio. Please try again.")
-      })
-  }, [edit.state, accessToken])
+  // A decode-only failure means the job succeeded but the fetch/decode afterward
+  // failed — retry just that, never a new (paid) generation.
+  const onRetry = applyError
+    ? () => {
+        if (childIdRef.current) applyChild(childIdRef.current)
+      }
+    : handleSubmit
+  const retryDisabled = applyError ? false : !valid
 
   return (
     <div
@@ -125,29 +169,33 @@ export function RepaintPanel({
     >
       <h2 className="text-sm font-semibold">Repaint selection</h2>
 
-      {busy ? (
-        <div role="status" className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
-          <HugeiconsIcon icon={Loading03Icon} className="animate-spin" data-icon="inline-start" />
-          <span>
-            {applying ? "Applying…" : "Regenerating…"}
-            {edit.state.phase === "polling" && edit.state.estimatedSeconds > 0
-              ? ` ~${edit.state.estimatedSeconds}s`
-              : ""}
-          </span>
-          {edit.state.phase === "polling" && edit.state.progress && (
-            <span className="text-xs">{edit.state.progress}</span>
-          )}
-        </div>
-      ) : errorMsg ? (
+      {/* Error takes precedence over `busy` — the sticky `success` phase keeps
+          `busy` true even after a decode-only failure, which would otherwise mask
+          the error behind the spinner. */}
+      {errorMsg ? (
         <div className="flex flex-col gap-2">
           <p role="alert" className="text-sm text-destructive">
             {errorMsg}
           </p>
           <div>
-            <Button type="button" size="sm" onClick={handleSubmit} disabled={!valid}>
+            <Button type="button" size="sm" onClick={onRetry} disabled={retryDisabled}>
               Try again
             </Button>
           </div>
+        </div>
+      ) : busy ? (
+        <div role="status" className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+          <HugeiconsIcon icon={Loading03Icon} className="animate-spin" data-icon="inline-start" />
+          <span>
+            {edit.state.phase === "polling"
+              ? `Regenerating…${edit.state.estimatedSeconds > 0 ? ` ~${edit.state.estimatedSeconds}s` : ""}`
+              : edit.state.phase === "submitting"
+                ? "Submitting…"
+                : "Applying…"}
+          </span>
+          {edit.state.phase === "polling" && edit.state.progress && (
+            <span className="text-xs">{edit.state.progress}</span>
+          )}
         </div>
       ) : (
         <div className="flex flex-col gap-3">

@@ -91,6 +91,14 @@ export function WaveformEditor({
   }))
   const [selection, setSelection] = useState<Region | null>(null)
   const [clipboard, setClipboard] = useState<Float32Array | null>(null)
+  // A repaint job outlives the selection that started it (any edit/seek clears
+  // the selection), so keep the panel mounted while its poll is active — else
+  // unmounting it would kill the poll and silently drop a paid generation.
+  // (US-18.5)
+  const [repaintActive, setRepaintActive] = useState(false)
+  // The region the repaint panel stays bound to once its job is in flight — the
+  // last non-null selection, so the panel survives the selection being cleared.
+  const [lastSelection, setLastSelection] = useState<Region | null>(null)
   // Pending gain (dB) while the Gain popover is open — drives a live, throwaway
   // waveform preview; null when nothing is being previewed. (US-18.3)
   const [gainPreview, setGainPreview] = useState<number | null>(null)
@@ -200,8 +208,13 @@ export function WaveformEditor({
     return r.endSec > r.startSec ? r : null
   }
 
-  // A drag on the canvas sweeps a new selection.
-  const select = (a: number, b: number) => setSelection(regionOrNull(a, b))
+  // A drag on the canvas sweeps a new selection. Remember the region so a repaint
+  // job started from it keeps the panel mounted after the selection is cleared.
+  const select = (a: number, b: number) => {
+    const r = regionOrNull(a, b)
+    setSelection(r)
+    if (r) setLastSelection(r)
+  }
 
   // A handle drag moves one edge; re-normalize so start ≤ end if they cross.
   const adjustEdge = (edge: "start" | "end", sec: number) =>
@@ -328,6 +341,12 @@ export function WaveformEditor({
   const atMin = !vp || vp.pxPerSec <= fitPx + 1e-6
   const atMax = !!vp && vp.pxPerSec >= MAX_PX_PER_SEC - 1e-6
 
+  // The repaint panel binds to the live selection, or (once its job is in flight
+  // and the selection has been cleared) the last region a drag produced — tracked
+  // in `select` below, so the panel keeps a stable region without reading a ref
+  // during render.
+  const repaintSelection = selection ?? lastSelection
+
   return (
     <div
       className="flex flex-col gap-2"
@@ -420,12 +439,16 @@ export function WaveformEditor({
 
       {/* Repaint mode (US-18.5): a live selection unlocks AI section-regenerate.
           The backend returns a full crossfade-blended child clip; we decode it
-          and push it through the same undo stack as every other edit. */}
-      {selection && (
+          and push it through the same undo stack as every other edit. Kept
+          mounted while a job is active even after the selection clears, so the
+          in-flight poll survives; `repaintSelection` falls back to the region the
+          job was started on for that window. */}
+      {repaintSelection && (selection || repaintActive) && (
         <RepaintPanel
-          selection={selection}
+          selection={repaintSelection}
           clipId={clip.id}
           onRepainted={(nextAudio, op) => pushEdit(nextAudio, op)}
+          onActiveChange={setRepaintActive}
         />
       )}
 

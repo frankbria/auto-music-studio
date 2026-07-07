@@ -401,4 +401,25 @@ describe("WaveformEditor", () => {
     expect(editedDuration()).toBeCloseTo(10)
     expect(opCount()).toBe(0)
   })
+
+  it("keeps the repaint job alive when the selection is cleared mid-poll", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
+
+    renderEditor()
+    dragSelect(2, 5)
+    const panel = screen.getByTestId("repaint-panel")
+    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await screen.findByRole("status") // reached submitting/polling
+
+    // A bare canvas click seeks and clears the selection mid-generation.
+    fireEvent.pointerDown(canvas(), { clientX: 160, pointerId: 1 })
+    fireEvent.pointerUp(canvas(), { clientX: 160, pointerId: 1 })
+
+    // Selection readout is gone, but the panel — and its poll — must survive so
+    // the paid result isn't silently dropped.
+    expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
+    expect(screen.getByTestId("repaint-panel")).toBeInTheDocument()
+  })
 })

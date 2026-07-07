@@ -84,6 +84,33 @@ describe("RepaintPanel", () => {
     })
   })
 
+  it("retries only the decode (no resubmit) after the job succeeded but the fetch failed", async () => {
+    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    // First decode fails (network blip on the already-generated clip), then succeeds.
+    decodeClipAudio.mockRejectedValueOnce(new Error("net")).mockResolvedValueOnce(CHILD_AUDIO)
+    const onRepainted = vi.fn()
+
+    render(
+      <RepaintPanel selection={selection} clipId="clip-1" onRepainted={onRepainted} />
+    )
+    await userEvent.type(screen.getByLabelText(/Instructions/), "make it jazzy")
+    await userEvent.click(screen.getByRole("button", { name: "Regenerate" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/Couldn't load the repainted audio/)
+    )
+    expect(submitRepaint).toHaveBeenCalledTimes(1)
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(onRepainted).toHaveBeenCalled())
+
+    // Retry re-fetched the same child; it did NOT start a new (paid) generation.
+    expect(submitRepaint).toHaveBeenCalledTimes(1)
+    expect(decodeClipAudio).toHaveBeenCalledTimes(2)
+    expect(decodeClipAudio).toHaveBeenLastCalledWith("child-1", "tok")
+  })
+
   it("surfaces a failed job and offers retry, without applying anything", async () => {
     submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
     fetchJobStatus.mockResolvedValue({ kind: "failed", error: "Generation failed." })
