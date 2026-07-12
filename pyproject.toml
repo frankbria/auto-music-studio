@@ -61,7 +61,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "black",
-    "uvicorn[standard]>=0.29",
+    "uvicorn[standard]>=0.49.0",
     "freezegun",
     "respx>=0.23.1",
 ]
@@ -69,7 +69,7 @@ audio-ml-midi = [
     "basic-pitch>=0.3.0",
 ]
 api = [
-    "uvicorn[standard]>=0.29",
+    "uvicorn[standard]>=0.49.0",
 ]
 s3 = [
     "boto3>=1.34",
