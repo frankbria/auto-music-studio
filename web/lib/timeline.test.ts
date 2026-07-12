@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest"
 import {
   BASE_PX_PER_SEC,
   MAX_ZOOM,
+  MIN_TIMELINE_SEC,
   MIN_ZOOM,
   clampZoom,
   computePlaybackSchedule,
   secToX,
+  timelineDurationSec,
   timelineTicks,
   xToSec,
   zoomToPxPerSec,
@@ -78,6 +80,34 @@ describe("timelineTicks bars-beats mode", () => {
     expect(ticks.length).toBeGreaterThan(0)
     // Every tick should land on a bar boundary (2s multiples at 120 BPM 4/4).
     for (const t of ticks) expect(t.sec % 2).toBe(0)
+  })
+})
+
+describe("timelineDurationSec", () => {
+  it("floors at MIN_TIMELINE_SEC when there are no placements", () => {
+    expect(timelineDurationSec([])).toBe(MIN_TIMELINE_SEC)
+  })
+
+  it("extends past the floor to fit the furthest clip, plus padding", () => {
+    const placements: Placement[] = [
+      { id: "p1", clipId: "c1", startSec: 0, title: "a", durationSec: 4 },
+      {
+        id: "p2",
+        clipId: "c2",
+        startSec: MIN_TIMELINE_SEC,
+        title: "b",
+        durationSec: 30,
+      },
+    ]
+    const duration = timelineDurationSec(placements)
+    expect(duration).toBeGreaterThan(MIN_TIMELINE_SEC + 30)
+  })
+
+  it("treats a null duration as zero-length for the extent calculation", () => {
+    const placements: Placement[] = [
+      { id: "p1", clipId: "c1", startSec: 5, title: "a", durationSec: null },
+    ]
+    expect(timelineDurationSec(placements)).toBe(MIN_TIMELINE_SEC)
   })
 })
 

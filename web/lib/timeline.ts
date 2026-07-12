@@ -105,6 +105,23 @@ export type Placement = {
   durationSec: number | null
 }
 
+/** Timeline never renders shorter than this, even with no clips placed. */
+export const MIN_TIMELINE_SEC = 60
+/** Trailing room past the furthest clip, so there's always room to drop more. */
+const TIMELINE_PADDING_SEC = 20
+
+/**
+ * Total timeline length: the floor, or far enough to fit every placement (plus
+ * padding to drop new clips past the end), whichever is longer.
+ */
+export function timelineDurationSec(placements: Placement[]): number {
+  const furthestEnd = placements.reduce(
+    (max, p) => Math.max(max, p.startSec + (p.durationSec ?? 0)),
+    0
+  )
+  return Math.max(MIN_TIMELINE_SEC, furthestEnd + TIMELINE_PADDING_SEC)
+}
+
 /** One clip scheduled to play through the studio's AudioContext. */
 export type ScheduledClip = {
   clipId: string
