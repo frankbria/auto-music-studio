@@ -6,8 +6,10 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { ZoomInAreaIcon, ZoomOutAreaIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
 import { TimeRuler } from "@/components/studio/TimeRuler"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import { useAuth } from "@/hooks/use-auth"
 import { useClip } from "@/hooks/use-clip"
 import { useRequireAuth } from "@/hooks/use-require-auth"
 import {
@@ -97,6 +99,7 @@ function StudioHeader() {
 
 function StudioTimeline() {
   const { state, dispatch } = useStudio()
+  const { accessToken } = useAuth()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Latest zoom read through a ref so the non-passive wheel listener (needed
@@ -134,6 +137,17 @@ function StudioTimeline() {
         durationSec={durationSec}
         displayMode={state.displayMode}
       />
+      {state.tracks.map((track) => (
+        <TrackLane
+          key={track.id}
+          track={track}
+          pxPerSec={pxPerSec}
+          token={accessToken}
+        />
+      ))}
+      <div className="p-2">
+        <AddTrackButton />
+      </div>
     </div>
   )
 }

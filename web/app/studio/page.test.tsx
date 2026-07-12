@@ -14,6 +14,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => searchParamsRef.current,
 }))
 
+const { getClipAudioMock } = vi.hoisted(() => ({
+  getClipAudioMock: vi.fn(() => new Promise(() => {})),
+}))
+vi.mock("@/lib/clip-audio-cache", () => ({
+  getClipAudio: getClipAudioMock,
+}))
+
 import StudioPage from "@/app/studio/page"
 import { AuthContext } from "@/contexts/auth-context"
 
@@ -42,6 +49,7 @@ function jsonRes(body: unknown, status = 200) {
 afterEach(() => {
   searchParamsRef.current = new URLSearchParams()
   vi.unstubAllGlobals()
+  getClipAudioMock.mockClear()
 })
 
 describe("StudioPage auth gate", () => {
@@ -87,8 +95,36 @@ describe("StudioPage header", () => {
 })
 
 describe("StudioPage ?song= preload", () => {
-  // Track lanes/ClipBlock (rendering the preloaded clip visually) land in a
-  // later step; this covers the fetch wiring that feeds ADD_TRACK/ADD_CLIP.
+  it("adds a track and renders the preloaded clip on the timeline", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonRes({
+          id: "clip-1",
+          workspace_id: "w1",
+          title: "My Song",
+          format: "mp3",
+          duration: 30,
+          bpm: null,
+          key: null,
+          style_tags: [],
+          lyrics: null,
+          vocal_language: null,
+          model: null,
+          seed: null,
+          inference_steps: null,
+          parent_clip_ids: [],
+          generation_mode: null,
+          is_public: false,
+          created_at: "2026-01-01T00:00:00Z",
+        })
+      )
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+  })
+
   it("fetches the clip named by the song query param", async () => {
     searchParamsRef.current = new URLSearchParams("song=clip-1")
     const fetchMock = vi.fn().mockResolvedValue(

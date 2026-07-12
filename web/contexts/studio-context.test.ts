@@ -41,6 +41,21 @@ describe("studioReducer tracks", () => {
     s = studioReducer(s, { type: "REMOVE_TRACK", trackId: "t1" })
     expect(s.tracks.map((t) => t.id)).toEqual(["t2"])
   })
+
+  it("RENAME_TRACK updates the matching track's name", () => {
+    let s = studioReducer(base(), { type: "ADD_TRACK", id: "t1" })
+    s = studioReducer(s, { type: "ADD_TRACK", id: "t2" })
+    s = studioReducer(s, { type: "RENAME_TRACK", trackId: "t1", name: "Drums" })
+    expect(s.tracks[0].name).toBe("Drums")
+    expect(s.tracks[1].name).toBe("Track 2")
+  })
+
+  it("RENAME_TRACK on an unknown track is a no-op", () => {
+    const s = studioReducer(base(), { type: "ADD_TRACK", id: "t1" })
+    expect(
+      studioReducer(s, { type: "RENAME_TRACK", trackId: "missing", name: "X" })
+    ).toBe(s)
+  })
 })
 
 describe("studioReducer clips", () => {

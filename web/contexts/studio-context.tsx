@@ -46,6 +46,7 @@ const TRACK_COLORS = [
 export type StudioAction =
   | { type: "ADD_TRACK"; id: string; name?: string; color?: string }
   | { type: "REMOVE_TRACK"; trackId: string }
+  | { type: "RENAME_TRACK"; trackId: string; name: string }
   | {
       type: "ADD_CLIP"
       id: string
@@ -87,6 +88,15 @@ export function studioReducer(
         ...state,
         tracks: state.tracks.filter((t) => t.id !== action.trackId),
       }
+    case "RENAME_TRACK": {
+      if (!state.tracks.some((t) => t.id === action.trackId)) return state
+      return {
+        ...state,
+        tracks: state.tracks.map((t) =>
+          t.id === action.trackId ? { ...t, name: action.name } : t
+        ),
+      }
+    }
     case "ADD_CLIP": {
       const placement: Placement = {
         id: action.id,
