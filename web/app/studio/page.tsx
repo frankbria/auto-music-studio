@@ -15,6 +15,7 @@ import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import { useAuth } from "@/hooks/use-auth"
 import { useClip } from "@/hooks/use-clip"
 import { useRequireAuth } from "@/hooks/use-require-auth"
+import { useStudioPlayback } from "@/hooks/use-studio-playback"
 import {
   MAX_ZOOM,
   MIN_ZOOM,
@@ -104,6 +105,7 @@ function StudioHeader() {
 function StudioTimeline() {
   const { state, dispatch } = useStudio()
   const { accessToken } = useAuth()
+  useStudioPlayback(accessToken)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Latest zoom read through a ref so the non-passive wheel listener (needed
