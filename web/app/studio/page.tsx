@@ -7,7 +7,9 @@ import { ZoomInAreaIcon, ZoomOutAreaIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
+import { Playhead } from "@/components/studio/Playhead"
 import { TimeRuler } from "@/components/studio/TimeRuler"
+import { TransportControls } from "@/components/studio/TransportControls"
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import { useAuth } from "@/hooks/use-auth"
@@ -55,6 +57,7 @@ function StudioHeader() {
     <div className="flex items-center justify-between gap-2 border-b border-border p-4">
       <h1 className="text-2xl font-semibold">Studio</h1>
       <div className="flex items-center gap-2">
+        <TransportControls />
         <Button
           type="button"
           variant="outline"
@@ -133,19 +136,23 @@ function StudioTimeline() {
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-auto">
-      <TimeRuler
-        pxPerSec={pxPerSec}
-        durationSec={durationSec}
-        displayMode={state.displayMode}
-      />
-      {state.tracks.map((track) => (
-        <TrackLane
-          key={track.id}
-          track={track}
+      <div className="relative">
+        <TimeRuler
           pxPerSec={pxPerSec}
-          token={accessToken}
+          durationSec={durationSec}
+          displayMode={state.displayMode}
+          onSeek={(sec) => dispatch({ type: "SET_PLAYHEAD", sec })}
         />
-      ))}
+        {state.tracks.map((track) => (
+          <TrackLane
+            key={track.id}
+            track={track}
+            pxPerSec={pxPerSec}
+            token={accessToken}
+          />
+        ))}
+        <Playhead playheadSec={state.playheadSec} pxPerSec={pxPerSec} />
+      </div>
       <div className="p-2">
         <AddTrackButton />
       </div>

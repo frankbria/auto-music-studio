@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
@@ -91,11 +91,44 @@ describe("StudioPage header", () => {
   it("zooms in and out via the header buttons", async () => {
     const user = userEvent.setup()
     renderPage()
-    const ruler = () =>
-      document.querySelector('[aria-hidden="true"]') as HTMLElement
+    const ruler = () => screen.getByRole("img", { name: "Timeline" })
     const initialWidth = ruler().style.width
     await user.click(screen.getByRole("button", { name: "Zoom in" }))
     expect(ruler().style.width).not.toBe(initialWidth)
+  })
+
+  it("renders the transport controls", () => {
+    renderPage()
+    expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Return to start" })
+    ).toBeInTheDocument()
+  })
+})
+
+describe("StudioPage playhead", () => {
+  it("renders a playhead that seeks when the ruler is clicked", () => {
+    renderPage()
+    const ruler = screen.getByRole("img", { name: "Timeline" })
+    vi.spyOn(ruler, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    const playhead = screen.getByTestId("playhead")
+    expect(playhead.style.left).toBe("0px")
+
+    fireEvent.click(ruler, { clientX: 100 })
+    // Default zoom is 100 px/sec (BASE_PX_PER_SEC), so 100px -> 1s -> 100px.
+    expect(playhead.style.left).toBe("100px")
   })
 })
 

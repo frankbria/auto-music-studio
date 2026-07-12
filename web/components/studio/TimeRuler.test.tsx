@@ -1,7 +1,21 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { fireEvent, render, screen } from "@testing-library/react"
+import { describe, expect, it, vi } from "vitest"
 
 import { TimeRuler } from "./TimeRuler"
+
+function zeroRect() {
+  return {
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  }
+}
 
 describe("TimeRuler mm:ss mode", () => {
   it("labels major ticks as mm:ss", () => {
@@ -40,5 +54,31 @@ describe("TimeRuler sizing", () => {
     )
     const ruler = container.firstElementChild as HTMLElement
     expect(ruler.style.width).toBe("600px")
+  })
+})
+
+describe("TimeRuler click-to-seek", () => {
+  it("calls onSeek with the clicked x converted to seconds", () => {
+    const onSeek = vi.fn()
+    const { container } = render(
+      <TimeRuler
+        pxPerSec={20}
+        durationSec={60}
+        displayMode="mm-ss"
+        onSeek={onSeek}
+      />
+    )
+    const ruler = container.firstElementChild as HTMLElement
+    vi.spyOn(ruler, "getBoundingClientRect").mockReturnValue(zeroRect())
+    fireEvent.click(ruler, { clientX: 100 })
+    expect(onSeek).toHaveBeenCalledWith(5) // 100px / 20px-per-sec
+  })
+
+  it("does nothing when onSeek isn't provided", () => {
+    const { container } = render(
+      <TimeRuler pxPerSec={20} durationSec={60} displayMode="mm-ss" />
+    )
+    const ruler = container.firstElementChild as HTMLElement
+    expect(() => fireEvent.click(ruler)).not.toThrow()
   })
 })
