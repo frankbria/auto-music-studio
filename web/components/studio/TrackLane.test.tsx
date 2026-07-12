@@ -103,28 +103,36 @@ describe("TrackLane clips", () => {
   })
 })
 
-describe("TrackLane drop zone", () => {
-  it("accepts a dropped clip and adds it at the dropped position", async () => {
+function zeroRect() {
+  return {
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  }
+}
+
+describe("TrackLane drop zone — adding a new clip", () => {
+  it("accepts a dropped clip and adds it to the track", async () => {
     render(<Harness />)
     const region = screen.getByRole("region", { name: "Track 1 timeline" })
-    vi.spyOn(region, "getBoundingClientRect").mockReturnValue({
-      left: 0,
-      top: 0,
-      right: 0,
-      bottom: 0,
-      width: 0,
-      height: 0,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
 
     fireEvent.drop(region, {
       dataTransfer: {
         getData: () =>
-          JSON.stringify({ clipId: "c1", title: "Dropped", duration: 10 }),
+          JSON.stringify({
+            kind: "add",
+            clipId: "c1",
+            title: "Dropped",
+            duration: 10,
+          }),
       },
-      clientX: 100, // 100px / 20px-per-sec = 5s
     })
 
     await waitFor(() => expect(screen.getByText("Dropped")).toBeInTheDocument())
@@ -136,5 +144,48 @@ describe("TrackLane drop zone", () => {
     const before = screen.queryAllByTestId("clip-block").length
     fireEvent.drop(region, { dataTransfer: { getData: () => "" } })
     expect(screen.queryAllByTestId("clip-block").length).toBe(before)
+  })
+
+  it("shows a drag-over indicator while a drag hovers the lane", () => {
+    render(<Harness />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    expect(region.className).not.toMatch(/bg-accent/)
+    fireEvent.dragEnter(region)
+    expect(region.className).toMatch(/bg-accent/)
+    fireEvent.dragLeave(region)
+    expect(region.className).not.toMatch(/bg-accent/)
+  })
+})
+
+describe("TrackLane drop zone — repositioning an existing clip", () => {
+  // jsdom has no native DragEvent, so fireEvent.drop can't carry a real
+  // clientX through to the handler (verified against RTL's DragEvent
+  // fallback) — the pixel math itself is covered by lib/timeline.test.ts's
+  // xToSec tests. This exercises the MOVE_CLIP branch selection: a "move"
+  // payload must reposition the existing placement, never duplicate it.
+  it("routes a 'move' payload to MOVE_CLIP instead of adding a duplicate", async () => {
+    render(
+      <Harness
+        clips={[{ clipId: "c1", title: "Intro", duration: 4, startSec: 0 }]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    fireEvent.drop(region, {
+      dataTransfer: {
+        getData: () =>
+          JSON.stringify({
+            kind: "move",
+            placementId: "seed-0",
+            sourceTrackId: "t1",
+          }),
+      },
+    })
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("clip-block")).toHaveLength(1)
+    )
+    expect(screen.getByText("Intro")).toBeInTheDocument()
   })
 })

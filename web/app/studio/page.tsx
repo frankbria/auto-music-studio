@@ -8,6 +8,7 @@ import { ZoomInAreaIcon, ZoomOutAreaIcon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
 import { TimeRuler } from "@/components/studio/TimeRuler"
+import { WorkspacePanel } from "@/components/workspace/WorkspacePanel"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import { useAuth } from "@/hooks/use-auth"
 import { useClip } from "@/hooks/use-clip"
@@ -155,9 +156,20 @@ function StudioTimeline() {
 function StudioView() {
   useSongPreload()
   return (
-    <div className="flex h-full flex-col">
-      <StudioHeader />
-      <StudioTimeline />
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <StudioHeader />
+        <StudioTimeline />
+      </div>
+      {/* Clip library, dragged onto lanes to add clips (US-19.1). Hidden below
+          lg to keep the timeline usable at the minimum supported width,
+          mirroring the app shell's RightPanel (see app/create/page.tsx). */}
+      <aside
+        aria-label="Clip library"
+        className="hidden w-80 shrink-0 flex-col border-l border-border p-4 lg:flex"
+      >
+        <WorkspacePanel />
+      </aside>
     </div>
   )
 }

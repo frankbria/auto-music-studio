@@ -23,6 +23,7 @@ vi.mock("@/lib/clip-audio-cache", () => ({
 
 import StudioPage from "@/app/studio/page"
 import { AuthContext } from "@/contexts/auth-context"
+import { PlayerProvider } from "@/contexts/player-context"
 
 const authValue = {
   user: { id: "u1", email: "a@b.co" },
@@ -37,7 +38,11 @@ const authValue = {
 function renderPage(overrides: Partial<typeof authValue> = {}) {
   const value = { ...authValue, ...overrides }
   function wrapper({ children }: { children: ReactNode }) {
-    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    return (
+      <AuthContext.Provider value={value}>
+        <PlayerProvider>{children}</PlayerProvider>
+      </AuthContext.Provider>
+    )
   }
   return render(<StudioPage />, { wrapper })
 }
@@ -94,61 +99,52 @@ describe("StudioPage header", () => {
   })
 })
 
+const SONG_CLIP_JSON = {
+  id: "clip-1",
+  workspace_id: "w1",
+  title: "My Song",
+  format: "mp3",
+  duration: 30,
+  bpm: null,
+  key: null,
+  style_tags: [],
+  lyrics: null,
+  vocal_language: null,
+  model: null,
+  seed: null,
+  inference_steps: null,
+  parent_clip_ids: [],
+  generation_mode: null,
+  is_public: false,
+  created_at: "2026-01-01T00:00:00Z",
+}
+
+/** Routes each fetch by URL — WorkspacePanel (/api/workspaces, /api/clips?…)
+ * and useClip (/api/clips/{id}) race concurrently, and a Response body can
+ * only be read once, so a single shared mockResolvedValue instance breaks
+ * whichever hook loses the race. */
+function stubStudioFetch(clipJson: unknown = SONG_CLIP_JSON) {
+  const fetchMock = vi.fn((url: string) => {
+    if (url.startsWith("/api/clips/") && !url.includes("?")) {
+      return Promise.resolve(jsonRes(clipJson))
+    }
+    return Promise.resolve(jsonRes({ workspaces: [] }))
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
 describe("StudioPage ?song= preload", () => {
   it("adds a track and renders the preloaded clip on the timeline", async () => {
     searchParamsRef.current = new URLSearchParams("song=clip-1")
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonRes({
-          id: "clip-1",
-          workspace_id: "w1",
-          title: "My Song",
-          format: "mp3",
-          duration: 30,
-          bpm: null,
-          key: null,
-          style_tags: [],
-          lyrics: null,
-          vocal_language: null,
-          model: null,
-          seed: null,
-          inference_steps: null,
-          parent_clip_ids: [],
-          generation_mode: null,
-          is_public: false,
-          created_at: "2026-01-01T00:00:00Z",
-        })
-      )
-    )
+    stubStudioFetch()
     renderPage()
     await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
   })
 
   it("fetches the clip named by the song query param", async () => {
     searchParamsRef.current = new URLSearchParams("song=clip-1")
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonRes({
-        id: "clip-1",
-        workspace_id: "w1",
-        title: "My Song",
-        format: "mp3",
-        duration: 30,
-        bpm: null,
-        key: null,
-        style_tags: [],
-        lyrics: null,
-        vocal_language: null,
-        model: null,
-        seed: null,
-        inference_steps: null,
-        parent_clip_ids: [],
-        generation_mode: null,
-        is_public: false,
-        created_at: "2026-01-01T00:00:00Z",
-      })
-    )
-    vi.stubGlobal("fetch", fetchMock)
+    const fetchMock = stubStudioFetch()
     renderPage()
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -159,9 +155,19 @@ describe("StudioPage ?song= preload", () => {
   })
 
   it("does not fetch a clip without a song param", () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal("fetch", fetchMock)
+    const fetchMock = stubStudioFetch()
     renderPage()
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/clips\/[^/]+$/),
+      expect.anything()
+    )
+  })
+})
+
+describe("StudioPage clip library aside", () => {
+  it("embeds the workspace panel as a drag source for the timeline", () => {
+    stubStudioFetch()
+    renderPage()
+    expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
   })
 })

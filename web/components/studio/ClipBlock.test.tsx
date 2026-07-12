@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ClipBlock } from "./ClipBlock"
+import { parseClipDragData } from "@/lib/clip-drag"
 import type { Placement } from "@/lib/timeline"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ describe("ClipBlock layout", () => {
     const { getByTestId } = render(
       <ClipBlock
         placement={placement}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -45,6 +47,7 @@ describe("ClipBlock layout", () => {
     render(
       <ClipBlock
         placement={placement}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -58,6 +61,7 @@ describe("ClipBlock layout", () => {
     render(
       <ClipBlock
         placement={{ ...placement, title: null }}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -77,6 +81,7 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -91,6 +96,7 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token={null}
@@ -104,6 +110,7 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
+        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -111,5 +118,35 @@ describe("ClipBlock waveform thumbnail", () => {
     )
     await waitFor(() => expect(getClipAudioMock).toHaveBeenCalled())
     expect(screen.getByText("My Clip")).toBeInTheDocument()
+  })
+})
+
+describe("ClipBlock drag source (reposition via MOVE_CLIP)", () => {
+  it("is draggable and sets a 'move' drag payload naming itself and its track", () => {
+    getClipAudioMock.mockReturnValue(new Promise(() => {}))
+    render(
+      <ClipBlock
+        placement={placement}
+        trackId="t1"
+        pxPerSec={20}
+        color="#123456"
+        token="tok"
+      />
+    )
+    const block = screen.getByTestId("clip-block")
+    expect(block).toHaveAttribute("draggable", "true")
+
+    const store = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? "",
+    } as unknown as DataTransfer
+    fireEvent.dragStart(block, { dataTransfer })
+
+    expect(parseClipDragData(dataTransfer)).toEqual({
+      kind: "move",
+      placementId: "p1",
+      sourceTrackId: "t1",
+    })
   })
 })

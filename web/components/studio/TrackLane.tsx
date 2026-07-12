@@ -8,19 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ClipBlock } from "@/components/studio/ClipBlock"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
+import { parseClipDragData } from "@/lib/clip-drag"
 import { xToSec } from "@/lib/timeline"
+import { cn } from "@/lib/utils"
 
 // A track row: an editable-name control strip on the left, and a drop-target
-// timeline region on the right holding its ClipBlocks (US-19.1). Dropped clips
-// carry {clipId,title,duration} as dataTransfer JSON (set by the workspace
-// panel's drag source, US-19.1 step 5) — the x position of the drop converts
-// to a start time via xToSec and lands as an ADD_CLIP.
-
-type DroppedClipPayload = {
-  clipId: string
-  title: string | null
-  duration: number | null
-}
+// timeline region on the right holding its ClipBlocks (US-19.1). Accepts two
+// drop kinds (lib/clip-drag.ts): a fresh clip dragged in from the workspace
+// panel ("add") or an existing placement being repositioned from this or
+// another lane ("move") — the x position of the drop converts to a start time
+// via xToSec either way.
 
 export function TrackLane({
   track,
@@ -34,6 +31,7 @@ export function TrackLane({
   const { dispatch } = useStudio()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(track.name)
+  const [dragOver, setDragOver] = useState(false)
 
   function startEdit() {
     setDraft(track.name)
@@ -50,30 +48,34 @@ export function TrackLane({
 
   function onDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault()
-    const raw = e.dataTransfer.getData("application/json")
-    if (!raw) return
-    let payload: DroppedClipPayload
-    try {
-      payload = JSON.parse(raw)
-    } catch {
-      return
-    }
-    if (!payload?.clipId) return
+    setDragOver(false)
+    const payload = parseClipDragData(e.dataTransfer)
+    if (!payload) return
 
     const rect = e.currentTarget.getBoundingClientRect()
     const startSec = Math.max(
       0,
       xToSec(e.clientX - rect.left, { pxPerSec, scrollSec: 0 })
     )
-    dispatch({
-      type: "ADD_CLIP",
-      id: crypto.randomUUID(),
-      trackId: track.id,
-      clipId: payload.clipId,
-      startSec,
-      title: payload.title ?? null,
-      durationSec: payload.duration ?? null,
-    })
+
+    if (payload.kind === "add") {
+      dispatch({
+        type: "ADD_CLIP",
+        id: crypto.randomUUID(),
+        trackId: track.id,
+        clipId: payload.clipId,
+        startSec,
+        title: payload.title,
+        durationSec: payload.duration,
+      })
+    } else {
+      dispatch({
+        type: "MOVE_CLIP",
+        trackId: track.id,
+        placementId: payload.placementId,
+        startSec,
+      })
+    }
   }
 
   return (
@@ -113,14 +115,17 @@ export function TrackLane({
       <div
         role="region"
         aria-label={`${track.name} timeline`}
-        className="relative min-h-16 flex-1"
+        className={cn("relative min-h-16 flex-1", dragOver && "bg-accent/40")}
         onDragOver={(e) => e.preventDefault()}
+        onDragEnter={() => setDragOver(true)}
+        onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
         {track.clips.map((placement) => (
           <ClipBlock
             key={placement.id}
             placement={placement}
+            trackId={track.id}
             pxPerSec={pxPerSec}
             color={track.color}
             token={token}

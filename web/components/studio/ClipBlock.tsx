@@ -1,24 +1,30 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type DragEvent } from "react"
 
 import { getClipAudio } from "@/lib/clip-audio-cache"
+import { setClipDragData } from "@/lib/clip-drag"
 import type { Placement } from "@/lib/timeline"
 
 // A clip placed on a Studio track lane (US-19.1). Positioned/sized purely from
 // startSec/durationSec × pxPerSec; the waveform thumbnail draws the cached
 // peak downsample onto a canvas, guarding a null 2D context the same way
 // components/editor/WaveformCanvas.tsx does (jsdom's getContext returns null).
+// Draggable to reposition: dragging it sets a "move" payload (its own
+// placement + source track) that a TrackLane's drop handler turns into a
+// MOVE_CLIP, same or different lane either way.
 
 const THUMBNAIL_HEIGHT = 32
 
 export function ClipBlock({
   placement,
+  trackId,
   pxPerSec,
   color,
   token,
 }: {
   placement: Placement
+  trackId: string
   pxPerSec: number
   color: string
   token: string | null
@@ -66,10 +72,20 @@ export function ClipBlock({
 
   const title = placement.title ?? "Untitled clip"
 
+  function onDragStart(e: DragEvent<HTMLDivElement>) {
+    setClipDragData(e.dataTransfer, {
+      kind: "move",
+      placementId: placement.id,
+      sourceTrackId: trackId,
+    })
+  }
+
   return (
     <div
       data-testid="clip-block"
-      className="absolute top-1 flex flex-col overflow-hidden rounded-md text-white shadow-sm"
+      draggable
+      onDragStart={onDragStart}
+      className="absolute top-1 flex cursor-grab flex-col overflow-hidden rounded-md text-white shadow-sm active:cursor-grabbing"
       style={{ left, width, backgroundColor: color }}
       title={title}
     >

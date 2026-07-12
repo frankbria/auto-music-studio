@@ -35,6 +35,7 @@ import { ShareModal } from "@/components/song/ShareModal"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { usePlayer } from "@/contexts/player-context"
 import { useSongActions } from "@/hooks/use-song-actions"
+import { setClipDragData } from "@/lib/clip-drag"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { formatTime, trackFromClip } from "@/lib/clips"
 import { isFullSongEligible } from "@/lib/song-structure"
@@ -50,7 +51,10 @@ import type { Clip } from "@/lib/workspace-clips"
 // confirms a delete wherever a card is rendered. `onDislike`/`onShare`/
 // `onPublishToggle` remain optional observers for parent analytics/refetch.
 // The action vocabulary lives in lib/song-actions (US-17.2) and is re-exported
-// here so existing imports keep working.
+// here so existing imports keep working. The card is also a native HTML5 drag
+// source (US-19.1): dragging it onto a Studio track lane carries an "add"
+// payload (lib/clip-drag.ts) that the lane's drop handler turns into an
+// ADD_CLIP placement.
 
 export type { ClipMenuAction } from "@/lib/song-actions"
 import type { ClipMenuAction, SongActionId } from "@/lib/song-actions"
@@ -125,7 +129,10 @@ export function ClipCard({
   const actions = useSongActions(clip, { onDeleted })
   // likedIds re-renders every player tick; scan a Set (cf. applyClientFilters).
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
-  const dislikedSet = useMemo(() => new Set(state.dislikedIds), [state.dislikedIds])
+  const dislikedSet = useMemo(
+    () => new Set(state.dislikedIds),
+    [state.dislikedIds]
+  )
   const liked = likedSet.has(clip.id)
   const disliked = dislikedSet.has(clip.id)
 
@@ -196,6 +203,15 @@ export function ClipCard({
   return (
     <div
       data-testid="clip-card"
+      draggable
+      onDragStart={(e) =>
+        setClipDragData(e.dataTransfer, {
+          kind: "add",
+          clipId: clip.id,
+          title: title ?? null,
+          duration: clip.duration,
+        })
+      }
       className="flex gap-3 rounded-lg border border-border bg-card p-2"
     >
       {/* Thumbnail with duration overlay + hover play. */}
@@ -327,7 +343,9 @@ export function ClipCard({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={isPublic ? "Unpublish (make private)" : "Publish (make public)"}
+            aria-label={
+              isPublic ? "Unpublish (make private)" : "Publish (make public)"
+            }
             aria-pressed={isPublic}
             onClick={togglePublish}
             className={cn(isPublic && "text-primary")}
@@ -366,15 +384,24 @@ export function ClipCard({
                     >
                       {item.label}
                       {item.pro && (
-                        <Badge variant="outline" className="ml-auto text-[10px]">
+                        <Badge
+                          variant="outline"
+                          className="ml-auto text-[10px]"
+                        >
                           {locked && (
-                            <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />
+                            <HugeiconsIcon
+                              icon={LockIcon}
+                              data-icon="inline-start"
+                            />
                           )}
                           Pro
                         </Badge>
                       )}
                       {item.beta && (
-                        <Badge variant="secondary" className="ml-auto text-[10px]">
+                        <Badge
+                          variant="secondary"
+                          className="ml-auto text-[10px]"
+                        >
                           Beta
                         </Badge>
                       )}
@@ -387,7 +414,11 @@ export function ClipCard({
             {/* More options (⋯) — full spec §9.2 list. */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="More options">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="More options"
+                >
                   <HugeiconsIcon icon={MoreHorizontalIcon} size={16} />
                 </Button>
               </DropdownMenuTrigger>
