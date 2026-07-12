@@ -18,7 +18,7 @@ dependencies = [
     # ships a numpy-2-ready backend (e.g. tensorflow >= 2.16).
     "numpy>=1.24.0,<2",
     "librosa>=0.10.0",
-    "soundfile>=0.12.0",
+    "soundfile>=0.14.0",
     "pydub>=0.25.1",
     # Pillow drives cover-art image validation and 1024->3000 upscaling (US-13.1).
     "Pillow>=10.0.0",
