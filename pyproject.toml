@@ -11,7 +11,7 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=0.13.0",
     "PyYAML>=5.4",
-    "mutagen>=1.47",
+    "mutagen>=1.48.1",
     # numpy capped <2: the audio-ml-midi extra pulls basic-pitch -> tensorflow 2.14,
     # which is not NumPy-2 compatible (import fails). The core audio stack (librosa,
     # numba, scipy, soundfile, pydub) runs fine on numpy 1.x. Lift once basic-pitch
