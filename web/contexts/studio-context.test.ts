@@ -359,6 +359,13 @@ describe("studioReducer project tempo (US-19.2)", () => {
   it("SET_BPM ignores a non-finite value", () => {
     expect(studioReducer(base(), { type: "SET_BPM", bpm: NaN }).bpm).toBe(120)
   })
+
+  it("SET_BPM bumps seekEpoch so an in-flight playback reschedules at the new rates", () => {
+    const s = studioReducer(base(), { type: "SET_BPM", bpm: 150 })
+    expect(s.seekEpoch).toBe(1)
+    // An ignored non-finite value must not force a pointless reschedule.
+    expect(studioReducer(base(), { type: "SET_BPM", bpm: NaN }).seekEpoch).toBe(0)
+  })
 })
 
 describe("studioReducer transport + view state", () => {

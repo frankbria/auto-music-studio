@@ -182,7 +182,14 @@ export function studioReducer(
       return { ...state, zoom: clampZoom(action.zoom) }
     case "SET_BPM": {
       if (!Number.isFinite(action.bpm)) return state
-      return { ...state, bpm: Math.min(BPM_MAX, Math.max(BPM_MIN, action.bpm)) }
+      return {
+        ...state,
+        bpm: Math.min(BPM_MAX, Math.max(BPM_MIN, action.bpm)),
+        // A tempo change re-rates loop-track clips; treat it like a seek so a
+        // playback already in flight reschedules its sources at the new rates
+        // (the engine only watches isPlaying/seekEpoch).
+        seekEpoch: state.seekEpoch + 1,
+      }
     }
     case "TOGGLE_DISPLAY_MODE":
       return {
