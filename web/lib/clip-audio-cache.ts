@@ -24,6 +24,22 @@ const THUMBNAIL_COLUMNS = 200
 
 const cache = new Map<string, Promise<CachedClipAudio>>()
 
+// One shared context for every decode: browsers cap concurrent realtime
+// AudioContexts (~6 in Chrome, fewer in Safari), so a context-per-decode
+// would start failing once enough clips land on the timeline at once.
+// decodeAudioData works fine on a suspended context, so this never needs a
+// user-gesture resume. The instanceof check re-creates the context if the
+// AudioContext constructor itself changes (only happens in tests, which stub
+// a fresh fake class per test).
+let decodeCtx: AudioContext | null = null
+
+function getDecodeContext(): AudioContext {
+  const Ctx = getAudioContextCtor()
+  if (!Ctx) throw new Error("Web Audio API unavailable")
+  if (!(decodeCtx instanceof Ctx)) decodeCtx = new Ctx()
+  return decodeCtx
+}
+
 async function decode(
   clipId: string,
   token: string,
@@ -36,23 +52,14 @@ async function decode(
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`)
   const bytes = await res.arrayBuffer()
 
-  const Ctx = getAudioContextCtor()
-  if (!Ctx) throw new Error("Web Audio API unavailable")
-  const ctx = new Ctx()
-  try {
-    const buffer = await ctx.decodeAudioData(bytes)
-    const channels: Float32Array[] = []
-    for (let c = 0; c < buffer.numberOfChannels; c++) {
-      channels.push(buffer.getChannelData(c))
-    }
-    const mono = mixToMono(channels, buffer.length)
-    const peaks = columnPeaks(mono, 0, mono.length, THUMBNAIL_COLUMNS)
-    return { buffer, peaks, duration: buffer.duration }
-  } finally {
-    // An AudioBuffer isn't tied to the context that decoded it, so closing
-    // here (freeing the decode context) doesn't affect later playback use.
-    void ctx.close()
+  const buffer = await getDecodeContext().decodeAudioData(bytes)
+  const channels: Float32Array[] = []
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    channels.push(buffer.getChannelData(c))
   }
+  const mono = mixToMono(channels, buffer.length)
+  const peaks = columnPeaks(mono, 0, mono.length, THUMBNAIL_COLUMNS)
+  return { buffer, peaks, duration: buffer.duration }
 }
 
 /**

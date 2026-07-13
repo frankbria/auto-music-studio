@@ -22,12 +22,17 @@ function jsonResponse(status: number) {
 }
 
 function stubAudioContext(decodeAudioData = vi.fn()) {
+  const constructed = vi.fn()
+  const close = vi.fn().mockResolvedValue(undefined)
   class FakeAudioContext {
-    close = vi.fn().mockResolvedValue(undefined)
+    close = close
     decodeAudioData = decodeAudioData
+    constructor() {
+      constructed()
+    }
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
-  return decodeAudioData
+  return { decodeAudioData, constructed, close }
 }
 
 afterEach(() => {
@@ -70,6 +75,20 @@ describe("getClipAudio", () => {
     await getClipAudio("clip-d1", "tok")
     await getClipAudio("clip-d2", "tok")
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("shares one AudioContext across decodes instead of one per clip", async () => {
+    // Browsers cap concurrent realtime AudioContexts (~6 in Chrome); a
+    // context-per-decode fails once enough clips are placed at once.
+    const { constructed, close } = stubAudioContext(
+      vi.fn().mockResolvedValue(fakeBuffer(50))
+    )
+    vi.stubGlobal("fetch", jsonResponse(200))
+
+    await getClipAudio("clip-share-1", "tok")
+    await getClipAudio("clip-share-2", "tok")
+    expect(constructed).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
   })
 
   it("evicts a failed decode so a later call can retry", async () => {
