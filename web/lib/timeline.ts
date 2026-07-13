@@ -163,6 +163,8 @@ export function timelineDurationSec(placements: Placement[]): number {
 
 /** One clip scheduled to play through the studio's AudioContext. */
 export type ScheduledClip = {
+  /** The placement this source plays — the same clip can sit on many tracks. */
+  placementId: string
   clipId: string
   /** AudioContext-relative time to start this source (>= audioContextNow). */
   when: number
@@ -200,7 +202,13 @@ export function computePlaybackSchedule(
     if (endSec <= playheadSec) continue
     const offset = Math.max(0, playheadSec - p.startSec) * rate
     const when = audioContextNow + Math.max(0, p.startSec - playheadSec)
-    schedule.push({ clipId: p.clipId, when, offset, playbackRate: rate })
+    schedule.push({
+      placementId: p.id,
+      clipId: p.clipId,
+      when,
+      offset,
+      playbackRate: rate,
+    })
   }
   return schedule.sort((a, b) => a.when - b.when)
 }

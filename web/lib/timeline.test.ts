@@ -123,9 +123,9 @@ describe("computePlaybackSchedule", () => {
   it("schedules a future placement at its absolute offset from now", () => {
     const schedule = computePlaybackSchedule(placements, 0, 100)
     expect(schedule).toEqual([
-      { clipId: "c1", when: 100, offset: 0, playbackRate: 1 },
-      { clipId: "c2", when: 104, offset: 0, playbackRate: 1 },
-      { clipId: "c3", when: 110, offset: 0, playbackRate: 1 },
+      { placementId: "p1", clipId: "c1", when: 100, offset: 0, playbackRate: 1 },
+      { placementId: "p2", clipId: "c2", when: 104, offset: 0, playbackRate: 1 },
+      { placementId: "p3", clipId: "c3", when: 110, offset: 0, playbackRate: 1 },
     ])
   })
 
@@ -133,8 +133,8 @@ describe("computePlaybackSchedule", () => {
     // Playhead at 6s: c1 already ended (0-4), c2 (4-8) is mid-playback.
     const schedule = computePlaybackSchedule(placements, 6, 50)
     expect(schedule).toEqual([
-      { clipId: "c2", when: 50, offset: 2, playbackRate: 1 },
-      { clipId: "c3", when: 54, offset: 0, playbackRate: 1 },
+      { placementId: "p2", clipId: "c2", when: 50, offset: 2, playbackRate: 1 },
+      { placementId: "p3", clipId: "c3", when: 54, offset: 0, playbackRate: 1 },
     ])
   })
 
@@ -160,7 +160,7 @@ describe("computePlaybackSchedule", () => {
     // duration must not be treated as already-finished.
     const schedule = computePlaybackSchedule(unknownDuration, 10_000, 0)
     expect(schedule).toEqual([
-      { clipId: "c1", when: 0, offset: 10_000, playbackRate: 1 },
+      { placementId: "p1", clipId: "c1", when: 0, offset: 10_000, playbackRate: 1 },
     ])
   })
 })
@@ -181,7 +181,7 @@ describe("computePlaybackSchedule with per-placement playback rates (US-19.2)", 
   it("carries the rate onto the scheduled clip", () => {
     const schedule = computePlaybackSchedule([loop], 0, 100, rateFor)
     expect(schedule).toEqual([
-      { clipId: "c1", when: 100, offset: 0, playbackRate: RATE },
+      { placementId: "p1", clipId: "c1", when: 100, offset: 0, playbackRate: RATE },
     ])
   })
 

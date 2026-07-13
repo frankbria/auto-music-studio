@@ -35,6 +35,12 @@ class FakeGainNode {
   gain = { value: 1 }
 }
 
+class FakePannerNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  pan = { value: 0 }
+}
+
 class FakeSourceNode {
   buffer: AudioBuffer | null = null
   playbackRate = { value: 1 }
@@ -50,6 +56,7 @@ function stubAudioContext() {
     currentTime = 0
     destination = {}
     createGain = vi.fn(() => new FakeGainNode())
+    createStereoPanner = vi.fn(() => new FakePannerNode())
     createBufferSource = vi.fn(() => new FakeSourceNode())
     close = vi.fn().mockResolvedValue(undefined)
     constructor() {

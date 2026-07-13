@@ -7,6 +7,7 @@ import { useStudio } from "@/contexts/studio-context"
 import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
+import { effectiveTrackGain } from "@/lib/track-audio"
 import { placementPlaybackRate } from "@/lib/track-types"
 
 // Studio-owned playback engine (US-19.1). Schedules every placement across
@@ -32,6 +33,9 @@ import { placementPlaybackRate } from "@/lib/track-types"
 // decoding took.
 
 type ActiveSource = { source: AudioBufferSourceNode }
+
+/** One track's live mixer chain: source → gain → panner → master (US-19.4). */
+type TrackNodes = { gain: GainNode; panner: StereoPannerNode }
 
 export function useStudioPlayback(token: string | null): void {
   const { state, dispatch } = useStudio()
@@ -62,6 +66,25 @@ export function useStudioPlayback(token: string | null): void {
     }
   }, [state.loopEnabled, state.loopStartSec, state.loopEndSec])
 
+  // Per-track mixer chains (US-19.4), rebuilt on every schedule run. Tracks
+  // mirrored into a ref so the scheduling closure reads control values as of
+  // decode-complete, not effect-start.
+  const trackNodesRef = useRef<Map<string, TrackNodes>>(new Map())
+  const tracksRef = useRef(state.tracks)
+  // Volume/pan/mute/solo changes retune the live chains directly — they must
+  // never enter the scheduling effect's deps, or every fader move would tear
+  // down and restart the audio.
+  useEffect(() => {
+    tracksRef.current = state.tracks
+    const anySolo = state.tracks.some((t) => t.solo)
+    for (const t of state.tracks) {
+      const nodes = trackNodesRef.current.get(t.id)
+      if (!nodes) continue
+      nodes.gain.gain.value = effectiveTrackGain(t, anySolo)
+      nodes.panner.pan.value = t.pan / 100
+    }
+  }, [state.tracks])
+
   function ensureContext(): AudioContext {
     if (!ctxRef.current) {
       const Ctx = getAudioContextCtor()
@@ -84,6 +107,11 @@ export function useStudioPlayback(token: string | null): void {
       source.disconnect()
     }
     sourcesRef.current = []
+    for (const { gain, panner } of trackNodesRef.current.values()) {
+      gain.disconnect()
+      panner.disconnect()
+    }
+    trackNodesRef.current.clear()
   }
 
   function stopTicking() {
@@ -129,6 +157,10 @@ export function useStudioPlayback(token: string | null): void {
         ])
       )
     )
+    const trackIdByPlacementId = new Map(
+      state.tracks.flatMap((t) => t.clips.map((c) => [c.id, t.id] as const))
+    )
+    const scheduledTracks = state.tracks
     const playheadAtStart = state.playheadSec
 
     let cancelled = false
@@ -155,13 +187,32 @@ export function useStudioPlayback(token: string | null): void {
           now,
           (p) => rateByPlacementId.get(p.id) ?? 1
         )
+
+        // One gain → panner chain per track (US-19.4). Control values are read
+        // from the live tracks (post-decode), so a fader moved during a slow
+        // decode still lands; the live-update effect keeps them tuned after.
+        const liveById = new Map(tracksRef.current.map((t) => [t.id, t]))
+        const anySolo = tracksRef.current.some((t) => t.solo)
+        for (const scheduled of scheduledTracks) {
+          const track = liveById.get(scheduled.id) ?? scheduled
+          const gain = ctx.createGain()
+          gain.gain.value = effectiveTrackGain(track, anySolo)
+          const panner = ctx.createStereoPanner()
+          panner.pan.value = track.pan / 100
+          gain.connect(panner)
+          panner.connect(master)
+          trackNodesRef.current.set(scheduled.id, { gain, panner })
+        }
+
         for (const item of schedule) {
           const buffer = bufferByClipId.get(item.clipId)
           if (!buffer) continue
           const source = ctx.createBufferSource()
           source.buffer = buffer
           source.playbackRate.value = item.playbackRate
-          source.connect(master)
+          const trackId = trackIdByPlacementId.get(item.placementId)
+          const chain = trackId ? trackNodesRef.current.get(trackId) : undefined
+          source.connect(chain ? chain.gain : master)
           source.start(item.when, item.offset)
           sourcesRef.current.push({ source })
         }
