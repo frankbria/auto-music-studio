@@ -191,6 +191,23 @@ describe("StudioPage header", () => {
     await user.tab()
     expect(input()).toHaveValue(180)
   })
+
+  it("reverts to the previous tempo when the input is committed empty (Number('') === 0 footgun)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    const input = () =>
+      screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+
+    await user.clear(input())
+    await user.type(input(), "140")
+    await user.tab()
+    expect(input()).toHaveValue(140)
+
+    // Clearing and blurring must not commit SET_BPM 0 (which would clamp to 60).
+    await user.clear(input())
+    await user.tab()
+    expect(input()).toHaveValue(140)
+  })
 })
 
 describe("StudioPage playhead", () => {

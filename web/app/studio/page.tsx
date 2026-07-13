@@ -73,7 +73,9 @@ function TempoInput() {
   const [draft, setDraft] = useState<string | null>(null)
 
   function commit() {
-    if (draft !== null) {
+    // Number("") === 0, so an emptied field would otherwise commit SET_BPM 0
+    // and clamp the project to BPM_MIN — treat blank as "revert" instead.
+    if (draft !== null && draft.trim() !== "") {
       const bpm = Number(draft)
       if (Number.isFinite(bpm)) dispatch({ type: "SET_BPM", bpm })
     }
