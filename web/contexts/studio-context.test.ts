@@ -370,8 +370,8 @@ describe("studioReducer project tempo (US-19.2)", () => {
   it("SET_BPM is a full no-op when the clamped value equals the current tempo", () => {
     // Re-committing the same value (or clamping into the same value) must not
     // bump seekEpoch — that would audibly restart an in-flight playback.
-    const same = studioReducer(base(), { type: "SET_BPM", bpm: 120 })
-    expect(same).toBe(initialStudioState)
+    const s0 = base()
+    expect(studioReducer(s0, { type: "SET_BPM", bpm: 120 })).toBe(s0)
 
     const atCeiling = studioReducer(base({ bpm: 180 }), {
       type: "SET_BPM",
