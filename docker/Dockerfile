@@ -8,7 +8,7 @@
 # mounted at /workspace/models (see model-deployment.md §3.3, §5.3). Keeping weights
 # out of the image holds it under the 10GB target and lets every worker share one
 # volume.
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
 
 WORKDIR /app
 
