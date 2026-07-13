@@ -91,6 +91,10 @@ export function useStudioPlayback(token: string | null): void {
     playerDispatch({ type: "pause" })
 
     const ctx = ensureContext()
+    // Browsers create an AudioContext "suspended" unless it's constructed
+    // synchronously inside a user-gesture handler — ours is created inside an
+    // effect, so it needs an explicit resume or playback is silently silent.
+    if (ctx.state === "suspended") void ctx.resume()
     const master = masterGainRef.current!
     const placements: Placement[] = state.tracks.flatMap((t) => t.clips)
     const schedule = computePlaybackSchedule(

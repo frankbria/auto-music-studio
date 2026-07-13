@@ -36,18 +36,30 @@ class FakeSourceNode {
 
 /** Installs a fake `AudioContext` global and returns the single instance the
  * hook will construct (via `instance`, populated on first `new`) plus every
- * buffer source it creates. */
-function stubAudioContext() {
+ * buffer source it creates. `initialState` mimics a browser starting the
+ * context "suspended" until resumed from a user gesture. */
+function stubAudioContext(initialState: AudioContextState = "running") {
   const sources: FakeSourceNode[] = []
-  const box: { instance: { currentTime: number } | null } = { instance: null }
+  const box: {
+    instance: {
+      currentTime: number
+      state: AudioContextState
+      resume: () => Promise<void>
+    } | null
+  } = { instance: null }
   class FakeAudioContext {
     currentTime = 0
+    state: AudioContextState = initialState
     destination = {}
     createGain = vi.fn(() => new FakeGainNode())
     createBufferSource = vi.fn(() => {
       const s = new FakeSourceNode()
       sources.push(s)
       return s
+    })
+    resume = vi.fn(() => {
+      this.state = "running"
+      return Promise.resolve()
     })
     close = vi.fn().mockResolvedValue(undefined)
     constructor() {
@@ -208,6 +220,52 @@ describe("useStudioPlayback scheduling", () => {
     })
 
     expect(getClipAudioMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("useStudioPlayback AudioContext resume", () => {
+  it("resumes a context that starts suspended (browsers create it suspended outside a user gesture)", async () => {
+    const { box } = stubAudioContext("suspended")
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 4,
+    })
+
+    await act(async () => {
+      render(
+        <Harness
+          clips={[{ clipId: "c1", title: "A", duration: 4, startSec: 0 }]}
+          autoplay
+        />
+      )
+      await Promise.resolve()
+    })
+
+    expect(box.instance!.resume).toHaveBeenCalled()
+  })
+
+  it("does not call resume when the context is already running", async () => {
+    const { box } = stubAudioContext("running")
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 4,
+    })
+
+    await act(async () => {
+      render(
+        <Harness
+          clips={[{ clipId: "c1", title: "A", duration: 4, startSec: 0 }]}
+          autoplay
+        />
+      )
+      await Promise.resolve()
+    })
+
+    expect(box.instance!.resume).not.toHaveBeenCalled()
   })
 })
 
