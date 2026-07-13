@@ -113,41 +113,50 @@ export function useStudioPlayback(token: string | null): void {
         async (p) =>
           [p.clipId, (await getClipAudio(p.clipId, token)).buffer] as const
       )
-    ).then((entries) => {
-      if (cancelled) return
-      const bufferByClipId = new Map(entries)
+    )
+      .then((entries) => {
+        if (cancelled) return
+        const bufferByClipId = new Map(entries)
 
-      // A fresh read of ctx.currentTime here, not the one from before decode
-      // — scheduled offsets/times must be relative to "now that we can
-      // actually start", not to whenever this effect run began.
-      const schedule = computePlaybackSchedule(
-        placements,
-        playheadAtStart,
-        ctx.currentTime
-      )
-      for (const item of schedule) {
-        const buffer = bufferByClipId.get(item.clipId)
-        if (!buffer) continue
-        const source = ctx.createBufferSource()
-        source.buffer = buffer
-        source.connect(master)
-        source.start(item.when, item.offset)
-        sourcesRef.current.push({ source })
-      }
+        // A fresh read of ctx.currentTime here, not the one from before decode
+        // — scheduled offsets/times must be relative to "now that we can
+        // actually start", not to whenever this effect run began.
+        const schedule = computePlaybackSchedule(
+          placements,
+          playheadAtStart,
+          ctx.currentTime
+        )
+        for (const item of schedule) {
+          const buffer = bufferByClipId.get(item.clipId)
+          if (!buffer) continue
+          const source = ctx.createBufferSource()
+          source.buffer = buffer
+          source.connect(master)
+          source.start(item.when, item.offset)
+          sourcesRef.current.push({ source })
+        }
 
-      originRef.current = {
-        ctxTime: ctx.currentTime,
-        playheadSec: playheadAtStart,
-      }
-      function tick() {
-        const origin = originRef.current
-        if (!ctxRef.current || !origin) return
-        const elapsed = ctxRef.current.currentTime - origin.ctxTime
-        dispatch({ type: "SET_PLAYHEAD", sec: origin.playheadSec + elapsed })
+        originRef.current = {
+          ctxTime: ctx.currentTime,
+          playheadSec: playheadAtStart,
+        }
+        function tick() {
+          const origin = originRef.current
+          if (!ctxRef.current || !origin) return
+          const elapsed = ctxRef.current.currentTime - origin.ctxTime
+          dispatch({ type: "SET_PLAYHEAD", sec: origin.playheadSec + elapsed })
+          rafRef.current = requestAnimationFrame(tick)
+        }
         rafRef.current = requestAnimationFrame(tick)
-      }
-      rafRef.current = requestAnimationFrame(tick)
-    })
+      })
+      .catch(() => {
+        // A clip failed to decode (404/500/corrupt) — nothing was scheduled,
+        // so leaving isPlaying true would freeze the transport with no
+        // feedback. Drop back to stopped; the cache evicts the failed entry,
+        // so pressing Play again retries once the clip/server recovers.
+        if (cancelled) return
+        dispatch({ type: "SET_PLAYING", playing: false })
+      })
 
     return () => {
       cancelled = true

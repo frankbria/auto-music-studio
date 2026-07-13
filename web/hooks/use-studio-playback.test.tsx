@@ -161,6 +161,9 @@ function Seed({
   return (
     <>
       <div data-testid="playhead-probe">{studioState.playheadSec}</div>
+      <div data-testid="studio-playing-probe">
+        {String(studioState.isPlaying)}
+      </div>
       <div data-testid="player-playing-probe">
         {String(playerState.isPlaying)}
       </div>
@@ -306,6 +309,45 @@ describe("useStudioPlayback playhead timing vs. decode", () => {
       raf.tick(4000)
     })
     expect(getByTestId("playhead-probe")).toHaveTextContent("1")
+  })
+})
+
+describe("useStudioPlayback decode failure", () => {
+  it("stops playback (visibly) when a clip's decode rejects, without starting any source or ticking", async () => {
+    const { sources } = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockImplementation((clipId: string) =>
+      clipId === "c1"
+        ? Promise.resolve({
+            buffer: fakeBuffer(),
+            peaks: new Float32Array(),
+            duration: 4,
+          })
+        : Promise.reject(new Error("404"))
+    )
+
+    const { getByTestId } = render(
+      <Harness
+        clips={[
+          { clipId: "c1", title: "A", duration: 4, startSec: 0 },
+          { clipId: "c2", title: "B", duration: 4, startSec: 0 },
+        ]}
+        autoplay
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(getByTestId("studio-playing-probe")).toHaveTextContent("false")
+    expect(sources).toHaveLength(0)
+
+    // No tick was ever scheduled, so firing one is a no-op — the playhead
+    // must not have moved either.
+    act(() => raf.tick(1000))
+    expect(getByTestId("playhead-probe")).toHaveTextContent("0")
   })
 })
 
