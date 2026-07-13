@@ -31,13 +31,15 @@ type SeedClip = {
 function Harness({
   clips = [],
   trackType = "ai",
+  snapOff = false,
 }: {
   clips?: SeedClip[]
   trackType?: TrackType
+  snapOff?: boolean
 }) {
   return (
     <StudioProvider>
-      <Seed clips={clips} trackType={trackType} />
+      <Seed clips={clips} trackType={trackType} snapOff={snapOff} />
     </StudioProvider>
   )
 }
@@ -45,15 +47,18 @@ function Harness({
 function Seed({
   clips,
   trackType,
+  snapOff,
 }: {
   clips: SeedClip[]
   trackType: TrackType
+  snapOff: boolean
 }) {
   const { state, dispatch } = useStudio()
   const seededRef = useRef(false)
   useEffect(() => {
     if (seededRef.current) return
     seededRef.current = true
+    if (snapOff) dispatch({ type: "TOGGLE_SNAP" })
     dispatch({ type: "ADD_TRACK", id: "t1", trackType, name: "Track 1" })
     clips.forEach((c, i) => {
       dispatch({
@@ -467,5 +472,78 @@ describe("TrackLane drop zone — repositioning an existing clip", () => {
     await waitFor(() =>
       expect(screen.getByTestId("clip-block")).toHaveStyle({ left: "60px" })
     )
+  })
+})
+
+describe("TrackLane snap-to-grid (US-19.3)", () => {
+  // Defaults: snap on, 1-beat resolution, 120 BPM → 0.5s grid = 10px at 20px/s.
+  it("quantizes an added clip's drop position to the nearest grid line", async () => {
+    render(<Harness />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    // 17px = 0.85s → nearest beat is 1.0s → 20px.
+    region.dispatchEvent(
+      dropEventWithClientX(17, {
+        getData: () =>
+          JSON.stringify({ kind: "add", clipId: "c1", title: "A", duration: 4 }),
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-block")).toHaveStyle({ left: "20px" })
+    )
+  })
+
+  it("leaves the drop position untouched when snap is disabled", async () => {
+    render(<Harness snapOff />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    region.dispatchEvent(
+      dropEventWithClientX(17, {
+        getData: () =>
+          JSON.stringify({ kind: "add", clipId: "c1", title: "A", duration: 4 }),
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-block")).toHaveStyle({ left: "17px" })
+    )
+  })
+
+  it("quantizes a moved clip's landing position", async () => {
+    render(
+      <Harness
+        clips={[{ clipId: "c1", title: "Intro", duration: 4, startSec: 0 }]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    // Cursor 47px, grabbed 1s (20px) into the clip → raw left edge 27px =
+    // 1.35s → snaps to 1.5s = 30px.
+    region.dispatchEvent(
+      dropEventWithClientX(47, {
+        getData: () =>
+          JSON.stringify({ kind: "move", placementId: "seed-0", grabOffsetSec: 1 }),
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-block")).toHaveStyle({ left: "30px" })
+    )
+  })
+
+  it("renders grid lines on the lane when snap is enabled, none when disabled", () => {
+    const { unmount } = render(<Harness />)
+    expect(
+      screen.getByRole("region", { name: "Track 1 timeline" }).style
+        .backgroundImage
+    ).toContain("repeating-linear-gradient")
+    unmount()
+
+    render(<Harness snapOff />)
+    expect(
+      screen.getByRole("region", { name: "Track 1 timeline" }).style
+        .backgroundImage
+    ).toBe("")
   })
 })

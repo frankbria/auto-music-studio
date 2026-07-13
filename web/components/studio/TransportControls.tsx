@@ -5,6 +5,7 @@ import {
   PauseIcon,
   PlayIcon,
   PreviousIcon,
+  RepeatIcon,
   StopIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -59,6 +60,18 @@ export function TransportControls() {
         }}
       >
         <HugeiconsIcon icon={StopIcon} size={20} />
+      </Button>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Toggle loop"
+        aria-pressed={state.loopEnabled}
+        className={state.loopEnabled ? "text-primary" : undefined}
+        onClick={() => dispatch({ type: "TOGGLE_LOOP" })}
+      >
+        <HugeiconsIcon icon={RepeatIcon} size={20} />
       </Button>
     </div>
   )
