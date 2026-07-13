@@ -22,7 +22,11 @@ import { ClipBlock } from "@/components/studio/ClipBlock"
 import { TrackRegenerateDialog } from "@/components/studio/TrackRegenerateDialog"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
-import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/lib/track-audio"
+import {
+  VOLUME_DB_MAX,
+  VOLUME_DB_MIN,
+  formatVolumeDb,
+} from "@/lib/track-audio"
 import {
   TRACK_STRIP_PX,
   snapSec,
@@ -290,6 +294,7 @@ export function TrackLane({
           </Button>
           <Slider
             aria-label="Track volume"
+            title={formatVolumeDb(track.volumeDb)}
             min={VOLUME_DB_MIN}
             max={VOLUME_DB_MAX}
             step={1}
