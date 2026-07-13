@@ -160,6 +160,48 @@ now a `navigation` workflow in `lib/song-actions.ts`).
   zoom, scroll clamp, adaptive `chooseTickInterval`).
 - `hooks/use-clip-audio.ts` — id-tagged decode hook (mirrors `useClip`).
 
+## Studio Timeline and Track Lanes (US-19.1)
+
+The `/studio` route is the in-browser multi-track arrangement canvas — a
+horizontal timeline of stacked track lanes with drag-and-drop clip placement.
+Reached from the song menu's "Open in Studio" action (`open-studio` in
+`lib/song-actions.ts`), which preloads the clip via `?song={id}`.
+
+- `app/studio/page.tsx` — thin auth-gated route (mirrors `app/create/page.tsx`);
+  `useSongPreload` adds the `?song=` clip to a fresh track at 0s once per clip
+  id per session. Composes the header (transport, bars-beats/mm:ss toggle,
+  zoom buttons + Ctrl/Cmd+wheel zoom), the scrollable timeline, and the
+  workspace panel as a drag source (hidden below `lg`, like the app shell's
+  `RightPanel`).
+- `contexts/studio-context.tsx` — `StudioProvider` + `useStudio`: a reducer
+  store for tracks/clip placements, playhead, play state, zoom, display mode,
+  and a `seekEpoch` that the playback engine watches to reschedule audio after
+  a user seek instead of a stale rAF tick stomping it.
+- `hooks/use-studio-playback.ts` — `useStudioPlayback`, a dedicated
+  `AudioContext` + master gain node that schedules every track's placements
+  and drives the playhead from `ctx.currentTime` via `requestAnimationFrame`.
+  Starting studio playback pauses the global player (the two never sound at
+  once) rather than routing through it.
+- `components/studio/TimeRuler.tsx` — bars+beats or mm:ss ticks over the
+  timeline; click/drag to seek.
+- `components/studio/TrackLane.tsx` / `AddTrackButton` — one lane per track
+  with a name/color control strip (`lib/timeline.ts`'s `TRACK_STRIP_PX`) and a
+  drop target for clips.
+- `components/studio/ClipBlock.tsx` — a placed clip rendered as a block with
+  title and waveform thumbnail; draggable to reposition within/between lanes.
+- `components/studio/Playhead.tsx` / `TransportControls.tsx` — the timeline
+  playhead line and play/pause/stop/return-to-start controls.
+- `lib/timeline.ts` — pure timeline math (zoom↔px/sec, ruler ticks, playback
+  scheduling), free of React/canvas, mirroring `lib/waveform-viewport.ts`.
+- `lib/clip-audio-cache.ts` — decodes a clip's audio once, caching both the
+  `AudioBuffer` (for playback) and a fixed-resolution peak downsample (for
+  `ClipBlock`'s thumbnail).
+- `lib/clip-drag.ts` — the shared `dataTransfer` JSON contract for dragging a
+  clip onto the timeline: an "add" payload from `ClipCard` (workspace panel)
+  or a "move" payload from `ClipBlock` repositioning an existing placement;
+  centralizes the wire shape so drag sources and the lane's drop handler can't
+  drift apart.
+
 ## Adding components
 
 To add components to your app, run the following command:

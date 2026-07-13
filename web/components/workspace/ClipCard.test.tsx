@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { ClipCard, type ClipCardProps } from "@/components/workspace/ClipCard"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
+import { parseClipDragData } from "@/lib/clip-drag"
 import type { Clip } from "@/lib/workspace-clips"
 
 // The ⋯ menu now dispatches through useSongActions (US-17.5): navigation uses the
@@ -244,13 +245,18 @@ describe("ClipCard", () => {
         <ClipCard clip={clip({ duration: 30 })} onGetFullSong={onGetFullSong} />
       </AllProviders>
     )
-    await userEvent.click(screen.getByRole("button", { name: /get full song/i }))
+    await userEvent.click(
+      screen.getByRole("button", { name: /get full song/i })
+    )
     expect(onGetFullSong).toHaveBeenCalledWith("c1")
     unmount()
 
     render(
       <AllProviders>
-        <ClipCard clip={clip({ duration: 120 })} onGetFullSong={onGetFullSong} />
+        <ClipCard
+          clip={clip({ duration: 120 })}
+          onGetFullSong={onGetFullSong}
+        />
       </AllProviders>
     )
     expect(
@@ -296,7 +302,9 @@ describe("ClipCard", () => {
     const onMenuAction = vi.fn()
     renderCard({ onMenuAction })
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
-    await userEvent.click(screen.getByRole("menuitem", { name: "Remix / Edit" }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Remix / Edit" })
+    )
     expect(onMenuAction).toHaveBeenCalledWith("remix-edit", "c1")
   })
 
@@ -323,7 +331,9 @@ describe("ClipCard", () => {
   it("navigates to the studio for Open in Studio", async () => {
     renderCard()
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
-    await userEvent.click(screen.getByRole("menuitem", { name: "Open in Studio" }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Open in Studio" })
+    )
     expect(push).toHaveBeenCalledWith("/studio?song=c1")
   })
 
@@ -344,7 +354,12 @@ describe("ClipCard", () => {
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
     await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
     await userEvent.click(screen.getByRole("menuitem", { name: "MP3" }))
-    expect(downloadClipAudio).toHaveBeenCalledWith("c1", "mp3", "tok", "Midnight")
+    expect(downloadClipAudio).toHaveBeenCalledWith(
+      "c1",
+      "mp3",
+      "tok",
+      "Midnight"
+    )
   })
 
   it("confirms before deleting, then calls the proxy and drops the card", async () => {
@@ -380,5 +395,25 @@ describe("ClipCard", () => {
     expect(
       screen.getByRole("menuitem", { name: /Open in Editor/i })
     ).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("is draggable, carrying an 'add' payload for the Studio timeline (US-19.1)", () => {
+    renderCard({ clip: clip({ id: "c1", title: "Midnight", duration: 95 }) })
+    const card = screen.getByTestId("clip-card")
+    expect(card).toHaveAttribute("draggable", "true")
+
+    const store = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? "",
+    } as unknown as DataTransfer
+    fireEvent.dragStart(card, { dataTransfer })
+
+    expect(parseClipDragData(dataTransfer)).toEqual({
+      kind: "add",
+      clipId: "c1",
+      title: "Midnight",
+      duration: 95,
+    })
   })
 })
