@@ -2,7 +2,7 @@
 
 import { useState, type DragEvent } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon } from "@hugeicons/core-free-icons"
+import { Add01Icon, AiMagicIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,9 +12,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { Slider } from "@/components/ui/slider"
 import { ClipBlock } from "@/components/studio/ClipBlock"
+import { TrackRegenerateDialog } from "@/components/studio/TrackRegenerateDialog"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
+import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/lib/track-audio"
 import {
   TRACK_STRIP_PX,
   snapSec,
@@ -47,6 +55,23 @@ type DragOverState = null | "valid" | "invalid"
  * snapping itself still applies at the full resolution. */
 const MIN_GRID_LINE_PX = 8
 
+/** Swatches offered by the track color selector (US-19.4). */
+const TRACK_COLORS = [
+  { name: "Rose", value: "#f43f5e" },
+  { name: "Orange", value: "#f97316" },
+  { name: "Amber", value: "#f59e0b" },
+  { name: "Emerald", value: "#10b981" },
+  { name: "Sky", value: "#0ea5e9" },
+  { name: "Violet", value: "#8b5cf6" },
+  { name: "Pink", value: "#ec4899" },
+  { name: "Slate", value: "#64748b" },
+]
+
+function panLabel(pan: number): string {
+  if (pan === 0) return "C"
+  return pan < 0 ? `L${-pan}` : `R${pan}`
+}
+
 /** One vertical line per snap grid step, drawn in CSS instead of DOM nodes
  * (US-19.3) — a repeating gradient scales with zoom for free. */
 function gridBackground(
@@ -74,7 +99,12 @@ export function TrackLane({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(track.name)
   const [dragOver, setDragOver] = useState<DragOverState>(null)
+  const [regenOpen, setRegenOpen] = useState(false)
   const typeConfig = TRACK_TYPES[track.trackType]
+  // Mirrors lib/track-audio's effectiveTrackGain: dim the lane whenever the
+  // engine would silence it (muted, or out-soloed by another track).
+  const anySolo = state.tracks.some((t) => t.solo)
+  const silenced = track.muted || (anySolo && !track.solo)
 
   function startEdit() {
     setDraft(track.name)
@@ -150,47 +180,179 @@ export function TrackLane({
     <div data-testid="track-lane" className="flex border-b border-border">
       <div
         data-testid="track-strip"
-        className="flex shrink-0 items-center gap-1.5 p-2"
+        className="flex shrink-0 flex-col justify-center gap-1 p-2"
         style={{
           width: TRACK_STRIP_PX,
           borderLeft: `4px solid ${track.color}`,
         }}
       >
-        <span
-          // aria-label is prohibited on role=generic (a bare span); role="img"
-          // makes the accessible name spec-valid for screenreaders.
-          role="img"
-          aria-label={`${typeConfig.label} track`}
-          className="shrink-0"
-          style={{ color: track.color }}
-        >
-          <HugeiconsIcon icon={typeConfig.icon} size={16} />
-        </span>
-        {editing ? (
-          <Input
-            aria-label="Track name"
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={(e) => e.currentTarget.select()}
-            onBlur={commitEdit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur()
-              else if (e.key === "Escape") {
-                setEditing(false)
-              }
-            }}
-            className="h-7"
-          />
-        ) : (
-          <button
-            type="button"
-            aria-label="Edit track name"
-            onClick={startEdit}
-            className="truncate text-left text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        <div className="flex items-center gap-1.5">
+          <span
+            // aria-label is prohibited on role=generic (a bare span); role="img"
+            // makes the accessible name spec-valid for screenreaders.
+            role="img"
+            aria-label={`${typeConfig.label} track`}
+            className="shrink-0"
+            style={{ color: track.color }}
           >
-            {track.name}
-          </button>
+            <HugeiconsIcon icon={typeConfig.icon} size={16} />
+          </span>
+          {editing ? (
+            <Input
+              aria-label="Track name"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={commitEdit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur()
+                else if (e.key === "Escape") {
+                  setEditing(false)
+                }
+              }}
+              className="h-7"
+            />
+          ) : (
+            <button
+              type="button"
+              aria-label="Edit track name"
+              onClick={startEdit}
+              className="min-w-0 flex-1 truncate text-left text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {track.name}
+            </button>
+          )}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="Track color"
+                className="size-4 shrink-0 rounded-full border border-border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                style={{ backgroundColor: track.color }}
+              />
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-auto p-2">
+              <div className="grid grid-cols-4 gap-1.5">
+                {TRACK_COLORS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    aria-label={`Color ${c.name}`}
+                    onClick={() =>
+                      dispatch({
+                        type: "SET_TRACK_COLOR",
+                        trackId: track.id,
+                        color: c.value,
+                      })
+                    }
+                    className="size-5 rounded-full border border-border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    style={{ backgroundColor: c.value }}
+                  />
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Mute track"
+            aria-pressed={track.muted}
+            onClick={() =>
+              dispatch({ type: "TOGGLE_TRACK_MUTE", trackId: track.id })
+            }
+            className={cn(
+              "text-xs font-semibold",
+              track.muted && "bg-destructive/15 text-destructive"
+            )}
+          >
+            M
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Solo track"
+            aria-pressed={track.solo}
+            onClick={() =>
+              dispatch({ type: "TOGGLE_TRACK_SOLO", trackId: track.id })
+            }
+            className={cn(
+              "text-xs font-semibold",
+              track.solo && "bg-amber-500/20 text-amber-600"
+            )}
+          >
+            S
+          </Button>
+          <Slider
+            aria-label="Track volume"
+            min={VOLUME_DB_MIN}
+            max={VOLUME_DB_MAX}
+            step={1}
+            value={[track.volumeDb]}
+            onValueChange={([v]) =>
+              dispatch({
+                type: "SET_TRACK_VOLUME",
+                trackId: track.id,
+                volumeDb: v,
+              })
+            }
+            className="min-w-0 flex-1"
+          />
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                aria-label="Track pan"
+                className="min-w-7 px-1 text-xs tabular-nums text-muted-foreground"
+              >
+                {panLabel(track.pan)}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-44 p-3">
+              <Slider
+                aria-label="Pan"
+                min={-100}
+                max={100}
+                step={1}
+                value={[track.pan]}
+                onValueChange={([v]) =>
+                  dispatch({ type: "SET_TRACK_PAN", trackId: track.id, pan: v })
+                }
+              />
+            </PopoverContent>
+          </Popover>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Regenerate track"
+            // Audio (uploads) and vocal (extracted stems) clips can't be
+            // produced by prompt generation, so their inferred type would
+            // never land on this track (US-19.2 strict typing).
+            disabled={track.trackType !== "ai" && track.trackType !== "loop"}
+            title={
+              track.trackType !== "ai" && track.trackType !== "loop"
+                ? "Regeneration is available for AI and Sound/Loop tracks"
+                : undefined
+            }
+            onClick={() => setRegenOpen(true)}
+          >
+            <HugeiconsIcon icon={AiMagicIcon} size={14} />
+          </Button>
+        </div>
+        {regenOpen && (
+          <TrackRegenerateDialog
+            track={track}
+            token={token}
+            onClose={() => setRegenOpen(false)}
+          />
         )}
       </div>
 
@@ -199,6 +361,7 @@ export function TrackLane({
         aria-label={`${track.name} timeline`}
         className={cn(
           "relative min-h-16 flex-1",
+          silenced && "opacity-50",
           dragOver === "valid" && "bg-accent/40",
           dragOver === "invalid" && "bg-destructive/10"
         )}

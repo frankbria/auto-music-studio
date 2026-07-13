@@ -26,7 +26,7 @@ export const BASE_PX_PER_SEC = 100
  * than under their strips. A single exported constant so the ruler's spacer,
  * the lane's strip, and the playhead's offset can't drift apart.
  */
-export const TRACK_STRIP_PX = 160
+export const TRACK_STRIP_PX = 208
 
 export const MIN_ZOOM = 0.25
 export const MAX_ZOOM = 4
