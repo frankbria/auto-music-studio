@@ -122,7 +122,15 @@ export function TrackLane({
         className={cn("relative min-h-16 flex-1", dragOver && "bg-accent/40")}
         onDragOver={(e) => e.preventDefault()}
         onDragEnter={() => setDragOver(true)}
-        onDragLeave={() => setDragOver(false)}
+        onDragLeave={(e) => {
+          // A dragLeave also fires when the pointer moves onto a child
+          // ClipBlock (still within this lane) — only clear once it's truly
+          // left the lane's own box, or the highlight flickers on every clip
+          // it drags over.
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDragOver(false)
+          }
+        }}
         onDrop={onDrop}
       >
         {track.clips.map((placement) => (

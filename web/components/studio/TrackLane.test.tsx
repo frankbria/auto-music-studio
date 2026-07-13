@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { useEffect, useRef } from "react"
+import { act, useEffect, useRef } from "react"
 
 import { TrackLane } from "./TrackLane"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
@@ -144,6 +144,17 @@ function dropEventWithClientX(clientX: number, dataTransfer: unknown) {
   return event
 }
 
+/** Same jsdom DragEvent gap as above, for `relatedTarget` — fireEvent.dragLeave
+ * silently drops it too (verified by direct probe). */
+function dragLeaveEventWithRelatedTarget(relatedTarget: EventTarget) {
+  const event = new Event("dragleave", { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "relatedTarget", {
+    value: relatedTarget,
+    configurable: true,
+  })
+  return event
+}
+
 describe("TrackLane drop zone — adding a new clip", () => {
   it("accepts a dropped clip and adds it to the track", async () => {
     render(<Harness />)
@@ -180,6 +191,31 @@ describe("TrackLane drop zone — adding a new clip", () => {
     fireEvent.dragEnter(region)
     expect(region.className).toMatch(/bg-accent/)
     fireEvent.dragLeave(region)
+    expect(region.className).not.toMatch(/bg-accent/)
+  })
+
+  it("does not flicker the drag-over indicator when crossing into a child ClipBlock", () => {
+    // A bare dragLeave fires when the pointer moves from the lane onto one of
+    // its own ClipBlock children (still within the lane's box), not just when
+    // it truly leaves the lane — guard on relatedTarget so it doesn't clear.
+    render(
+      <Harness
+        clips={[{ clipId: "c1", title: "Intro", duration: 4, startSec: 0 }]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    const clipBlock = screen.getByTestId("clip-block")
+    fireEvent.dragEnter(region)
+    expect(region.className).toMatch(/bg-accent/)
+
+    act(() => {
+      region.dispatchEvent(dragLeaveEventWithRelatedTarget(clipBlock))
+    })
+    expect(region.className).toMatch(/bg-accent/)
+
+    act(() => {
+      region.dispatchEvent(dragLeaveEventWithRelatedTarget(document.body))
+    })
     expect(region.className).not.toMatch(/bg-accent/)
   })
 
