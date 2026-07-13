@@ -169,3 +169,28 @@ describe("RulerArea loop region (US-19.3)", () => {
     })
   })
 })
+
+describe("RulerArea review fixes (US-19.3)", () => {
+  it("clamps a marker dragged past the timeline end to durationSec", () => {
+    render(<Harness markers={[{ id: "m1", sec: 4, label: "Verse 1" }]} />)
+    mockAreaRect()
+    const flag = screen.getByRole("button", { name: "Marker: Verse 1" })
+    fireEvent.pointerDown(flag, { clientX: 80, pointerId: 1 })
+    // Way past the 60s timeline (60s × 20px = 1200px).
+    fireEvent.pointerMove(flag, { clientX: 5000, pointerId: 1 })
+    fireEvent.pointerUp(flag, { pointerId: 1 })
+    expect(flag).toHaveStyle({ left: "1200px" })
+  })
+
+  it("loop handles expose their range and adjust with arrow keys", () => {
+    render(<Harness loop={{ startSec: 2, endSec: 6 }} />)
+    const handle = screen.getByRole("slider", { name: "Loop end handle" })
+    expect(handle).toHaveAttribute("aria-valuemin", "0")
+    expect(handle).toHaveAttribute("aria-valuemax", "60")
+    // Default snap step is 0.5s (1 beat @ 120 BPM): 6s → 5.5s → 70px wide.
+    fireEvent.keyDown(handle, { key: "ArrowLeft" })
+    expect(screen.getByTestId("loop-region")).toHaveStyle({ width: "70px" })
+    fireEvent.keyDown(handle, { key: "ArrowRight" })
+    expect(screen.getByTestId("loop-region")).toHaveStyle({ width: "80px" })
+  })
+})

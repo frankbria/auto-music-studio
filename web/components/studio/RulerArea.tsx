@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/popover"
 import { TimeRuler } from "@/components/studio/TimeRuler"
 import { useStudio, type StudioMarker } from "@/contexts/studio-context"
-import { snapSec, xToSec } from "@/lib/timeline"
+import { snapSec, snapStepSec, xToSec } from "@/lib/timeline"
 
 // The ruler band of the studio timeline (US-19.3): a marker strip stacked on
 // the US-19.1 TimeRuler, plus the loop-region overlay. All three features
@@ -38,7 +38,10 @@ export function RulerArea({
 
   function secAtClientX(clientX: number): number {
     const rectLeft = ref.current?.getBoundingClientRect().left ?? 0
-    const sec = Math.max(0, xToSec(clientX - rectLeft, { pxPerSec, scrollSec: 0 }))
+    const raw = xToSec(clientX - rectLeft, { pxPerSec, scrollSec: 0 })
+    // Clamp to the timeline: a captured-pointer drag can report a clientX
+    // outside the ruler, which would park the marker/handle out of reach.
+    const sec = Math.min(durationSec, Math.max(0, raw))
     return state.snapEnabled
       ? snapSec(sec, state.snapResolution, state.bpm)
       : sec
@@ -77,7 +80,11 @@ export function RulerArea({
         onSeek={(sec) => dispatch({ type: "SEEK", sec })}
       />
       {state.loopEnabled && (
-        <LoopRegion pxPerSec={pxPerSec} secAtClientX={secAtClientX} />
+        <LoopRegion
+          pxPerSec={pxPerSec}
+          durationSec={durationSec}
+          secAtClientX={secAtClientX}
+        />
       )}
     </div>
   )
@@ -202,14 +209,30 @@ function MarkerFlag({
  * itself is click-transparent so ruler seeks still work inside it. */
 function LoopRegion({
   pxPerSec,
+  durationSec,
   secAtClientX,
 }: {
   pxPerSec: number
+  durationSec: number
   secAtClientX: (clientX: number) => number
 }) {
   const { state, dispatch } = useStudio()
   const left = state.loopStartSec * pxPerSec
   const width = Math.max(0, (state.loopEndSec - state.loopStartSec) * pxPerSec)
+
+  // Arrow keys move an edge by one snap step (or 0.1s with snap off), clamped
+  // to the timeline like drags are.
+  const nudgeStep = state.snapEnabled
+    ? snapStepSec(state.snapResolution, state.bpm)
+    : 0.1
+  function setEdge(edge: "start" | "end", sec: number) {
+    const clamped = Math.min(durationSec, Math.max(0, sec))
+    dispatch({
+      type: "SET_LOOP_REGION",
+      startSec: edge === "start" ? clamped : state.loopStartSec,
+      endSec: edge === "end" ? clamped : state.loopEndSec,
+    })
+  }
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-5">
@@ -222,25 +245,17 @@ function LoopRegion({
         edge="start"
         xPx={left}
         valueSec={state.loopStartSec}
-        onMoveClientX={(clientX) =>
-          dispatch({
-            type: "SET_LOOP_REGION",
-            startSec: secAtClientX(clientX),
-            endSec: state.loopEndSec,
-          })
-        }
+        durationSec={durationSec}
+        onMoveClientX={(clientX) => setEdge("start", secAtClientX(clientX))}
+        onNudge={(delta) => setEdge("start", state.loopStartSec + delta * nudgeStep)}
       />
       <LoopHandle
         edge="end"
         xPx={left + width}
         valueSec={state.loopEndSec}
-        onMoveClientX={(clientX) =>
-          dispatch({
-            type: "SET_LOOP_REGION",
-            startSec: state.loopStartSec,
-            endSec: secAtClientX(clientX),
-          })
-        }
+        durationSec={durationSec}
+        onMoveClientX={(clientX) => setEdge("end", secAtClientX(clientX))}
+        onNudge={(delta) => setEdge("end", state.loopEndSec + delta * nudgeStep)}
       />
     </div>
   )
@@ -250,12 +265,17 @@ function LoopHandle({
   edge,
   xPx,
   valueSec,
+  durationSec,
   onMoveClientX,
+  onNudge,
 }: {
   edge: "start" | "end"
   xPx: number
   valueSec: number
+  durationSec: number
   onMoveClientX: (clientX: number) => void
+  /** Arrow-key adjustment: delta is -1 (left) or +1 (right) snap steps. */
+  onNudge: (delta: number) => void
 }) {
   const dragging = useRef(false)
   return (
@@ -263,11 +283,22 @@ function LoopHandle({
       role="slider"
       aria-label={`Loop ${edge} handle`}
       aria-orientation="horizontal"
+      aria-valuemin={0}
+      aria-valuemax={durationSec}
       aria-valuenow={valueSec}
       tabIndex={0}
       className="pointer-events-auto absolute top-0 z-10 h-full w-2 -translate-x-1/2 cursor-ew-resize touch-none"
       style={{ left: xPx }}
       onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault()
+          onNudge(-1)
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault()
+          onNudge(1)
+        }
+      }}
       onPointerDown={(e) => {
         e.stopPropagation() // don't seek the ruler underneath
         e.currentTarget.setPointerCapture?.(e.pointerId)
