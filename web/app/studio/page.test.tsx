@@ -363,6 +363,41 @@ describe("StudioPage ?song= preload", () => {
       expect.anything()
     )
   })
+
+  it("does not re-add a track when navigating back to an already-preloaded song (A→B→A)", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    const clipsById: Record<string, unknown> = {
+      "clip-1": SONG_CLIP_JSON,
+      "clip-2": { ...SONG_CLIP_JSON, id: "clip-2", title: "Second Song" },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const match = /^\/api\/clips\/([^/?]+)$/.exec(url)
+        if (match) return Promise.resolve(jsonRes(clipsById[match[1]]))
+        return Promise.resolve(jsonRes({ workspaces: [] }))
+      })
+    )
+
+    const { rerender } = renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+
+    searchParamsRef.current = new URLSearchParams("song=clip-2")
+    rerender(<StudioPage />)
+    await waitFor(() =>
+      expect(screen.getByText("Second Song")).toBeInTheDocument()
+    )
+
+    // Nav back to the first song — a *previous* boolean-only guard would only
+    // ever block the immediately-preceding id, so this would re-add clip-1
+    // as a duplicate track (three lanes instead of two).
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    rerender(<StudioPage />)
+    await waitFor(() =>
+      expect(screen.getAllByTestId("track-lane")).toHaveLength(2)
+    )
+    expect(screen.getAllByText("My Song")).toHaveLength(1)
+  })
 })
 
 describe("StudioPage clip library aside", () => {

@@ -29,18 +29,19 @@ const ZOOM_BUTTON_FACTOR = 1.5
 const WHEEL_ZOOM_SENSITIVITY = 0.002
 
 /** Preloads the ?song= clip onto a fresh track at 0s (US-19.1). Preloads
- * again for a *different* clip id — e.g. a client-side nav from ?song=A to
- * ?song=B on the same mounted page — but never re-preloads the same clip. */
+ * again for any clip id not already preloaded this session — e.g. a
+ * client-side nav from ?song=A to ?song=B, or back again to A — but never
+ * re-preloads a clip id it's already added a track for. */
 function useSongPreload() {
   const searchParams = useSearchParams()
   const songId = searchParams.get("song") ?? undefined
   const { clip } = useClip(songId)
   const { dispatch } = useStudio()
-  const preloadedRef = useRef<string | null>(null)
+  const preloadedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    if (!clip || preloadedRef.current === clip.id) return
-    preloadedRef.current = clip.id
+    if (!clip || preloadedRef.current.has(clip.id)) return
+    preloadedRef.current.add(clip.id)
     const trackId = crypto.randomUUID()
     dispatch({ type: "ADD_TRACK", id: trackId })
     dispatch({
