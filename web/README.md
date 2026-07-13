@@ -202,6 +202,29 @@ Reached from the song menu's "Open in Studio" action (`open-studio` in
   centralizes the wire shape so drag sources and the lane's drop handler can't
   drift apart.
 
+## Track Types and Clip Import (US-19.2)
+
+Tracks are typed — AI-Generated, Audio, Sound/Loop, Vocal — each with its own
+color and icon; the Add Track button opens a type selector dropdown.
+
+- `lib/track-types.ts` — the type config (label/description/color/icon),
+  `inferTrackType(generation_mode)` (`"upload"` → audio, `"stems"` → vocal,
+  `"sound"` → loop, everything else → ai — matching what the API persists),
+  and `placementPlaybackRate` (loop-track clips stretch to the project tempo:
+  `projectBpm / clipBpm`, 1x elsewhere or without BPM metadata).
+- Strict type matching is enforced authoritatively in the reducer (`ADD_CLIP`
+  re-infers from the payload's `generationMode`; `MOVE_CLIP` rejects
+  cross-type track moves). During dragover, lanes show valid/invalid feedback
+  from a `dataTransfer` *type* entry (`setDragTrackType`/`readDragTrackType`
+  in `lib/clip-drag.ts`) because `getData()` is unavailable until drop; an
+  invalid lane skips `preventDefault`, so the browser itself disallows the
+  drop.
+- Project tempo lives in studio state (`bpm`, default 120, clamped 60–180 to
+  mirror the backend's bounds) behind the header's BPM input. Placements store
+  `clipBpm` and the playback rate is derived at render/schedule time, so a
+  tempo change re-stretches placed loops — including mid-playback, where an
+  effective `SET_BPM` bumps `seekEpoch` to reschedule the running sources.
+
 ## Adding components
 
 To add components to your app, run the following command:
