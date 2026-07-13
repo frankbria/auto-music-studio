@@ -149,4 +149,14 @@ describe("computePlaybackSchedule", () => {
     const schedule = computePlaybackSchedule(unordered, 0, 0)
     expect(schedule.map((s) => s.clipId)).toEqual(["c1", "c2"])
   })
+
+  it("treats a null duration as playing through to the end — never pre-emptively excluded", () => {
+    const unknownDuration: Placement[] = [
+      { id: "p1", clipId: "c1", startSec: 0, title: "a", durationSec: null },
+    ]
+    // Even at a playhead far past any "reasonable" clip length, a null
+    // duration must not be treated as already-finished.
+    const schedule = computePlaybackSchedule(unknownDuration, 10_000, 0)
+    expect(schedule).toEqual([{ clipId: "c1", when: 0, offset: 10_000 }])
+  })
 })
