@@ -14,6 +14,12 @@ import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
 // external-source seam (see the plan's "Through the global player" deviation
 // note), so starting studio playback instead silences it via a "pause"
 // dispatch — the two engines never sound at once.
+//
+// A user seek mid-playback (contexts/studio-context.tsx's SEEK action) bumps
+// seekEpoch instead of just setting playheadSec — SET_PLAYHEAD alone doesn't
+// re-trigger this effect, so the rAF loop's stale origin would overwrite the
+// seek on its very next frame. Watching seekEpoch makes a seek reschedule the
+// whole run from the new position, the same as starting fresh.
 
 type ActiveSource = { source: AudioBufferSourceNode }
 
@@ -74,6 +80,13 @@ export function useStudioPlayback(token: string | null): void {
     }
     if (!token) return
 
+    // Idempotent on the very first run (nothing scheduled yet); on a mid-play
+    // seek (seekEpoch bump) this tears down the previous run's sources/tick
+    // so the reschedule below doesn't double up on top of what's still
+    // playing.
+    stopAllSources()
+    stopTicking()
+
     // Silence the global playbar — the two playback engines never sound at once.
     playerDispatch({ type: "pause" })
 
@@ -119,11 +132,11 @@ export function useStudioPlayback(token: string | null): void {
     return () => {
       cancelled = true
     }
-    // Scheduling is a one-shot look-ahead at the moment play starts; only
-    // isPlaying should re-trigger it (state.tracks/playheadSec are read once,
-    // not tracked as reactive deps here).
+    // Reruns on isPlaying (start/stop) or seekEpoch (a mid-play seek
+    // rescheduling from the new position) — state.tracks/state.playheadSec
+    // are read fresh each run, not tracked as reactive deps themselves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.isPlaying])
+  }, [state.isPlaying, state.seekEpoch])
 
   // Full teardown on unmount: stop any playing sources and close the context.
   useEffect(() => {

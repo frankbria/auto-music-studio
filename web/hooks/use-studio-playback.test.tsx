@@ -260,6 +260,96 @@ describe("useStudioPlayback rAF playhead loop", () => {
   })
 })
 
+describe("useStudioPlayback seek during playback", () => {
+  it("stops the old source and reschedules a new one from the seek position on a seekEpoch bump", async () => {
+    const { sources } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    function SeekHarness() {
+      const { dispatch } = useStudio()
+      useEffect(() => {
+        dispatch({ type: "ADD_TRACK", id: "t1" })
+        dispatch({
+          type: "ADD_CLIP",
+          id: "p0",
+          trackId: "t1",
+          clipId: "c1",
+          startSec: 0,
+          title: "A",
+          durationSec: 100,
+        })
+        dispatch({ type: "SET_PLAYING", playing: true })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [])
+      useStudioPlayback("tok")
+      return (
+        <button onClick={() => dispatch({ type: "SEEK", sec: 10 })}>
+          seek
+        </button>
+      )
+    }
+
+    const { getByRole } = render(
+      <PlayerProvider>
+        <StudioProvider>
+          <SeekHarness />
+        </StudioProvider>
+      </PlayerProvider>
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(1)
+    const original = sources[0]
+
+    await act(async () => {
+      getByRole("button", { name: "seek" }).click()
+      await Promise.resolve()
+    })
+
+    expect(original.stop).toHaveBeenCalled()
+    expect(sources).toHaveLength(2)
+    // The new source starts at the seeked-to offset (10s into a clip
+    // starting at 0s), not the stale pre-seek position.
+    expect(sources[1].start).toHaveBeenCalledWith(0, 10)
+  })
+
+  it("does not bump seekEpoch — and so does not reschedule — for the rAF loop's own SET_PLAYHEAD ticks", async () => {
+    const { sources, box } = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    render(
+      <Harness
+        clips={[{ clipId: "c1", title: "A", duration: 100, startSec: 0 }]}
+        autoplay
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(1)
+
+    act(() => {
+      box.instance!.currentTime = 2
+      raf.tick(2000)
+    })
+
+    // The rAF loop's own playhead tick must not itself trigger a reschedule.
+    expect(sources).toHaveLength(1)
+    expect(sources[0].stop).not.toHaveBeenCalled()
+  })
+})
+
 describe("useStudioPlayback cleanup", () => {
   it("stops active sources when playback is paused", async () => {
     const { sources } = stubAudioContext()

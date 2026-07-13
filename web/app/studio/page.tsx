@@ -143,7 +143,7 @@ function StudioTimeline() {
           pxPerSec={pxPerSec}
           durationSec={durationSec}
           displayMode={state.displayMode}
-          onSeek={(sec) => dispatch({ type: "SET_PLAYHEAD", sec })}
+          onSeek={(sec) => dispatch({ type: "SEEK", sec })}
         />
         {state.tracks.map((track) => (
           <TrackLane

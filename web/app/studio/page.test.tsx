@@ -21,9 +21,70 @@ vi.mock("@/lib/clip-audio-cache", () => ({
   getClipAudio: getClipAudioMock,
 }))
 
+import { act } from "react"
 import StudioPage from "@/app/studio/page"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider } from "@/contexts/player-context"
+
+// --- Minimal Web Audio + rAF stand-ins (jsdom has neither), mirroring
+// hooks/use-studio-playback.test.tsx's stubs. ---
+
+class FakeGainNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  gain = { value: 1 }
+}
+
+class FakeSourceNode {
+  buffer: AudioBuffer | null = null
+  connect = vi.fn()
+  disconnect = vi.fn()
+  start = vi.fn()
+  stop = vi.fn()
+}
+
+function stubAudioContext() {
+  const box: { instance: { currentTime: number } | null } = { instance: null }
+  class FakeAudioContext {
+    currentTime = 0
+    destination = {}
+    createGain = vi.fn(() => new FakeGainNode())
+    createBufferSource = vi.fn(() => new FakeSourceNode())
+    close = vi.fn().mockResolvedValue(undefined)
+    constructor() {
+      box.instance = this
+    }
+  }
+  vi.stubGlobal("AudioContext", FakeAudioContext)
+  return box
+}
+
+function stubRaf() {
+  let nextId = 1
+  const callbacks = new Map<number, FrameRequestCallback>()
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn((cb: FrameRequestCallback) => {
+      const id = nextId++
+      callbacks.set(id, cb)
+      return id
+    })
+  )
+  vi.stubGlobal(
+    "cancelAnimationFrame",
+    vi.fn((id: number) => {
+      callbacks.delete(id)
+    })
+  )
+  return {
+    /** Invoke every currently-scheduled rAF callback once, at time `t`. */
+    tick(t: number) {
+      const due = [...callbacks.entries()]
+      callbacks.clear()
+      for (const [, cb] of due) cb(t)
+    },
+  }
+}
 
 const authValue = {
   user: { id: "u1", email: "a@b.co" },
@@ -129,6 +190,63 @@ describe("StudioPage playhead", () => {
     fireEvent.click(ruler, { clientX: 100 })
     // Default zoom is 100 px/sec (BASE_PX_PER_SEC), so 100px -> 1s -> 100px.
     expect(playhead.style.left).toBe("100px")
+  })
+
+  it("does not stomp a ruler seek made mid-playback on the next rAF tick", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    stubStudioFetch()
+    const box = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: {} as AudioBuffer,
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Play" }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const ruler = screen.getByRole("img", { name: "Timeline" })
+    vi.spyOn(ruler, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+    const playhead = screen.getByTestId("playhead")
+
+    // One frame elapses (1s of ctx time) before the user seeks.
+    act(() => {
+      box.instance!.currentTime = 1
+      raf.tick(1000)
+    })
+    expect(playhead.style.left).toBe("100px") // 1s * 100px/sec
+
+    // User seeks to 5s mid-playback.
+    act(() => {
+      fireEvent.click(ruler, { clientX: 500 })
+    })
+    expect(playhead.style.left).toBe("500px")
+
+    // Another 0.2s of ctx time elapses and the next rAF frame fires. Without
+    // rescheduling off the seek, the stale origin (ctxTime=0, playheadSec=0)
+    // would compute 1.2s here instead — reverting the user's seek.
+    await act(async () => {
+      box.instance!.currentTime = 1.2
+      raf.tick(1200)
+    })
+    expect(playhead.style.left).toBe("520px") // 5.2s * 100px/sec
   })
 })
 

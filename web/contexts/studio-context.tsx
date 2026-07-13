@@ -23,6 +23,10 @@ export type StudioState = {
   isPlaying: boolean
   zoom: number
   displayMode: DisplayMode
+  // Bumped only by a user-initiated SEEK (never by the rAF loop's own
+  // SET_PLAYHEAD ticks) — the playback engine watches this to reschedule
+  // audio from the new position instead of stomping it on the next frame.
+  seekEpoch: number
 }
 
 export const initialStudioState: StudioState = {
@@ -31,6 +35,7 @@ export const initialStudioState: StudioState = {
   isPlaying: false,
   zoom: 1,
   displayMode: "bars-beats",
+  seekEpoch: 0,
 }
 
 // Distinct per-track colors (plan requirement), cycled by track index.
@@ -63,6 +68,7 @@ export type StudioAction =
       startSec: number
     }
   | { type: "SET_PLAYHEAD"; sec: number }
+  | { type: "SEEK"; sec: number }
   | { type: "SET_PLAYING"; playing: boolean }
   | { type: "SET_ZOOM"; zoom: number }
   | { type: "TOGGLE_DISPLAY_MODE" }
@@ -138,6 +144,12 @@ export function studioReducer(
     }
     case "SET_PLAYHEAD":
       return { ...state, playheadSec: Math.max(0, action.sec) }
+    case "SEEK":
+      return {
+        ...state,
+        playheadSec: Math.max(0, action.sec),
+        seekEpoch: state.seekEpoch + 1,
+      }
     case "SET_PLAYING":
       return { ...state, isPlaying: action.playing }
     case "SET_ZOOM":

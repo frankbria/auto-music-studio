@@ -215,6 +215,22 @@ describe("studioReducer transport + view state", () => {
     ).toBe(0)
   })
 
+  it("SET_PLAYHEAD does not bump seekEpoch (the rAF loop's own tick, not a user seek)", () => {
+    expect(
+      studioReducer(base(), { type: "SET_PLAYHEAD", sec: 5 }).seekEpoch
+    ).toBe(0)
+  })
+
+  it("SEEK updates the playhead, clamps to non-negative, and bumps seekEpoch", () => {
+    const s1 = studioReducer(base(), { type: "SEEK", sec: 12.5 })
+    expect(s1.playheadSec).toBe(12.5)
+    expect(s1.seekEpoch).toBe(1)
+
+    const s2 = studioReducer(s1, { type: "SEEK", sec: -5 })
+    expect(s2.playheadSec).toBe(0)
+    expect(s2.seekEpoch).toBe(2)
+  })
+
   it("SET_PLAYING toggles isPlaying", () => {
     expect(
       studioReducer(base(), { type: "SET_PLAYING", playing: true }).isPlaying
