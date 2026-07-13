@@ -41,6 +41,21 @@ describe("ClipBlock layout", () => {
     expect(block.style.width).toBe("160px") // 8s * 20px/sec
   })
 
+  it("renders a null-duration clip at a visible minimum width, not a 1px sliver", () => {
+    getClipAudioMock.mockReturnValue(new Promise(() => {}))
+    const { getByTestId } = render(
+      <ClipBlock
+        placement={{ ...placement, durationSec: null }}
+        pxPerSec={20}
+        color="#123456"
+        token="tok"
+      />
+    )
+    const width = parseFloat(getByTestId("clip-block").style.width)
+    // Wide enough to show a truncated title and stay selectable/draggable.
+    expect(width).toBeGreaterThanOrEqual(40)
+  })
+
   it("renders the clip title, truncated via CSS", () => {
     getClipAudioMock.mockReturnValue(new Promise(() => {}))
     render(

@@ -16,6 +16,9 @@ import type { Placement } from "@/lib/timeline"
 // the payload doesn't need to name it.
 
 const THUMBNAIL_HEIGHT = 32
+// A clip with no known duration would otherwise render as a 1px sliver —
+// wide enough to show a truncated title and stay selectable/draggable.
+const MIN_WIDTH_PX = 40
 
 export function ClipBlock({
   placement,
@@ -29,7 +32,7 @@ export function ClipBlock({
   token: string | null
 }) {
   const left = placement.startSec * pxPerSec
-  const width = Math.max(1, (placement.durationSec ?? 0) * pxPerSec)
+  const width = Math.max(MIN_WIDTH_PX, (placement.durationSec ?? 0) * pxPerSec)
 
   const [peaks, setPeaks] = useState<Float32Array | null>(null)
   useEffect(() => {
