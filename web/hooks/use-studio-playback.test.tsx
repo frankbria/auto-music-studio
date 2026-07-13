@@ -706,3 +706,106 @@ describe("useStudioPlayback cleanup", () => {
     expect(sources[0].stop).toHaveBeenCalled()
   })
 })
+
+describe("useStudioPlayback loop region (US-19.3)", () => {
+  function LoopSeed({
+    loop,
+    startAtSec,
+  }: {
+    loop: { startSec: number; endSec: number }
+    startAtSec?: number
+  }) {
+    const { state, dispatch } = useStudio()
+    const seededRef = useRef(false)
+    useEffect(() => {
+      if (seededRef.current) return
+      seededRef.current = true
+      dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
+      dispatch({
+        type: "ADD_CLIP",
+        id: "p0",
+        trackId: "t1",
+        clipId: "c1",
+        startSec: 0,
+        title: "A",
+        durationSec: 100,
+      })
+      dispatch({ type: "SET_LOOP_REGION", ...loop })
+      dispatch({ type: "TOGGLE_LOOP" })
+      if (startAtSec != null) dispatch({ type: "SEEK", sec: startAtSec })
+      dispatch({ type: "SET_PLAYING", playing: true })
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    useStudioPlayback("tok")
+    return <div data-testid="playhead-probe">{state.playheadSec}</div>
+  }
+
+  function LoopHarness(props: {
+    loop: { startSec: number; endSec: number }
+    startAtSec?: number
+  }) {
+    return (
+      <PlayerProvider>
+        <StudioProvider>
+          <LoopSeed {...props} />
+        </StudioProvider>
+      </PlayerProvider>
+    )
+  }
+
+  it("wraps the playhead back to loop start when it reaches loop end, rescheduling audio", async () => {
+    const { sources, box } = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    const { getByTestId } = render(
+      <LoopHarness loop={{ startSec: 2, endSec: 4 }} />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(1)
+
+    // Playback crosses the loop end (4s): the tick must seek back to 2s...
+    await act(async () => {
+      box.instance!.currentTime = 4.5
+      raf.tick(4500)
+      await Promise.resolve()
+    })
+    expect(getByTestId("playhead-probe")).toHaveTextContent(/^2$/)
+
+    // ...and the seekEpoch bump reschedules audio from the loop start.
+    expect(sources[0].stop).toHaveBeenCalled()
+    expect(sources).toHaveLength(2)
+    expect(sources[1].start).toHaveBeenCalledWith(4.5, 2)
+  })
+
+  it("plays straight through the loop region when the run starts past its end", async () => {
+    const { sources, box } = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    const { getByTestId } = render(
+      <LoopHarness loop={{ startSec: 2, endSec: 4 }} startAtSec={5} />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      box.instance!.currentTime = 1
+      raf.tick(1000)
+      await Promise.resolve()
+    })
+    expect(getByTestId("playhead-probe")).toHaveTextContent(/^6$/)
+    expect(sources).toHaveLength(1)
+  })
+})

@@ -8,6 +8,8 @@ import {
   clampZoom,
   computePlaybackSchedule,
   secToX,
+  snapSec,
+  snapStepSec,
   timelineDurationSec,
   timelineTicks,
   xToSec,
@@ -196,5 +198,36 @@ describe("computePlaybackSchedule with per-placement playback rates (US-19.2)", 
     expect(computePlaybackSchedule([loop], 7, 0, rateFor)).toEqual([])
     // But at 1x it would still be playing at 7s.
     expect(computePlaybackSchedule([loop], 7, 0)).toHaveLength(1)
+  })
+})
+
+describe("snap-to-grid math (US-19.3)", () => {
+  // At 120 BPM a beat is 0.5s, a 4/4 bar is 2s.
+  it("snapStepSec maps each resolution to its beat fraction", () => {
+    expect(snapStepSec("1bar", 120)).toBeCloseTo(2)
+    expect(snapStepSec("1beat", 120)).toBeCloseTo(0.5)
+    expect(snapStepSec("1/2beat", 120)).toBeCloseTo(0.25)
+    expect(snapStepSec("1/4beat", 120)).toBeCloseTo(0.125)
+  })
+
+  it("snapStepSec scales with tempo", () => {
+    expect(snapStepSec("1beat", 60)).toBeCloseTo(1)
+    expect(snapStepSec("1bar", 90)).toBeCloseTo((60 / 90) * 4)
+  })
+
+  it("snapSec rounds to the nearest grid line", () => {
+    expect(snapSec(0.6, "1beat", 120)).toBeCloseTo(0.5)
+    expect(snapSec(0.76, "1beat", 120)).toBeCloseTo(1)
+    expect(snapSec(2.9, "1bar", 120)).toBeCloseTo(2)
+    expect(snapSec(3.1, "1bar", 120)).toBeCloseTo(4)
+  })
+
+  it("snapSec is exact on a grid line and at zero", () => {
+    expect(snapSec(2, "1bar", 120)).toBe(2)
+    expect(snapSec(0, "1/4beat", 120)).toBe(0)
+  })
+
+  it("snapSec never returns a negative position", () => {
+    expect(snapSec(-0.3, "1beat", 120)).toBe(0)
   })
 })

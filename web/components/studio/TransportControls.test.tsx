@@ -94,3 +94,16 @@ describe("TransportControls return to start", () => {
     expect(screen.getByTestId("playing-probe")).toHaveTextContent("true")
   })
 })
+
+describe("TransportControls loop toggle (US-19.3)", () => {
+  it("toggles loop playback with a pressed state", async () => {
+    render(<Harness />)
+    const user = userEvent.setup()
+    const loop = screen.getByRole("button", { name: "Toggle loop" })
+    expect(loop).toHaveAttribute("aria-pressed", "false")
+    await user.click(loop)
+    expect(loop).toHaveAttribute("aria-pressed", "true")
+    await user.click(loop)
+    expect(loop).toHaveAttribute("aria-pressed", "false")
+  })
+})

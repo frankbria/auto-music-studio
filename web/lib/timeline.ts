@@ -46,6 +46,31 @@ export type DisplayMode = "bars-beats" | "mm-ss"
 export const DEFAULT_BPM = 120
 const BEATS_PER_BAR = 4
 
+/** Grid resolutions for snap-to-grid, as fractions of a beat/bar (US-19.3). */
+export type SnapResolution = "1bar" | "1beat" | "1/2beat" | "1/4beat"
+
+const SNAP_BEATS: Record<SnapResolution, number> = {
+  "1bar": BEATS_PER_BAR,
+  "1beat": 1,
+  "1/2beat": 0.5,
+  "1/4beat": 0.25,
+}
+
+/** Seconds between grid lines for a snap resolution at the given tempo. */
+export function snapStepSec(resolution: SnapResolution, bpm: number): number {
+  return (60 / bpm) * SNAP_BEATS[resolution]
+}
+
+/** Quantize a time to the nearest grid line (never negative). */
+export function snapSec(
+  sec: number,
+  resolution: SnapResolution,
+  bpm: number
+): number {
+  const step = snapStepSec(resolution, bpm)
+  return Math.max(0, Math.round(sec / step) * step)
+}
+
 /** A ruler tick: audio time, screen-x, and its display label. */
 export type TimelineTick = { sec: number; x: number; label: string }
 

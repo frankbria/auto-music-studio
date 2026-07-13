@@ -435,3 +435,125 @@ describe("studioReducer transport + view state", () => {
     expect(s2.displayMode).toBe("bars-beats")
   })
 })
+
+describe("studioReducer snap settings (US-19.3)", () => {
+  it("snap defaults on at 1-beat resolution", () => {
+    expect(initialStudioState.snapEnabled).toBe(true)
+    expect(initialStudioState.snapResolution).toBe("1beat")
+  })
+
+  it("TOGGLE_SNAP flips snapEnabled", () => {
+    const off = studioReducer(base(), { type: "TOGGLE_SNAP" })
+    expect(off.snapEnabled).toBe(false)
+    expect(studioReducer(off, { type: "TOGGLE_SNAP" }).snapEnabled).toBe(true)
+  })
+
+  it("SET_SNAP_RESOLUTION stores the resolution", () => {
+    const s = studioReducer(base(), {
+      type: "SET_SNAP_RESOLUTION",
+      resolution: "1bar",
+    })
+    expect(s.snapResolution).toBe("1bar")
+  })
+})
+
+describe("studioReducer loop region (US-19.3)", () => {
+  it("loop defaults off, spanning the first 4 bars at 120 BPM", () => {
+    expect(initialStudioState.loopEnabled).toBe(false)
+    expect(initialStudioState.loopStartSec).toBe(0)
+    expect(initialStudioState.loopEndSec).toBe(8)
+  })
+
+  it("TOGGLE_LOOP flips loopEnabled", () => {
+    const on = studioReducer(base(), { type: "TOGGLE_LOOP" })
+    expect(on.loopEnabled).toBe(true)
+    expect(studioReducer(on, { type: "TOGGLE_LOOP" }).loopEnabled).toBe(false)
+  })
+
+  it("SET_LOOP_REGION stores the range", () => {
+    const s = studioReducer(base(), {
+      type: "SET_LOOP_REGION",
+      startSec: 2,
+      endSec: 6,
+    })
+    expect(s.loopStartSec).toBe(2)
+    expect(s.loopEndSec).toBe(6)
+  })
+
+  it("SET_LOOP_REGION normalizes an inverted range and clamps below zero", () => {
+    const s = studioReducer(base(), {
+      type: "SET_LOOP_REGION",
+      startSec: 6,
+      endSec: -2,
+    })
+    expect(s.loopStartSec).toBe(0)
+    expect(s.loopEndSec).toBe(6)
+  })
+})
+
+describe("studioReducer markers (US-19.3)", () => {
+  it("ADD_MARKER appends a marker, clamping its position to >= 0", () => {
+    const s1 = studioReducer(base(), {
+      type: "ADD_MARKER",
+      id: "m1",
+      sec: 4,
+      label: "Verse 1",
+    })
+    expect(s1.markers).toEqual([{ id: "m1", sec: 4, label: "Verse 1" }])
+    const s2 = studioReducer(s1, {
+      type: "ADD_MARKER",
+      id: "m2",
+      sec: -1,
+      label: "Intro",
+    })
+    expect(s2.markers[1]).toEqual({ id: "m2", sec: 0, label: "Intro" })
+  })
+
+  it("RENAME_MARKER updates only the targeted marker's label", () => {
+    const seeded = studioReducer(base(), {
+      type: "ADD_MARKER",
+      id: "m1",
+      sec: 4,
+      label: "Verse 1",
+    })
+    const s = studioReducer(seeded, {
+      type: "RENAME_MARKER",
+      markerId: "m1",
+      label: "Chorus",
+    })
+    expect(s.markers[0]).toEqual({ id: "m1", sec: 4, label: "Chorus" })
+    expect(
+      studioReducer(seeded, {
+        type: "RENAME_MARKER",
+        markerId: "nope",
+        label: "x",
+      })
+    ).toBe(seeded)
+  })
+
+  it("MOVE_MARKER repositions the marker, clamping to >= 0", () => {
+    const seeded = studioReducer(base(), {
+      type: "ADD_MARKER",
+      id: "m1",
+      sec: 4,
+      label: "Verse 1",
+    })
+    const s = studioReducer(seeded, {
+      type: "MOVE_MARKER",
+      markerId: "m1",
+      sec: -3,
+    })
+    expect(s.markers[0].sec).toBe(0)
+  })
+
+  it("DELETE_MARKER removes the marker", () => {
+    const seeded = studioReducer(base(), {
+      type: "ADD_MARKER",
+      id: "m1",
+      sec: 4,
+      label: "Verse 1",
+    })
+    const s = studioReducer(seeded, { type: "DELETE_MARKER", markerId: "m1" })
+    expect(s.markers).toEqual([])
+  })
+})

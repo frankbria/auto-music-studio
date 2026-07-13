@@ -46,6 +46,21 @@ export function useStudioPlayback(token: string | null): void {
   const originRef = useRef<{ ctxTime: number; playheadSec: number } | null>(
     null
   )
+  // Loop state mirrored into a ref (US-19.3): the tick loop reads it fresh on
+  // every frame without the main effect having to re-run — toggling loop or
+  // dragging its handles mid-play must not restart the audio.
+  const loopRef = useRef({
+    enabled: state.loopEnabled,
+    startSec: state.loopStartSec,
+    endSec: state.loopEndSec,
+  })
+  useEffect(() => {
+    loopRef.current = {
+      enabled: state.loopEnabled,
+      startSec: state.loopStartSec,
+      endSec: state.loopEndSec,
+    }
+  }, [state.loopEnabled, state.loopStartSec, state.loopEndSec])
 
   function ensureContext(): AudioContext {
     if (!ctxRef.current) {
@@ -159,7 +174,22 @@ export function useStudioPlayback(token: string | null): void {
           const origin = originRef.current
           if (!ctxRef.current || !origin) return
           const elapsed = ctxRef.current.currentTime - origin.ctxTime
-          dispatch({ type: "SET_PLAYHEAD", sec: origin.playheadSec + elapsed })
+          const nextSec = origin.playheadSec + elapsed
+          // Loop wrap (US-19.3): crossing the loop end seeks back to its
+          // start — SEEK (not SET_PLAYHEAD) so the epoch bump reschedules the
+          // audio sources from there, and the new run restarts this loop. A
+          // run that began at/past the loop end plays straight through.
+          const loop = loopRef.current
+          if (
+            loop.enabled &&
+            loop.endSec > loop.startSec &&
+            origin.playheadSec < loop.endSec &&
+            nextSec >= loop.endSec
+          ) {
+            dispatch({ type: "SEEK", sec: loop.startSec })
+            return
+          }
+          dispatch({ type: "SET_PLAYHEAD", sec: nextSec })
           rafRef.current = requestAnimationFrame(tick)
         }
         rafRef.current = requestAnimationFrame(tick)

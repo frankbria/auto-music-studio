@@ -8,7 +8,13 @@ import {
   type ReactNode,
 } from "react"
 
-import { clampZoom, DEFAULT_BPM, type DisplayMode, type Placement } from "@/lib/timeline"
+import {
+  clampZoom,
+  DEFAULT_BPM,
+  type DisplayMode,
+  type Placement,
+  type SnapResolution,
+} from "@/lib/timeline"
 import {
   BPM_MAX,
   BPM_MIN,
@@ -26,6 +32,13 @@ export type StudioTrack = {
   clips: Placement[]
 }
 
+/** A named flag on the time ruler labeling a song section (US-19.3). */
+export type StudioMarker = {
+  id: string
+  sec: number
+  label: string
+}
+
 export type StudioState = {
   tracks: StudioTrack[]
   playheadSec: number
@@ -34,6 +47,14 @@ export type StudioState = {
   displayMode: DisplayMode
   /** Project tempo — loop-track clips stretch to match it (US-19.2). */
   bpm: number
+  /** Snap-to-grid (US-19.3): quantize clip drops/markers to beat divisions. */
+  snapEnabled: boolean
+  snapResolution: SnapResolution
+  /** Loop region (US-19.3): playback repeats [loopStartSec, loopEndSec). */
+  loopEnabled: boolean
+  loopStartSec: number
+  loopEndSec: number
+  markers: StudioMarker[]
   // Bumped by user-initiated SEEKs and effective BPM changes (never by the
   // rAF loop's own SET_PLAYHEAD ticks) — the playback engine watches this to
   // reschedule audio from the new position/rates instead of stomping it on
@@ -48,6 +69,13 @@ export const initialStudioState: StudioState = {
   zoom: 1,
   displayMode: "bars-beats",
   bpm: DEFAULT_BPM,
+  snapEnabled: true,
+  snapResolution: "1beat",
+  loopEnabled: false,
+  loopStartSec: 0,
+  // 4 bars at the default 120 BPM — a sensible starting loop.
+  loopEndSec: 8,
+  markers: [],
   seekEpoch: 0,
 }
 
@@ -86,6 +114,14 @@ export type StudioAction =
   | { type: "SET_ZOOM"; zoom: number }
   | { type: "SET_BPM"; bpm: number }
   | { type: "TOGGLE_DISPLAY_MODE" }
+  | { type: "TOGGLE_SNAP" }
+  | { type: "SET_SNAP_RESOLUTION"; resolution: SnapResolution }
+  | { type: "TOGGLE_LOOP" }
+  | { type: "SET_LOOP_REGION"; startSec: number; endSec: number }
+  | { type: "ADD_MARKER"; id: string; sec: number; label: string }
+  | { type: "RENAME_MARKER"; markerId: string; label: string }
+  | { type: "MOVE_MARKER"; markerId: string; sec: number }
+  | { type: "DELETE_MARKER"; markerId: string }
 
 export function studioReducer(
   state: StudioState,
@@ -201,6 +237,51 @@ export function studioReducer(
         ...state,
         displayMode:
           state.displayMode === "bars-beats" ? "mm-ss" : "bars-beats",
+      }
+    case "TOGGLE_SNAP":
+      return { ...state, snapEnabled: !state.snapEnabled }
+    case "SET_SNAP_RESOLUTION":
+      return { ...state, snapResolution: action.resolution }
+    case "TOGGLE_LOOP":
+      return { ...state, loopEnabled: !state.loopEnabled }
+    case "SET_LOOP_REGION": {
+      // Handles can cross during a drag — store the normalized range.
+      const a = Math.max(0, action.startSec)
+      const b = Math.max(0, action.endSec)
+      return {
+        ...state,
+        loopStartSec: Math.min(a, b),
+        loopEndSec: Math.max(a, b),
+      }
+    }
+    case "ADD_MARKER":
+      return {
+        ...state,
+        markers: [
+          ...state.markers,
+          { id: action.id, sec: Math.max(0, action.sec), label: action.label },
+        ],
+      }
+    case "RENAME_MARKER": {
+      if (!state.markers.some((m) => m.id === action.markerId)) return state
+      return {
+        ...state,
+        markers: state.markers.map((m) =>
+          m.id === action.markerId ? { ...m, label: action.label } : m
+        ),
+      }
+    }
+    case "MOVE_MARKER":
+      return {
+        ...state,
+        markers: state.markers.map((m) =>
+          m.id === action.markerId ? { ...m, sec: Math.max(0, action.sec) } : m
+        ),
+      }
+    case "DELETE_MARKER":
+      return {
+        ...state,
+        markers: state.markers.filter((m) => m.id !== action.markerId),
       }
     default:
       return state

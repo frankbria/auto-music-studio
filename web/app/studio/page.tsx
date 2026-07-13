@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
 import { Playhead } from "@/components/studio/Playhead"
-import { TimeRuler } from "@/components/studio/TimeRuler"
+import { RulerArea } from "@/components/studio/RulerArea"
+import { SnapControls } from "@/components/studio/SnapControls"
 import { TransportControls } from "@/components/studio/TransportControls"
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
@@ -110,6 +111,7 @@ function StudioHeader() {
       <div className="flex items-center gap-2">
         <TransportControls />
         <TempoInput />
+        <SnapControls />
         <Button
           type="button"
           variant="outline"
@@ -199,13 +201,7 @@ function StudioTimeline() {
             className="shrink-0"
             style={{ width: TRACK_STRIP_PX }}
           />
-          <TimeRuler
-            pxPerSec={pxPerSec}
-            durationSec={durationSec}
-            displayMode={state.displayMode}
-            bpm={state.bpm}
-            onSeek={(sec) => dispatch({ type: "SEEK", sec })}
-          />
+          <RulerArea pxPerSec={pxPerSec} durationSec={durationSec} />
         </div>
         {state.tracks.map((track) => (
           <TrackLane

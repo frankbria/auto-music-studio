@@ -15,7 +15,13 @@ import { Input } from "@/components/ui/input"
 import { ClipBlock } from "@/components/studio/ClipBlock"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
-import { TRACK_STRIP_PX, xToSec } from "@/lib/timeline"
+import {
+  TRACK_STRIP_PX,
+  snapSec,
+  snapStepSec,
+  xToSec,
+  type SnapResolution,
+} from "@/lib/timeline"
 import {
   TRACK_TYPES,
   TRACK_TYPE_ORDER,
@@ -36,6 +42,24 @@ import { cn } from "@/lib/utils"
  * track-type entry (external files, unit tests) reads as valid — the drop
  * handler and reducer still validate the actual payload. */
 type DragOverState = null | "valid" | "invalid"
+
+/** Grid lines below this spacing are visual noise, so they aren't drawn —
+ * snapping itself still applies at the full resolution. */
+const MIN_GRID_LINE_PX = 8
+
+/** One vertical line per snap grid step, drawn in CSS instead of DOM nodes
+ * (US-19.3) — a repeating gradient scales with zoom for free. */
+function gridBackground(
+  state: { snapEnabled: boolean; snapResolution: SnapResolution; bpm: number },
+  pxPerSec: number
+): React.CSSProperties | undefined {
+  if (!state.snapEnabled) return undefined
+  const stepPx = snapStepSec(state.snapResolution, state.bpm) * pxPerSec
+  if (stepPx < MIN_GRID_LINE_PX) return undefined
+  return {
+    backgroundImage: `repeating-linear-gradient(to right, var(--border) 0, var(--border) 1px, transparent 1px, transparent ${stepPx}px)`,
+  }
+}
 
 export function TrackLane({
   track,
@@ -88,13 +112,23 @@ export function TrackLane({
     const rect = e.currentTarget.getBoundingClientRect()
     const cursorSec = xToSec(e.clientX - rect.left, { pxPerSec, scrollSec: 0 })
 
+    // Snap-to-grid (US-19.3) quantizes where the clip's left edge lands — for
+    // a move that's the grabbed point minus its offset, so the edge (not the
+    // cursor) snaps to the grid line.
+    function place(rawSec: number): number {
+      const sec = Math.max(0, rawSec)
+      return state.snapEnabled
+        ? snapSec(sec, state.snapResolution, state.bpm)
+        : sec
+    }
+
     if (payload.kind === "add") {
       dispatch({
         type: "ADD_CLIP",
         id: crypto.randomUUID(),
         trackId: track.id,
         clipId: payload.clipId,
-        startSec: Math.max(0, cursorSec),
+        startSec: place(cursorSec),
         title: payload.title,
         durationSec: payload.duration,
         generationMode: payload.generationMode,
@@ -107,7 +141,7 @@ export function TrackLane({
         placementId: payload.placementId,
         // Keep the grabbed point under the cursor: the clip's left edge lands
         // grabOffsetSec before it.
-        startSec: Math.max(0, cursorSec - payload.grabOffsetSec),
+        startSec: place(cursorSec - payload.grabOffsetSec),
       })
     }
   }
@@ -168,6 +202,7 @@ export function TrackLane({
           dragOver === "valid" && "bg-accent/40",
           dragOver === "invalid" && "bg-destructive/10"
         )}
+        style={gridBackground(state, pxPerSec)}
         onDragOver={onDragOver}
         onDragEnter={(e) => setDragOver(dragValidity(e))}
         onDragLeave={(e) => {
