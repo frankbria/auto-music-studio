@@ -34,9 +34,10 @@ export type StudioState = {
   displayMode: DisplayMode
   /** Project tempo — loop-track clips stretch to match it (US-19.2). */
   bpm: number
-  // Bumped only by a user-initiated SEEK (never by the rAF loop's own
-  // SET_PLAYHEAD ticks) — the playback engine watches this to reschedule
-  // audio from the new position instead of stomping it on the next frame.
+  // Bumped by user-initiated SEEKs and effective BPM changes (never by the
+  // rAF loop's own SET_PLAYHEAD ticks) — the playback engine watches this to
+  // reschedule audio from the new position/rates instead of stomping it on
+  // the next frame.
   seekEpoch: number
 }
 
@@ -182,9 +183,13 @@ export function studioReducer(
       return { ...state, zoom: clampZoom(action.zoom) }
     case "SET_BPM": {
       if (!Number.isFinite(action.bpm)) return state
+      const bpm = Math.min(BPM_MAX, Math.max(BPM_MIN, action.bpm))
+      // No-op commits (same value, or clamped into the same value) must not
+      // bump seekEpoch — that would audibly restart an in-flight playback.
+      if (bpm === state.bpm) return state
       return {
         ...state,
-        bpm: Math.min(BPM_MAX, Math.max(BPM_MIN, action.bpm)),
+        bpm,
         // A tempo change re-rates loop-track clips; treat it like a seek so a
         // playback already in flight reschedules its sources at the new rates
         // (the engine only watches isPlaying/seekEpoch).
