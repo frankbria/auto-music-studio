@@ -117,6 +117,20 @@ function zeroRect() {
   }
 }
 
+/** jsdom has no DragEvent, so fireEvent.drop's `clientX` init is silently
+ * dropped (verified by direct probe) — dispatch a plain Event with clientX
+ * and dataTransfer overridden via defineProperty instead, which React's
+ * synthetic event does read through. */
+function dropEventWithClientX(clientX: number, dataTransfer: unknown) {
+  const event = new Event("drop", { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "clientX", { value: clientX, configurable: true })
+  Object.defineProperty(event, "dataTransfer", {
+    value: dataTransfer,
+    configurable: true,
+  })
+  return event
+}
+
 describe("TrackLane drop zone — adding a new clip", () => {
   it("accepts a dropped clip and adds it to the track", async () => {
     render(<Harness />)
@@ -154,6 +168,35 @@ describe("TrackLane drop zone — adding a new clip", () => {
     expect(region.className).toMatch(/bg-accent/)
     fireEvent.dragLeave(region)
     expect(region.className).not.toMatch(/bg-accent/)
+  })
+
+  it("clamps a drop left of the lane's origin to startSec 0", async () => {
+    render(<Harness />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    // Lane starts at x=100 on screen; the drop lands at x=20 — 80px to the
+    // left of the lane's own origin, which would be a negative startSec
+    // without the Math.max(0, …) clamp.
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue({
+      ...zeroRect(),
+      left: 100,
+    })
+
+    region.dispatchEvent(
+      dropEventWithClientX(20, {
+        getData: () =>
+          JSON.stringify({
+            kind: "add",
+            clipId: "c1",
+            title: "Dropped",
+            duration: 10,
+          }),
+      })
+    )
+
+    await waitFor(() => {
+      const block = screen.getByTestId("clip-block")
+      expect(block.style.left).toBe("0px")
+    })
   })
 })
 
