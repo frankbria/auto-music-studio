@@ -470,6 +470,9 @@ describe("WaveformEditor", () => {
     // Finish the decode → the result lands and editing unfreezes.
     resolveDecode({ mono: new Float32Array(480), sampleRate: 80, duration: 6 })
     await waitFor(() => expect(editedDuration()).toBeCloseTo(6))
-    expect(screen.getByRole("button", { name: "Normalize" })).toBeEnabled()
+    // The unfreeze can land a render after the duration does — await it.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Normalize" })).toBeEnabled()
+    )
   })
 })
