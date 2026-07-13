@@ -28,17 +28,19 @@ const ZOOM_BUTTON_FACTOR = 1.5
 // Matches the sensitivity used for Ctrl+wheel zoom on the waveform canvas.
 const WHEEL_ZOOM_SENSITIVITY = 0.002
 
-/** Preloads the ?song= clip onto a fresh track at 0s, once (US-19.1). */
+/** Preloads the ?song= clip onto a fresh track at 0s (US-19.1). Preloads
+ * again for a *different* clip id — e.g. a client-side nav from ?song=A to
+ * ?song=B on the same mounted page — but never re-preloads the same clip. */
 function useSongPreload() {
   const searchParams = useSearchParams()
   const songId = searchParams.get("song") ?? undefined
   const { clip } = useClip(songId)
   const { dispatch } = useStudio()
-  const preloadedRef = useRef(false)
+  const preloadedRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!clip || preloadedRef.current) return
-    preloadedRef.current = true
+    if (!clip || preloadedRef.current === clip.id) return
+    preloadedRef.current = clip.id
     const trackId = crypto.randomUUID()
     dispatch({ type: "ADD_TRACK", id: trackId })
     dispatch({

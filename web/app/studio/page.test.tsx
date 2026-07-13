@@ -325,6 +325,36 @@ describe("StudioPage ?song= preload", () => {
     )
   })
 
+  it("preloads a second song after a client-side nav to a new ?song=", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    const clipsById: Record<string, unknown> = {
+      "clip-1": SONG_CLIP_JSON,
+      "clip-2": { ...SONG_CLIP_JSON, id: "clip-2", title: "Second Song" },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const match = /^\/api\/clips\/([^/?]+)$/.exec(url)
+        if (match) return Promise.resolve(jsonRes(clipsById[match[1]]))
+        return Promise.resolve(jsonRes({ workspaces: [] }))
+      })
+    )
+
+    const { rerender } = renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+
+    // Client-side nav to a different song — same page instance stays mounted.
+    searchParamsRef.current = new URLSearchParams("song=clip-2")
+    rerender(<StudioPage />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Second Song")).toBeInTheDocument()
+    )
+    // The first song's track is untouched — this is a second preload, not a
+    // replacement.
+    expect(screen.getByText("My Song")).toBeInTheDocument()
+  })
+
   it("does not fetch a clip without a song param", () => {
     const fetchMock = stubStudioFetch()
     renderPage()
