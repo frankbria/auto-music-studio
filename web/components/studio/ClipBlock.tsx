@@ -75,7 +75,14 @@ export function ClipBlock({
   const title = placement.title ?? "Untitled clip"
 
   function onDragStart(e: DragEvent<HTMLDivElement>) {
-    setClipDragData(e.dataTransfer, { kind: "move", placementId: placement.id })
+    const rect = e.currentTarget.getBoundingClientRect()
+    setClipDragData(e.dataTransfer, {
+      kind: "move",
+      placementId: placement.id,
+      // Where within the clip the user grabbed, so the drop keeps that point
+      // under the cursor instead of snapping the left edge to it.
+      grabOffsetSec: Math.max(0, (e.clientX - rect.left) / pxPerSec),
+    })
   }
 
   return (

@@ -118,11 +118,15 @@ export function useStudioPlayback(token: string | null): void {
 
         // A fresh read of ctx.currentTime here, not the one from before decode
         // — scheduled offsets/times must be relative to "now that we can
-        // actually start", not to whenever this effect run began.
+        // actually start", not to whenever this effect run began. One snapshot
+        // shared with the rAF origin below, so the playhead doesn't
+        // permanently trail the audio by however long the scheduling loop
+        // took.
+        const now = ctx.currentTime
         const schedule = computePlaybackSchedule(
           placements,
           playheadAtStart,
-          ctx.currentTime
+          now
         )
         for (const item of schedule) {
           const buffer = bufferByClipId.get(item.clipId)
@@ -135,7 +139,7 @@ export function useStudioPlayback(token: string | null): void {
         }
 
         originRef.current = {
-          ctxTime: ctx.currentTime,
+          ctxTime: now,
           playheadSec: playheadAtStart,
         }
         function tick() {

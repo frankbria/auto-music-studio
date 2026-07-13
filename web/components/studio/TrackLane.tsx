@@ -53,10 +53,7 @@ export function TrackLane({
     if (!payload) return
 
     const rect = e.currentTarget.getBoundingClientRect()
-    const startSec = Math.max(
-      0,
-      xToSec(e.clientX - rect.left, { pxPerSec, scrollSec: 0 })
-    )
+    const cursorSec = xToSec(e.clientX - rect.left, { pxPerSec, scrollSec: 0 })
 
     if (payload.kind === "add") {
       dispatch({
@@ -64,7 +61,7 @@ export function TrackLane({
         id: crypto.randomUUID(),
         trackId: track.id,
         clipId: payload.clipId,
-        startSec,
+        startSec: Math.max(0, cursorSec),
         title: payload.title,
         durationSec: payload.duration,
       })
@@ -73,7 +70,9 @@ export function TrackLane({
         type: "MOVE_CLIP",
         trackId: track.id,
         placementId: payload.placementId,
-        startSec,
+        // Keep the grabbed point under the cursor: the clip's left edge lands
+        // grabOffsetSec before it.
+        startSec: Math.max(0, cursorSec - payload.grabOffsetSec),
       })
     }
   }

@@ -31,9 +31,26 @@ describe("setClipDragData / parseClipDragData round-trip", () => {
 
   it("round-trips a 'move' payload (existing placement being repositioned)", () => {
     const dt = fakeDataTransfer()
-    const payload: ClipDragPayload = { kind: "move", placementId: "p1" }
+    const payload: ClipDragPayload = {
+      kind: "move",
+      placementId: "p1",
+      grabOffsetSec: 1.25,
+    }
     setClipDragData(dt, payload)
     expect(parseClipDragData(dt)).toEqual(payload)
+  })
+
+  it("defaults a missing grabOffsetSec to 0 on a 'move' payload", () => {
+    const dt = fakeDataTransfer()
+    dt.setData(
+      "application/json",
+      JSON.stringify({ kind: "move", placementId: "p1" })
+    )
+    expect(parseClipDragData(dt)).toEqual({
+      kind: "move",
+      placementId: "p1",
+      grabOffsetSec: 0,
+    })
   })
 })
 

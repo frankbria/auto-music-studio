@@ -151,9 +151,13 @@ describe("ClipBlock drag source (reposition via MOVE_CLIP)", () => {
     } as unknown as DataTransfer
     fireEvent.dragStart(block, { dataTransfer })
 
+    // jsdom's zero-rect + missing clientX both read as 0, so the grab offset
+    // computes to 0 here; the offset math itself is asserted in TrackLane's
+    // grab-offset drop test.
     expect(parseClipDragData(dataTransfer)).toEqual({
       kind: "move",
       placementId: "p1",
+      grabOffsetSec: 0,
     })
   })
 })

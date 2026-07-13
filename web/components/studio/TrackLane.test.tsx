@@ -275,4 +275,33 @@ describe("TrackLane drop zone — repositioning an existing clip", () => {
     )
     expect(screen.getByText("Intro")).toBeInTheDocument()
   })
+
+  // The drop keeps the grabbed point under the cursor: left edge lands
+  // grabOffsetSec before the cursor's timeline position.
+  it("subtracts the move payload's grab offset from the drop position", async () => {
+    render(
+      <Harness
+        clips={[{ clipId: "c1", title: "Intro", duration: 4, startSec: 0 }]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    // Cursor at 100px = 5s (20 px/sec); grabbed 2s into the clip → left edge
+    // lands at 3s = 60px.
+    region.dispatchEvent(
+      dropEventWithClientX(100, {
+        getData: () =>
+          JSON.stringify({
+            kind: "move",
+            placementId: "seed-0",
+            grabOffsetSec: 2,
+          }),
+      })
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-block")).toHaveStyle({ left: "60px" })
+    )
+  })
 })

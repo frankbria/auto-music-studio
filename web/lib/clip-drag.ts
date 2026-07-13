@@ -17,7 +17,13 @@ export type ClipDragPayload =
       title: string | null
       duration: number | null
     }
-  | { kind: "move"; placementId: string }
+  | {
+      kind: "move"
+      placementId: string
+      /** Seconds between the clip's left edge and where the user grabbed it,
+       * so a drop places the grab point (not the left edge) at the cursor. */
+      grabOffsetSec: number
+    }
 
 export function setClipDragData(
   dataTransfer: DataTransfer,
@@ -49,7 +55,11 @@ export function parseClipDragData(
     }
   }
   if (p.kind === "move" && typeof p.placementId === "string") {
-    return { kind: "move", placementId: p.placementId }
+    return {
+      kind: "move",
+      placementId: p.placementId,
+      grabOffsetSec: typeof p.grabOffsetSec === "number" ? p.grabOffsetSec : 0,
+    }
   }
   return null
 }
