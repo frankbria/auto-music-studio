@@ -105,7 +105,12 @@ export function TrackLane({
   const [draft, setDraft] = useState(track.name)
   const [dragOver, setDragOver] = useState<DragOverState>(null)
   const [regenOpen, setRegenOpen] = useState(false)
+  const [colorOpen, setColorOpen] = useState(false)
   const typeConfig = TRACK_TYPES[track.trackType]
+  // Audio (uploads) and vocal (extracted stems) clips can't be produced by
+  // prompt generation, so their inferred type would never land on this track
+  // (US-19.2 strict typing).
+  const canRegenerate = track.trackType === "ai" || track.trackType === "loop"
   // Dim the lane whenever the engine would silence it — same predicate the
   // audio graph uses, so sight and sound can't diverge.
   const anySolo = state.tracks.some((t) => t.solo)
@@ -228,7 +233,7 @@ export function TrackLane({
               {track.name}
             </button>
           )}
-          <Popover>
+          <Popover open={colorOpen} onOpenChange={setColorOpen}>
             <PopoverTrigger asChild>
               <button
                 type="button"
@@ -244,13 +249,14 @@ export function TrackLane({
                     key={c.value}
                     type="button"
                     aria-label={`Color ${c.name}`}
-                    onClick={() =>
+                    onClick={() => {
                       dispatch({
                         type: "SET_TRACK_COLOR",
                         trackId: track.id,
                         color: c.value,
                       })
-                    }
+                      setColorOpen(false)
+                    }}
                     className="size-5 rounded-full border border-border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                     style={{ backgroundColor: c.value }}
                   />
@@ -339,14 +345,11 @@ export function TrackLane({
             variant="ghost"
             size="icon-xs"
             aria-label="Regenerate track"
-            // Audio (uploads) and vocal (extracted stems) clips can't be
-            // produced by prompt generation, so their inferred type would
-            // never land on this track (US-19.2 strict typing).
-            disabled={track.trackType !== "ai" && track.trackType !== "loop"}
+            disabled={!canRegenerate}
             title={
-              track.trackType !== "ai" && track.trackType !== "loop"
-                ? "Regeneration is available for AI and Sound/Loop tracks"
-                : undefined
+              canRegenerate
+                ? undefined
+                : "Regeneration is available for AI and Sound/Loop tracks"
             }
             onClick={() => setRegenOpen(true)}
           >

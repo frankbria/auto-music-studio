@@ -34,6 +34,11 @@ export function effectiveTrackGain(
   return isTrackSilenced(track, anySolo) ? 0 : dbToGain(track.volumeDb)
 }
 
+/** Map the UI's pan range [-100, +100] to StereoPannerNode's [-1, +1]. */
+export function panToAudioValue(pan: number): number {
+  return pan / 100
+}
+
 export function formatVolumeDb(volumeDb: number): string {
   if (volumeDb <= VOLUME_DB_MIN) return "-∞ dB"
   if (volumeDb > 0) return `+${volumeDb} dB`

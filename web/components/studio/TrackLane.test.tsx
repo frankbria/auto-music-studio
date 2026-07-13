@@ -268,6 +268,10 @@ describe("TrackLane per-track controls (US-19.4)", () => {
     expect(screen.getByTestId("track-strip").style.borderLeft).toContain(
       "rgb(244, 63, 94)"
     )
+    // Picking a color dismisses the popover (click-to-pick-and-dismiss).
+    expect(
+      screen.queryByRole("button", { name: "Color Rose" })
+    ).not.toBeInTheDocument()
   })
 })
 

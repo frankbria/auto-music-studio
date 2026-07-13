@@ -284,6 +284,92 @@ describe("TrackRegenerateDialog", () => {
     )
   })
 
+  it("treats a generated clip whose type mismatches the track as a failure, not a silent close", async () => {
+    // A loop track receiving a clip whose generation_mode infers as "ai":
+    // ADD_CLIP would silently reject it, so the dialog must show the failure
+    // instead of closing over a spent credit and a missing clip.
+    stubFetch(
+      happyRoutes({
+        id: "nc4",
+        title: "Wrong type",
+        duration: 6,
+        bpm: null,
+        generation_mode: null,
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness trackType="loop" />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "drum loop")
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn.t be added/i
+    )
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(clipsProbe()).toEqual([])
+  })
+
+  it("ignores a second Retry click while an add is already in flight", async () => {
+    let clipFetches = 0
+    let resolveSecond: (r: Response) => void = () => {}
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === "/api/generate" && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({ job_id: "j1", estimated_time_seconds: 5 }),
+            { status: 202 }
+          )
+        }
+        if (url.startsWith("/api/jobs/j1")) {
+          return new Response(
+            JSON.stringify({ status: "completed", clip_ids: ["nc5"] }),
+            { status: 200 }
+          )
+        }
+        if (url === "/api/clips/nc5") {
+          clipFetches += 1
+          if (clipFetches === 1) return new Response("{}", { status: 500 })
+          // Second fetch hangs until we resolve it — the window for a
+          // double-click.
+          return new Promise<Response>((res) => {
+            resolveSecond = res
+          })
+        }
+        return new Response("{}", { status: 404 })
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "anything")
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+    await screen.findByRole("alert")
+
+    const retry = screen.getByRole("button", { name: "Retry" })
+    await user.click(retry)
+    await user.click(retry) // double-click while the first retry is in flight
+    expect(clipFetches).toBe(2) // 1 failed + 1 in flight — not 3
+
+    resolveSecond(
+      new Response(
+        JSON.stringify({
+          id: "nc5",
+          title: "Recovered",
+          duration: 6,
+          bpm: null,
+          generation_mode: "song",
+        }),
+        { status: 200 }
+      )
+    )
+    await waitFor(() =>
+      expect(clipsProbe()).toEqual([{ clipId: "nc5", startSec: 0 }])
+    )
+  })
+
   it("disables Generate until a prompt is entered", () => {
     stubFetch([])
     render(<Harness />)

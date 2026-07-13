@@ -7,7 +7,7 @@ import { useStudio } from "@/contexts/studio-context"
 import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
-import { effectiveTrackGain } from "@/lib/track-audio"
+import { effectiveTrackGain, panToAudioValue } from "@/lib/track-audio"
 import { placementPlaybackRate } from "@/lib/track-types"
 
 // Studio-owned playback engine (US-19.1). Schedules every placement across
@@ -81,7 +81,7 @@ export function useStudioPlayback(token: string | null): void {
       const nodes = trackNodesRef.current.get(t.id)
       if (!nodes) continue
       nodes.gain.gain.value = effectiveTrackGain(t, anySolo)
-      nodes.panner.pan.value = t.pan / 100
+      nodes.panner.pan.value = panToAudioValue(t.pan)
     }
   }, [state.tracks])
 
@@ -198,7 +198,7 @@ export function useStudioPlayback(token: string | null): void {
           const gain = ctx.createGain()
           gain.gain.value = effectiveTrackGain(track, anySolo)
           const panner = ctx.createStereoPanner()
-          panner.pan.value = track.pan / 100
+          panner.pan.value = panToAudioValue(track.pan)
           gain.connect(panner)
           panner.connect(master)
           trackNodesRef.current.set(scheduled.id, { gain, panner })

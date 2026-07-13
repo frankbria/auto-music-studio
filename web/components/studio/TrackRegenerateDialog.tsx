@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { useGeneration } from "@/hooks/use-generation"
 import { submitGeneration, submitSoundsGeneration } from "@/lib/generate"
-import { placementPlaybackRate } from "@/lib/track-types"
+import { inferTrackType, placementPlaybackRate } from "@/lib/track-types"
 import type { Clip } from "@/lib/workspace-clips"
 
 // AI Regenerate for a studio track (US-19.4): prompt → existing /api/generate
@@ -52,6 +52,9 @@ export function TrackRegenerateDialog({
   const [instrumental, setInstrumental] = useState(false)
   const [addFailed, setAddFailed] = useState(false)
   const addedRef = useRef(false)
+  // Gates concurrent add attempts (e.g. a double-clicked Retry) — addedRef
+  // only guards the effect path.
+  const addingRef = useRef(false)
 
   const busy = gen.phase === "submitting" || gen.phase === "polling"
 
@@ -96,7 +99,8 @@ export function TrackRegenerateDialog({
   // fetch — never silently hang, and never re-submit the generation.
   const startSec = appendStartSec(track, state.bpm)
   function addGeneratedClip(clipId: string | undefined) {
-    if (!token || !clipId) return
+    if (!token || !clipId || addingRef.current) return
+    addingRef.current = true
     fetch(`/api/clips/${encodeURIComponent(clipId)}`, {
       headers: { authorization: `Bearer ${token}` },
     })
@@ -105,6 +109,13 @@ export function TrackRegenerateDialog({
         return (await res.json()) as Clip
       })
       .then((clip) => {
+        // ADD_CLIP silently rejects a clip whose inferred type mismatches the
+        // track (US-19.2). Unreachable via this dialog's own requests, but if
+        // it ever happened the dialog would close over a spent credit and a
+        // missing clip — surface it as a failure instead.
+        if (inferTrackType(clip.generation_mode) !== track.trackType) {
+          throw new Error("generated clip type does not match the track")
+        }
         dispatch({
           type: "ADD_CLIP",
           id: crypto.randomUUID(),
@@ -119,6 +130,9 @@ export function TrackRegenerateDialog({
         onClose()
       })
       .catch(() => setAddFailed(true))
+      .finally(() => {
+        addingRef.current = false
+      })
   }
   useEffect(() => {
     if (gen.phase !== "success" || addedRef.current || !token) return
