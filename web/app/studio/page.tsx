@@ -203,6 +203,7 @@ function StudioTimeline() {
             pxPerSec={pxPerSec}
             durationSec={durationSec}
             displayMode={state.displayMode}
+            bpm={state.bpm}
             onSeek={(sec) => dispatch({ type: "SEEK", sec })}
           />
         </div>

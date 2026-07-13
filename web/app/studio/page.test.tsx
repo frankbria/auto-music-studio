@@ -192,6 +192,22 @@ describe("StudioPage header", () => {
     expect(input()).toHaveValue(180)
   })
 
+  it("re-labels the bars-beats ruler from the project tempo (US-19.2)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    // 120 BPM: bar = 2s → the "2.1" tick sits at 200px (100px/sec, zoom 1).
+    const tick = () => screen.getByText("2.1").parentElement as HTMLElement
+    expect(tick().style.left).toBe("200px")
+
+    const input = screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+    await user.clear(input)
+    await user.type(input, "60")
+    await user.tab()
+
+    // 60 BPM: bar = 4s → the same bar label moves to 400px.
+    expect(tick().style.left).toBe("400px")
+  })
+
   it("reverts to the previous tempo when the input is committed empty (Number('') === 0 footgun)", async () => {
     const user = userEvent.setup()
     renderPage()
