@@ -225,6 +225,29 @@ color and icon; the Add Track button opens a type selector dropdown.
   tempo change re-stretches placed loops — including mid-playback, where an
   effective `SET_BPM` bumps `seekEpoch` to reschedule the running sources.
 
+## Snap-to-Grid, Loop Regions, and Markers (US-19.3)
+
+Timeline precision tools, all client-side studio state (persisted later via
+DAW export, US-19.6):
+
+- **Snap-to-grid** — `snapStepSec`/`snapSec` in `lib/timeline.ts` quantize
+  seconds to a beat fraction (`1bar`/`1beat`/`1/2beat`/`1/4beat`, tempo-aware).
+  On by default at 1 beat via `components/studio/SnapControls.tsx` (magnet
+  toggle + resolution dropdown in the header). `TrackLane.onDrop` snaps the
+  clip's landing edge; lanes draw grid lines with a CSS repeating gradient
+  sized to the snap step (hidden below 8px spacing).
+- **Loop region** — `loopEnabled`/`loopStartSec`/`loopEndSec` in studio state
+  (`SET_LOOP_REGION` normalizes crossed handles). The transport's repeat
+  button toggles it; `components/studio/RulerArea.tsx` draws the band over the
+  ruler with draggable, keyboard-adjustable ARIA-slider handles. During
+  playback the rAF tick dispatches `SEEK loopStart` when it crosses the loop
+  end — the seekEpoch bump reschedules audio, so the wrap is seamless; loop
+  state is read through a ref so mid-play edits never restart the run.
+- **Markers** — `markers: {id, sec, label}[]` with add/rename/move/delete
+  actions. The marker strip above the ruler (also `RulerArea.tsx`): double-
+  click adds a snapped flag, dragging moves it (clamped to the timeline),
+  clicking opens a popover to rename or delete.
+
 ## Adding components
 
 To add components to your app, run the following command:
