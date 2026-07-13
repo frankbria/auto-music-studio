@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react"
 import { useStudioPlayback } from "./use-studio-playback"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import type { TrackType } from "@/lib/track-types"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
   getClipAudioMock: vi.fn(),
@@ -28,6 +29,7 @@ class FakeGainNode {
 
 class FakeSourceNode {
   buffer: AudioBuffer | null = null
+  playbackRate = { value: 1 }
   connect = vi.fn()
   disconnect = vi.fn()
   start = vi.fn()
@@ -104,21 +106,30 @@ type SeedClip = {
   title: string
   duration: number
   startSec: number
+  trackId?: string
+  generationMode?: string | null
+  clipBpm?: number | null
 }
+
+type SeedTrack = { id: string; trackType: TrackType }
+
+const DEFAULT_TRACKS: SeedTrack[] = [{ id: "t1", trackType: "ai" }]
 
 function Harness({
   token = "tok",
   clips = [],
+  tracks = DEFAULT_TRACKS,
   autoplay = false,
 }: {
   token?: string | null
   clips?: SeedClip[]
+  tracks?: SeedTrack[]
   autoplay?: boolean
 }) {
   return (
     <PlayerProvider>
       <StudioProvider>
-        <Seed token={token} clips={clips} autoplay={autoplay} />
+        <Seed token={token} clips={clips} tracks={tracks} autoplay={autoplay} />
       </StudioProvider>
     </PlayerProvider>
   )
@@ -127,10 +138,12 @@ function Harness({
 function Seed({
   token,
   clips,
+  tracks,
   autoplay,
 }: {
   token: string | null
   clips: SeedClip[]
+  tracks: SeedTrack[]
   autoplay: boolean
 }) {
   const { state: studioState, dispatch } = useStudio()
@@ -140,16 +153,20 @@ function Seed({
   useEffect(() => {
     if (seededRef.current) return
     seededRef.current = true
-    dispatch({ type: "ADD_TRACK", id: "t1" })
+    for (const t of tracks) {
+      dispatch({ type: "ADD_TRACK", id: t.id, trackType: t.trackType })
+    }
     clips.forEach((c, i) => {
       dispatch({
         type: "ADD_CLIP",
         id: `p${i}`,
-        trackId: "t1",
+        trackId: c.trackId ?? "t1",
         clipId: c.clipId,
         startSec: c.startSec,
         title: c.title,
         durationSec: c.duration,
+        generationMode: c.generationMode,
+        clipBpm: c.clipBpm,
       })
     })
     if (autoplay) dispatch({ type: "SET_PLAYING", playing: true })
@@ -223,6 +240,105 @@ describe("useStudioPlayback scheduling", () => {
     })
 
     expect(getClipAudioMock).not.toHaveBeenCalled()
+  })
+
+  it("plays clips on the same track sequentially by timeline position (US-19.2 acceptance)", async () => {
+    const { sources, box } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 4,
+    })
+
+    await act(async () => {
+      render(
+        <Harness
+          clips={[
+            { clipId: "c1", title: "A", duration: 4, startSec: 0 },
+            { clipId: "c2", title: "B", duration: 4, startSec: 4 },
+          ]}
+          autoplay
+        />
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const now = box.instance!.currentTime
+    expect(sources).toHaveLength(2)
+    // One after the other: the second starts exactly when the first ends.
+    expect(sources[0].start).toHaveBeenCalledWith(now, 0)
+    expect(sources[1].start).toHaveBeenCalledWith(now + 4, 0)
+  })
+
+  it("plays clips on different tracks simultaneously (US-19.2 acceptance)", async () => {
+    const { sources, box } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 4,
+    })
+
+    await act(async () => {
+      render(
+        <Harness
+          tracks={[
+            { id: "t1", trackType: "ai" },
+            { id: "t2", trackType: "ai" },
+          ]}
+          clips={[
+            { clipId: "c1", title: "A", duration: 4, startSec: 0, trackId: "t1" },
+            { clipId: "c2", title: "B", duration: 4, startSec: 0, trackId: "t2" },
+          ]}
+          autoplay
+        />
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const now = box.instance!.currentTime
+    expect(sources).toHaveLength(2)
+    // Same start time on both sources: layered playback.
+    expect(sources[0].start).toHaveBeenCalledWith(now, 0)
+    expect(sources[1].start).toHaveBeenCalledWith(now, 0)
+  })
+
+  it("applies the loop track's tempo-derived playback rate to the source (US-19.2)", async () => {
+    const { sources } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: fakeBuffer(),
+      peaks: new Float32Array(),
+      duration: 8,
+    })
+
+    await act(async () => {
+      render(
+        <Harness
+          tracks={[{ id: "t1", trackType: "loop" }]}
+          clips={[
+            {
+              clipId: "c1",
+              title: "Loop",
+              duration: 8,
+              startSec: 0,
+              generationMode: "sound",
+              clipBpm: 90,
+            },
+          ]}
+          autoplay
+        />
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(sources).toHaveLength(1)
+    // 90 BPM loop in the default 120 BPM project → 4/3 rate.
+    expect(sources[0].playbackRate.value).toBeCloseTo(4 / 3)
   })
 })
 
@@ -459,7 +575,7 @@ describe("useStudioPlayback seek during playback", () => {
     function SeekHarness() {
       const { dispatch } = useStudio()
       useEffect(() => {
-        dispatch({ type: "ADD_TRACK", id: "t1" })
+        dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
         dispatch({
           type: "ADD_CLIP",
           id: "p0",
@@ -549,7 +665,7 @@ describe("useStudioPlayback cleanup", () => {
     function ToggleHarness() {
       const { dispatch } = useStudio()
       useEffect(() => {
-        dispatch({ type: "ADD_TRACK", id: "t1" })
+        dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
         dispatch({
           type: "ADD_CLIP",
           id: "p0",

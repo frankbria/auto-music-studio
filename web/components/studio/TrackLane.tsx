@@ -5,11 +5,22 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ClipBlock } from "@/components/studio/ClipBlock"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
-import { parseClipDragData } from "@/lib/clip-drag"
+import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
 import { TRACK_STRIP_PX, xToSec } from "@/lib/timeline"
+import {
+  TRACK_TYPES,
+  TRACK_TYPE_ORDER,
+  placementPlaybackRate,
+} from "@/lib/track-types"
 import { cn } from "@/lib/utils"
 
 // A track row: an editable-name control strip on the left, and a drop-target
@@ -17,7 +28,14 @@ import { cn } from "@/lib/utils"
 // drop kinds (lib/clip-drag.ts): a fresh clip dragged in from the workspace
 // panel ("add") or an existing placement being repositioned from this or
 // another lane ("move") — the x position of the drop converts to a start time
-// via xToSec either way.
+// via xToSec either way. Tracks are typed (US-19.2): mismatched clips get
+// invalid-drop feedback during dragover, and the reducer rejects them
+// authoritatively on drop.
+
+/** Valid/invalid drop feedback while a drag hovers the lane. A drag with no
+ * track-type entry (external files, unit tests) reads as valid — the drop
+ * handler and reducer still validate the actual payload. */
+type DragOverState = null | "valid" | "invalid"
 
 export function TrackLane({
   track,
@@ -28,10 +46,11 @@ export function TrackLane({
   pxPerSec: number
   token: string | null
 }) {
-  const { dispatch } = useStudio()
+  const { state, dispatch } = useStudio()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(track.name)
-  const [dragOver, setDragOver] = useState(false)
+  const [dragOver, setDragOver] = useState<DragOverState>(null)
+  const typeConfig = TRACK_TYPES[track.trackType]
 
   function startEdit() {
     setDraft(track.name)
@@ -46,9 +65,23 @@ export function TrackLane({
     }
   }
 
+  function dragValidity(e: DragEvent<HTMLDivElement>): DragOverState {
+    const dragType = e.dataTransfer ? readDragTrackType(e.dataTransfer) : null
+    return dragType && dragType !== track.trackType ? "invalid" : "valid"
+  }
+
+  function onDragOver(e: DragEvent<HTMLDivElement>) {
+    if (dragValidity(e) === "invalid") {
+      // No preventDefault → the browser disallows the drop and shows the
+      // platform's no-drop cursor; the tinted lane says why.
+      return
+    }
+    e.preventDefault()
+  }
+
   function onDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault()
-    setDragOver(false)
+    setDragOver(null)
     const payload = parseClipDragData(e.dataTransfer)
     if (!payload) return
 
@@ -64,6 +97,8 @@ export function TrackLane({
         startSec: Math.max(0, cursorSec),
         title: payload.title,
         durationSec: payload.duration,
+        generationMode: payload.generationMode,
+        clipBpm: payload.bpm,
       })
     } else {
       dispatch({
@@ -81,12 +116,22 @@ export function TrackLane({
     <div data-testid="track-lane" className="flex border-b border-border">
       <div
         data-testid="track-strip"
-        className="flex shrink-0 items-center p-2"
+        className="flex shrink-0 items-center gap-1.5 p-2"
         style={{
           width: TRACK_STRIP_PX,
           borderLeft: `4px solid ${track.color}`,
         }}
       >
+        <span
+          // aria-label is prohibited on role=generic (a bare span); role="img"
+          // makes the accessible name spec-valid for screenreaders.
+          role="img"
+          aria-label={`${typeConfig.label} track`}
+          className="shrink-0"
+          style={{ color: track.color }}
+        >
+          <HugeiconsIcon icon={typeConfig.icon} size={16} />
+        </span>
         {editing ? (
           <Input
             aria-label="Track name"
@@ -118,16 +163,20 @@ export function TrackLane({
       <div
         role="region"
         aria-label={`${track.name} timeline`}
-        className={cn("relative min-h-16 flex-1", dragOver && "bg-accent/40")}
-        onDragOver={(e) => e.preventDefault()}
-        onDragEnter={() => setDragOver(true)}
+        className={cn(
+          "relative min-h-16 flex-1",
+          dragOver === "valid" && "bg-accent/40",
+          dragOver === "invalid" && "bg-destructive/10"
+        )}
+        onDragOver={onDragOver}
+        onDragEnter={(e) => setDragOver(dragValidity(e))}
         onDragLeave={(e) => {
           // A dragLeave also fires when the pointer moves onto a child
           // ClipBlock (still within this lane) — only clear once it's truly
           // left the lane's own box, or the highlight flickers on every clip
           // it drags over.
           if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-            setDragOver(false)
+            setDragOver(null)
           }
         }}
         onDrop={onDrop}
@@ -139,6 +188,12 @@ export function TrackLane({
             pxPerSec={pxPerSec}
             color={track.color}
             token={token}
+            trackType={track.trackType}
+            playbackRate={placementPlaybackRate(
+              placement.clipBpm,
+              track.trackType,
+              state.bpm
+            )}
           />
         ))}
       </div>
@@ -146,18 +201,44 @@ export function TrackLane({
   )
 }
 
-/** Appends a new track to the studio (US-19.1). */
+/** Appends a new track of the chosen type to the studio (US-19.1, US-19.2). */
 export function AddTrackButton() {
   const { dispatch } = useStudio()
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={() => dispatch({ type: "ADD_TRACK", id: crypto.randomUUID() })}
-    >
-      <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-      Add Track
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="sm">
+          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+          Add Track
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {TRACK_TYPE_ORDER.map((type) => {
+          const cfg = TRACK_TYPES[type]
+          return (
+            <DropdownMenuItem
+              key={type}
+              onSelect={() =>
+                dispatch({
+                  type: "ADD_TRACK",
+                  id: crypto.randomUUID(),
+                  trackType: type,
+                })
+              }
+            >
+              <span style={{ color: cfg.color }}>
+                <HugeiconsIcon icon={cfg.icon} size={16} />
+              </span>
+              <span className="flex flex-col">
+                <span>{cfg.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {cfg.description}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

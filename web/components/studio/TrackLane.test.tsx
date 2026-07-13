@@ -3,9 +3,10 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { act, useEffect, useRef } from "react"
 
-import { TrackLane } from "./TrackLane"
+import { AddTrackButton, TrackLane } from "./TrackLane"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import { TRACK_STRIP_PX } from "@/lib/timeline"
+import { TRACK_TYPES, type TrackType } from "@/lib/track-types"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
   getClipAudioMock: vi.fn(),
@@ -19,27 +20,41 @@ type SeedClip = {
   title: string
   duration: number
   startSec: number
+  generationMode?: string | null
+  clipBpm?: number | null
 }
 
 /** Seeds one track (t1) — optionally with clips — then renders TrackLane bound
  * to the live context state, so a dispatch from within TrackLane (rename, drop)
  * is immediately visible, the same way the real Studio page re-renders lanes
  * off `state.tracks`. */
-function Harness({ clips = [] }: { clips?: SeedClip[] }) {
+function Harness({
+  clips = [],
+  trackType = "ai",
+}: {
+  clips?: SeedClip[]
+  trackType?: TrackType
+}) {
   return (
     <StudioProvider>
-      <Seed clips={clips} />
+      <Seed clips={clips} trackType={trackType} />
     </StudioProvider>
   )
 }
 
-function Seed({ clips }: { clips: SeedClip[] }) {
+function Seed({
+  clips,
+  trackType,
+}: {
+  clips: SeedClip[]
+  trackType: TrackType
+}) {
   const { state, dispatch } = useStudio()
   const seededRef = useRef(false)
   useEffect(() => {
     if (seededRef.current) return
     seededRef.current = true
-    dispatch({ type: "ADD_TRACK", id: "t1", name: "Track 1" })
+    dispatch({ type: "ADD_TRACK", id: "t1", trackType, name: "Track 1" })
     clips.forEach((c, i) => {
       dispatch({
         type: "ADD_CLIP",
@@ -49,6 +64,8 @@ function Seed({ clips }: { clips: SeedClip[] }) {
         startSec: c.startSec,
         title: c.title,
         durationSec: c.duration,
+        generationMode: c.generationMode,
+        clipBpm: c.clipBpm,
       })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -98,6 +115,70 @@ describe("TrackLane control strip", () => {
     // drift from the ruler spacer / playhead offset that share this constant.
     expect(screen.getByTestId("track-strip").style.width).toBe(
       `${TRACK_STRIP_PX}px`
+    )
+  })
+})
+
+describe("TrackLane track-type indicator (US-19.2)", () => {
+  it("shows the track type's icon with an accessible label", () => {
+    render(<Harness trackType="loop" />)
+    expect(screen.getByLabelText("Sound/Loop track")).toBeInTheDocument()
+  })
+
+  it("accents the strip with the track type's color", () => {
+    render(<Harness trackType="vocal" />)
+    // jsdom normalizes hex to rgb(), so compare in that form.
+    const [r, g, b] = [1, 3, 5].map((i) =>
+      parseInt(TRACK_TYPES.vocal.color.slice(i, i + 2), 16)
+    )
+    expect(screen.getByTestId("track-strip").style.borderLeft).toContain(
+      `rgb(${r}, ${g}, ${b})`
+    )
+  })
+})
+
+describe("AddTrackButton type selector (US-19.2)", () => {
+  function MenuHarness() {
+    return (
+      <StudioProvider>
+        <AddTrackButton />
+        <TrackProbe />
+      </StudioProvider>
+    )
+  }
+  function TrackProbe() {
+    const { state } = useStudio()
+    return (
+      <div data-testid="track-probe">
+        {state.tracks.map((t) => t.trackType).join(",")}
+      </div>
+    )
+  }
+
+  it("offers all four track types and creates a track of the chosen type", async () => {
+    const user = userEvent.setup()
+    render(<MenuHarness />)
+    await user.click(screen.getByRole("button", { name: /Add Track/i }))
+    for (const label of ["AI-Generated", "Audio", "Sound/Loop", "Vocal"]) {
+      expect(
+        screen.getByRole("menuitem", { name: new RegExp(label) })
+      ).toBeInTheDocument()
+    }
+    await user.click(screen.getByRole("menuitem", { name: /Sound\/Loop/ }))
+    expect(screen.getByTestId("track-probe")).toHaveTextContent("loop")
+  })
+
+  it("can create every track type (US-19.2 acceptance)", async () => {
+    const user = userEvent.setup()
+    render(<MenuHarness />)
+    for (const label of ["AI-Generated", "Audio", "Sound/Loop", "Vocal"]) {
+      await user.click(screen.getByRole("button", { name: /Add Track/i }))
+      await user.click(
+        screen.getByRole("menuitem", { name: new RegExp(label) })
+      )
+    }
+    expect(screen.getByTestId("track-probe")).toHaveTextContent(
+      "ai,audio,loop,vocal"
     )
   })
 })
@@ -217,6 +298,89 @@ describe("TrackLane drop zone — adding a new clip", () => {
       region.dispatchEvent(dragLeaveEventWithRelatedTarget(document.body))
     })
     expect(region.className).not.toMatch(/bg-accent/)
+  })
+
+  it("rejects a drop whose clip type mismatches the track type (US-19.2)", () => {
+    render(<Harness trackType="vocal" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    fireEvent.drop(region, {
+      dataTransfer: {
+        getData: () =>
+          JSON.stringify({
+            kind: "add",
+            clipId: "c1",
+            title: "AI song",
+            duration: 10,
+            generationMode: "song",
+          }),
+      },
+    })
+
+    expect(screen.queryAllByTestId("clip-block")).toHaveLength(0)
+  })
+
+  it("marks the lane invalid during dragover of a mismatched clip type", () => {
+    render(<Harness trackType="vocal" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    fireEvent.dragEnter(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-ai"] },
+    })
+    expect(region.className).toMatch(/destructive/)
+    expect(region.className).not.toMatch(/bg-accent/)
+  })
+
+  it("keeps the normal highlight during dragover of a matching clip type", () => {
+    render(<Harness trackType="vocal" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    fireEvent.dragEnter(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-vocal"] },
+    })
+    expect(region.className).toMatch(/bg-accent/)
+    expect(region.className).not.toMatch(/destructive/)
+  })
+
+  it("only allows the native drop (preventDefault on dragover) for matching clip types", () => {
+    // Not calling preventDefault on dragover is how the browser itself
+    // disallows the drop and shows the no-drop cursor.
+    render(<Harness trackType="vocal" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+
+    const mismatched = fireEvent.dragOver(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-ai"] },
+    })
+    expect(mismatched).toBe(true) // not prevented → drop disallowed
+
+    const matching = fireEvent.dragOver(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-vocal"] },
+    })
+    expect(matching).toBe(false) // prevented → drop allowed
+  })
+
+  it("stretches a dropped loop clip to the project tempo (width from playbackRate)", async () => {
+    // 90 BPM, 8s loop in a 120 BPM project → 4/3 rate → 6s × 20px = 120px.
+    render(<Harness trackType="loop" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue(zeroRect())
+
+    fireEvent.drop(region, {
+      dataTransfer: {
+        getData: () =>
+          JSON.stringify({
+            kind: "add",
+            clipId: "c1",
+            title: "Loop",
+            duration: 8,
+            generationMode: "sound",
+            bpm: 90,
+          }),
+      },
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId("clip-block").style.width).toBe("120px")
+    )
   })
 
   it("clamps a drop left of the lane's origin to startSec 0", async () => {

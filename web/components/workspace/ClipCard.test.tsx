@@ -6,7 +6,7 @@ import type { ReactNode } from "react"
 import { ClipCard, type ClipCardProps } from "@/components/workspace/ClipCard"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
-import { parseClipDragData } from "@/lib/clip-drag"
+import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
 import type { Clip } from "@/lib/workspace-clips"
 
 // The ⋯ menu now dispatches through useSongActions (US-17.5): navigation uses the
@@ -398,7 +398,15 @@ describe("ClipCard", () => {
   })
 
   it("is draggable, carrying an 'add' payload for the Studio timeline (US-19.1)", () => {
-    renderCard({ clip: clip({ id: "c1", title: "Midnight", duration: 95 }) })
+    renderCard({
+      clip: clip({
+        id: "c1",
+        title: "Midnight",
+        duration: 95,
+        generation_mode: "sound",
+        bpm: 90,
+      }),
+    })
     const card = screen.getByTestId("clip-card")
     expect(card).toHaveAttribute("draggable", "true")
 
@@ -406,6 +414,9 @@ describe("ClipCard", () => {
     const dataTransfer = {
       setData: (type: string, value: string) => store.set(type, value),
       getData: (type: string) => store.get(type) ?? "",
+      get types() {
+        return [...store.keys()]
+      },
     } as unknown as DataTransfer
     fireEvent.dragStart(card, { dataTransfer })
 
@@ -414,6 +425,11 @@ describe("ClipCard", () => {
       clipId: "c1",
       title: "Midnight",
       duration: 95,
+      generationMode: "sound",
+      bpm: 90,
     })
+    // Track type entry, readable during dragover for drop-target validation
+    // (US-19.2): a "sound" clip belongs on Sound/Loop tracks.
+    expect(readDragTrackType(dataTransfer)).toBe("loop")
   })
 })

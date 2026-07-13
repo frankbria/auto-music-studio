@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState, type DragEvent } from "react"
 
 import { getClipAudio } from "@/lib/clip-audio-cache"
-import { setClipDragData } from "@/lib/clip-drag"
+import { setClipDragData, setDragTrackType } from "@/lib/clip-drag"
 import type { Placement } from "@/lib/timeline"
+import type { TrackType } from "@/lib/track-types"
 
 // A clip placed on a Studio track lane (US-19.1). Positioned/sized purely from
 // startSec/durationSec × pxPerSec; the waveform thumbnail draws the cached
@@ -25,14 +26,24 @@ export function ClipBlock({
   pxPerSec,
   color,
   token,
+  trackType,
+  playbackRate = 1,
 }: {
   placement: Placement
   pxPerSec: number
   color: string
   token: string | null
+  /** The owning track's type, marked on move-drags so other lanes can show
+   * valid/invalid feedback during dragover (US-19.2). */
+  trackType?: TrackType
+  /** Loop-track tempo stretch (US-19.2): >1 compresses the clip on screen. */
+  playbackRate?: number
 }) {
   const left = placement.startSec * pxPerSec
-  const width = Math.max(MIN_WIDTH_PX, (placement.durationSec ?? 0) * pxPerSec)
+  const width = Math.max(
+    MIN_WIDTH_PX,
+    ((placement.durationSec ?? 0) / playbackRate) * pxPerSec
+  )
 
   const [peaks, setPeaks] = useState<Float32Array | null>(null)
   useEffect(() => {
@@ -83,6 +94,7 @@ export function ClipBlock({
       // under the cursor instead of snapping the left edge to it.
       grabOffsetSec: Math.max(0, (e.clientX - rect.left) / pxPerSec),
     })
+    if (trackType) setDragTrackType(e.dataTransfer, trackType)
   }
 
   return (
