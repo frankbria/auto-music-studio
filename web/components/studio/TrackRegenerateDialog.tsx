@@ -61,6 +61,11 @@ export function TrackRegenerateDialog({
   function handleGenerate() {
     const trimmed = prompt.trim()
     if (!token || !trimmed || busy) return
+    // A fresh generation gets a fresh add lifecycle — without this, a failed
+    // add on a previous generation leaves addedRef tripped and the new
+    // success would never auto-add its clip.
+    addedRef.current = false
+    setAddFailed(false)
     if (track.trackType === "loop") {
       void submit(
         () =>

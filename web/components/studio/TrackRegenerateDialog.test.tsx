@@ -370,6 +370,60 @@ describe("TrackRegenerateDialog", () => {
     )
   })
 
+  it("auto-adds the clip of a second generation started after a failed add", async () => {
+    // addedRef must reset when a new generation is submitted — otherwise the
+    // second generation's success never auto-adds and the stale error shows.
+    let generation = 0
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === "/api/generate" && init?.method === "POST") {
+          generation += 1
+          return new Response(
+            JSON.stringify({ job_id: `j${generation}`, estimated_time_seconds: 5 }),
+            { status: 202 }
+          )
+        }
+        if (url.startsWith("/api/jobs/j")) {
+          const clip = url.includes("j1") ? "bad" : "good"
+          return new Response(
+            JSON.stringify({ status: "completed", clip_ids: [clip] }),
+            { status: 200 }
+          )
+        }
+        if (url === "/api/clips/bad") return new Response("{}", { status: 500 })
+        if (url === "/api/clips/good") {
+          return new Response(
+            JSON.stringify({
+              id: "good",
+              title: "Second try",
+              duration: 6,
+              bpm: null,
+              generation_mode: "song",
+            }),
+            { status: 200 }
+          )
+        }
+        return new Response("{}", { status: 404 })
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "anything")
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+    await screen.findByRole("alert") // first generation's add failed
+
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+    await waitFor(() =>
+      expect(clipsProbe()).toEqual([{ clipId: "good", startSec: 0 }])
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+  })
+
   it("disables Generate until a prompt is entered", () => {
     stubFetch([])
     render(<Harness />)
