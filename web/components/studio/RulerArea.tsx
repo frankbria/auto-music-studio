@@ -42,9 +42,10 @@ export function RulerArea({
     // Clamp to the timeline: a captured-pointer drag can report a clientX
     // outside the ruler, which would park the marker/handle out of reach.
     const sec = Math.min(durationSec, Math.max(0, raw))
-    return state.snapEnabled
-      ? snapSec(sec, state.snapResolution, state.bpm)
-      : sec
+    if (!state.snapEnabled) return sec
+    // Re-clamp after snapping — when durationSec isn't on the grid, rounding
+    // to the nearest line can land past the timeline end.
+    return Math.min(durationSec, snapSec(sec, state.snapResolution, state.bpm))
   }
 
   return (
@@ -159,6 +160,11 @@ function MarkerFlag({
             suppressOpenRef.current = dragRef.current?.dragged ?? false
             dragRef.current = null
             e.currentTarget.releasePointerCapture?.(e.pointerId)
+          }}
+          onPointerCancel={() => {
+            // A cancelled drag (touch scroll, capture loss) must not leave the
+            // flag tracking later hovers.
+            dragRef.current = null
           }}
         >
           <HugeiconsIcon icon={Flag01Icon} size={12} className="shrink-0" />
@@ -310,6 +316,9 @@ function LoopHandle({
       onPointerUp={(e) => {
         dragging.current = false
         e.currentTarget.releasePointerCapture?.(e.pointerId)
+      }}
+      onPointerCancel={() => {
+        dragging.current = false
       }}
     >
       <span className="absolute top-0 left-1/2 h-full w-0.5 -translate-x-1/2 bg-primary" />

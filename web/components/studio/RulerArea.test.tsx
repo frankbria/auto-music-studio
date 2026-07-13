@@ -13,14 +13,24 @@ function Harness({
   markers = [],
   loop = null,
   snapOff = false,
+  bpm,
+  resolution,
 }: {
   markers?: { id: string; sec: number; label: string }[]
   loop?: { startSec: number; endSec: number } | null
   snapOff?: boolean
+  bpm?: number
+  resolution?: "1bar" | "1beat" | "1/2beat" | "1/4beat"
 }) {
   return (
     <StudioProvider>
-      <Seed markers={markers} loop={loop} snapOff={snapOff} />
+      <Seed
+        markers={markers}
+        loop={loop}
+        snapOff={snapOff}
+        bpm={bpm}
+        resolution={resolution}
+      />
     </StudioProvider>
   )
 }
@@ -29,10 +39,14 @@ function Seed({
   markers,
   loop,
   snapOff,
+  bpm,
+  resolution,
 }: {
   markers: { id: string; sec: number; label: string }[]
   loop: { startSec: number; endSec: number } | null
   snapOff: boolean
+  bpm?: number
+  resolution?: "1bar" | "1beat" | "1/2beat" | "1/4beat"
 }) {
   const { dispatch } = useStudio()
   const seededRef = useRef(false)
@@ -40,6 +54,8 @@ function Seed({
     if (seededRef.current) return
     seededRef.current = true
     if (snapOff) dispatch({ type: "TOGGLE_SNAP" })
+    if (bpm != null) dispatch({ type: "SET_BPM", bpm })
+    if (resolution) dispatch({ type: "SET_SNAP_RESOLUTION", resolution })
     for (const m of markers) dispatch({ type: "ADD_MARKER", ...m })
     if (loop) {
       dispatch({ type: "SET_LOOP_REGION", ...loop })
@@ -191,6 +207,47 @@ describe("RulerArea review fixes (US-19.3)", () => {
     fireEvent.keyDown(handle, { key: "ArrowLeft" })
     expect(screen.getByTestId("loop-region")).toHaveStyle({ width: "70px" })
     fireEvent.keyDown(handle, { key: "ArrowRight" })
+    expect(screen.getByTestId("loop-region")).toHaveStyle({ width: "80px" })
+  })
+})
+
+describe("RulerArea PR-review fixes (US-19.3, claude-review)", () => {
+  it("never snaps a marker past the timeline end", () => {
+    // 1 bar @ 90 BPM = 2.667s: 60s clamps then rounds UP to 61.33s without a
+    // post-snap clamp. The marker must stay at 60s = 1200px.
+    render(
+      <Harness
+        markers={[{ id: "m1", sec: 4, label: "V" }]}
+        bpm={90}
+        resolution="1bar"
+      />
+    )
+    mockAreaRect()
+    const flag = screen.getByRole("button", { name: "Marker: V" })
+    fireEvent.pointerDown(flag, { clientX: 80, pointerId: 1 })
+    fireEvent.pointerMove(flag, { clientX: 5000, pointerId: 1 })
+    fireEvent.pointerUp(flag, { pointerId: 1 })
+    expect(flag).toHaveStyle({ left: "1200px" })
+  })
+
+  it("a cancelled marker drag stops tracking pointer movement", () => {
+    render(<Harness markers={[{ id: "m1", sec: 4, label: "V" }]} />)
+    mockAreaRect()
+    const flag = screen.getByRole("button", { name: "Marker: V" })
+    fireEvent.pointerDown(flag, { clientX: 80, pointerId: 1 })
+    fireEvent.pointerCancel(flag, { pointerId: 1 })
+    // A hover after the cancel must not move the marker.
+    fireEvent.pointerMove(flag, { clientX: 300, pointerId: 1 })
+    expect(flag).toHaveStyle({ left: "80px" })
+  })
+
+  it("a cancelled loop-handle drag stops tracking pointer movement", () => {
+    render(<Harness loop={{ startSec: 2, endSec: 6 }} />)
+    mockAreaRect()
+    const handle = screen.getByRole("slider", { name: "Loop end handle" })
+    fireEvent.pointerDown(handle, { clientX: 120, pointerId: 1 })
+    fireEvent.pointerCancel(handle, { pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 300, pointerId: 1 })
     expect(screen.getByTestId("loop-region")).toHaveStyle({ width: "80px" })
   })
 })
