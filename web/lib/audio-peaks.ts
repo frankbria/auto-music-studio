@@ -9,6 +9,8 @@
 // clip at a time; downsample to a capped peak buffer if multi-clip memory ever
 // bites.
 
+import { getAudioContextCtor } from "./audio-context"
+
 export type ClipAudio = {
   /** Mono mixdown of the decoded audio, one sample per element in ~[-1, 1]. */
   mono: Float32Array
@@ -81,10 +83,7 @@ export async function decodeClipAudio(
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`)
   const bytes = await res.arrayBuffer()
 
-  const Ctx =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext
+  const Ctx = getAudioContextCtor()
   if (!Ctx) throw new Error("Web Audio API unavailable")
   const ctx = new Ctx()
   try {

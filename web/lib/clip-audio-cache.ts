@@ -8,6 +8,7 @@
 // the AudioBuffer playback needs. This reuses its pure `mixToMono`/`columnPeaks`
 // helpers but keeps its own fetch+decode so the buffer survives.
 
+import { getAudioContextCtor } from "./audio-context"
 import { columnPeaks, mixToMono } from "./audio-peaks"
 
 export type CachedClipAudio = {
@@ -35,10 +36,7 @@ async function decode(
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`)
   const bytes = await res.arrayBuffer()
 
-  const Ctx =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext
+  const Ctx = getAudioContextCtor()
   if (!Ctx) throw new Error("Web Audio API unavailable")
   const ctx = new Ctx()
   try {

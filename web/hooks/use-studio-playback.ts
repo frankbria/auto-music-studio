@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react"
 
 import { usePlayer } from "@/contexts/player-context"
 import { useStudio } from "@/contexts/studio-context"
+import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
 
@@ -47,10 +48,7 @@ export function useStudioPlayback(token: string | null): void {
 
   function ensureContext(): AudioContext {
     if (!ctxRef.current) {
-      const Ctx =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext
+      const Ctx = getAudioContextCtor()
       const ctx = new Ctx()
       ctxRef.current = ctx
       const gain = ctx.createGain()
