@@ -20,6 +20,14 @@ import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
 // re-trigger this effect, so the rAF loop's stale origin would overwrite the
 // seek on its very next frame. Watching seekEpoch makes a seek reschedule the
 // whole run from the new position, the same as starting fresh.
+//
+// Scheduling, the rAF origin, and the tick loop all wait for every clip's
+// buffer to finish decoding first — the playhead must not advance (and no
+// source should start) until playback can actually begin, or a slow decode
+// makes it look like the timeline silently jumped ahead. The schedule itself
+// is computed against a ctx.currentTime read *after* decode, not the one at
+// effect-start, so scheduled offsets stay correct regardless of how long
+// decoding took.
 
 type ActiveSource = { source: AudioBufferSourceNode }
 
@@ -97,41 +105,49 @@ export function useStudioPlayback(token: string | null): void {
     if (ctx.state === "suspended") void ctx.resume()
     const master = masterGainRef.current!
     const placements: Placement[] = state.tracks.flatMap((t) => t.clips)
-    const schedule = computePlaybackSchedule(
-      placements,
-      state.playheadSec,
-      ctx.currentTime
-    )
+    const playheadAtStart = state.playheadSec
 
     let cancelled = false
     Promise.all(
-      schedule.map(async (item) => {
-        const audio = await getClipAudio(item.clipId, token)
-        return { ...item, buffer: audio.buffer }
-      })
-    ).then((scheduled) => {
+      placements.map(
+        async (p) =>
+          [p.clipId, (await getClipAudio(p.clipId, token)).buffer] as const
+      )
+    ).then((entries) => {
       if (cancelled) return
-      for (const item of scheduled) {
+      const bufferByClipId = new Map(entries)
+
+      // A fresh read of ctx.currentTime here, not the one from before decode
+      // — scheduled offsets/times must be relative to "now that we can
+      // actually start", not to whenever this effect run began.
+      const schedule = computePlaybackSchedule(
+        placements,
+        playheadAtStart,
+        ctx.currentTime
+      )
+      for (const item of schedule) {
+        const buffer = bufferByClipId.get(item.clipId)
+        if (!buffer) continue
         const source = ctx.createBufferSource()
-        source.buffer = item.buffer
+        source.buffer = buffer
         source.connect(master)
         source.start(item.when, item.offset)
         sourcesRef.current.push({ source })
       }
-    })
 
-    originRef.current = {
-      ctxTime: ctx.currentTime,
-      playheadSec: state.playheadSec,
-    }
-    function tick() {
-      const origin = originRef.current
-      if (!ctxRef.current || !origin) return
-      const elapsed = ctxRef.current.currentTime - origin.ctxTime
-      dispatch({ type: "SET_PLAYHEAD", sec: origin.playheadSec + elapsed })
+      originRef.current = {
+        ctxTime: ctx.currentTime,
+        playheadSec: playheadAtStart,
+      }
+      function tick() {
+        const origin = originRef.current
+        if (!ctxRef.current || !origin) return
+        const elapsed = ctxRef.current.currentTime - origin.ctxTime
+        dispatch({ type: "SET_PLAYHEAD", sec: origin.playheadSec + elapsed })
+        rafRef.current = requestAnimationFrame(tick)
+      }
       rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
+    })
 
     return () => {
       cancelled = true

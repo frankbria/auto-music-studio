@@ -223,6 +223,92 @@ describe("useStudioPlayback scheduling", () => {
   })
 })
 
+describe("useStudioPlayback playhead timing vs. decode", () => {
+  it("does not advance the playhead while buffers are still decoding", async () => {
+    const { sources, box } = stubAudioContext()
+    const raf = stubRaf()
+    let resolveDecode: (a: unknown) => void = () => {}
+    getClipAudioMock.mockReturnValue(
+      new Promise((res) => {
+        resolveDecode = res
+      })
+    )
+
+    const { getByTestId } = render(
+      <Harness
+        clips={[{ clipId: "c1", title: "A", duration: 100, startSec: 0 }]}
+        autoplay
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // Decode is still in flight: nothing scheduled yet, and — critically —
+    // no rAF tick was even registered, so firing one is a no-op and the
+    // playhead must not have moved despite 5s of "AudioContext time" passing.
+    expect(sources).toHaveLength(0)
+    box.instance!.currentTime = 5
+    act(() => raf.tick(5000))
+    expect(sources).toHaveLength(0)
+    expect(getByTestId("playhead-probe")).toHaveTextContent("0")
+
+    // Decode resolves: only now do sources start and the tick loop begin.
+    await act(async () => {
+      resolveDecode({
+        buffer: fakeBuffer(),
+        peaks: new Float32Array(),
+        duration: 100,
+      })
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(1)
+    expect(sources[0].start).toHaveBeenCalled()
+  })
+
+  it("origins the rAF loop from ctx.currentTime read after decode, not before it", async () => {
+    const { box } = stubAudioContext()
+    const raf = stubRaf()
+    let resolveDecode: (a: unknown) => void = () => {}
+    getClipAudioMock.mockReturnValue(
+      new Promise((res) => {
+        resolveDecode = res
+      })
+    )
+
+    const { getByTestId } = render(
+      <Harness
+        clips={[{ clipId: "c1", title: "A", duration: 100, startSec: 0 }]}
+        autoplay
+      />
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // 3s of AudioContext time passes while the buffer is still decoding.
+    box.instance!.currentTime = 3
+
+    await act(async () => {
+      resolveDecode({
+        buffer: fakeBuffer(),
+        peaks: new Float32Array(),
+        duration: 100,
+      })
+      await Promise.resolve()
+    })
+
+    // One more second passes, then the tick fires. If the origin had been
+    // captured before decode (at ctx.currentTime=0), this would report 4s
+    // elapsed instead of the correct 1s.
+    act(() => {
+      box.instance!.currentTime = 4
+      raf.tick(4000)
+    })
+    expect(getByTestId("playhead-probe")).toHaveTextContent("1")
+  })
+})
+
 describe("useStudioPlayback AudioContext resume", () => {
   it("resumes a context that starts suspended (browsers create it suspended outside a user gesture)", async () => {
     const { box } = stubAudioContext("suspended")
