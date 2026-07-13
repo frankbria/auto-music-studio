@@ -180,6 +180,29 @@ describe("studioReducer clips", () => {
       })
     ).toBe(s)
   })
+
+  it("MOVE_CLIP to an unknown destination track is a no-op (doesn't drop the clip)", () => {
+    let s = studioReducer(withTrack(), {
+      type: "ADD_CLIP",
+      id: "p1",
+      trackId: "t1",
+      clipId: "clip-a",
+      startSec: 0,
+      title: "A",
+      durationSec: 5,
+    })
+    const before = s
+    s = studioReducer(s, {
+      type: "MOVE_CLIP",
+      trackId: "missing",
+      placementId: "p1",
+      startSec: 3,
+    })
+    expect(s).toBe(before)
+    expect(s.tracks[0].clips).toEqual([
+      { id: "p1", clipId: "clip-a", startSec: 0, title: "A", durationSec: 5 },
+    ])
+  })
 })
 
 describe("studioReducer transport + view state", () => {

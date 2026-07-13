@@ -113,6 +113,7 @@ export function studioReducer(
       }
     }
     case "MOVE_CLIP": {
+      if (!state.tracks.some((t) => t.id === action.trackId)) return state
       const source = state.tracks.find((t) =>
         t.clips.some((c) => c.id === action.placementId)
       )
