@@ -11,14 +11,14 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=0.13.0",
     "PyYAML>=5.4",
-    "mutagen>=1.47",
+    "mutagen>=1.48.1",
     # numpy capped <2: the audio-ml-midi extra pulls basic-pitch -> tensorflow 2.14,
     # which is not NumPy-2 compatible (import fails). The core audio stack (librosa,
     # numba, scipy, soundfile, pydub) runs fine on numpy 1.x. Lift once basic-pitch
     # ships a numpy-2-ready backend (e.g. tensorflow >= 2.16).
     "numpy>=1.24.0,<2",
     "librosa>=0.10.0",
-    "soundfile>=0.12.0",
+    "soundfile>=0.14.0",
     "pydub>=0.25.1",
     # Pillow drives cover-art image validation and 1024->3000 upscaling (US-13.1).
     "Pillow>=10.0.0",
@@ -51,7 +51,7 @@ acemusic = "acemusic.cli:app"
 [project.optional-dependencies]
 audio-ml = [
     "demucs>=4.0",
-    "torch>=2.0",
+    "torch>=2.12.1",
     "torchaudio>=2.0",
 ]
 dev = [
@@ -61,7 +61,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "black",
-    "uvicorn[standard]>=0.29",
+    "uvicorn[standard]>=0.49.0",
     "freezegun",
     "respx>=0.23.1",
 ]
@@ -69,7 +69,7 @@ audio-ml-midi = [
     "basic-pitch>=0.3.0",
 ]
 api = [
-    "uvicorn[standard]>=0.29",
+    "uvicorn[standard]>=0.49.0",
 ]
 s3 = [
     "boto3>=1.34",
