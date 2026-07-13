@@ -123,6 +123,9 @@ export function TrackLane({
         }}
       >
         <span
+          // aria-label is prohibited on role=generic (a bare span); role="img"
+          // makes the accessible name spec-valid for screenreaders.
+          role="img"
           aria-label={`${typeConfig.label} track`}
           className="shrink-0"
           style={{ color: track.color }}
