@@ -24,7 +24,10 @@ export function TransportControls() {
         variant="ghost"
         size="icon"
         aria-label="Return to start"
-        onClick={() => dispatch({ type: "SET_PLAYHEAD", sec: 0 })}
+        // SEEK (not SET_PLAYHEAD) so a rewind mid-playback actually
+        // reschedules audio from 0 instead of getting stomped by the rAF
+        // loop's stale origin on the next frame.
+        onClick={() => dispatch({ type: "SEEK", sec: 0 })}
       >
         <HugeiconsIcon icon={PreviousIcon} size={20} />
       </Button>

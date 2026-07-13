@@ -254,6 +254,56 @@ describe("StudioPage playhead", () => {
     expect(playhead.style.left).toBe("680px") // 160 + 5.2s * 100px/sec
   })
 
+  it("Return to start actually rewinds mid-playback, not just for one frame", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    stubStudioFetch()
+    const box = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue({
+      buffer: {} as AudioBuffer,
+      peaks: new Float32Array(),
+      duration: 100,
+    })
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Play" }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const playhead = screen.getByTestId("playhead")
+
+    // One frame elapses (1s of ctx time) before Return to start is clicked.
+    act(() => {
+      box.instance!.currentTime = 1
+      raf.tick(1000)
+    })
+    expect(playhead.style.left).toBe("260px") // 160 + 1s * 100px/sec
+
+    // Return to start mid-playback — must reschedule (SEEK), the same as a
+    // ruler click, not just park playheadSec (SET_PLAYHEAD) with no epoch
+    // bump: that would leave the rAF loop's origin stale, so the *next* tick
+    // would compute elapsed from the ORIGINAL play-start origin (ctxTime=0)
+    // instead of from this rewind, jumping back to 1.2s instead of 0.2s.
+    await act(async () => {
+      await userEvent.click(
+        screen.getByRole("button", { name: "Return to start" })
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(playhead.style.left).toBe("160px") // 160 + 0s
+
+    await act(async () => {
+      box.instance!.currentTime = 1.2
+      raf.tick(1200)
+    })
+    expect(playhead.style.left).toBe("180px") // 160 + 0.2s * 100px/sec
+  })
+
   it("aligns the ruler's origin with the lanes' timeline region via a shared spacer width", async () => {
     searchParamsRef.current = new URLSearchParams("song=clip-1")
     stubStudioFetch()
