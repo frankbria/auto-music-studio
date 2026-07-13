@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -37,14 +43,18 @@ vi.mock("@/lib/job-status", () => ({
 // width so the canvas + controls render like they do in a browser.
 let widthSpy: PropertyDescriptor | undefined
 beforeEach(() => {
-  widthSpy = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth")
+  widthSpy = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  )
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get: () => 800,
   })
 })
 afterEach(() => {
-  if (widthSpy) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthSpy)
+  if (widthSpy)
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", widthSpy)
   vi.clearAllMocks()
 })
 
@@ -98,7 +108,9 @@ function dragSelect(fromSec: number, toSec: number) {
 }
 function editedDuration() {
   return Number(
-    document.querySelector("[data-edited-duration]")?.getAttribute("data-edited-duration")
+    document
+      .querySelector("[data-edited-duration]")
+      ?.getAttribute("data-edited-duration")
   )
 }
 function opCount() {
@@ -170,7 +182,9 @@ describe("WaveformEditor", () => {
     expect(screen.queryByTestId("selection-info")).not.toBeInTheDocument()
     dragSelect(2, 5)
     expect(screen.getByTestId("selection-overlay")).toBeInTheDocument()
-    expect(screen.getByTestId("selection-info")).toHaveTextContent("Duration 0:03.000")
+    expect(screen.getByTestId("selection-info")).toHaveTextContent(
+      "Duration 0:03.000"
+    )
   })
 
   it("Delete removes the selected region and shortens the audio", () => {
@@ -201,7 +215,10 @@ describe("WaveformEditor", () => {
     fireEvent.pointerUp(canvas(), { clientX: 8 * 80, pointerId: 1 })
     key("v", { ctrlKey: true }) // insert 3s at 8s → new duration 13, playhead 11
     expect(editedDuration()).toBeCloseTo(13)
-    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(11, 1)
+    expect(Number(screen.getByTestId("seek-req").textContent)).toBeCloseTo(
+      11,
+      1
+    )
   })
 
   it("a drag that collapses back to its origin creates no selection", () => {
@@ -220,7 +237,9 @@ describe("WaveformEditor", () => {
     expect(editedDuration()).toBeCloseTo(7)
     // 3s @ 80Hz = 240 samples now on the clipboard, ready to paste.
     expect(
-      document.querySelector("[data-clipboard-samples]")?.getAttribute("data-clipboard-samples")
+      document
+        .querySelector("[data-clipboard-samples]")
+        ?.getAttribute("data-clipboard-samples")
     ).toBe("240")
   })
 
@@ -375,42 +394,76 @@ describe("WaveformEditor", () => {
   })
 
   it("applies a completed repaint as an undoable edit", async () => {
-    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
-    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    submitRepaint.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["child-1"],
+    })
     // The child clip is the full crossfade-blended result; a 6s duration lets us
     // see it land in the editor's buffer (and undo back to the original 10s).
-    decodeClipAudio.mockResolvedValue({ mono: new Float32Array(480), sampleRate: 80, duration: 6 })
+    decodeClipAudio.mockResolvedValue({
+      mono: new Float32Array(480),
+      sampleRate: 80,
+      duration: 6,
+    })
 
     renderEditor()
     dragSelect(2, 5)
     const panel = screen.getByTestId("repaint-panel")
-    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
-    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await userEvent.type(
+      within(panel).getByLabelText(/Instructions/),
+      "make it jazzy"
+    )
+    await userEvent.click(
+      within(panel).getByRole("button", { name: "Regenerate" })
+    )
 
     // The decoded child replaces the buffer as a recorded repaint op.
     await waitFor(() => expect(editedDuration()).toBeCloseTo(6))
     expect(opCount()).toBe(1)
     expect(submitRepaint).toHaveBeenCalledWith(
       "c1",
-      expect.objectContaining({ start: "2s", end: "5s", prompt: "make it jazzy" }),
+      expect.objectContaining({
+        start: "2s",
+        end: "5s",
+        prompt: "make it jazzy",
+      }),
       "test-token"
     )
 
-    // Undoable: back to the pristine original, op log cleared.
+    // Undoable: back to the pristine original, op log cleared. The freeze
+    // (repaintActive, disabling Undo) lifts one render after editedDuration
+    // updates — it propagates through RepaintPanel's onActiveChange effect,
+    // not the same commit as the history update — so wait for it rather than
+    // racing a click against a still-disabled button.
+    await waitFor(() => expect(undoBtn()).toBeEnabled())
     fireEvent.click(undoBtn())
     expect(editedDuration()).toBeCloseTo(10)
     expect(opCount()).toBe(0)
   })
 
   it("keeps the repaint job alive when the selection is cleared mid-poll", async () => {
-    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    submitRepaint.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
     fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
 
     renderEditor()
     dragSelect(2, 5)
     const panel = screen.getByTestId("repaint-panel")
-    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
-    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await userEvent.type(
+      within(panel).getByLabelText(/Instructions/),
+      "make it jazzy"
+    )
+    await userEvent.click(
+      within(panel).getByRole("button", { name: "Regenerate" })
+    )
     await screen.findByRole("status") // reached submitting/polling
 
     // A bare canvas click seeks and clears the selection mid-generation.
@@ -424,7 +477,11 @@ describe("WaveformEditor", () => {
   })
 
   it("freezes other edits while a repaint is in flight", async () => {
-    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 30 })
+    submitRepaint.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
     fetchJobStatus.mockResolvedValue({ kind: "pending" }) // still generating
 
     renderEditor()
@@ -436,8 +493,13 @@ describe("WaveformEditor", () => {
     // Start a repaint on a fresh selection.
     dragSelect(1, 3)
     const panel = screen.getByTestId("repaint-panel")
-    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
-    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await userEvent.type(
+      within(panel).getByLabelText(/Instructions/),
+      "make it jazzy"
+    )
+    await userEvent.click(
+      within(panel).getByRole("button", { name: "Regenerate" })
+    )
     await screen.findByRole("status") // job in flight
 
     // The buffer is about to be replaced wholesale — every mutating affordance is
@@ -450,18 +512,34 @@ describe("WaveformEditor", () => {
   })
 
   it("stays frozen through the decode window, not just the poll", async () => {
-    submitRepaint.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
-    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["child-1"] })
+    submitRepaint.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["child-1"],
+    })
     // Hold the decode open so we can inspect the window between job-complete and
     // the result landing — the freeze must persist across it.
     let resolveDecode: (a: unknown) => void = () => {}
-    decodeClipAudio.mockReturnValue(new Promise((res) => { resolveDecode = res }))
+    decodeClipAudio.mockReturnValue(
+      new Promise((res) => {
+        resolveDecode = res
+      })
+    )
 
     renderEditor()
     dragSelect(2, 5)
     const panel = screen.getByTestId("repaint-panel")
-    await userEvent.type(within(panel).getByLabelText(/Instructions/), "make it jazzy")
-    await userEvent.click(within(panel).getByRole("button", { name: "Regenerate" }))
+    await userEvent.type(
+      within(panel).getByLabelText(/Instructions/),
+      "make it jazzy"
+    )
+    await userEvent.click(
+      within(panel).getByRole("button", { name: "Regenerate" })
+    )
 
     // Job completed, decode in flight ("Applying…"): edits must still be frozen.
     await screen.findByText(/Applying/)

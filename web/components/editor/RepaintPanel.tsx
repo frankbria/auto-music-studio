@@ -34,7 +34,12 @@ import type { EditOperation, Region } from "@/lib/waveform-edit"
 // editor keeps it mounted while a job is in flight so the paid result is never
 // silently dropped.
 
-type RepaintSubmitted = { prompt: string; style?: string; startSec: number; endSec: number }
+type RepaintSubmitted = {
+  prompt: string
+  style?: string
+  startSec: number
+  endSec: number
+}
 
 // Round seconds to millisecond precision so the "Ns" payload stays tidy
 // (e.g. "15.238s", not "15.23835616438356s" straight off the pixel→sec math).
@@ -68,7 +73,9 @@ export function RepaintPanel({
   // the fields change during the async job.
   const submittedRef = useRef<RepaintSubmitted | null>(null)
   // One-shot guard: `useClipEdit`'s success state persists across the frequent
-  // re-renders the player's time-tick drives, so the decode must run exactly once.
+  // re-renders the player's time-tick drives, so the decode must run exactly
+  // once. A ref, since it's only ever read/written from effects, never during
+  // render (see `pendingApply` below, which uses state instead for that).
   const appliedRef = useRef(false)
   // `onRepainted` in a ref so a changing parent closure doesn't re-arm the apply
   // effect (which would cancel an in-flight decode and drop the result).
@@ -83,13 +90,31 @@ export function RepaintPanel({
   const overStyle = style.length > STYLE_MAX_LENGTH
   const valid = prompt.trim().length > 0 && !overPrompt && !overStyle
 
+  // The job hitting "success" and `applying`/`childId`/`applyError` updating
+  // aren't the same render: the apply effect below (which calls applyChild)
+  // runs *after* this file's onActiveChange effect, since effects fire in
+  // declaration order. Without `pendingApply`, the render where phase becomes
+  // "success" would report active=false for one frame before the next render
+  // reports true again — reopening the concurrent-edit hole for exactly the
+  // window this freeze exists to close. `pendingApply` covers that gap:
+  // "succeeded" but none of applying/childId/applyError have been set yet by
+  // applyChild is only ever true for that one transient render (handleSubmit
+  // resets all three before a next submit, so it can't linger across jobs).
+  const pendingApply =
+    edit.state.phase === "success" &&
+    !applying &&
+    childId === null &&
+    applyError === null
   // Active == a job is in flight, through both the poll AND the decode/apply that
   // follows it. Reported up so the editor keeps this panel mounted and freezes
   // other edits for the whole window — `applying` is included so the freeze
   // doesn't lift during the decode (a fetch + decodeAudioData), which would
   // reopen the concurrent-edit hole one step past the poll.
   const active =
-    edit.state.phase === "submitting" || edit.state.phase === "polling" || applying
+    edit.state.phase === "submitting" ||
+    edit.state.phase === "polling" ||
+    applying ||
+    pendingApply
   useEffect(() => {
     onActiveChange?.(active)
   }, [active, onActiveChange])
@@ -153,8 +178,16 @@ export function RepaintPanel({
       startSec: selection.startSec,
       endSec: selection.endSec,
     }
-    const payload = { start: coord(selection.startSec), end: coord(selection.endSec), prompt: p, ...(s ? { style: s } : {}) }
-    void edit.submit(() => submitRepaint(clipId, payload, accessToken), accessToken)
+    const payload = {
+      start: coord(selection.startSec),
+      end: coord(selection.endSec),
+      prompt: p,
+      ...(s ? { style: s } : {}),
+    }
+    void edit.submit(
+      () => submitRepaint(clipId, payload, accessToken),
+      accessToken
+    )
   }
 
   // A decode-only failure (job succeeded, we have the child id) retries just the
@@ -180,14 +213,26 @@ export function RepaintPanel({
             {errorMsg}
           </p>
           <div>
-            <Button type="button" size="sm" onClick={onRetry} disabled={retryDisabled}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={onRetry}
+              disabled={retryDisabled}
+            >
               Try again
             </Button>
           </div>
         </div>
       ) : busy ? (
-        <div role="status" className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
-          <HugeiconsIcon icon={Loading03Icon} className="animate-spin" data-icon="inline-start" />
+        <div
+          role="status"
+          className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
+        >
+          <HugeiconsIcon
+            icon={Loading03Icon}
+            className="animate-spin"
+            data-icon="inline-start"
+          />
           <span>
             {edit.state.phase === "polling"
               ? `Regenerating…${edit.state.estimatedSeconds > 0 ? ` ~${edit.state.estimatedSeconds}s` : ""}`
@@ -218,7 +263,12 @@ export function RepaintPanel({
             rows={2}
           />
           <div>
-            <Button type="button" size="sm" onClick={handleSubmit} disabled={!valid}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSubmit}
+              disabled={!valid}
+            >
               Regenerate
             </Button>
           </div>
