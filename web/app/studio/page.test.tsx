@@ -37,6 +37,7 @@ class FakeGainNode {
 
 class FakeSourceNode {
   buffer: AudioBuffer | null = null
+  playbackRate = { value: 1 }
   connect = vi.fn()
   disconnect = vi.fn()
   start = vi.fn()
@@ -165,6 +166,30 @@ describe("StudioPage header", () => {
     expect(
       screen.getByRole("button", { name: "Return to start" })
     ).toBeInTheDocument()
+  })
+
+  it("renders a project tempo input defaulting to 120 BPM (US-19.2)", () => {
+    renderPage()
+    expect(
+      screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+    ).toHaveValue(120)
+  })
+
+  it("commits an edited tempo on blur, clamped to the supported range", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    const input = () =>
+      screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+
+    await user.clear(input())
+    await user.type(input(), "90")
+    await user.tab()
+    expect(input()).toHaveValue(90)
+
+    await user.clear(input())
+    await user.type(input(), "999")
+    await user.tab()
+    expect(input()).toHaveValue(180)
   })
 })
 
@@ -361,6 +386,15 @@ describe("StudioPage ?song= preload", () => {
     stubStudioFetch()
     renderPage()
     await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+  })
+
+  it("creates the preloaded track with the clip's inferred type (US-19.2)", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    stubStudioFetch({ ...SONG_CLIP_JSON, generation_mode: "sound" })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByLabelText("Sound/Loop track")).toBeInTheDocument()
+    )
   })
 
   it("fetches the clip named by the song query param", async () => {

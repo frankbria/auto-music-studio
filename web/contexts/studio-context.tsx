@@ -8,11 +8,20 @@ import {
   type ReactNode,
 } from "react"
 
-import { clampZoom, type DisplayMode, type Placement } from "@/lib/timeline"
+import { clampZoom, DEFAULT_BPM, type DisplayMode, type Placement } from "@/lib/timeline"
+import {
+  BPM_MAX,
+  BPM_MIN,
+  TRACK_TYPES,
+  inferTrackType,
+  type TrackType,
+} from "@/lib/track-types"
 
 export type StudioTrack = {
   id: string
   name: string
+  /** Which clip category this track accepts (US-19.2). */
+  trackType: TrackType
   color: string
   clips: Placement[]
 }
@@ -23,6 +32,8 @@ export type StudioState = {
   isPlaying: boolean
   zoom: number
   displayMode: DisplayMode
+  /** Project tempo — loop-track clips stretch to match it (US-19.2). */
+  bpm: number
   // Bumped only by a user-initiated SEEK (never by the rAF loop's own
   // SET_PLAYHEAD ticks) — the playback engine watches this to reschedule
   // audio from the new position instead of stomping it on the next frame.
@@ -35,21 +46,18 @@ export const initialStudioState: StudioState = {
   isPlaying: false,
   zoom: 1,
   displayMode: "bars-beats",
+  bpm: DEFAULT_BPM,
   seekEpoch: 0,
 }
 
-// Distinct per-track colors (plan requirement), cycled by track index.
-const TRACK_COLORS = [
-  "#6d28d9",
-  "#0ea5e9",
-  "#f97316",
-  "#22c55e",
-  "#ec4899",
-  "#eab308",
-]
-
 export type StudioAction =
-  | { type: "ADD_TRACK"; id: string; name?: string; color?: string }
+  | {
+      type: "ADD_TRACK"
+      id: string
+      trackType: TrackType
+      name?: string
+      color?: string
+    }
   | { type: "REMOVE_TRACK"; trackId: string }
   | { type: "RENAME_TRACK"; trackId: string; name: string }
   | {
@@ -60,6 +68,10 @@ export type StudioAction =
       startSec: number
       title: string | null
       durationSec: number | null
+      /** For track-type matching; undefined/null infers as AI-generated. */
+      generationMode?: string | null
+      /** For loop-track tempo inheritance. */
+      clipBpm?: number | null
     }
   | {
       type: "MOVE_CLIP"
@@ -71,6 +83,7 @@ export type StudioAction =
   | { type: "SEEK"; sec: number }
   | { type: "SET_PLAYING"; playing: boolean }
   | { type: "SET_ZOOM"; zoom: number }
+  | { type: "SET_BPM"; bpm: number }
   | { type: "TOGGLE_DISPLAY_MODE" }
 
 export function studioReducer(
@@ -82,9 +95,9 @@ export function studioReducer(
       const track: StudioTrack = {
         id: action.id,
         name: action.name ?? `Track ${state.tracks.length + 1}`,
-        color:
-          action.color ??
-          TRACK_COLORS[state.tracks.length % TRACK_COLORS.length],
+        trackType: action.trackType,
+        // Type color by default — the type IS the visual identity (US-19.2).
+        color: action.color ?? TRACK_TYPES[action.trackType].color,
         clips: [],
       }
       return { ...state, tracks: [...state.tracks, track] }
@@ -104,12 +117,21 @@ export function studioReducer(
       }
     }
     case "ADD_CLIP": {
+      const track = state.tracks.find((t) => t.id === action.trackId)
+      if (!track) return state
+      // Strict type matching (US-19.2): a clip only lands on a track of its
+      // inferred type. The drop target gives visual feedback during the drag;
+      // this is the authoritative check.
+      if (inferTrackType(action.generationMode) !== track.trackType) {
+        return state
+      }
       const placement: Placement = {
         id: action.id,
         clipId: action.clipId,
         startSec: action.startSec,
         title: action.title,
         durationSec: action.durationSec,
+        clipBpm: action.clipBpm ?? null,
       }
       return {
         ...state,
@@ -119,12 +141,16 @@ export function studioReducer(
       }
     }
     case "MOVE_CLIP": {
-      if (!state.tracks.some((t) => t.id === action.trackId)) return state
+      const dest = state.tracks.find((t) => t.id === action.trackId)
+      if (!dest) return state
       const source = state.tracks.find((t) =>
         t.clips.some((c) => c.id === action.placementId)
       )
       const original = source?.clips.find((c) => c.id === action.placementId)
       if (!source || !original) return state
+      // A clip was validated against its track's type on entry, so same-type
+      // moves are always safe; cross-type moves are rejected (US-19.2).
+      if (source.trackType !== dest.trackType) return state
       const relocated: Placement = {
         ...original,
         startSec: Math.max(0, action.startSec),
@@ -154,6 +180,10 @@ export function studioReducer(
       return { ...state, isPlaying: action.playing }
     case "SET_ZOOM":
       return { ...state, zoom: clampZoom(action.zoom) }
+    case "SET_BPM": {
+      if (!Number.isFinite(action.bpm)) return state
+      return { ...state, bpm: Math.min(BPM_MAX, Math.max(BPM_MIN, action.bpm)) }
+    }
     case "TOGGLE_DISPLAY_MODE":
       return {
         ...state,

@@ -7,6 +7,7 @@ import { useStudio } from "@/contexts/studio-context"
 import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
+import { placementPlaybackRate } from "@/lib/track-types"
 
 // Studio-owned playback engine (US-19.1). Schedules every placement across
 // every track through a dedicated AudioContext + master gain node, keyed off
@@ -103,6 +104,16 @@ export function useStudioPlayback(token: string | null): void {
     if (ctx.state === "suspended") void ctx.resume()
     const master = masterGainRef.current!
     const placements: Placement[] = state.tracks.flatMap((t) => t.clips)
+    // Loop-track clips stretch to the project tempo (US-19.2) — derived here,
+    // per placement, from its track's type + the tempo at play time.
+    const rateByPlacementId = new Map(
+      state.tracks.flatMap((t) =>
+        t.clips.map((c) => [
+          c.id,
+          placementPlaybackRate(c.clipBpm, t.trackType, state.bpm),
+        ])
+      )
+    )
     const playheadAtStart = state.playheadSec
 
     let cancelled = false
@@ -126,13 +137,15 @@ export function useStudioPlayback(token: string | null): void {
         const schedule = computePlaybackSchedule(
           placements,
           playheadAtStart,
-          now
+          now,
+          (p) => rateByPlacementId.get(p.id) ?? 1
         )
         for (const item of schedule) {
           const buffer = bufferByClipId.get(item.clipId)
           if (!buffer) continue
           const source = ctx.createBufferSource()
           source.buffer = buffer
+          source.playbackRate.value = item.playbackRate
           source.connect(master)
           source.start(item.when, item.offset)
           sourcesRef.current.push({ source })

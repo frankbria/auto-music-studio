@@ -1,11 +1,12 @@
 "use client"
 
-import { Suspense, useEffect, useMemo, useRef } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ZoomInAreaIcon, ZoomOutAreaIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
 import { Playhead } from "@/components/studio/Playhead"
 import { TimeRuler } from "@/components/studio/TimeRuler"
@@ -23,6 +24,7 @@ import {
   timelineDurationSec,
   zoomToPxPerSec,
 } from "@/lib/timeline"
+import { BPM_MAX, BPM_MIN, inferTrackType } from "@/lib/track-types"
 
 const ZOOM_BUTTON_FACTOR = 1.5
 // Matches the sensitivity used for Ctrl+wheel zoom on the waveform canvas.
@@ -43,7 +45,13 @@ function useSongPreload() {
     if (!clip || preloadedRef.current.has(clip.id)) return
     preloadedRef.current.add(clip.id)
     const trackId = crypto.randomUUID()
-    dispatch({ type: "ADD_TRACK", id: trackId })
+    // The preloaded track takes the clip's own type (US-19.2), so the clip is
+    // guaranteed to land on it.
+    dispatch({
+      type: "ADD_TRACK",
+      id: trackId,
+      trackType: inferTrackType(clip.generation_mode),
+    })
     dispatch({
       type: "ADD_CLIP",
       id: crypto.randomUUID(),
@@ -52,8 +60,44 @@ function useSongPreload() {
       startSec: 0,
       title: clip.title,
       durationSec: clip.duration,
+      generationMode: clip.generation_mode,
+      clipBpm: clip.bpm,
     })
   }, [clip, dispatch])
+}
+
+/** Project tempo control (US-19.2): drafts locally while typing, commits a
+ * clamped SET_BPM on blur/Enter — mirrors TrackLane's rename commit pattern. */
+function TempoInput() {
+  const { state, dispatch } = useStudio()
+  const [draft, setDraft] = useState<string | null>(null)
+
+  function commit() {
+    if (draft !== null) {
+      const bpm = Number(draft)
+      if (Number.isFinite(bpm)) dispatch({ type: "SET_BPM", bpm })
+    }
+    setDraft(null)
+  }
+
+  return (
+    <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      BPM
+      <Input
+        type="number"
+        aria-label="Project tempo (BPM)"
+        min={BPM_MIN}
+        max={BPM_MAX}
+        value={draft ?? state.bpm}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur()
+        }}
+        className="h-8 w-20"
+      />
+    </label>
+  )
 }
 
 function StudioHeader() {
@@ -63,6 +107,7 @@ function StudioHeader() {
       <h1 className="text-2xl font-semibold">Studio</h1>
       <div className="flex items-center gap-2">
         <TransportControls />
+        <TempoInput />
         <Button
           type="button"
           variant="outline"

@@ -121,9 +121,9 @@ describe("computePlaybackSchedule", () => {
   it("schedules a future placement at its absolute offset from now", () => {
     const schedule = computePlaybackSchedule(placements, 0, 100)
     expect(schedule).toEqual([
-      { clipId: "c1", when: 100, offset: 0 },
-      { clipId: "c2", when: 104, offset: 0 },
-      { clipId: "c3", when: 110, offset: 0 },
+      { clipId: "c1", when: 100, offset: 0, playbackRate: 1 },
+      { clipId: "c2", when: 104, offset: 0, playbackRate: 1 },
+      { clipId: "c3", when: 110, offset: 0, playbackRate: 1 },
     ])
   })
 
@@ -131,8 +131,8 @@ describe("computePlaybackSchedule", () => {
     // Playhead at 6s: c1 already ended (0-4), c2 (4-8) is mid-playback.
     const schedule = computePlaybackSchedule(placements, 6, 50)
     expect(schedule).toEqual([
-      { clipId: "c2", when: 50, offset: 2 },
-      { clipId: "c3", when: 54, offset: 0 },
+      { clipId: "c2", when: 50, offset: 2, playbackRate: 1 },
+      { clipId: "c3", when: 54, offset: 0, playbackRate: 1 },
     ])
   })
 
@@ -157,6 +157,44 @@ describe("computePlaybackSchedule", () => {
     // Even at a playhead far past any "reasonable" clip length, a null
     // duration must not be treated as already-finished.
     const schedule = computePlaybackSchedule(unknownDuration, 10_000, 0)
-    expect(schedule).toEqual([{ clipId: "c1", when: 0, offset: 10_000 }])
+    expect(schedule).toEqual([
+      { clipId: "c1", when: 0, offset: 10_000, playbackRate: 1 },
+    ])
+  })
+})
+
+describe("computePlaybackSchedule with per-placement playback rates (US-19.2)", () => {
+  // A 90 BPM loop in a 120 BPM project plays at 4/3 speed: its 8s of audio
+  // occupy 6s of timeline.
+  const RATE = 4 / 3
+  const loop: Placement = {
+    id: "p1",
+    clipId: "c1",
+    startSec: 0,
+    title: "loop",
+    durationSec: 8,
+  }
+  const rateFor = () => RATE
+
+  it("carries the rate onto the scheduled clip", () => {
+    const schedule = computePlaybackSchedule([loop], 0, 100, rateFor)
+    expect(schedule).toEqual([
+      { clipId: "c1", when: 100, offset: 0, playbackRate: RATE },
+    ])
+  })
+
+  it("scales the buffer offset for an in-progress sped-up clip", () => {
+    // Playhead 3s into the timeline = 3 * RATE = 4s into the buffer.
+    const schedule = computePlaybackSchedule([loop], 3, 50, rateFor)
+    expect(schedule).toHaveLength(1)
+    expect(schedule[0].when).toBe(50)
+    expect(schedule[0].offset).toBeCloseTo(4)
+  })
+
+  it("uses the rate-compressed duration to decide when a clip has finished", () => {
+    // 8s of audio at 4/3 speed ends at 6s on the timeline: playhead 7s → done.
+    expect(computePlaybackSchedule([loop], 7, 0, rateFor)).toEqual([])
+    // But at 1x it would still be playing at 7s.
+    expect(computePlaybackSchedule([loop], 7, 0)).toHaveLength(1)
   })
 })

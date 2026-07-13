@@ -113,6 +113,10 @@ export type Placement = {
   startSec: number
   title: string | null
   durationSec: number | null
+  /** The source clip's own BPM (US-19.2) — kept on the placement so a
+   * loop-track clip's playback rate can be re-derived whenever the project
+   * tempo changes, instead of freezing a multiplier at drop time. */
+  clipBpm?: number | null
 }
 
 /** Timeline never renders shorter than this, even with no clips placed. */
@@ -139,6 +143,8 @@ export type ScheduledClip = {
   when: number
   /** Offset into the clip's buffer to start playback from, in seconds. */
   offset: number
+  /** AudioBufferSourceNode.playbackRate for this clip (US-19.2 loop tempo). */
+  playbackRate: number
 }
 
 /**
@@ -149,20 +155,27 @@ export type ScheduledClip = {
  * with a nonzero buffer offset; future ones are scheduled at their absolute
  * start time. Placements with no known duration are treated as playing
  * through to the end (never pre-emptively excluded).
+ *
+ * `rateFor` supplies each placement's playback rate (loop-track tempo
+ * matching, US-19.2): a rate ≠ 1 compresses/stretches the clip on the
+ * timeline (durationSec/rate) and scales the buffer offset for in-progress
+ * clips, since timeline seconds pass `rate`× faster inside the buffer.
  */
 export function computePlaybackSchedule(
   placements: Placement[],
   playheadSec: number,
-  audioContextNow: number
+  audioContextNow: number,
+  rateFor: (p: Placement) => number = () => 1
 ): ScheduledClip[] {
   const schedule: ScheduledClip[] = []
   for (const p of placements) {
-    const duration = p.durationSec ?? Infinity
+    const rate = rateFor(p)
+    const duration = p.durationSec == null ? Infinity : p.durationSec / rate
     const endSec = p.startSec + duration
     if (endSec <= playheadSec) continue
-    const offset = Math.max(0, playheadSec - p.startSec)
+    const offset = Math.max(0, playheadSec - p.startSec) * rate
     const when = audioContextNow + Math.max(0, p.startSec - playheadSec)
-    schedule.push({ clipId: p.clipId, when, offset })
+    schedule.push({ clipId: p.clipId, when, offset, playbackRate: rate })
   }
   return schedule.sort((a, b) => a.when - b.when)
 }

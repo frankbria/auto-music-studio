@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ClipBlock } from "./ClipBlock"
-import { parseClipDragData } from "@/lib/clip-drag"
+import { parseClipDragData, readDragTrackType } from "@/lib/clip-drag"
 import type { Placement } from "@/lib/timeline"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
@@ -39,6 +39,21 @@ describe("ClipBlock layout", () => {
     const block = getByTestId("clip-block")
     expect(block.style.left).toBe("80px") // 4s * 20px/sec
     expect(block.style.width).toBe("160px") // 8s * 20px/sec
+  })
+
+  it("compresses its width by the playback rate (loop tempo inheritance, US-19.2)", () => {
+    getClipAudioMock.mockReturnValue(new Promise(() => {}))
+    const { getByTestId } = render(
+      <ClipBlock
+        placement={placement}
+        pxPerSec={20}
+        color="#123456"
+        token="tok"
+        playbackRate={4 / 3}
+      />
+    )
+    // 8s of audio at 4/3 speed occupies 6s of timeline → 120px.
+    expect(getByTestId("clip-block").style.width).toBe("120px")
   })
 
   it("renders a null-duration clip at a visible minimum width, not a 1px sliver", () => {
@@ -159,5 +174,29 @@ describe("ClipBlock drag source (reposition via MOVE_CLIP)", () => {
       placementId: "p1",
       grabOffsetSec: 0,
     })
+  })
+
+  it("marks the drag with its track's type so lanes can validate during dragover (US-19.2)", () => {
+    getClipAudioMock.mockReturnValue(new Promise(() => {}))
+    render(
+      <ClipBlock
+        placement={placement}
+        pxPerSec={20}
+        color="#123456"
+        token="tok"
+        trackType="vocal"
+      />
+    )
+    const store = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? "",
+      get types() {
+        return [...store.keys()]
+      },
+    } as unknown as DataTransfer
+    fireEvent.dragStart(screen.getByTestId("clip-block"), { dataTransfer })
+
+    expect(readDragTrackType(dataTransfer)).toBe("vocal")
   })
 })

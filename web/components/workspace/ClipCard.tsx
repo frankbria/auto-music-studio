@@ -35,7 +35,8 @@ import { ShareModal } from "@/components/song/ShareModal"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { usePlayer } from "@/contexts/player-context"
 import { useSongActions } from "@/hooks/use-song-actions"
-import { setClipDragData } from "@/lib/clip-drag"
+import { setClipDragData, setDragTrackType } from "@/lib/clip-drag"
+import { inferTrackType } from "@/lib/track-types"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { formatTime, trackFromClip } from "@/lib/clips"
 import { isFullSongEligible } from "@/lib/song-structure"
@@ -204,14 +205,19 @@ export function ClipCard({
     <div
       data-testid="clip-card"
       draggable
-      onDragStart={(e) =>
+      onDragStart={(e) => {
         setClipDragData(e.dataTransfer, {
           kind: "add",
           clipId: clip.id,
           title: title ?? null,
           duration: clip.duration,
+          generationMode: clip.generation_mode,
+          bpm: clip.bpm,
         })
-      }
+        // Track type entry, readable during dragover so studio lanes can show
+        // valid/invalid drop feedback (US-19.2).
+        setDragTrackType(e.dataTransfer, inferTrackType(clip.generation_mode))
+      }}
       className="flex gap-3 rounded-lg border border-border bg-card p-2"
     >
       {/* Thumbnail with duration overlay + hover play. */}
