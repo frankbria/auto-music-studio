@@ -12,17 +12,26 @@ export function dbToGain(volumeDb: number): number {
 }
 
 /**
- * The gain a track actually plays at: silent when muted, or when other tracks
- * are soloed and this one isn't; otherwise its fader gain. Multiple solos are
- * allowed — solo is a filter, not a radio button.
+ * Whether a track is silenced outright: muted, or out-soloed by another track.
+ * Multiple solos are allowed — solo is a filter, not a radio button. Shared by
+ * the audio engine and the lane's visual dimming so they can't diverge.
+ */
+export function isTrackSilenced(
+  track: { muted: boolean; solo: boolean },
+  anySolo: boolean
+): boolean {
+  return track.muted || (anySolo && !track.solo)
+}
+
+/**
+ * The gain a track actually plays at: 0 when silenced, otherwise its fader
+ * gain.
  */
 export function effectiveTrackGain(
   track: { volumeDb: number; muted: boolean; solo: boolean },
   anySolo: boolean
 ): number {
-  if (track.muted) return 0
-  if (anySolo && !track.solo) return 0
-  return dbToGain(track.volumeDb)
+  return isTrackSilenced(track, anySolo) ? 0 : dbToGain(track.volumeDb)
 }
 
 export function formatVolumeDb(volumeDb: number): string {

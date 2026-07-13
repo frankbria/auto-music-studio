@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { useGeneration } from "@/hooks/use-generation"
@@ -48,6 +49,8 @@ export function TrackRegenerateDialog({
   const { state: gen, submit } = useGeneration()
   const [prompt, setPrompt] = useState("")
   const [style, setStyle] = useState("")
+  const [instrumental, setInstrumental] = useState(false)
+  const [addFailed, setAddFailed] = useState(false)
   const addedRef = useRef(false)
 
   const busy = gen.phase === "submitting" || gen.phase === "polling"
@@ -77,7 +80,7 @@ export function TrackRegenerateDialog({
             {
               description: trimmed,
               lyrics: "",
-              instrumental: false,
+              instrumental,
               selectedTags: style.trim() ? [style.trim()] : [],
             },
             token
@@ -87,22 +90,21 @@ export function TrackRegenerateDialog({
     }
   }
 
-  // On success, fetch the new clip's metadata and append it to this track. The
-  // dispatch happens in the fetch's async callback (not synchronously in the
-  // effect body), then the dialog closes.
+  // On success, fetch the new clip's metadata and append it to this track,
+  // then close. Generation already succeeded (and charged credits) by this
+  // point, so a failed metadata fetch must surface with a Retry of just the
+  // fetch — never silently hang, and never re-submit the generation.
   const startSec = appendStartSec(track, state.bpm)
-  useEffect(() => {
-    if (gen.phase !== "success" || addedRef.current || !token) return
-    const clipId = gen.clipIds[0]
-    if (!clipId) return
-    addedRef.current = true
-    let active = true
+  function addGeneratedClip(clipId: string) {
+    if (!token) return
     fetch(`/api/clips/${encodeURIComponent(clipId)}`, {
       headers: { authorization: `Bearer ${token}` },
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as Clip) : null))
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`clip fetch ${res.status}`)
+        return (await res.json()) as Clip
+      })
       .then((clip) => {
-        if (!active || !clip) return
         dispatch({
           type: "ADD_CLIP",
           id: crypto.randomUUID(),
@@ -116,9 +118,14 @@ export function TrackRegenerateDialog({
         })
         onClose()
       })
-    return () => {
-      active = false
-    }
+      .catch(() => setAddFailed(true))
+  }
+  useEffect(() => {
+    if (gen.phase !== "success" || addedRef.current || !token) return
+    const clipId = gen.clipIds[0]
+    if (!clipId) return
+    addedRef.current = true
+    addGeneratedClip(clipId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gen, token])
 
@@ -149,16 +156,27 @@ export function TrackRegenerateDialog({
             />
           </div>
           {track.trackType !== "loop" && (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="regen-style">Style (optional)</Label>
-              <Input
-                id="regen-style"
-                value={style}
-                onChange={(e) => setStyle(e.target.value)}
-                placeholder="e.g. synthwave, ambient"
-                disabled={busy}
-              />
-            </div>
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="regen-style">Style (optional)</Label>
+                <Input
+                  id="regen-style"
+                  value={style}
+                  onChange={(e) => setStyle(e.target.value)}
+                  placeholder="e.g. synthwave, ambient"
+                  disabled={busy}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="regen-instrumental"
+                  checked={instrumental}
+                  onCheckedChange={setInstrumental}
+                  disabled={busy}
+                />
+                <Label htmlFor="regen-instrumental">Instrumental</Label>
+              </div>
+            </>
           )}
           {gen.phase === "polling" && (
             <p className="text-sm text-muted-foreground" role="status">
@@ -167,9 +185,26 @@ export function TrackRegenerateDialog({
               {gen.progress}
             </p>
           )}
-          {gen.phase === "success" && (
+          {gen.phase === "success" && !addFailed && (
             <p className="text-sm text-muted-foreground" role="status">
               Adding clip to the track…
+            </p>
+          )}
+          {gen.phase === "success" && addFailed && (
+            <p className="text-sm text-destructive" role="alert">
+              The clip was generated but couldn&apos;t be added to the track.{" "}
+              <Button
+                type="button"
+                variant="link"
+                size="xs"
+                className="px-0"
+                onClick={() => {
+                  setAddFailed(false)
+                  addGeneratedClip(gen.clipIds[0])
+                }}
+              >
+                Retry
+              </Button>
             </p>
           )}
           {gen.phase === "error" && (

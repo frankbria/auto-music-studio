@@ -198,11 +198,13 @@ export function studioReducer(
       }))
     case "TOGGLE_TRACK_SOLO":
       return updateTrack(state, action.trackId, (t) => ({ ...t, solo: !t.solo }))
-    case "SET_TRACK_COLOR":
-      return updateTrack(state, action.trackId, (t) => ({
-        ...t,
-        color: action.color,
-      }))
+    case "SET_TRACK_COLOR": {
+      // Applied verbatim as CSS (border/background) — an empty value would
+      // silently erase the track's visual identity.
+      const color = action.color.trim()
+      if (!color) return state
+      return updateTrack(state, action.trackId, (t) => ({ ...t, color }))
+    }
     case "ADD_CLIP": {
       const track = state.tracks.find((t) => t.id === action.trackId)
       if (!track) return state

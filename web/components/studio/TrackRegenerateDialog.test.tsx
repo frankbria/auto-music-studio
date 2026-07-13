@@ -181,6 +181,31 @@ describe("TrackRegenerateDialog", () => {
     })
   })
 
+  it("sends instrumental=true when the Instrumental switch is on", async () => {
+    const calls = stubFetch(
+      happyRoutes({
+        id: "nc3",
+        title: "Inst",
+        duration: 6,
+        bpm: null,
+        generation_mode: "song",
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "ambient pad")
+    await user.click(screen.getByRole("switch", { name: "Instrumental" }))
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+
+    await waitFor(() =>
+      expect(calls.find((c) => c.url === "/api/generate")).toBeTruthy()
+    )
+    expect(calls.find((c) => c.url === "/api/generate")!.body).toMatchObject({
+      instrumental: true,
+    })
+  })
+
   it("shows the failure and keeps the dialog open when generation errors", async () => {
     stubFetch([
       {
@@ -198,6 +223,65 @@ describe("TrackRegenerateDialog", () => {
     expect(await screen.findByText("backend exploded")).toBeInTheDocument()
     expect(screen.getByRole("dialog")).toBeInTheDocument()
     expect(clipsProbe()).toEqual([])
+  })
+
+  it("surfaces an error with a retry when the generated clip can't be fetched", async () => {
+    // Generation succeeds, but the follow-up clip-metadata fetch 500s once and
+    // then recovers — the dialog must show the failure (not hang on "Adding
+    // clip…") and Retry must complete the add.
+    let clipFetches = 0
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === "/api/generate" && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({ job_id: "j1", estimated_time_seconds: 5 }),
+            { status: 202 }
+          )
+        }
+        if (url.startsWith("/api/jobs/j1")) {
+          return new Response(
+            JSON.stringify({ status: "completed", clip_ids: ["nc9"] }),
+            { status: 200 }
+          )
+        }
+        if (url === "/api/clips/nc9") {
+          clipFetches += 1
+          if (clipFetches === 1) return new Response("{}", { status: 500 })
+          return new Response(
+            JSON.stringify({
+              id: "nc9",
+              title: "Recovered",
+              duration: 6,
+              bpm: null,
+              generation_mode: "song",
+            }),
+            { status: 200 }
+          )
+        }
+        return new Response("{}", { status: 404 })
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "anything")
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn.t be added/i
+    )
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(clipsProbe()).toEqual([])
+
+    await user.click(screen.getByRole("button", { name: "Retry" }))
+    await waitFor(() =>
+      expect(clipsProbe()).toEqual([{ clipId: "nc9", startSec: 0 }])
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
   })
 
   it("disables Generate until a prompt is entered", () => {

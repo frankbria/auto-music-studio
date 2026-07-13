@@ -26,6 +26,7 @@ import {
   VOLUME_DB_MAX,
   VOLUME_DB_MIN,
   formatVolumeDb,
+  isTrackSilenced,
 } from "@/lib/track-audio"
 import {
   TRACK_STRIP_PX,
@@ -105,10 +106,10 @@ export function TrackLane({
   const [dragOver, setDragOver] = useState<DragOverState>(null)
   const [regenOpen, setRegenOpen] = useState(false)
   const typeConfig = TRACK_TYPES[track.trackType]
-  // Mirrors lib/track-audio's effectiveTrackGain: dim the lane whenever the
-  // engine would silence it (muted, or out-soloed by another track).
+  // Dim the lane whenever the engine would silence it — same predicate the
+  // audio graph uses, so sight and sound can't diverge.
   const anySolo = state.tracks.some((t) => t.solo)
-  const silenced = track.muted || (anySolo && !track.solo)
+  const silenced = isTrackSilenced(track, anySolo)
 
   function startEdit() {
     setDraft(track.name)

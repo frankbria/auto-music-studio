@@ -6,7 +6,17 @@ import {
   dbToGain,
   effectiveTrackGain,
   formatVolumeDb,
+  isTrackSilenced,
 } from "@/lib/track-audio"
+
+describe("isTrackSilenced", () => {
+  it("silences muted tracks, and non-soloed tracks while any solo is active", () => {
+    expect(isTrackSilenced({ muted: true, solo: false }, false)).toBe(true)
+    expect(isTrackSilenced({ muted: false, solo: false }, true)).toBe(true)
+    expect(isTrackSilenced({ muted: false, solo: true }, true)).toBe(false)
+    expect(isTrackSilenced({ muted: false, solo: false }, false)).toBe(false)
+  })
+})
 
 describe("dbToGain", () => {
   it("maps 0 dB to unity gain", () => {

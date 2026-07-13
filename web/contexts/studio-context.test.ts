@@ -601,6 +601,16 @@ describe("studioReducer per-track controls (US-19.4)", () => {
       studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "nope", color: "#000" })
     ).toBe(s)
   })
+
+  it("SET_TRACK_COLOR ignores an empty or whitespace color", () => {
+    const s = withTrack()
+    expect(
+      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "t1", color: "" })
+    ).toBe(s)
+    expect(
+      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "t1", color: "   " })
+    ).toBe(s)
+  })
 })
 
 describe("studioReducer markers (US-19.3)", () => {
