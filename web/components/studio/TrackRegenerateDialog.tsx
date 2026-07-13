@@ -95,8 +95,8 @@ export function TrackRegenerateDialog({
   // point, so a failed metadata fetch must surface with a Retry of just the
   // fetch — never silently hang, and never re-submit the generation.
   const startSec = appendStartSec(track, state.bpm)
-  function addGeneratedClip(clipId: string) {
-    if (!token) return
+  function addGeneratedClip(clipId: string | undefined) {
+    if (!token || !clipId) return
     fetch(`/api/clips/${encodeURIComponent(clipId)}`, {
       headers: { authorization: `Bearer ${token}` },
     })
