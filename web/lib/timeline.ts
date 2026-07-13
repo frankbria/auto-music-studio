@@ -18,6 +18,16 @@ export { secToX, xToSec }
 /** px/sec at zoom level 1. */
 export const BASE_PX_PER_SEC = 100
 
+/**
+ * Width, in px, of each TrackLane's left control strip (name/color). The
+ * ruler and playhead sit in the same outer container as the lanes but don't
+ * have a strip of their own, so anything positioned by seconds × pxPerSec
+ * needs this added to land under the lanes' actual timeline region rather
+ * than under their strips. A single exported constant so the ruler's spacer,
+ * the lane's strip, and the playhead's offset can't drift apart.
+ */
+export const TRACK_STRIP_PX = 160
+
 export const MIN_ZOOM = 0.25
 export const MAX_ZOOM = 4
 

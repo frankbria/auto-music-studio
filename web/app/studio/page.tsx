@@ -19,6 +19,7 @@ import { useStudioPlayback } from "@/hooks/use-studio-playback"
 import {
   MAX_ZOOM,
   MIN_ZOOM,
+  TRACK_STRIP_PX,
   timelineDurationSec,
   zoomToPxPerSec,
 } from "@/lib/timeline"
@@ -139,12 +140,22 @@ function StudioTimeline() {
   return (
     <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-auto">
       <div className="relative">
-        <TimeRuler
-          pxPerSec={pxPerSec}
-          durationSec={durationSec}
-          displayMode={state.displayMode}
-          onSeek={(sec) => dispatch({ type: "SEEK", sec })}
-        />
+        {/* Ruler ticks must start where each lane's timeline region does —
+            after its control strip — so a spacer of the same width sits in
+            front of it (TrackLane's own strip uses the same constant). */}
+        <div className="flex">
+          <div
+            data-testid="ruler-spacer"
+            className="shrink-0"
+            style={{ width: TRACK_STRIP_PX }}
+          />
+          <TimeRuler
+            pxPerSec={pxPerSec}
+            durationSec={durationSec}
+            displayMode={state.displayMode}
+            onSeek={(sec) => dispatch({ type: "SEEK", sec })}
+          />
+        </div>
         {state.tracks.map((track) => (
           <TrackLane
             key={track.id}

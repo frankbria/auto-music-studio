@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { ClipBlock } from "@/components/studio/ClipBlock"
 import { useStudio, type StudioTrack } from "@/contexts/studio-context"
 import { parseClipDragData } from "@/lib/clip-drag"
-import { xToSec } from "@/lib/timeline"
+import { TRACK_STRIP_PX, xToSec } from "@/lib/timeline"
 import { cn } from "@/lib/utils"
 
 // A track row: an editable-name control strip on the left, and a drop-target
@@ -81,8 +81,12 @@ export function TrackLane({
   return (
     <div data-testid="track-lane" className="flex border-b border-border">
       <div
-        className="flex w-40 shrink-0 items-center p-2"
-        style={{ borderLeft: `4px solid ${track.color}` }}
+        data-testid="track-strip"
+        className="flex shrink-0 items-center p-2"
+        style={{
+          width: TRACK_STRIP_PX,
+          borderLeft: `4px solid ${track.color}`,
+        }}
       >
         {editing ? (
           <Input

@@ -185,11 +185,13 @@ describe("StudioPage playhead", () => {
     })
 
     const playhead = screen.getByTestId("playhead")
-    expect(playhead.style.left).toBe("0px")
+    // Playhead x includes TRACK_STRIP_PX (160) so it lines up with the lanes'
+    // timeline region, not the outer container's raw left edge.
+    expect(playhead.style.left).toBe("160px")
 
     fireEvent.click(ruler, { clientX: 100 })
-    // Default zoom is 100 px/sec (BASE_PX_PER_SEC), so 100px -> 1s -> 100px.
-    expect(playhead.style.left).toBe("100px")
+    // Default zoom is 100 px/sec (BASE_PX_PER_SEC): 100px -> 1s -> 160+100px.
+    expect(playhead.style.left).toBe("260px")
   })
 
   it("does not stomp a ruler seek made mid-playback on the next rAF tick", async () => {
@@ -231,13 +233,16 @@ describe("StudioPage playhead", () => {
       box.instance!.currentTime = 1
       raf.tick(1000)
     })
-    expect(playhead.style.left).toBe("100px") // 1s * 100px/sec
+    expect(playhead.style.left).toBe("260px") // 160 + 1s * 100px/sec
 
-    // User seeks to 5s mid-playback.
-    act(() => {
+    // User seeks to 5s mid-playback. The seek reschedules through the same
+    // decode-then-tick path as the initial play (Fix 3), so let it settle.
+    await act(async () => {
       fireEvent.click(ruler, { clientX: 500 })
+      await Promise.resolve()
+      await Promise.resolve()
     })
-    expect(playhead.style.left).toBe("500px")
+    expect(playhead.style.left).toBe("660px") // 160 + 500
 
     // Another 0.2s of ctx time elapses and the next rAF frame fires. Without
     // rescheduling off the seek, the stale origin (ctxTime=0, playheadSec=0)
@@ -246,7 +251,22 @@ describe("StudioPage playhead", () => {
       box.instance!.currentTime = 1.2
       raf.tick(1200)
     })
-    expect(playhead.style.left).toBe("520px") // 5.2s * 100px/sec
+    expect(playhead.style.left).toBe("680px") // 160 + 5.2s * 100px/sec
+  })
+
+  it("aligns the ruler's origin with the lanes' timeline region via a shared spacer width", async () => {
+    searchParamsRef.current = new URLSearchParams("song=clip-1")
+    stubStudioFetch()
+    renderPage()
+    await waitFor(() => expect(screen.getByText("My Song")).toBeInTheDocument())
+
+    // The ruler's spacer and each lane's control strip must share the exact
+    // same width (TRACK_STRIP_PX) — otherwise a tick at sec=0 and a clip at
+    // startSec=0 land at different x positions in the shared outer container.
+    const spacerWidth = screen.getByTestId("ruler-spacer").style.width
+    const stripWidth = screen.getByTestId("track-strip").style.width
+    expect(spacerWidth).toBe(stripWidth)
+    expect(spacerWidth).not.toBe("")
   })
 })
 

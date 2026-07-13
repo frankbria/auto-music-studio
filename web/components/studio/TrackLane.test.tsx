@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react"
 
 import { TrackLane } from "./TrackLane"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import { TRACK_STRIP_PX } from "@/lib/timeline"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
   getClipAudioMock: vi.fn(),
@@ -89,6 +90,15 @@ describe("TrackLane control strip", () => {
     await user.type(input, "Drums{Escape}")
     expect(screen.getByText("Track 1")).toBeInTheDocument()
     expect(screen.queryByText("Drums")).not.toBeInTheDocument()
+  })
+
+  it("sizes itself to the shared TRACK_STRIP_PX constant, not a hardcoded class value", () => {
+    render(<Harness />)
+    // Inline style, not just a Tailwind width class, so it can't silently
+    // drift from the ruler spacer / playhead offset that share this constant.
+    expect(screen.getByTestId("track-strip").style.width).toBe(
+      `${TRACK_STRIP_PX}px`
+    )
   })
 })
 
