@@ -341,6 +341,23 @@ describe("TrackLane drop zone — adding a new clip", () => {
     expect(region.className).not.toMatch(/destructive/)
   })
 
+  it("only allows the native drop (preventDefault on dragover) for matching clip types", () => {
+    // Not calling preventDefault on dragover is how the browser itself
+    // disallows the drop and shows the no-drop cursor.
+    render(<Harness trackType="vocal" />)
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+
+    const mismatched = fireEvent.dragOver(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-ai"] },
+    })
+    expect(mismatched).toBe(true) // not prevented → drop disallowed
+
+    const matching = fireEvent.dragOver(region, {
+      dataTransfer: { types: ["application/x-ams-track-type-vocal"] },
+    })
+    expect(matching).toBe(false) // prevented → drop allowed
+  })
+
   it("stretches a dropped loop clip to the project tempo (width from playbackRate)", async () => {
     // 90 BPM, 8s loop in a 120 BPM project → 4/3 rate → 6s × 20px = 120px.
     render(<Harness trackType="loop" />)
