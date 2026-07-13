@@ -31,11 +31,7 @@ describe("setClipDragData / parseClipDragData round-trip", () => {
 
   it("round-trips a 'move' payload (existing placement being repositioned)", () => {
     const dt = fakeDataTransfer()
-    const payload: ClipDragPayload = {
-      kind: "move",
-      placementId: "p1",
-      sourceTrackId: "t1",
-    }
+    const payload: ClipDragPayload = { kind: "move", placementId: "p1" }
     setClipDragData(dt, payload)
     expect(parseClipDragData(dt)).toEqual(payload)
   })

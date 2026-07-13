@@ -125,7 +125,6 @@ export function TrackLane({
           <ClipBlock
             key={placement.id}
             placement={placement}
-            trackId={track.id}
             pxPerSec={pxPerSec}
             color={track.color}
             token={token}

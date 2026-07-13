@@ -123,7 +123,10 @@ function zeroRect() {
  * synthetic event does read through. */
 function dropEventWithClientX(clientX: number, dataTransfer: unknown) {
   const event = new Event("drop", { bubbles: true, cancelable: true })
-  Object.defineProperty(event, "clientX", { value: clientX, configurable: true })
+  Object.defineProperty(event, "clientX", {
+    value: clientX,
+    configurable: true,
+  })
   Object.defineProperty(event, "dataTransfer", {
     value: dataTransfer,
     configurable: true,
@@ -217,12 +220,7 @@ describe("TrackLane drop zone — repositioning an existing clip", () => {
 
     fireEvent.drop(region, {
       dataTransfer: {
-        getData: () =>
-          JSON.stringify({
-            kind: "move",
-            placementId: "seed-0",
-            sourceTrackId: "t1",
-          }),
+        getData: () => JSON.stringify({ kind: "move", placementId: "seed-0" }),
       },
     })
 

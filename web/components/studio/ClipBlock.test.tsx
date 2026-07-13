@@ -31,7 +31,6 @@ describe("ClipBlock layout", () => {
     const { getByTestId } = render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -47,7 +46,6 @@ describe("ClipBlock layout", () => {
     render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -61,7 +59,6 @@ describe("ClipBlock layout", () => {
     render(
       <ClipBlock
         placement={{ ...placement, title: null }}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -81,7 +78,6 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -96,7 +92,6 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token={null}
@@ -110,7 +105,6 @@ describe("ClipBlock waveform thumbnail", () => {
     render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -122,12 +116,11 @@ describe("ClipBlock waveform thumbnail", () => {
 })
 
 describe("ClipBlock drag source (reposition via MOVE_CLIP)", () => {
-  it("is draggable and sets a 'move' drag payload naming itself and its track", () => {
+  it("is draggable and sets a 'move' drag payload naming its own placement", () => {
     getClipAudioMock.mockReturnValue(new Promise(() => {}))
     render(
       <ClipBlock
         placement={placement}
-        trackId="t1"
         pxPerSec={20}
         color="#123456"
         token="tok"
@@ -146,7 +139,6 @@ describe("ClipBlock drag source (reposition via MOVE_CLIP)", () => {
     expect(parseClipDragData(dataTransfer)).toEqual({
       kind: "move",
       placementId: "p1",
-      sourceTrackId: "t1",
     })
   })
 })

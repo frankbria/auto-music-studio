@@ -10,21 +10,20 @@ import type { Placement } from "@/lib/timeline"
 // startSec/durationSec × pxPerSec; the waveform thumbnail draws the cached
 // peak downsample onto a canvas, guarding a null 2D context the same way
 // components/editor/WaveformCanvas.tsx does (jsdom's getContext returns null).
-// Draggable to reposition: dragging it sets a "move" payload (its own
-// placement + source track) that a TrackLane's drop handler turns into a
-// MOVE_CLIP, same or different lane either way.
+// Draggable to reposition: dragging it sets a "move" payload naming its own
+// placement id that a TrackLane's drop handler turns into a MOVE_CLIP, same or
+// different lane either way — the reducer finds the source track itself, so
+// the payload doesn't need to name it.
 
 const THUMBNAIL_HEIGHT = 32
 
 export function ClipBlock({
   placement,
-  trackId,
   pxPerSec,
   color,
   token,
 }: {
   placement: Placement
-  trackId: string
   pxPerSec: number
   color: string
   token: string | null
@@ -73,11 +72,7 @@ export function ClipBlock({
   const title = placement.title ?? "Untitled clip"
 
   function onDragStart(e: DragEvent<HTMLDivElement>) {
-    setClipDragData(e.dataTransfer, {
-      kind: "move",
-      placementId: placement.id,
-      sourceTrackId: trackId,
-    })
+    setClipDragData(e.dataTransfer, { kind: "move", placementId: placement.id })
   }
 
   return (
