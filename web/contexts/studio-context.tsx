@@ -9,6 +9,33 @@ import {
 } from "react"
 
 import {
+  clamp,
+  COMPRESSOR_ATTACK_SEC_MAX,
+  COMPRESSOR_ATTACK_SEC_MIN,
+  COMPRESSOR_RATIO_MAX,
+  COMPRESSOR_RATIO_MIN,
+  COMPRESSOR_RELEASE_SEC_MAX,
+  COMPRESSOR_RELEASE_SEC_MIN,
+  COMPRESSOR_THRESHOLD_DB_MAX,
+  COMPRESSOR_THRESHOLD_DB_MIN,
+  DEFAULT_MASTER_BUS,
+  EQ_GAIN_DB_MAX,
+  EQ_GAIN_DB_MIN,
+  EQ_HIGH_SHELF_FREQ_MAX,
+  EQ_HIGH_SHELF_FREQ_MIN,
+  EQ_LOW_SHELF_FREQ_MAX,
+  EQ_LOW_SHELF_FREQ_MIN,
+  EQ_MID_FREQ_MAX,
+  EQ_MID_FREQ_MIN,
+  EQ_Q_MAX,
+  EQ_Q_MIN,
+  LIMITER_CEILING_DB_MAX,
+  LIMITER_CEILING_DB_MIN,
+  MASTER_VOLUME_DB_MAX,
+  MASTER_VOLUME_DB_MIN,
+  type MasterBusState,
+} from "@/lib/master-bus"
+import {
   clampZoom,
   DEFAULT_BPM,
   type DisplayMode,
@@ -67,6 +94,9 @@ export type StudioState = {
   // reschedule audio from the new position/rates instead of stomping it on
   // the next frame.
   seekEpoch: number
+  /** Master bus: EQ/compressor/limiter/volume sitting after the track sum,
+   * before the destination (US-19.5). */
+  masterBus: MasterBusState
 }
 
 export const initialStudioState: StudioState = {
@@ -84,6 +114,7 @@ export const initialStudioState: StudioState = {
   loopEndSec: 8,
   markers: [],
   seekEpoch: 0,
+  masterBus: DEFAULT_MASTER_BUS,
 }
 
 export type StudioAction =
@@ -134,6 +165,23 @@ export type StudioAction =
   | { type: "RENAME_MARKER"; markerId: string; label: string }
   | { type: "MOVE_MARKER"; markerId: string; sec: number }
   | { type: "DELETE_MARKER"; markerId: string }
+  | { type: "SET_MASTER_VOLUME"; volumeDb: number }
+  | {
+      type: "SET_MASTER_EQ"
+      band: "low" | "mid" | "high"
+      freqHz?: number
+      gainDb?: number
+      /** Only meaningful for the mid band's peaking filter. */
+      q?: number
+    }
+  | {
+      type: "SET_MASTER_COMPRESSOR"
+      thresholdDb?: number
+      ratio?: number
+      attackSec?: number
+      releaseSec?: number
+    }
+  | { type: "SET_MASTER_LIMITER_CEILING"; ceilingDb: number }
 
 /** Replace one track via `update`; unknown ids are a strict no-op. */
 function updateTrack(
@@ -335,6 +383,155 @@ export function studioReducer(
         ...state,
         markers: state.markers.filter((m) => m.id !== action.markerId),
       }
+    case "SET_MASTER_VOLUME": {
+      if (!Number.isFinite(action.volumeDb)) return state
+      return {
+        ...state,
+        masterBus: {
+          ...state.masterBus,
+          masterVolumeDb: clamp(
+            action.volumeDb,
+            MASTER_VOLUME_DB_MIN,
+            MASTER_VOLUME_DB_MAX
+          ),
+        },
+      }
+    }
+    case "SET_MASTER_EQ": {
+      const { band, freqHz, gainDb, q } = action
+      if (
+        (freqHz !== undefined && !Number.isFinite(freqHz)) ||
+        (gainDb !== undefined && !Number.isFinite(gainDb)) ||
+        (q !== undefined && !Number.isFinite(q))
+      ) {
+        return state
+      }
+      const eq = state.masterBus.eq
+      if (band === "low") {
+        return {
+          ...state,
+          masterBus: {
+            ...state.masterBus,
+            eq: {
+              ...eq,
+              lowShelf: {
+                freqHz:
+                  freqHz !== undefined
+                    ? clamp(freqHz, EQ_LOW_SHELF_FREQ_MIN, EQ_LOW_SHELF_FREQ_MAX)
+                    : eq.lowShelf.freqHz,
+                gainDb:
+                  gainDb !== undefined
+                    ? clamp(gainDb, EQ_GAIN_DB_MIN, EQ_GAIN_DB_MAX)
+                    : eq.lowShelf.gainDb,
+              },
+            },
+          },
+        }
+      }
+      if (band === "mid") {
+        return {
+          ...state,
+          masterBus: {
+            ...state.masterBus,
+            eq: {
+              ...eq,
+              midPeak: {
+                freqHz:
+                  freqHz !== undefined
+                    ? clamp(freqHz, EQ_MID_FREQ_MIN, EQ_MID_FREQ_MAX)
+                    : eq.midPeak.freqHz,
+                gainDb:
+                  gainDb !== undefined
+                    ? clamp(gainDb, EQ_GAIN_DB_MIN, EQ_GAIN_DB_MAX)
+                    : eq.midPeak.gainDb,
+                q: q !== undefined ? clamp(q, EQ_Q_MIN, EQ_Q_MAX) : eq.midPeak.q,
+              },
+            },
+          },
+        }
+      }
+      return {
+        ...state,
+        masterBus: {
+          ...state.masterBus,
+          eq: {
+            ...eq,
+            highShelf: {
+              freqHz:
+                freqHz !== undefined
+                  ? clamp(freqHz, EQ_HIGH_SHELF_FREQ_MIN, EQ_HIGH_SHELF_FREQ_MAX)
+                  : eq.highShelf.freqHz,
+              gainDb:
+                gainDb !== undefined
+                  ? clamp(gainDb, EQ_GAIN_DB_MIN, EQ_GAIN_DB_MAX)
+                  : eq.highShelf.gainDb,
+            },
+          },
+        },
+      }
+    }
+    case "SET_MASTER_COMPRESSOR": {
+      const { thresholdDb, ratio, attackSec, releaseSec } = action
+      if (
+        (thresholdDb !== undefined && !Number.isFinite(thresholdDb)) ||
+        (ratio !== undefined && !Number.isFinite(ratio)) ||
+        (attackSec !== undefined && !Number.isFinite(attackSec)) ||
+        (releaseSec !== undefined && !Number.isFinite(releaseSec))
+      ) {
+        return state
+      }
+      const compressor = state.masterBus.compressor
+      return {
+        ...state,
+        masterBus: {
+          ...state.masterBus,
+          compressor: {
+            thresholdDb:
+              thresholdDb !== undefined
+                ? clamp(
+                    thresholdDb,
+                    COMPRESSOR_THRESHOLD_DB_MIN,
+                    COMPRESSOR_THRESHOLD_DB_MAX
+                  )
+                : compressor.thresholdDb,
+            ratio:
+              ratio !== undefined
+                ? clamp(ratio, COMPRESSOR_RATIO_MIN, COMPRESSOR_RATIO_MAX)
+                : compressor.ratio,
+            attackSec:
+              attackSec !== undefined
+                ? clamp(
+                    attackSec,
+                    COMPRESSOR_ATTACK_SEC_MIN,
+                    COMPRESSOR_ATTACK_SEC_MAX
+                  )
+                : compressor.attackSec,
+            releaseSec:
+              releaseSec !== undefined
+                ? clamp(
+                    releaseSec,
+                    COMPRESSOR_RELEASE_SEC_MIN,
+                    COMPRESSOR_RELEASE_SEC_MAX
+                  )
+                : compressor.releaseSec,
+          },
+        },
+      }
+    }
+    case "SET_MASTER_LIMITER_CEILING": {
+      if (!Number.isFinite(action.ceilingDb)) return state
+      return {
+        ...state,
+        masterBus: {
+          ...state.masterBus,
+          limiterCeilingDb: clamp(
+            action.ceilingDb,
+            LIMITER_CEILING_DB_MIN,
+            LIMITER_CEILING_DB_MAX
+          ),
+        },
+      }
+    }
     default:
       return state
   }

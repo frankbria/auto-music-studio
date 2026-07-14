@@ -5,6 +5,22 @@ import {
   studioReducer,
   type StudioState,
 } from "@/contexts/studio-context"
+import {
+  COMPRESSOR_ATTACK_SEC_MAX,
+  COMPRESSOR_RATIO_MAX,
+  COMPRESSOR_RELEASE_SEC_MAX,
+  COMPRESSOR_THRESHOLD_DB_MIN,
+  DEFAULT_MASTER_BUS,
+  EQ_GAIN_DB_MAX,
+  EQ_GAIN_DB_MIN,
+  EQ_HIGH_SHELF_FREQ_MAX,
+  EQ_LOW_SHELF_FREQ_MAX,
+  EQ_Q_MAX,
+  LIMITER_CEILING_DB_MAX,
+  LIMITER_CEILING_DB_MIN,
+  MASTER_VOLUME_DB_MAX,
+  MASTER_VOLUME_DB_MIN,
+} from "@/lib/master-bus"
 import { TRACK_TYPES, TRACK_TYPE_ORDER } from "@/lib/track-types"
 
 const base = (over: Partial<StudioState> = {}): StudioState => ({
@@ -677,5 +693,147 @@ describe("studioReducer markers (US-19.3)", () => {
     })
     const s = studioReducer(seeded, { type: "DELETE_MARKER", markerId: "m1" })
     expect(s.markers).toEqual([])
+  })
+})
+
+describe("studioReducer masterBus (US-19.5)", () => {
+  it("initializes to DEFAULT_MASTER_BUS", () => {
+    expect(initialStudioState.masterBus).toEqual(DEFAULT_MASTER_BUS)
+  })
+
+  it("SET_MASTER_VOLUME updates masterVolumeDb, clamped to the fader range", () => {
+    const s1 = studioReducer(base(), {
+      type: "SET_MASTER_VOLUME",
+      volumeDb: -12,
+    })
+    expect(s1.masterBus.masterVolumeDb).toBe(-12)
+    const s2 = studioReducer(base(), {
+      type: "SET_MASTER_VOLUME",
+      volumeDb: 100,
+    })
+    expect(s2.masterBus.masterVolumeDb).toBe(MASTER_VOLUME_DB_MAX)
+    const s3 = studioReducer(base(), {
+      type: "SET_MASTER_VOLUME",
+      volumeDb: -100,
+    })
+    expect(s3.masterBus.masterVolumeDb).toBe(MASTER_VOLUME_DB_MIN)
+  })
+
+  it("SET_MASTER_VOLUME ignores non-finite input", () => {
+    const s = base()
+    expect(
+      studioReducer(s, { type: "SET_MASTER_VOLUME", volumeDb: NaN })
+    ).toBe(s)
+  })
+
+  it("SET_MASTER_EQ updates only the targeted band, clamping freq/gain", () => {
+    const s1 = studioReducer(base(), {
+      type: "SET_MASTER_EQ",
+      band: "low",
+      freqHz: 50,
+      gainDb: 6,
+    })
+    expect(s1.masterBus.eq.lowShelf).toEqual({ freqHz: 50, gainDb: 6 })
+    expect(s1.masterBus.eq.midPeak).toEqual(DEFAULT_MASTER_BUS.eq.midPeak)
+    expect(s1.masterBus.eq.highShelf).toEqual(DEFAULT_MASTER_BUS.eq.highShelf)
+
+    const s2 = studioReducer(base(), {
+      type: "SET_MASTER_EQ",
+      band: "mid",
+      gainDb: 999,
+      q: 999,
+    })
+    expect(s2.masterBus.eq.midPeak.gainDb).toBe(EQ_GAIN_DB_MAX)
+    expect(s2.masterBus.eq.midPeak.q).toBe(EQ_Q_MAX)
+    // freqHz not passed — stays at the default.
+    expect(s2.masterBus.eq.midPeak.freqHz).toBe(
+      DEFAULT_MASTER_BUS.eq.midPeak.freqHz
+    )
+
+    const s3 = studioReducer(base(), {
+      type: "SET_MASTER_EQ",
+      band: "high",
+      freqHz: 999999,
+      gainDb: -999,
+    })
+    expect(s3.masterBus.eq.highShelf.freqHz).toBe(EQ_HIGH_SHELF_FREQ_MAX)
+    expect(s3.masterBus.eq.highShelf.gainDb).toBe(EQ_GAIN_DB_MIN)
+  })
+
+  it("SET_MASTER_EQ clamps each band's frequency to its own range", () => {
+    const s = studioReducer(base(), {
+      type: "SET_MASTER_EQ",
+      band: "low",
+      freqHz: 999999,
+    })
+    expect(s.masterBus.eq.lowShelf.freqHz).toBe(EQ_LOW_SHELF_FREQ_MAX)
+  })
+
+  it("SET_MASTER_EQ ignores non-finite fields", () => {
+    const s = base()
+    expect(
+      studioReducer(s, {
+        type: "SET_MASTER_EQ",
+        band: "low",
+        freqHz: NaN,
+      })
+    ).toBe(s)
+  })
+
+  it("SET_MASTER_COMPRESSOR patches only the provided fields, clamped", () => {
+    const s1 = studioReducer(base(), {
+      type: "SET_MASTER_COMPRESSOR",
+      thresholdDb: -30,
+    })
+    expect(s1.masterBus.compressor).toEqual({
+      ...DEFAULT_MASTER_BUS.compressor,
+      thresholdDb: -30,
+    })
+
+    const s2 = studioReducer(base(), {
+      type: "SET_MASTER_COMPRESSOR",
+      ratio: 999,
+      attackSec: 999,
+      releaseSec: 999,
+      thresholdDb: -999,
+    })
+    expect(s2.masterBus.compressor).toEqual({
+      thresholdDb: COMPRESSOR_THRESHOLD_DB_MIN,
+      ratio: COMPRESSOR_RATIO_MAX,
+      attackSec: COMPRESSOR_ATTACK_SEC_MAX,
+      releaseSec: COMPRESSOR_RELEASE_SEC_MAX,
+    })
+  })
+
+  it("SET_MASTER_COMPRESSOR ignores non-finite fields", () => {
+    const s = base()
+    expect(
+      studioReducer(s, { type: "SET_MASTER_COMPRESSOR", ratio: NaN })
+    ).toBe(s)
+  })
+
+  it("SET_MASTER_LIMITER_CEILING updates limiterCeilingDb, clamped", () => {
+    const s1 = studioReducer(base(), {
+      type: "SET_MASTER_LIMITER_CEILING",
+      ceilingDb: -1,
+    })
+    expect(s1.masterBus.limiterCeilingDb).toBe(-1)
+    const s2 = studioReducer(base(), {
+      type: "SET_MASTER_LIMITER_CEILING",
+      ceilingDb: 10,
+    })
+    expect(s2.masterBus.limiterCeilingDb).toBe(LIMITER_CEILING_DB_MAX)
+    const s3 = studioReducer(base(), {
+      type: "SET_MASTER_LIMITER_CEILING",
+      ceilingDb: -100,
+    })
+    expect(s3.masterBus.limiterCeilingDb).toBe(LIMITER_CEILING_DB_MIN)
+  })
+
+  it("SET_MASTER_LIMITER_CEILING ignores non-finite input", () => {
+    const s = base()
+    expect(
+      studioReducer(s, { type: "SET_MASTER_LIMITER_CEILING", ceilingDb: NaN })
+    ).toBe(s)
   })
 })
