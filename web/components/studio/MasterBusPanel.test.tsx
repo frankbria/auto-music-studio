@@ -66,7 +66,9 @@ function Seed({
         analyserRight={analyserRight}
         limiter={limiter}
       />
-      <div data-testid="master-bus-probe">{JSON.stringify(state.masterBus)}</div>
+      <div data-testid="master-bus-probe">
+        {JSON.stringify(state.masterBus)}
+      </div>
     </>
   )
 }
@@ -79,8 +81,12 @@ describe("MasterBusPanel rendering", () => {
   it("renders the stereo meter", () => {
     stubRaf()
     render(<Harness />)
-    expect(screen.getByRole("meter", { name: "L channel level" })).toBeInTheDocument()
-    expect(screen.getByRole("meter", { name: "R channel level" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("meter", { name: "L channel level" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("meter", { name: "R channel level" })
+    ).toBeInTheDocument()
   })
 
   it("renders every fader at its default value and range", () => {
@@ -98,7 +104,10 @@ describe("MasterBusPanel rendering", () => {
       String(DEFAULT_MASTER_BUS.eq.lowShelf.freqHz)
     )
     const midQ = screen.getByRole("slider", { name: "Mid Q" })
-    expect(midQ).toHaveAttribute("aria-valuenow", String(DEFAULT_MASTER_BUS.eq.midPeak.q))
+    expect(midQ).toHaveAttribute(
+      "aria-valuenow",
+      String(DEFAULT_MASTER_BUS.eq.midPeak.q)
+    )
     const threshold = screen.getByRole("slider", { name: "Threshold" })
     expect(threshold).toHaveAttribute(
       "aria-valuenow",
@@ -135,7 +144,9 @@ describe("MasterBusPanel dispatch (US-19.5)", () => {
       DEFAULT_MASTER_BUS.eq.lowShelf.freqHz + 5
     )
     // Untouched sibling field on the same band stays at its default.
-    expect(probe().eq.lowShelf.gainDb).toBe(DEFAULT_MASTER_BUS.eq.lowShelf.gainDb)
+    expect(probe().eq.lowShelf.gainDb).toBe(
+      DEFAULT_MASTER_BUS.eq.lowShelf.gainDb
+    )
 
     const gain = screen.getByRole("slider", { name: "Low shelf gain" })
     gain.focus()
@@ -163,7 +174,9 @@ describe("MasterBusPanel dispatch (US-19.5)", () => {
     const q = screen.getByRole("slider", { name: "Mid Q" })
     q.focus()
     await user.keyboard("{ArrowUp}")
-    expect(probe().eq.midPeak.q).toBeCloseTo(DEFAULT_MASTER_BUS.eq.midPeak.q + 0.1)
+    expect(probe().eq.midPeak.q).toBeCloseTo(
+      DEFAULT_MASTER_BUS.eq.midPeak.q + 0.1
+    )
   })
 
   it("changes the high shelf frequency and gain", async () => {
@@ -194,7 +207,9 @@ describe("MasterBusPanel dispatch (US-19.5)", () => {
     const ratio = screen.getByRole("slider", { name: "Ratio" })
     ratio.focus()
     await user.keyboard("{ArrowUp}")
-    expect(probe().compressor.ratio).toBe(DEFAULT_MASTER_BUS.compressor.ratio + 1)
+    expect(probe().compressor.ratio).toBe(
+      DEFAULT_MASTER_BUS.compressor.ratio + 1
+    )
 
     const attack = screen.getByRole("slider", { name: "Attack" })
     attack.focus()

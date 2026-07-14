@@ -61,7 +61,7 @@ describe("master-bus defaults", () => {
 
 describe("clamp", () => {
   it("passes values within range through unchanged", () => {
-    expect(clamp(5, 0, 10)) .toBe(5)
+    expect(clamp(5, 0, 10)).toBe(5)
   })
   it("clamps below the minimum", () => {
     expect(clamp(-5, 0, 10)).toBe(0)
@@ -85,7 +85,9 @@ describe("master-bus param ranges", () => {
   })
 
   it("defines compressor param bounds", () => {
-    expect(COMPRESSOR_THRESHOLD_DB_MIN).toBeLessThan(COMPRESSOR_THRESHOLD_DB_MAX)
+    expect(COMPRESSOR_THRESHOLD_DB_MIN).toBeLessThan(
+      COMPRESSOR_THRESHOLD_DB_MAX
+    )
     expect(COMPRESSOR_RATIO_MIN).toBeLessThan(COMPRESSOR_RATIO_MAX)
     expect(COMPRESSOR_ATTACK_SEC_MIN).toBeLessThan(COMPRESSOR_ATTACK_SEC_MAX)
     expect(COMPRESSOR_RELEASE_SEC_MIN).toBeLessThan(COMPRESSOR_RELEASE_SEC_MAX)

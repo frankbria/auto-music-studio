@@ -5,7 +5,10 @@
  * directly for master volume rather than duplicated.
  */
 
-export { VOLUME_DB_MAX as MASTER_VOLUME_DB_MAX, VOLUME_DB_MIN as MASTER_VOLUME_DB_MIN } from "@/lib/track-audio"
+export {
+  VOLUME_DB_MAX as MASTER_VOLUME_DB_MAX,
+  VOLUME_DB_MIN as MASTER_VOLUME_DB_MIN,
+} from "@/lib/track-audio"
 
 export const EQ_GAIN_DB_MIN = -15
 export const EQ_GAIN_DB_MAX = 15

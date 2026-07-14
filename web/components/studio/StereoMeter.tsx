@@ -65,7 +65,10 @@ function ChannelBar({
         />
         <div
           data-role="peak-hold"
-          className={cn("absolute inset-x-0 h-0.5", levelColorClass(levels.holdDb))}
+          className={cn(
+            "absolute inset-x-0 h-0.5",
+            levelColorClass(levels.holdDb)
+          )}
           style={{ bottom: `${dbToPercent(levels.holdDb)}%` }}
         />
       </div>
@@ -94,7 +97,9 @@ export function StereoMeter({
 
   const leftHoldRef = useRef<PeakHoldState | null>(null)
   const rightHoldRef = useRef<PeakHoldState | null>(null)
-  const buffersRef = useRef(new WeakMap<AnalyserNode, Float32Array<ArrayBuffer>>())
+  const buffersRef = useRef(
+    new WeakMap<AnalyserNode, Float32Array<ArrayBuffer>>()
+  )
   const rafRef = useRef<number | null>(null)
 
   useEffect(() => {

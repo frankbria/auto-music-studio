@@ -150,7 +150,16 @@ function stubAudioContext(initialState: AudioContextState = "running") {
     }
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
-  return { sources, gains, panners, biquads, compressors, splitters, analysers, box }
+  return {
+    sources,
+    gains,
+    panners,
+    biquads,
+    compressors,
+    splitters,
+    analysers,
+    box,
+  }
 }
 
 function stubRaf() {
@@ -370,8 +379,20 @@ describe("useStudioPlayback scheduling", () => {
             { id: "t2", trackType: "ai" },
           ]}
           clips={[
-            { clipId: "c1", title: "A", duration: 4, startSec: 0, trackId: "t1" },
-            { clipId: "c2", title: "B", duration: 4, startSec: 0, trackId: "t2" },
+            {
+              clipId: "c1",
+              title: "A",
+              duration: 4,
+              startSec: 0,
+              trackId: "t1",
+            },
+            {
+              clipId: "c2",
+              title: "B",
+              duration: 4,
+              startSec: 0,
+              trackId: "t2",
+            },
           ]}
           autoplay
         />
@@ -929,16 +950,28 @@ describe("useStudioPlayback per-track controls (US-19.4)", () => {
     useStudioPlayback("tok")
     return (
       <>
-        <button onClick={() => dispatch({ type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -6 })}>
+        <button
+          onClick={() =>
+            dispatch({ type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -6 })
+          }
+        >
           duck t1
         </button>
-        <button onClick={() => dispatch({ type: "SET_TRACK_PAN", trackId: "t1", pan: -100 })}>
+        <button
+          onClick={() =>
+            dispatch({ type: "SET_TRACK_PAN", trackId: "t1", pan: -100 })
+          }
+        >
           pan t1 left
         </button>
-        <button onClick={() => dispatch({ type: "TOGGLE_TRACK_MUTE", trackId: "t1" })}>
+        <button
+          onClick={() => dispatch({ type: "TOGGLE_TRACK_MUTE", trackId: "t1" })}
+        >
           mute t1
         </button>
-        <button onClick={() => dispatch({ type: "TOGGLE_TRACK_SOLO", trackId: "t2" })}>
+        <button
+          onClick={() => dispatch({ type: "TOGGLE_TRACK_SOLO", trackId: "t2" })}
+        >
           solo t2
         </button>
       </>
@@ -1108,9 +1141,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
           {limiter.current ? "ready" : "null"}
         </div>
         <button
-          onClick={() =>
-            dispatch({ type: "SET_MASTER_VOLUME", volumeDb: -12 })
-          }
+          onClick={() => dispatch({ type: "SET_MASTER_VOLUME", volumeDb: -12 })}
         >
           set master volume
         </button>
@@ -1185,7 +1216,11 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     )
   }
 
-  const audio = { buffer: fakeBuffer(), peaks: new Float32Array(), duration: 100 }
+  const audio = {
+    buffer: fakeBuffer(),
+    peaks: new Float32Array(),
+    duration: 100,
+  }
 
   it("wires the master chain sum → EQ → compressor → limiter → masterVolume → destination + analysers", async () => {
     const { gains, biquads, compressors, splitters, analysers } =
@@ -1252,9 +1287,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
       }, [])
       useStudioPlayback("tok")
       return (
-        <button onClick={() => dispatch({ type: "SEEK", sec: 5 })}>
-          seek
-        </button>
+        <button onClick={() => dispatch({ type: "SEEK", sec: 5 })}>seek</button>
       )
     }
 

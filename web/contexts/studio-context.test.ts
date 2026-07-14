@@ -77,14 +77,22 @@ describe("studioReducer tracks", () => {
   })
 
   it("REMOVE_TRACK drops the matching track", () => {
-    let s = studioReducer(base(), { type: "ADD_TRACK", id: "t1", trackType: "ai" })
+    let s = studioReducer(base(), {
+      type: "ADD_TRACK",
+      id: "t1",
+      trackType: "ai",
+    })
     s = studioReducer(s, { type: "ADD_TRACK", id: "t2", trackType: "ai" })
     s = studioReducer(s, { type: "REMOVE_TRACK", trackId: "t1" })
     expect(s.tracks.map((t) => t.id)).toEqual(["t2"])
   })
 
   it("RENAME_TRACK updates the matching track's name", () => {
-    let s = studioReducer(base(), { type: "ADD_TRACK", id: "t1", trackType: "ai" })
+    let s = studioReducer(base(), {
+      type: "ADD_TRACK",
+      id: "t1",
+      trackType: "ai",
+    })
     s = studioReducer(s, { type: "ADD_TRACK", id: "t2", trackType: "ai" })
     s = studioReducer(s, { type: "RENAME_TRACK", trackId: "t1", name: "Drums" })
     expect(s.tracks[0].name).toBe("Drums")
@@ -380,7 +388,9 @@ describe("studioReducer project tempo (US-19.2)", () => {
     const s = studioReducer(base(), { type: "SET_BPM", bpm: 150 })
     expect(s.seekEpoch).toBe(1)
     // An ignored non-finite value must not force a pointless reschedule.
-    expect(studioReducer(base(), { type: "SET_BPM", bpm: NaN }).seekEpoch).toBe(0)
+    expect(studioReducer(base(), { type: "SET_BPM", bpm: NaN }).seekEpoch).toBe(
+      0
+    )
   })
 
   it("SET_BPM is a full no-op when the clamped value equals the current tempo", () => {
@@ -509,7 +519,11 @@ describe("studioReducer loop region (US-19.3)", () => {
 
 describe("studioReducer per-track controls (US-19.4)", () => {
   function withTrack(): StudioState {
-    return studioReducer(base(), { type: "ADD_TRACK", id: "t1", trackType: "ai" })
+    return studioReducer(base(), {
+      type: "ADD_TRACK",
+      id: "t1",
+      trackType: "ai",
+    })
   }
 
   it("ADD_TRACK defaults volume to 0 dB, pan centered, not muted, not soloed", () => {
@@ -529,19 +543,35 @@ describe("studioReducer per-track controls (US-19.4)", () => {
       volumeDb: -12,
     })
     expect(s.tracks[0].volumeDb).toBe(-12)
-    s = studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: 20 })
+    s = studioReducer(s, {
+      type: "SET_TRACK_VOLUME",
+      trackId: "t1",
+      volumeDb: 20,
+    })
     expect(s.tracks[0].volumeDb).toBe(6)
-    s = studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -99 })
+    s = studioReducer(s, {
+      type: "SET_TRACK_VOLUME",
+      trackId: "t1",
+      volumeDb: -99,
+    })
     expect(s.tracks[0].volumeDb).toBe(-60)
   })
 
   it("SET_TRACK_VOLUME ignores a non-finite value and unknown tracks", () => {
     const s = withTrack()
     expect(
-      studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: NaN })
+      studioReducer(s, {
+        type: "SET_TRACK_VOLUME",
+        trackId: "t1",
+        volumeDb: NaN,
+      })
     ).toBe(s)
     expect(
-      studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "nope", volumeDb: -6 })
+      studioReducer(s, {
+        type: "SET_TRACK_VOLUME",
+        trackId: "nope",
+        volumeDb: -6,
+      })
     ).toBe(s)
   })
 
@@ -563,9 +593,9 @@ describe("studioReducer per-track controls (US-19.4)", () => {
     expect(
       studioReducer(s, { type: "SET_TRACK_PAN", trackId: "t1", pan: NaN })
     ).toBe(s)
-    expect(studioReducer(s, { type: "SET_TRACK_PAN", trackId: "nope", pan: 10 })).toBe(
-      s
-    )
+    expect(
+      studioReducer(s, { type: "SET_TRACK_PAN", trackId: "nope", pan: 10 })
+    ).toBe(s)
   })
 
   it("TOGGLE_TRACK_MUTE flips only the targeted track", () => {
@@ -596,8 +626,12 @@ describe("studioReducer per-track controls (US-19.4)", () => {
 
   it("TOGGLE_TRACK_MUTE / TOGGLE_TRACK_SOLO on unknown tracks are no-ops", () => {
     const s = withTrack()
-    expect(studioReducer(s, { type: "TOGGLE_TRACK_MUTE", trackId: "nope" })).toBe(s)
-    expect(studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "nope" })).toBe(s)
+    expect(
+      studioReducer(s, { type: "TOGGLE_TRACK_MUTE", trackId: "nope" })
+    ).toBe(s)
+    expect(
+      studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "nope" })
+    ).toBe(s)
   })
 
   it("SET_TRACK_COLOR recolors only the targeted track", () => {
@@ -614,7 +648,11 @@ describe("studioReducer per-track controls (US-19.4)", () => {
     expect(s.tracks[0].color).toBe("#f43f5e")
     expect(s.tracks[1].color).toBe(TRACK_TYPES.loop.color)
     expect(
-      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "nope", color: "#000" })
+      studioReducer(s, {
+        type: "SET_TRACK_COLOR",
+        trackId: "nope",
+        color: "#000",
+      })
     ).toBe(s)
   })
 
@@ -721,9 +759,9 @@ describe("studioReducer masterBus (US-19.5)", () => {
 
   it("SET_MASTER_VOLUME ignores non-finite input", () => {
     const s = base()
-    expect(
-      studioReducer(s, { type: "SET_MASTER_VOLUME", volumeDb: NaN })
-    ).toBe(s)
+    expect(studioReducer(s, { type: "SET_MASTER_VOLUME", volumeDb: NaN })).toBe(
+      s
+    )
   })
 
   it("SET_MASTER_EQ updates only the targeted band, clamping freq/gain", () => {

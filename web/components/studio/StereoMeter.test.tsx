@@ -61,12 +61,8 @@ describe("StereoMeter", () => {
     const { getByRole } = render(
       <StereoMeter analyserLeft={left} analyserRight={right} />
     )
-    expect(
-      getByRole("meter", { name: "L channel level" })
-    ).toBeInTheDocument()
-    expect(
-      getByRole("meter", { name: "R channel level" })
-    ).toBeInTheDocument()
+    expect(getByRole("meter", { name: "L channel level" })).toBeInTheDocument()
+    expect(getByRole("meter", { name: "R channel level" })).toBeInTheDocument()
   })
 
   it("reflects a loud left-channel signal in its meter value, distinct from a silent right channel", () => {
@@ -125,9 +121,9 @@ describe("StereoMeter", () => {
     act(() => raf.tick(50)) // well within the hold window
     // The instantaneous peak dropped to silence, but the held marker must
     // still read near 0 dBFS.
-    const holdEl = getByRole("meter", { name: "L channel level" }).querySelector(
-      '[data-role="peak-hold"]'
-    )
+    const holdEl = getByRole("meter", {
+      name: "L channel level",
+    }).querySelector('[data-role="peak-hold"]')
     expect(holdEl).not.toBeNull()
     const holdPercent = parseFloat((holdEl as HTMLElement).style.bottom)
     expect(holdPercent).toBeGreaterThan(90)

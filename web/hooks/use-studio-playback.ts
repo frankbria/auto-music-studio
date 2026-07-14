@@ -12,7 +12,11 @@ import {
   type MasterBusState,
 } from "@/lib/master-bus"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
-import { dbToGain, effectiveTrackGain, panToAudioValue } from "@/lib/track-audio"
+import {
+  dbToGain,
+  effectiveTrackGain,
+  panToAudioValue,
+} from "@/lib/track-audio"
 import { placementPlaybackRate } from "@/lib/track-types"
 
 // Studio-owned playback engine (US-19.1). Schedules every placement across

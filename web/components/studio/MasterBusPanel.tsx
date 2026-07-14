@@ -163,7 +163,9 @@ export function MasterBusPanel({
         max={MASTER_VOLUME_DB_MAX}
         step={1}
         format={formatVolumeDb}
-        onValueChange={(v) => dispatch({ type: "SET_MASTER_VOLUME", volumeDb: v })}
+        onValueChange={(v) =>
+          dispatch({ type: "SET_MASTER_VOLUME", volumeDb: v })
+        }
       />
 
       <div className="flex flex-col gap-2">

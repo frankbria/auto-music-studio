@@ -245,7 +245,10 @@ export function studioReducer(
         muted: !t.muted,
       }))
     case "TOGGLE_TRACK_SOLO":
-      return updateTrack(state, action.trackId, (t) => ({ ...t, solo: !t.solo }))
+      return updateTrack(state, action.trackId, (t) => ({
+        ...t,
+        solo: !t.solo,
+      }))
     case "SET_TRACK_COLOR": {
       // Applied verbatim as CSS (border/background) — an empty value would
       // silently erase the track's visual identity.
@@ -417,7 +420,11 @@ export function studioReducer(
               lowShelf: {
                 freqHz:
                   freqHz !== undefined
-                    ? clamp(freqHz, EQ_LOW_SHELF_FREQ_MIN, EQ_LOW_SHELF_FREQ_MAX)
+                    ? clamp(
+                        freqHz,
+                        EQ_LOW_SHELF_FREQ_MIN,
+                        EQ_LOW_SHELF_FREQ_MAX
+                      )
                     : eq.lowShelf.freqHz,
                 gainDb:
                   gainDb !== undefined
@@ -444,7 +451,8 @@ export function studioReducer(
                   gainDb !== undefined
                     ? clamp(gainDb, EQ_GAIN_DB_MIN, EQ_GAIN_DB_MAX)
                     : eq.midPeak.gainDb,
-                q: q !== undefined ? clamp(q, EQ_Q_MIN, EQ_Q_MAX) : eq.midPeak.q,
+                q:
+                  q !== undefined ? clamp(q, EQ_Q_MIN, EQ_Q_MAX) : eq.midPeak.q,
               },
             },
           },
@@ -459,7 +467,11 @@ export function studioReducer(
             highShelf: {
               freqHz:
                 freqHz !== undefined
-                  ? clamp(freqHz, EQ_HIGH_SHELF_FREQ_MIN, EQ_HIGH_SHELF_FREQ_MAX)
+                  ? clamp(
+                      freqHz,
+                      EQ_HIGH_SHELF_FREQ_MIN,
+                      EQ_HIGH_SHELF_FREQ_MAX
+                    )
                   : eq.highShelf.freqHz,
               gainDb:
                 gainDb !== undefined

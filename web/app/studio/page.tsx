@@ -7,7 +7,9 @@ import { ZoomInAreaIcon, ZoomOutAreaIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
+import { MasterBusPanel } from "@/components/studio/MasterBusPanel"
 import { Playhead } from "@/components/studio/Playhead"
 import { RulerArea } from "@/components/studio/RulerArea"
 import { SnapControls } from "@/components/studio/SnapControls"
@@ -158,7 +160,6 @@ function StudioHeader() {
 function StudioTimeline() {
   const { state, dispatch } = useStudio()
   const { accessToken } = useAuth()
-  useStudioPlayback(accessToken)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Latest zoom read through a ref so the non-passive wheel listener (needed
@@ -222,20 +223,42 @@ function StudioTimeline() {
 
 function StudioView() {
   useSongPreload()
+  const { accessToken } = useAuth()
+  // The playback engine is owned by this shared ancestor, not by the
+  // timeline or the side panel individually — both StudioTimeline (via
+  // context/props) and the Master tab (via these refs) need to observe the
+  // one AudioContext it builds, and calling the hook twice would build two.
+  const { analyserLeft, analyserRight, limiter } =
+    useStudioPlayback(accessToken)
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
         <StudioHeader />
         <StudioTimeline />
       </div>
-      {/* Clip library, dragged onto lanes to add clips (US-19.1). Hidden below
-          lg to keep the timeline usable at the minimum supported width,
+      {/* Clip library / master bus, tabbed (US-19.1, US-19.5). Hidden below lg
+          to keep the timeline usable at the minimum supported width,
           mirroring the app shell's RightPanel (see app/create/page.tsx). */}
       <aside
-        aria-label="Clip library"
+        aria-label="Studio side panel"
         className="hidden w-80 shrink-0 flex-col border-l border-border p-4 lg:flex"
       >
-        <WorkspacePanel />
+        <Tabs defaultValue="workspace" className="h-full min-h-0">
+          <TabsList>
+            <TabsTrigger value="workspace">Workspace</TabsTrigger>
+            <TabsTrigger value="master">Master</TabsTrigger>
+          </TabsList>
+          <TabsContent value="workspace" className="min-h-0 overflow-y-auto">
+            <WorkspacePanel />
+          </TabsContent>
+          <TabsContent value="master" className="min-h-0 overflow-y-auto">
+            <MasterBusPanel
+              analyserLeft={analyserLeft}
+              analyserRight={analyserRight}
+              limiter={limiter}
+            />
+          </TabsContent>
+        </Tabs>
       </aside>
     </div>
   )

@@ -246,7 +246,9 @@ describe("StudioPage header", () => {
     const tick = () => screen.getByText("2.1").parentElement as HTMLElement
     expect(tick().style.left).toBe("200px")
 
-    const input = screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+    const input = screen.getByRole("spinbutton", {
+      name: "Project tempo (BPM)",
+    })
     await user.clear(input)
     await user.type(input, "60")
     await user.tab()
@@ -569,5 +571,52 @@ describe("StudioPage clip library aside", () => {
     stubStudioFetch()
     renderPage()
     expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+  })
+})
+
+describe("StudioPage master bus tab (US-19.5)", () => {
+  it("defaults to the Workspace tab, hiding the master bus controls", () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    renderPage()
+    expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("slider", { name: "Master volume" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("switching to the Master tab reveals the master bus controls and meter, hiding the workspace panel", async () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole("tab", { name: "Master" }))
+
+    expect(
+      screen.getByRole("slider", { name: "Master volume" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("meter", { name: "L channel level" })
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("workspace-panel")).not.toBeInTheDocument()
+  })
+
+  it("switching back to Workspace restores the clip library", async () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole("tab", { name: "Master" }))
+    await user.click(screen.getByRole("tab", { name: "Workspace" }))
+
+    expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("slider", { name: "Master volume" })
+    ).not.toBeInTheDocument()
   })
 })
