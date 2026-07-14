@@ -6,32 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { MasterBusPanel } from "./MasterBusPanel"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import { DEFAULT_MASTER_BUS } from "@/lib/master-bus"
-
-function stubRaf() {
-  let nextId = 1
-  const callbacks = new Map<number, FrameRequestCallback>()
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((cb: FrameRequestCallback) => {
-      const id = nextId++
-      callbacks.set(id, cb)
-      return id
-    })
-  )
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      callbacks.delete(id)
-    })
-  )
-  return {
-    tick(t: number) {
-      const due = [...callbacks.entries()]
-      callbacks.clear()
-      for (const [, cb] of due) cb(t)
-    },
-  }
-}
+import { stubRaf } from "@/test/raf-stub"
 
 afterEach(() => {
   vi.unstubAllGlobals()

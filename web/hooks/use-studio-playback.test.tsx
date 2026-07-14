@@ -15,6 +15,13 @@ import {
 } from "@/lib/master-bus"
 import { dbToGain } from "@/lib/track-audio"
 import type { TrackType } from "@/lib/track-types"
+import {
+  FakeAnalyserNode,
+  FakeBiquadFilterNode,
+  FakeChannelSplitterNode,
+  FakeDynamicsCompressorNode,
+} from "@/test/audio-stubs"
+import { stubRaf } from "@/test/raf-stub"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
   getClipAudioMock: vi.fn(),
@@ -39,38 +46,6 @@ class FakePannerNode {
   connect = vi.fn()
   disconnect = vi.fn()
   pan = { value: 0 }
-}
-
-class FakeBiquadFilterNode {
-  type: BiquadFilterType = "lowpass"
-  connect = vi.fn()
-  disconnect = vi.fn()
-  frequency = { value: 350 }
-  gain = { value: 0 }
-  Q = { value: 1 }
-}
-
-class FakeDynamicsCompressorNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-  threshold = { value: -24 }
-  knee = { value: 30 }
-  ratio = { value: 12 }
-  attack = { value: 0.003 }
-  release = { value: 0.25 }
-  reduction = 0
-}
-
-class FakeChannelSplitterNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-}
-
-class FakeAnalyserNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-  fftSize = 2048
-  getFloatTimeDomainData = vi.fn()
 }
 
 class FakeSourceNode {
@@ -162,33 +137,6 @@ function stubAudioContext(initialState: AudioContextState = "running") {
     splitters,
     analysers,
     box,
-  }
-}
-
-function stubRaf() {
-  let nextId = 1
-  const callbacks = new Map<number, FrameRequestCallback>()
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((cb: FrameRequestCallback) => {
-      const id = nextId++
-      callbacks.set(id, cb)
-      return id
-    })
-  )
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      callbacks.delete(id)
-    })
-  )
-  return {
-    /** Invoke every currently-scheduled rAF callback once, at time `t`. */
-    tick(t: number) {
-      const due = [...callbacks.entries()]
-      callbacks.clear()
-      for (const [, cb] of due) cb(t)
-    },
   }
 }
 

@@ -26,8 +26,15 @@ import StudioPage from "@/app/studio/page"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider } from "@/contexts/player-context"
 import { TRACK_STRIP_PX } from "@/lib/timeline"
+import {
+  FakeAnalyserNode,
+  FakeBiquadFilterNode,
+  FakeChannelSplitterNode,
+  FakeDynamicsCompressorNode,
+} from "@/test/audio-stubs"
+import { stubRaf } from "@/test/raf-stub"
 
-// --- Minimal Web Audio + rAF stand-ins (jsdom has neither), mirroring
+// --- Minimal Web Audio stand-ins (jsdom has none), mirroring
 // hooks/use-studio-playback.test.tsx's stubs. ---
 
 class FakeGainNode {
@@ -51,41 +58,6 @@ class FakeSourceNode {
   stop = vi.fn()
 }
 
-// US-19.5's master bus chain runs on every play, so this page-level harness
-// needs the same node stand-ins as hooks/use-studio-playback.test.tsx even
-// though this file doesn't assert on them directly.
-class FakeBiquadFilterNode {
-  type: BiquadFilterType = "lowpass"
-  connect = vi.fn()
-  disconnect = vi.fn()
-  frequency = { value: 350 }
-  gain = { value: 0 }
-  Q = { value: 1 }
-}
-
-class FakeDynamicsCompressorNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-  threshold = { value: -24 }
-  knee = { value: 30 }
-  ratio = { value: 12 }
-  attack = { value: 0.003 }
-  release = { value: 0.25 }
-  reduction = 0
-}
-
-class FakeChannelSplitterNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-}
-
-class FakeAnalyserNode {
-  connect = vi.fn()
-  disconnect = vi.fn()
-  fftSize = 2048
-  getFloatTimeDomainData = vi.fn()
-}
-
 function stubAudioContext() {
   const box: { instance: { currentTime: number } | null } = { instance: null }
   class FakeAudioContext {
@@ -105,33 +77,6 @@ function stubAudioContext() {
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
   return box
-}
-
-function stubRaf() {
-  let nextId = 1
-  const callbacks = new Map<number, FrameRequestCallback>()
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((cb: FrameRequestCallback) => {
-      const id = nextId++
-      callbacks.set(id, cb)
-      return id
-    })
-  )
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      callbacks.delete(id)
-    })
-  )
-  return {
-    /** Invoke every currently-scheduled rAF callback once, at time `t`. */
-    tick(t: number) {
-      const due = [...callbacks.entries()]
-      callbacks.clear()
-      for (const [, cb] of due) cb(t)
-    },
-  }
 }
 
 const authValue = {

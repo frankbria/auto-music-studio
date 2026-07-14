@@ -3,6 +3,7 @@ import { act, createRef } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { StereoMeter } from "./StereoMeter"
+import { stubRaf } from "@/test/raf-stub"
 
 /** A fake AnalyserNode whose `getFloatTimeDomainData` fills the caller's
  * buffer with a fixed sample window — swappable mid-test via `.samples`. */
@@ -19,32 +20,6 @@ function fakeAnalyser(initial: number[] = [0]) {
     } as unknown as AnalyserNode,
     setSamples(samples: number[]) {
       state.samples = samples
-    },
-  }
-}
-
-function stubRaf() {
-  let nextId = 1
-  const callbacks = new Map<number, FrameRequestCallback>()
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((cb: FrameRequestCallback) => {
-      const id = nextId++
-      callbacks.set(id, cb)
-      return id
-    })
-  )
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      callbacks.delete(id)
-    })
-  )
-  return {
-    tick(t: number) {
-      const due = [...callbacks.entries()]
-      callbacks.clear()
-      for (const [, cb] of due) cb(t)
     },
   }
 }
