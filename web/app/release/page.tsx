@@ -103,7 +103,13 @@ export function ReleasePageContent() {
       <h1 className="text-2xl font-semibold">Mastering &amp; Distribution</h1>
       <Tabs
         value={tab}
-        onValueChange={(next) => router.replace(`/release?tab=${next}`)}
+        onValueChange={(next) => {
+          // Preserve the rest of the query (notably ?clip= from Send to
+          // Mastering) — replacing with only ?tab= would drop the hand-off.
+          const params = new URLSearchParams(searchParams.toString())
+          params.set("tab", next)
+          router.replace(`/release?${params.toString()}`)
+        }}
       >
         <TabsList>
           <TabsTrigger value="mastering">Mastering</TabsTrigger>

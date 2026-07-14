@@ -12,7 +12,7 @@ import { useStudio } from "@/contexts/studio-context"
 import { useAuth } from "@/hooks/use-auth"
 import { useStudioExport } from "@/hooks/use-studio-export"
 import { useWorkspaces } from "@/hooks/use-workspaces"
-import { buildMixdownRequest } from "@/lib/studio-export"
+import { buildMixdownRequest, DEFAULT_STUDIO_PROJECT_NAME } from "@/lib/studio-export"
 import {
   COMPRESSOR_ATTACK_SEC_MAX,
   COMPRESSOR_ATTACK_SEC_MIN,
@@ -148,9 +148,6 @@ function LimiterIndicator({
   )
 }
 
-// Naming for the mastering hand-off's bounced clip / DAW bundle (no project
-// name field in the studio yet). Mirrors ExportMenu's default (US-19.6).
-const DEFAULT_PROJECT_NAME = "Studio Mix"
 
 /** "Send to Mastering" (US-19.6): bounce the arrangement to a WAV clip, then
  * navigate to the release/mastering page with that clip pre-selected. Uses the
@@ -179,7 +176,7 @@ function SendToMastering() {
     void exportMixdown(
       buildMixdownRequest(state, {
         workspaceId,
-        projectName: DEFAULT_PROJECT_NAME,
+        projectName: DEFAULT_STUDIO_PROJECT_NAME,
         format: "wav",
       }),
       accessToken

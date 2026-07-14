@@ -87,4 +87,18 @@ describe("ReleasePage", () => {
     await user.click(screen.getByRole("tab", { name: /distribute/i }))
     expect(replace).toHaveBeenCalledWith("/release?tab=distribute")
   })
+
+  it("keeps ?clip= when switching tabs", async () => {
+    searchParamsRef.current = new URLSearchParams("tab=mastering&clip=c1")
+    useClip.mockReturnValue({
+      clip: { id: "c1", title: "My Mixdown", duration: 65, generation_mode: "studio" },
+      loading: false,
+      error: false,
+      notFound: false,
+    })
+    const user = userEvent.setup()
+    render(<ReleasePageContent />)
+    await user.click(screen.getByRole("tab", { name: /distribute/i }))
+    expect(replace).toHaveBeenCalledWith("/release?tab=distribute&clip=c1")
+  })
 })

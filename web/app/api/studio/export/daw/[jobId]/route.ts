@@ -21,9 +21,12 @@ export async function GET(
   const { jobId } = await ctx.params
   let res: Response
   try {
+    // The backend buffers the whole ZIP before responding, so large bundles
+    // need more headroom than the 10s default.
     res = await fetchWithTimeout(
       `${BACKEND_URL}/api/v1/studio/export/daw/${encodeURIComponent(jobId)}`,
-      { headers: { authorization: auth } }
+      { headers: { authorization: auth } },
+      60_000
     )
   } catch {
     return NextResponse.json(

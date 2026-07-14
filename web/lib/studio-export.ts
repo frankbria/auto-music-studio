@@ -11,6 +11,10 @@ import { panToAudioValue } from "@/lib/track-audio"
 /** Output containers the mixdown job can render to (US-19.6). */
 export type StudioFormat = "wav" | "flac" | "mp3"
 
+/** The studio has no project-name field yet; a stable default names the mixdown
+ * clip and the DAW bundle's ZIP wherever an export is triggered. */
+export const DEFAULT_STUDIO_PROJECT_NAME = "Studio Mix"
+
 export type StudioPlacementPayload = {
   clip_id: string
   start_sec: number

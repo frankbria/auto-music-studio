@@ -24,6 +24,7 @@ import { useWorkspaces } from "@/hooks/use-workspaces"
 import {
   buildDawExportRequest,
   buildMixdownRequest,
+  DEFAULT_STUDIO_PROJECT_NAME,
   type StudioFormat,
 } from "@/lib/studio-export"
 
@@ -34,9 +35,6 @@ import {
 // polls, and (for DAW) downloads the bundle. Progress surfaces inline via a
 // role="status" region — the app has no toast layer.
 
-// The studio has no project-name field yet; a stable default names the mixdown
-// clip and the DAW bundle's ZIP.
-const DEFAULT_PROJECT_NAME = "Studio Mix"
 
 const FORMATS: { format: StudioFormat; label: string }[] = [
   { format: "wav", label: "WAV" },
@@ -66,7 +64,7 @@ export function ExportMenu({
 
   const opts = {
     workspaceId: workspaceId ?? "",
-    projectName: DEFAULT_PROJECT_NAME,
+    projectName: DEFAULT_STUDIO_PROJECT_NAME,
   }
 
   function runMixdown(format: StudioFormat) {
