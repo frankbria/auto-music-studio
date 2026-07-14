@@ -224,8 +224,8 @@ class TestAssembleStudioBundle:
             bpm=128.0,
             duration_seconds=12.5,
             tracks=[
-                StudioTrackFile(name="Drums", audio_path=drums, volume_db=-3.0, pan=0.0),
-                StudioTrackFile(name="Bass", audio_path=bass, volume_db=0.0, pan=-0.25),
+                StudioTrackFile(name="Drums", audio_path=drums, volume_db=-3.0, pan=0.0, muted=True),
+                StudioTrackFile(name="Bass", audio_path=bass, volume_db=0.0, pan=-0.25, solo=True),
             ],
             markers=[{"name": "Verse", "time_sec": 4.0}],
             output_path=out,
@@ -246,6 +246,9 @@ class TestAssembleStudioBundle:
         }
         assert {t["name"]: t["volume_db"] for t in meta["tracks"]} == {"Drums": -3.0, "Bass": 0.0}
         assert {t["name"]: t["pan"] for t in meta["tracks"]} == {"Drums": 0.0, "Bass": -0.25}
+        # Mute/solo intent rides along so a DAW can reconstruct the session state.
+        assert {t["name"]: t["muted"] for t in meta["tracks"]} == {"Drums": True, "Bass": False}
+        assert {t["name"]: t["solo"] for t in meta["tracks"]} == {"Drums": False, "Bass": True}
         assert meta["markers"] == [{"name": "Verse", "time": 4.0}]
 
     def test_duplicate_track_names_get_unique_files(self, tmp_path) -> None:

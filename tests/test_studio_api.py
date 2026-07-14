@@ -121,6 +121,14 @@ class TestRequestModels:
                 tracks=[{"name": "n", "track_type": "melody", "placements": [{"clip_id": "c", "start_sec": -1.0}]}],
             )
 
+    def test_start_sec_capped(self) -> None:
+        with pytest.raises(ValidationError):
+            StudioMixdownRequest(
+                workspace_id="w",
+                project_name="Song",
+                tracks=[{"name": "n", "track_type": "melody", "placements": [{"clip_id": "c", "start_sec": 1e9}]}],
+            )
+
     def test_empty_clip_id_rejected(self) -> None:
         with pytest.raises(ValidationError):
             StudioMixdownRequest(

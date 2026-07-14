@@ -163,6 +163,8 @@ def _assemble_bundle(tracks: list[dict], track_mixes: list[TrackMix], project_na
                 audio_path=stem_path,
                 volume_db=float(track.get("volume_db", 0.0)),
                 pan=float(track.get("pan", 0.0)),
+                muted=bool(track.get("muted", False)),
+                solo=bool(track.get("solo", False)),
             )
         )
     zip_local = tmp / "bundle.zip"

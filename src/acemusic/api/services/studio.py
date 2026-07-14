@@ -41,14 +41,17 @@ VOLUME_DB_MAX = 6.0
 # above any real studio session, low enough to bound a hostile payload.
 MAX_TRACKS = 64
 MAX_PLACEMENTS_PER_TRACK = 256
+# Timeline cap (4h): the mixer allocates a silent timeline spanning the latest
+# placement end, so an unbounded start_sec is a memory-exhaustion vector too.
+MAX_TIMELINE_SEC = 4 * 3600.0
 
 
 class PlacementRequest(BaseModel):
     """A clip placed on a track's timeline at ``start_sec``, optionally trimmed."""
 
     clip_id: str = Field(min_length=1)
-    start_sec: float = Field(ge=0.0)
-    duration_sec: float | None = Field(default=None, gt=0.0)
+    start_sec: float = Field(ge=0.0, le=MAX_TIMELINE_SEC)
+    duration_sec: float | None = Field(default=None, gt=0.0, le=MAX_TIMELINE_SEC)
 
 
 class TrackRequest(BaseModel):

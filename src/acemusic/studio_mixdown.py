@@ -65,6 +65,8 @@ class StudioTrackFile:
     audio_path: Path | str
     volume_db: float
     pan: float
+    muted: bool = False
+    solo: bool = False
 
 
 def _load_segment(path: Path | str):
@@ -147,9 +149,9 @@ def mixdown_arrangement(
 
     for track in _audible_tracks(tracks):
         rendered = _overlay_placements(_silent(timeline_ms), track.placements)
-        if track.volume_db:
+        if track.volume_db != 0.0:
             rendered = rendered + track.volume_db
-        if track.pan:
+        if track.pan != 0.0:
             rendered = rendered.pan(max(-1.0, min(1.0, track.pan)))
         master = master.overlay(rendered)
 
@@ -236,7 +238,8 @@ def assemble_studio_bundle(
 
     Lays out ``<Slug>_Export/audio/<track>.wav`` for each stem plus a
     ``project.json`` carrying ``project_name``, ``bpm``, ``duration_seconds``, the
-    per-track ``{name, file, volume_db, pan}`` and the ``{name, time}`` markers.
+    per-track ``{name, file, volume_db, pan, muted, solo}`` and the ``{name, time}``
+    markers.
     Track stems are assumed to be WAV already (copied verbatim, not transcoded).
     ``markers`` entries use ``time_sec`` (the request shape); they are written as
     ``time`` via :class:`~acemusic.daw_export.Marker`.
@@ -265,6 +268,8 @@ def assemble_studio_bundle(
                     "file": f"audio/{filename}",
                     "volume_db": track.volume_db,
                     "pan": track.pan,
+                    "muted": track.muted,
+                    "solo": track.solo,
                 }
             )
 
