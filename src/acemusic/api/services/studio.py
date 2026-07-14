@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from beanie import PydanticObjectId
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..models import Job
 from .jobs import create_job
@@ -35,6 +35,12 @@ STUDIO_DAW_EXPORT_JOB_TYPE = "studio_daw_export"
 # and pan is a normalised -1 (hard left) .. +1 (hard right).
 VOLUME_DB_MIN = -60.0
 VOLUME_DB_MAX = 6.0
+
+# Arrangement size caps: the worker downloads every referenced clip to local disk
+# before mixing, so an unbounded request is a disk/memory exhaustion vector. Far
+# above any real studio session, low enough to bound a hostile payload.
+MAX_TRACKS = 64
+MAX_PLACEMENTS_PER_TRACK = 256
 
 
 class PlacementRequest(BaseModel):
@@ -54,7 +60,7 @@ class TrackRequest(BaseModel):
     pan: float = Field(default=0.0, ge=-1.0, le=1.0)
     muted: bool = False
     solo: bool = False
-    placements: list[PlacementRequest] = Field(default_factory=list)
+    placements: list[PlacementRequest] = Field(default_factory=list, max_length=MAX_PLACEMENTS_PER_TRACK)
 
 
 class MarkerRequest(BaseModel):
@@ -64,25 +70,35 @@ class MarkerRequest(BaseModel):
     time_sec: float = Field(ge=0.0)
 
 
-class StudioMixdownRequest(BaseModel):
+class StudioArrangementRequest(BaseModel):
+    """The arrangement payload shared by mixdown and DAW export.
+
+    Rejects arrangements with nothing to export: the UI disables its buttons on an
+    empty timeline, but a direct API call would otherwise 202 and "succeed" with a
+    zero-length file.
+    """
+
+    workspace_id: str
+    project_name: str = Field(min_length=1)
+    bpm: float | None = Field(default=None, gt=0.0)
+    markers: list[MarkerRequest] = Field(default_factory=list)
+    tracks: list[TrackRequest] = Field(min_length=1, max_length=MAX_TRACKS)
+
+    @model_validator(mode="after")
+    def _require_placements(self) -> "StudioArrangementRequest":
+        if not any(track.placements for track in self.tracks):
+            raise ValueError("arrangement has no clip placements to export")
+        return self
+
+
+class StudioMixdownRequest(StudioArrangementRequest):
     """A studio mixdown: the arrangement plus the delivery ``format``."""
 
-    workspace_id: str
-    project_name: str = Field(min_length=1)
     format: Literal["wav", "flac", "mp3"] = "wav"
-    bpm: float | None = Field(default=None, gt=0.0)
-    markers: list[MarkerRequest] = Field(default_factory=list)
-    tracks: list[TrackRequest] = Field(default_factory=list)
 
 
-class StudioDawExportRequest(BaseModel):
+class StudioDawExportRequest(StudioArrangementRequest):
     """A DAW export: the same arrangement, minus ``format`` (stems are always WAV)."""
-
-    workspace_id: str
-    project_name: str = Field(min_length=1)
-    bpm: float | None = Field(default=None, gt=0.0)
-    markers: list[MarkerRequest] = Field(default_factory=list)
-    tracks: list[TrackRequest] = Field(default_factory=list)
 
 
 def clip_ids_in(tracks: list[TrackRequest]) -> list[str]:

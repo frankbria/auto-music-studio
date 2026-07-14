@@ -218,15 +218,22 @@ class TestDawExportHandler:
             assert f"{root}/audio/bass.wav" in names
             meta = json.loads(zf.read(f"{root}/project.json"))
             melody_stem = zf.read(f"{root}/audio/melody.wav")
+            bass_stem = zf.read(f"{root}/audio/bass.wav")
         assert meta["project_name"] == "DAW Song"
         assert meta["bpm"] == 90.0
         # Per-track gain/pan recorded in metadata (not baked into the stem).
         assert {t["name"]: t["volume_db"] for t in meta["tracks"]} == {"Melody": -6.0, "Bass": 0.0}
         assert {t["name"]: t["pan"] for t in meta["tracks"]} == {"Melody": 0.5, "Bass": 0.0}
         assert meta["markers"] == [{"name": "Intro", "time": 0.0}]
-        # Stems are silence-padded to the full arrangement length (~2s).
+        # Stems are silence-padded to the full arrangement length (~2s), decodable,
+        # and carry real signal where their placements sit.
         audio, sr = sf.read(io.BytesIO(melody_stem), always_2d=True)
         assert len(audio) / sr == pytest.approx(2.0, abs=0.1)
+        assert np.sqrt(np.mean(np.square(audio[: sr // 2]))) > 1e-3  # melody sounds from t=0
+        bass_audio, bass_sr = sf.read(io.BytesIO(bass_stem), always_2d=True)
+        assert len(bass_audio) / bass_sr == pytest.approx(2.0, abs=0.1)
+        assert np.sqrt(np.mean(np.square(bass_audio[: bass_sr // 2]))) < 1e-3  # bass placed at 1s: leading silence
+        assert np.sqrt(np.mean(np.square(bass_audio[bass_sr + bass_sr // 4 :]))) > 1e-3  # ...then audible
 
     async def test_progress_reaches_uploading(self, storage) -> None:
         user, workspace, clips = await _setup(storage, "studio-task-daw-progress@example.com", n_clips=1)

@@ -19,6 +19,8 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
 from acemusic.api.services import users as user_service
 from acemusic.api.services.studio import (
+    MAX_PLACEMENTS_PER_TRACK,
+    MAX_TRACKS,
     STUDIO_DAW_EXPORT_JOB_TYPE,
     STUDIO_MIXDOWN_JOB_TYPE,
     StudioDawExportRequest,
@@ -53,18 +55,49 @@ def _track(clip_id: str, **overrides) -> dict:
 
 class TestRequestModels:
     def test_mixdown_defaults(self) -> None:
-        req = StudioMixdownRequest(workspace_id="w", project_name="Song")
+        req = StudioMixdownRequest(workspace_id="w", project_name="Song", tracks=[_track("c")])
         assert req.format == "wav"
         assert req.bpm is None
-        assert req.tracks == []
+        assert len(req.tracks) == 1
 
     def test_mixdown_rejects_unknown_format(self) -> None:
         with pytest.raises(ValidationError):
-            StudioMixdownRequest(workspace_id="w", project_name="Song", format="ogg")
+            StudioMixdownRequest(workspace_id="w", project_name="Song", format="ogg", tracks=[_track("c")])
 
     def test_mixdown_rejects_blank_project_name(self) -> None:
         with pytest.raises(ValidationError):
-            StudioMixdownRequest(workspace_id="w", project_name="")
+            StudioMixdownRequest(workspace_id="w", project_name="", tracks=[_track("c")])
+
+    def test_empty_tracks_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            StudioMixdownRequest(workspace_id="w", project_name="Song", tracks=[])
+
+    def test_tracks_without_placements_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="no clip placements"):
+            StudioDawExportRequest(
+                workspace_id="w",
+                project_name="Song",
+                tracks=[_track("c", placements=[]), _track("c", placements=[])],
+            )
+
+    def test_track_count_capped(self) -> None:
+        with pytest.raises(ValidationError):
+            StudioMixdownRequest(
+                workspace_id="w",
+                project_name="Song",
+                tracks=[_track("c") for _ in range(MAX_TRACKS + 1)],
+            )
+
+    def test_placement_count_capped(self) -> None:
+        placements = [
+            {"clip_id": "c", "start_sec": float(i), "duration_sec": None} for i in range(MAX_PLACEMENTS_PER_TRACK + 1)
+        ]
+        with pytest.raises(ValidationError):
+            StudioMixdownRequest(
+                workspace_id="w",
+                project_name="Song",
+                tracks=[_track("c", placements=placements)],
+            )
 
     @pytest.mark.parametrize("bad", [-61.0, 7.0])
     def test_volume_db_bounds(self, bad: float) -> None:
