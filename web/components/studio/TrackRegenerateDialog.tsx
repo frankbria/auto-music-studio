@@ -55,6 +55,7 @@ export function TrackRegenerateDialog({
   // Gates concurrent add attempts (e.g. a double-clicked Retry) — addedRef
   // only guards the effect path.
   const addingRef = useRef(false)
+  const addAbortRef = useRef<AbortController | null>(null)
 
   const busy = gen.phase === "submitting" || gen.phase === "polling"
 
@@ -63,8 +64,13 @@ export function TrackRegenerateDialog({
     if (!token || !trimmed || busy) return
     // A fresh generation gets a fresh add lifecycle — without this, a failed
     // add on a previous generation leaves addedRef tripped and the new
-    // success would never auto-add its clip.
+    // success would never auto-add its clip. A previous add fetch still in
+    // flight (e.g. hung) is aborted so it can neither hold addingRef forever
+    // nor add its outdated clip after this generation takes over.
+    addAbortRef.current?.abort()
+    addAbortRef.current = null
     addedRef.current = false
+    addingRef.current = false
     setAddFailed(false)
     if (track.trackType === "loop") {
       void submit(
@@ -106,14 +112,18 @@ export function TrackRegenerateDialog({
   function addGeneratedClip(clipId: string | undefined) {
     if (!token || !clipId || addingRef.current) return
     addingRef.current = true
+    const controller = new AbortController()
+    addAbortRef.current = controller
     fetch(`/api/clips/${encodeURIComponent(clipId)}`, {
       headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal,
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`clip fetch ${res.status}`)
         return (await res.json()) as Clip
       })
       .then((clip) => {
+        if (controller.signal.aborted) return
         // ADD_CLIP silently rejects a clip whose inferred type mismatches the
         // track (US-19.2). Unreachable via this dialog's own requests, but if
         // it ever happened the dialog would close over a spent credit and a
@@ -134,9 +144,13 @@ export function TrackRegenerateDialog({
         })
         onClose()
       })
-      .catch(() => setAddFailed(true))
+      .catch(() => {
+        if (!controller.signal.aborted) setAddFailed(true)
+      })
       .finally(() => {
-        addingRef.current = false
+        // An aborted add's lifecycle was already reset by handleGenerate —
+        // don't clobber the flag of the add that superseded it.
+        if (!controller.signal.aborted) addingRef.current = false
       })
   }
   useEffect(() => {

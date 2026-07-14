@@ -424,6 +424,78 @@ describe("TrackRegenerateDialog", () => {
     )
   })
 
+  it("auto-adds a second generation's clip even when the first add fetch is hung", async () => {
+    // addingRef must be freed (and the stale fetch aborted) when a new
+    // generation is submitted — otherwise the second clip's auto-add is
+    // silently dropped and the dialog hangs on "Adding clip…" with no Retry.
+    let generation = 0
+    const aborted: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === "/api/generate" && init?.method === "POST") {
+          generation += 1
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ job_id: `j${generation}`, estimated_time_seconds: 5 }),
+              { status: 202 }
+            )
+          )
+        }
+        if (url.startsWith("/api/jobs/j")) {
+          const clip = url.includes("j1") ? "hung" : "good"
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ status: "completed", clip_ids: [clip] }),
+              { status: 200 }
+            )
+          )
+        }
+        if (url === "/api/clips/hung") {
+          // A stalled connection: settles only if the caller aborts it.
+          return new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              aborted.push(url)
+              reject(new DOMException("aborted", "AbortError"))
+            })
+          })
+        }
+        if (url === "/api/clips/good") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: "good",
+                title: "Second try",
+                duration: 6,
+                bpm: null,
+                generation_mode: "song",
+              }),
+              { status: 200 }
+            )
+          )
+        }
+        return Promise.resolve(new Response("{}", { status: 404 }))
+      })
+    )
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    await user.type(screen.getByRole("textbox", { name: "Prompt" }), "anything")
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+    // First generation succeeded; its clip-add fetch is hung.
+    await screen.findByText(/adding clip to the track/i)
+
+    await user.click(screen.getByRole("button", { name: "Generate" }))
+    await waitFor(() =>
+      expect(clipsProbe()).toEqual([{ clipId: "good", startSec: 0 }])
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    )
+    expect(aborted).toEqual(["/api/clips/hung"])
+  })
+
   it("disables Generate until a prompt is entered", () => {
     stubFetch([])
     render(<Harness />)
