@@ -1,13 +1,24 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, type RefObject } from "react"
 
 import { usePlayer } from "@/contexts/player-context"
 import { useStudio } from "@/contexts/studio-context"
 import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
+import {
+  LIMITER_ATTACK_SEC,
+  LIMITER_KNEE_DB,
+  LIMITER_RELEASE_SEC,
+  LIMITER_RATIO,
+  type MasterBusState,
+} from "@/lib/master-bus"
 import { computePlaybackSchedule, type Placement } from "@/lib/timeline"
-import { effectiveTrackGain, panToAudioValue } from "@/lib/track-audio"
+import {
+  dbToGain,
+  effectiveTrackGain,
+  panToAudioValue,
+} from "@/lib/track-audio"
 import { placementPlaybackRate } from "@/lib/track-types"
 
 // Studio-owned playback engine (US-19.1). Schedules every placement across
@@ -37,7 +48,46 @@ type ActiveSource = { source: AudioBufferSourceNode }
 /** One track's live mixer chain: source → gain → panner → master (US-19.4). */
 type TrackNodes = { gain: GainNode; panner: StereoPannerNode }
 
-export function useStudioPlayback(token: string | null): void {
+/** The master bus's own post-sum processing chain (US-19.5): sum → EQ →
+ * compressor → masterVolume → limiter → [destination, metering splitter]. */
+type MasterBusNodes = {
+  lowShelf: BiquadFilterNode
+  midPeak: BiquadFilterNode
+  highShelf: BiquadFilterNode
+  compressor: DynamicsCompressorNode
+  limiter: DynamicsCompressorNode
+  masterVolume: GainNode
+}
+
+function applyMasterBusParams(nodes: MasterBusNodes, bus: MasterBusState) {
+  nodes.lowShelf.frequency.value = bus.eq.lowShelf.freqHz
+  nodes.lowShelf.gain.value = bus.eq.lowShelf.gainDb
+  nodes.midPeak.frequency.value = bus.eq.midPeak.freqHz
+  nodes.midPeak.gain.value = bus.eq.midPeak.gainDb
+  nodes.midPeak.Q.value = bus.eq.midPeak.q
+  nodes.highShelf.frequency.value = bus.eq.highShelf.freqHz
+  nodes.highShelf.gain.value = bus.eq.highShelf.gainDb
+  nodes.compressor.threshold.value = bus.compressor.thresholdDb
+  nodes.compressor.ratio.value = bus.compressor.ratio
+  nodes.compressor.attack.value = bus.compressor.attackSec
+  nodes.compressor.release.value = bus.compressor.releaseSec
+  // The limiter's ratio/attack are fixed (a high-ratio DynamicsCompressorNode
+  // standing in for a true limiter); only its ceiling is user-adjustable,
+  // modeled as the node's threshold.
+  nodes.limiter.threshold.value = bus.limiterCeilingDb
+  nodes.masterVolume.gain.value = dbToGain(bus.masterVolumeDb)
+}
+
+export type MasterBusRefs = {
+  analyserLeft: RefObject<AnalyserNode | null>
+  analyserRight: RefObject<AnalyserNode | null>
+  /** Exposed for the limiter-active indicator, which reads the live
+   * `.reduction` value — an audio-domain measurement with no state-slice
+   * equivalent, same rationale as the analysers. */
+  limiter: RefObject<DynamicsCompressorNode | null>
+}
+
+export function useStudioPlayback(token: string | null): MasterBusRefs {
   const { state, dispatch } = useStudio()
   const { dispatch: playerDispatch } = usePlayer()
 
@@ -85,16 +135,88 @@ export function useStudioPlayback(token: string | null): void {
     }
   }, [state.tracks])
 
+  // The master bus's own chain (US-19.5), built once per AudioContext (see
+  // ensureMasterChain below) — unlike per-track nodes, it survives play/pause
+  // cycles rather than being rebuilt on every run.
+  const masterBusNodesRef = useRef<MasterBusNodes | null>(null)
+  const analyserLeftRef = useRef<AnalyserNode | null>(null)
+  const analyserRightRef = useRef<AnalyserNode | null>(null)
+  const limiterRef = useRef<DynamicsCompressorNode | null>(null)
+  // Mirrors state.masterBus (like tracksRef mirrors state.tracks) so a chain
+  // built after the user has already tweaked settings still starts in tune.
+  const masterBusValuesRef = useRef(state.masterBus)
+  useEffect(() => {
+    masterBusValuesRef.current = state.masterBus
+    const nodes = masterBusNodesRef.current
+    if (!nodes) return
+    applyMasterBusParams(nodes, state.masterBus)
+  }, [state.masterBus])
+
   function ensureContext(): AudioContext {
     if (!ctxRef.current) {
       const Ctx = getAudioContextCtor()
       const ctx = new Ctx()
       ctxRef.current = ctx
       const gain = ctx.createGain()
-      gain.connect(ctx.destination)
       masterGainRef.current = gain
     }
     return ctxRef.current
+  }
+
+  /** Builds the master bus's post-sum chain the first time playback runs,
+   * splicing it between the summing gain and the destination — see the
+   * per-track gain-creation loop below for why this must run *after* it
+   * (index ordering the wiring tests key off). Idempotent on every later run. */
+  function ensureMasterChain(ctx: AudioContext) {
+    if (masterBusNodesRef.current) return
+    const sum = masterGainRef.current!
+
+    const lowShelf = ctx.createBiquadFilter()
+    lowShelf.type = "lowshelf"
+    const midPeak = ctx.createBiquadFilter()
+    midPeak.type = "peaking"
+    const highShelf = ctx.createBiquadFilter()
+    highShelf.type = "highshelf"
+    const compressor = ctx.createDynamicsCompressor()
+    const limiter = ctx.createDynamicsCompressor()
+    limiter.ratio.value = LIMITER_RATIO
+    limiter.attack.value = LIMITER_ATTACK_SEC
+    limiter.release.value = LIMITER_RELEASE_SEC
+    limiter.knee.value = LIMITER_KNEE_DB
+    const masterVolume = ctx.createGain()
+    const splitter = ctx.createChannelSplitter(2)
+    const analyserLeft = ctx.createAnalyser()
+    const analyserRight = ctx.createAnalyser()
+
+    // Master volume sits between compressor and limiter: after the compressor
+    // so the fader doesn't change compression amount, but before the limiter
+    // so the configured ceiling is a true output cap even at +6 dB boost.
+    // The metering splitter taps the limiter's output — the actual signal
+    // reaching the destination.
+    sum.connect(lowShelf)
+    lowShelf.connect(midPeak)
+    midPeak.connect(highShelf)
+    highShelf.connect(compressor)
+    compressor.connect(masterVolume)
+    masterVolume.connect(limiter)
+    limiter.connect(ctx.destination)
+    limiter.connect(splitter)
+    splitter.connect(analyserLeft, 0)
+    splitter.connect(analyserRight, 1)
+
+    const nodes: MasterBusNodes = {
+      lowShelf,
+      midPeak,
+      highShelf,
+      compressor,
+      limiter,
+      masterVolume,
+    }
+    masterBusNodesRef.current = nodes
+    analyserLeftRef.current = analyserLeft
+    analyserRightRef.current = analyserRight
+    limiterRef.current = limiter
+    applyMasterBusParams(nodes, masterBusValuesRef.current)
   }
 
   function stopAllSources() {
@@ -204,6 +326,11 @@ export function useStudioPlayback(token: string | null): void {
           trackNodesRef.current.set(scheduled.id, { gain, panner })
         }
 
+        // Built after the per-track loop above (see ensureMasterChain's own
+        // note) — its GainNode must not shift indices per-track code already
+        // assumes for the track chains it just created.
+        ensureMasterChain(ctx)
+
         for (const item of schedule) {
           const buffer = bufferByClipId.get(item.clipId)
           if (!buffer) continue
@@ -271,4 +398,13 @@ export function useStudioPlayback(token: string | null): void {
       void ctxRef.current?.close()
     }
   }, [])
+
+  // The ref objects (not their `.current` values) are stable across
+  // renders, so this literal's identity churning each render is harmless —
+  // a consumer's effect can depend on the individual refs directly.
+  return {
+    analyserLeft: analyserLeftRef,
+    analyserRight: analyserRightRef,
+    limiter: limiterRef,
+  }
 }

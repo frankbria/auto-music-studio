@@ -26,8 +26,15 @@ import StudioPage from "@/app/studio/page"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider } from "@/contexts/player-context"
 import { TRACK_STRIP_PX } from "@/lib/timeline"
+import {
+  FakeAnalyserNode,
+  FakeBiquadFilterNode,
+  FakeChannelSplitterNode,
+  FakeDynamicsCompressorNode,
+} from "@/test/audio-stubs"
+import { stubRaf } from "@/test/raf-stub"
 
-// --- Minimal Web Audio + rAF stand-ins (jsdom has neither), mirroring
+// --- Minimal Web Audio stand-ins (jsdom has none), mirroring
 // hooks/use-studio-playback.test.tsx's stubs. ---
 
 class FakeGainNode {
@@ -59,6 +66,10 @@ function stubAudioContext() {
     createGain = vi.fn(() => new FakeGainNode())
     createStereoPanner = vi.fn(() => new FakePannerNode())
     createBufferSource = vi.fn(() => new FakeSourceNode())
+    createBiquadFilter = vi.fn(() => new FakeBiquadFilterNode())
+    createDynamicsCompressor = vi.fn(() => new FakeDynamicsCompressorNode())
+    createChannelSplitter = vi.fn(() => new FakeChannelSplitterNode())
+    createAnalyser = vi.fn(() => new FakeAnalyserNode())
     close = vi.fn().mockResolvedValue(undefined)
     constructor() {
       box.instance = this
@@ -66,33 +77,6 @@ function stubAudioContext() {
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
   return box
-}
-
-function stubRaf() {
-  let nextId = 1
-  const callbacks = new Map<number, FrameRequestCallback>()
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((cb: FrameRequestCallback) => {
-      const id = nextId++
-      callbacks.set(id, cb)
-      return id
-    })
-  )
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      callbacks.delete(id)
-    })
-  )
-  return {
-    /** Invoke every currently-scheduled rAF callback once, at time `t`. */
-    tick(t: number) {
-      const due = [...callbacks.entries()]
-      callbacks.clear()
-      for (const [, cb] of due) cb(t)
-    },
-  }
 }
 
 const authValue = {
@@ -207,7 +191,9 @@ describe("StudioPage header", () => {
     const tick = () => screen.getByText("2.1").parentElement as HTMLElement
     expect(tick().style.left).toBe("200px")
 
-    const input = screen.getByRole("spinbutton", { name: "Project tempo (BPM)" })
+    const input = screen.getByRole("spinbutton", {
+      name: "Project tempo (BPM)",
+    })
     await user.clear(input)
     await user.type(input, "60")
     await user.tab()
@@ -530,5 +516,52 @@ describe("StudioPage clip library aside", () => {
     stubStudioFetch()
     renderPage()
     expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+  })
+})
+
+describe("StudioPage master bus tab (US-19.5)", () => {
+  it("defaults to the Workspace tab, hiding the master bus controls", () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    renderPage()
+    expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("slider", { name: "Master volume" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("switching to the Master tab reveals the master bus controls and meter, hiding the workspace panel", async () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole("tab", { name: "Master" }))
+
+    expect(
+      screen.getByRole("slider", { name: "Master volume" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("meter", { name: "L channel level" })
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("workspace-panel")).not.toBeInTheDocument()
+  })
+
+  it("switching back to Workspace restores the clip library", async () => {
+    stubAudioContext()
+    stubRaf()
+    stubStudioFetch()
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole("tab", { name: "Master" }))
+    await user.click(screen.getByRole("tab", { name: "Workspace" }))
+
+    expect(screen.getByTestId("workspace-panel")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("slider", { name: "Master volume" })
+    ).not.toBeInTheDocument()
   })
 })
