@@ -28,7 +28,6 @@ from typing import Any
 
 from beanie import PydanticObjectId
 
-from acemusic.audio import export_audio
 from acemusic.storage import StorageBackend
 from acemusic.studio_mixdown import (
     PlacementMix,
@@ -36,6 +35,7 @@ from acemusic.studio_mixdown import (
     TrackMix,
     arrangement_duration,
     assemble_studio_bundle,
+    export_mix,
     mixdown_arrangement,
     render_track_timeline,
 )
@@ -110,7 +110,7 @@ def _render_mixdown(track_mixes: list[TrackMix], fmt: str, tmp: Path) -> tuple[b
     raw = tmp / "mix.wav"
     mixdown_arrangement(track_mixes, output_path=raw, total_duration_sec=duration)
     final = tmp / f"mix.{fmt}"
-    export_audio(raw, final, fmt)
+    export_mix(raw, final, fmt)
     return final.read_bytes(), duration
 
 

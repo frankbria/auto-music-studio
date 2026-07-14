@@ -16,8 +16,9 @@ mute and solo. This module turns that arrangement into audio two ways:
 The pydub overlay idiom mirrors :func:`acemusic.audio.combine_sample`: segments
 are normalised to a 48 kHz stereo timeline and positioned by millisecond offset.
 WAV in / WAV out uses the stdlib ``wave`` module (no ffmpeg), so the mix and stem
-renders are CI-safe; converting the mix to its final delivery format (pcm_s24le
-WAV / FLAC / MP3) is left to :func:`acemusic.audio.export_audio` in the worker.
+renders are CI-safe; :func:`export_mix` converts the mix to its delivery format
+(24-bit WAV and FLAC via libsndfile — still no ffmpeg — MP3 via
+:func:`acemusic.audio.export_audio`).
 """
 
 from __future__ import annotations
@@ -176,6 +177,29 @@ def render_track_timeline(
     stem = stem.set_frame_rate(sample_rate).set_channels(MIX_CHANNELS)
     stem.export(str(output_path), format="wav")
     return output_path
+
+
+def export_mix(raw_wav: Path | str, dest_path: Path | str, fmt: str) -> Path:
+    """Convert the rendered mix WAV to its delivery format.
+
+    ``wav`` (48 kHz / 24-bit PCM) and ``flac`` go through libsndfile so the two
+    primary formats work on hosts without ffmpeg (CI included); only ``mp3`` needs
+    :func:`acemusic.audio.export_audio`'s ffmpeg pipeline.
+    """
+    import soundfile as sf
+
+    dest_path = Path(dest_path)
+    if fmt == "wav":
+        data, sr = sf.read(str(raw_wav), always_2d=True)
+        sf.write(str(dest_path), data, sr, subtype="PCM_24")
+    elif fmt == "flac":
+        data, sr = sf.read(str(raw_wav), always_2d=True)
+        sf.write(str(dest_path), data, sr, format="FLAC")
+    else:
+        from acemusic.audio import export_audio
+
+        export_audio(raw_wav, dest_path, fmt)
+    return dest_path
 
 
 def _project_slug(project_name: str) -> str:

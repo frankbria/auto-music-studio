@@ -2,10 +2,10 @@
 
 These are pure and CI-safe: the mixdown/stem-render helpers take WAV in and write
 WAV out (pydub uses the stdlib ``wave`` module for WAV, so no ffmpeg is needed),
-and ``assemble_studio_bundle`` only copies already-WAV stems and writes JSON. The
-final-format conversion (pcm_s24le WAV / FLAC / MP3 via ``export_audio``) and the
-job handlers that drive it are exercised in ``tests/test_studio_tasks.py`` under
-the ``integration`` marker.
+and ``assemble_studio_bundle`` only copies already-WAV stems and writes JSON.
+``export_mix``'s WAV/FLAC delivery goes through libsndfile so it's CI-safe too;
+only its MP3 branch needs ffmpeg. The job handlers that drive all of this are
+exercised in ``tests/test_studio_tasks.py`` under the ``integration`` marker.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from acemusic.studio_mixdown import (
     TrackMix,
     arrangement_duration,
     assemble_studio_bundle,
+    export_mix,
     mixdown_arrangement,
     render_track_timeline,
 )
@@ -286,3 +287,28 @@ class TestAssembleStudioBundle:
         data, sr = sf.read(io.BytesIO(wav_bytes), always_2d=True)
         assert sr == 48000
         assert data.shape[1] == 2
+
+
+# ---------------------------------------------------------------------------
+# export_mix — wav/flac are libsndfile-native so they run in CI (no ffmpeg)
+# ---------------------------------------------------------------------------
+
+
+class TestExportMix:
+    def test_wav_is_48k_24bit(self, tmp_path) -> None:
+        raw = _write_tone(tmp_path / "raw.wav", duration_s=0.5)
+        out = export_mix(raw, tmp_path / "mix.wav", "wav")
+        info = sf.info(str(out))
+        assert info.samplerate == 48000
+        assert info.subtype == "PCM_24"
+        audio, _ = sf.read(str(out), always_2d=True)
+        assert np.sqrt(np.mean(np.square(audio))) > 1e-3
+
+    def test_flac_round_trips(self, tmp_path) -> None:
+        raw = _write_tone(tmp_path / "raw.wav", duration_s=0.5)
+        out = export_mix(raw, tmp_path / "mix.flac", "flac")
+        info = sf.info(str(out))
+        assert info.format == "FLAC"
+        audio, sr = sf.read(str(out), always_2d=True)
+        assert sr == 48000
+        assert np.sqrt(np.mean(np.square(audio))) > 1e-3

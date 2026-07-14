@@ -6,13 +6,14 @@ handlers download the referenced source clips, mix / bounce them, and store the
 result (a ``generation_mode="studio"`` child clip, or a ZIP under the per-job
 export key). They assert the worker contract — lineage, badge mode, format
 conversion, the DAW ZIP layout — that only real audio + DB can cover, so the
-whole module is ``integration`` (needs ffmpeg for the FLAC/MP3 conversions and a
-local mongod).
+whole module is ``integration`` (needs a local mongod; the MP3 conversion case
+additionally needs ffmpeg and skips itself where it's absent).
 """
 
 from __future__ import annotations
 
 import io
+import shutil
 import zipfile
 
 import numpy as np
@@ -143,7 +144,18 @@ class TestMixdownHandler:
         reloaded = await Job.get(job.id)
         assert reloaded.progress == "Uploading"
 
-    @pytest.mark.parametrize("fmt", ["flac", "mp3"])
+    @pytest.mark.parametrize(
+        "fmt",
+        [
+            "flac",  # libsndfile — runs everywhere, ffmpeg not needed
+            pytest.param(
+                "mp3",
+                marks=pytest.mark.skipif(
+                    shutil.which("ffmpeg") is None, reason="mp3 conversion requires ffmpeg (not installed in CI)"
+                ),
+            ),
+        ],
+    )
     async def test_alternate_formats(self, storage, fmt: str) -> None:
         user, workspace, clips = await _setup(storage, f"studio-task-{fmt}@example.com")
         job = _mix_job(user, workspace, clips, fmt=fmt)
