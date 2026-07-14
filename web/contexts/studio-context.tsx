@@ -402,6 +402,10 @@ export function studioReducer(
     }
     case "SET_MASTER_EQ": {
       const { band, freqHz, gainDb, q } = action
+      // No fields → keep state identity (same rationale as SET_BPM).
+      if (freqHz === undefined && gainDb === undefined && q === undefined) {
+        return state
+      }
       if (
         (freqHz !== undefined && !Number.isFinite(freqHz)) ||
         (gainDb !== undefined && !Number.isFinite(gainDb)) ||

@@ -807,6 +807,11 @@ describe("studioReducer masterBus (US-19.5)", () => {
     expect(s.masterBus.eq.lowShelf.freqHz).toBe(EQ_LOW_SHELF_FREQ_MAX)
   })
 
+  it("SET_MASTER_EQ with no fields returns the same state object", () => {
+    const s = base()
+    expect(studioReducer(s, { type: "SET_MASTER_EQ", band: "mid" })).toBe(s)
+  })
+
   it("SET_MASTER_EQ ignores non-finite fields", () => {
     const s = base()
     expect(
