@@ -40,6 +40,7 @@ from .routers import (
     presets,
     queue,
     releases,
+    studio,
     users,
     workspaces,
 )
@@ -191,6 +192,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(artwork.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
     app.include_router(daw_export.router, prefix=API_V1_PREFIX)
+    app.include_router(studio.router, prefix=API_V1_PREFIX)
     app.include_router(iterative.router, prefix=API_V1_PREFIX)
     app.include_router(batch.router, prefix=API_V1_PREFIX)
     app.include_router(workspaces.router, prefix=API_V1_PREFIX)
