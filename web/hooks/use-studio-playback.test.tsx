@@ -1095,7 +1095,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
       dispatch({ type: "SET_PLAYING", playing: true })
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
-    const { analyserLeft, analyserRight } = useStudioPlayback("tok")
+    const { analyserLeft, analyserRight, limiter } = useStudioPlayback("tok")
     return (
       <>
         <div data-testid="analyser-left-probe">
@@ -1103,6 +1103,9 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
         </div>
         <div data-testid="analyser-right-probe">
           {analyserRight.current ? "ready" : "null"}
+        </div>
+        <div data-testid="limiter-probe">
+          {limiter.current ? "ready" : "null"}
         </div>
         <button
           onClick={() =>
@@ -1321,13 +1324,14 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     )
   })
 
-  it("exposes analyser refs once the chain is built", async () => {
+  it("exposes analyser and limiter refs once the chain is built", async () => {
     const { box } = stubAudioContext()
     const raf = stubRaf()
     getClipAudioMock.mockResolvedValue(audio)
 
     const { getByTestId } = render(<MasterBusHarness />)
     expect(getByTestId("analyser-left-probe")).toHaveTextContent("null")
+    expect(getByTestId("limiter-probe")).toHaveTextContent("null")
 
     await act(async () => {
       await Promise.resolve()
@@ -1344,6 +1348,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
 
     expect(getByTestId("analyser-left-probe")).toHaveTextContent("ready")
     expect(getByTestId("analyser-right-probe")).toHaveTextContent("ready")
+    expect(getByTestId("limiter-probe")).toHaveTextContent("ready")
   })
 
   it("live-retunes master volume without rescheduling sources", async () => {

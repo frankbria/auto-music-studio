@@ -72,12 +72,16 @@ function applyMasterBusParams(nodes: MasterBusNodes, bus: MasterBusState) {
   nodes.masterVolume.gain.value = dbToGain(bus.masterVolumeDb)
 }
 
-export type MasterAnalysers = {
+export type MasterBusRefs = {
   analyserLeft: RefObject<AnalyserNode | null>
   analyserRight: RefObject<AnalyserNode | null>
+  /** Exposed for the limiter-active indicator, which reads the live
+   * `.reduction` value — an audio-domain measurement with no state-slice
+   * equivalent, same rationale as the analysers. */
+  limiter: RefObject<DynamicsCompressorNode | null>
 }
 
-export function useStudioPlayback(token: string | null): MasterAnalysers {
+export function useStudioPlayback(token: string | null): MasterBusRefs {
   const { state, dispatch } = useStudio()
   const { dispatch: playerDispatch } = usePlayer()
 
@@ -131,6 +135,7 @@ export function useStudioPlayback(token: string | null): MasterAnalysers {
   const masterBusNodesRef = useRef<MasterBusNodes | null>(null)
   const analyserLeftRef = useRef<AnalyserNode | null>(null)
   const analyserRightRef = useRef<AnalyserNode | null>(null)
+  const limiterRef = useRef<DynamicsCompressorNode | null>(null)
   // Mirrors state.masterBus (like tracksRef mirrors state.tracks) so a chain
   // built after the user has already tweaked settings still starts in tune.
   const masterBusValuesRef = useRef(state.masterBus)
@@ -197,6 +202,7 @@ export function useStudioPlayback(token: string | null): MasterAnalysers {
     masterBusNodesRef.current = nodes
     analyserLeftRef.current = analyserLeft
     analyserRightRef.current = analyserRight
+    limiterRef.current = limiter
     applyMasterBusParams(nodes, masterBusValuesRef.current)
   }
 
@@ -380,8 +386,12 @@ export function useStudioPlayback(token: string | null): MasterAnalysers {
     }
   }, [])
 
-  // The two ref objects (not their `.current` values) are stable across
+  // The ref objects (not their `.current` values) are stable across
   // renders, so this literal's identity churning each render is harmless —
-  // a consumer's effect can depend on analyserLeft/analyserRight directly.
-  return { analyserLeft: analyserLeftRef, analyserRight: analyserRightRef }
+  // a consumer's effect can depend on the individual refs directly.
+  return {
+    analyserLeft: analyserLeftRef,
+    analyserRight: analyserRightRef,
+    limiter: limiterRef,
+  }
 }
