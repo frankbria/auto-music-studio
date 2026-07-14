@@ -51,6 +51,41 @@ class FakeSourceNode {
   stop = vi.fn()
 }
 
+// US-19.5's master bus chain runs on every play, so this page-level harness
+// needs the same node stand-ins as hooks/use-studio-playback.test.tsx even
+// though this file doesn't assert on them directly.
+class FakeBiquadFilterNode {
+  type: BiquadFilterType = "lowpass"
+  connect = vi.fn()
+  disconnect = vi.fn()
+  frequency = { value: 350 }
+  gain = { value: 0 }
+  Q = { value: 1 }
+}
+
+class FakeDynamicsCompressorNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  threshold = { value: -24 }
+  knee = { value: 30 }
+  ratio = { value: 12 }
+  attack = { value: 0.003 }
+  release = { value: 0.25 }
+  reduction = 0
+}
+
+class FakeChannelSplitterNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+}
+
+class FakeAnalyserNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  fftSize = 2048
+  getFloatTimeDomainData = vi.fn()
+}
+
 function stubAudioContext() {
   const box: { instance: { currentTime: number } | null } = { instance: null }
   class FakeAudioContext {
@@ -59,6 +94,10 @@ function stubAudioContext() {
     createGain = vi.fn(() => new FakeGainNode())
     createStereoPanner = vi.fn(() => new FakePannerNode())
     createBufferSource = vi.fn(() => new FakeSourceNode())
+    createBiquadFilter = vi.fn(() => new FakeBiquadFilterNode())
+    createDynamicsCompressor = vi.fn(() => new FakeDynamicsCompressorNode())
+    createChannelSplitter = vi.fn(() => new FakeChannelSplitterNode())
+    createAnalyser = vi.fn(() => new FakeAnalyserNode())
     close = vi.fn().mockResolvedValue(undefined)
     constructor() {
       box.instance = this

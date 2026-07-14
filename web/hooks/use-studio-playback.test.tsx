@@ -6,6 +6,12 @@ import { useEffect, useRef } from "react"
 import { useStudioPlayback } from "./use-studio-playback"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import {
+  DEFAULT_MASTER_BUS,
+  LIMITER_ATTACK_SEC,
+  LIMITER_RATIO,
+} from "@/lib/master-bus"
+import { dbToGain } from "@/lib/track-audio"
 import type { TrackType } from "@/lib/track-types"
 
 const { getClipAudioMock } = vi.hoisted(() => ({
@@ -33,6 +39,38 @@ class FakePannerNode {
   pan = { value: 0 }
 }
 
+class FakeBiquadFilterNode {
+  type: BiquadFilterType = "lowpass"
+  connect = vi.fn()
+  disconnect = vi.fn()
+  frequency = { value: 350 }
+  gain = { value: 0 }
+  Q = { value: 1 }
+}
+
+class FakeDynamicsCompressorNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  threshold = { value: -24 }
+  knee = { value: 30 }
+  ratio = { value: 12 }
+  attack = { value: 0.003 }
+  release = { value: 0.25 }
+  reduction = 0
+}
+
+class FakeChannelSplitterNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+}
+
+class FakeAnalyserNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  fftSize = 2048
+  getFloatTimeDomainData = vi.fn()
+}
+
 class FakeSourceNode {
   buffer: AudioBuffer | null = null
   playbackRate = { value: 1 }
@@ -48,9 +86,14 @@ class FakeSourceNode {
  * context "suspended" until resumed from a user gesture. */
 function stubAudioContext(initialState: AudioContextState = "running") {
   const sources: FakeSourceNode[] = []
-  // gains[0] is always the master gain; per-track gains follow (US-19.4).
+  // gains[0] is always the master gain; per-track gains follow (US-19.4);
+  // the master bus's own volume gain is appended after them, once (US-19.5).
   const gains: FakeGainNode[] = []
   const panners: FakePannerNode[] = []
+  const biquads: FakeBiquadFilterNode[] = []
+  const compressors: FakeDynamicsCompressorNode[] = []
+  const splitters: FakeChannelSplitterNode[] = []
+  const analysers: FakeAnalyserNode[] = []
   const box: {
     instance: {
       currentTime: number
@@ -77,6 +120,26 @@ function stubAudioContext(initialState: AudioContextState = "running") {
       sources.push(s)
       return s
     })
+    createBiquadFilter = vi.fn(() => {
+      const f = new FakeBiquadFilterNode()
+      biquads.push(f)
+      return f
+    })
+    createDynamicsCompressor = vi.fn(() => {
+      const c = new FakeDynamicsCompressorNode()
+      compressors.push(c)
+      return c
+    })
+    createChannelSplitter = vi.fn(() => {
+      const s = new FakeChannelSplitterNode()
+      splitters.push(s)
+      return s
+    })
+    createAnalyser = vi.fn(() => {
+      const a = new FakeAnalyserNode()
+      analysers.push(a)
+      return a
+    })
     resume = vi.fn(() => {
       this.state = "running"
       return Promise.resolve()
@@ -87,7 +150,7 @@ function stubAudioContext(initialState: AudioContextState = "running") {
     }
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
-  return { sources, gains, panners, box }
+  return { sources, gains, panners, biquads, compressors, splitters, analysers, box }
 }
 
 function stubRaf() {
@@ -911,8 +974,11 @@ describe("useStudioPlayback per-track controls (US-19.4)", () => {
       await Promise.resolve()
     })
 
-    // gains[0] = master; then one gain+panner per track, in track order.
-    expect(gains).toHaveLength(3)
+    // gains[0] = master sum; then one gain+panner per track, in track order;
+    // gains[3] = the master bus's own volume gain, appended once it's built
+    // after the per-track loop (US-19.5) — appending after preserves every
+    // other index this and sibling tests rely on.
+    expect(gains).toHaveLength(4)
     expect(panners).toHaveLength(2)
     expect(sources).toHaveLength(2)
     expect(sources[0].connect).toHaveBeenCalledWith(gains[1])
@@ -1006,5 +1072,359 @@ describe("useStudioPlayback per-track controls (US-19.4)", () => {
     expect(sources).toHaveLength(2)
     expect(sources[0].stop).not.toHaveBeenCalled()
     expect(sources[1].stop).not.toHaveBeenCalled()
+  })
+})
+
+describe("useStudioPlayback master bus (US-19.5)", () => {
+  function MasterBusSeed() {
+    const { dispatch } = useStudio()
+    const seededRef = useRef(false)
+    useEffect(() => {
+      if (seededRef.current) return
+      seededRef.current = true
+      dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
+      dispatch({
+        type: "ADD_CLIP",
+        id: "p0",
+        trackId: "t1",
+        clipId: "c1",
+        startSec: 0,
+        title: "A",
+        durationSec: 100,
+      })
+      dispatch({ type: "SET_PLAYING", playing: true })
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    const { analyserLeft, analyserRight } = useStudioPlayback("tok")
+    return (
+      <>
+        <div data-testid="analyser-left-probe">
+          {analyserLeft.current ? "ready" : "null"}
+        </div>
+        <div data-testid="analyser-right-probe">
+          {analyserRight.current ? "ready" : "null"}
+        </div>
+        <button
+          onClick={() =>
+            dispatch({ type: "SET_MASTER_VOLUME", volumeDb: -12 })
+          }
+        >
+          set master volume
+        </button>
+        <button
+          onClick={() =>
+            dispatch({
+              type: "SET_MASTER_EQ",
+              band: "low",
+              freqHz: 60,
+              gainDb: 4,
+            })
+          }
+        >
+          set low eq
+        </button>
+        <button
+          onClick={() =>
+            dispatch({
+              type: "SET_MASTER_EQ",
+              band: "mid",
+              freqHz: 2000,
+              gainDb: -3,
+              q: 2,
+            })
+          }
+        >
+          set mid eq
+        </button>
+        <button
+          onClick={() =>
+            dispatch({
+              type: "SET_MASTER_EQ",
+              band: "high",
+              freqHz: 6000,
+              gainDb: 5,
+            })
+          }
+        >
+          set high eq
+        </button>
+        <button
+          onClick={() =>
+            dispatch({
+              type: "SET_MASTER_COMPRESSOR",
+              thresholdDb: -10,
+              ratio: 6,
+              attackSec: 0.05,
+              releaseSec: 0.2,
+            })
+          }
+        >
+          set compressor
+        </button>
+        <button
+          onClick={() =>
+            dispatch({ type: "SET_MASTER_LIMITER_CEILING", ceilingDb: -1 })
+          }
+        >
+          set limiter ceiling
+        </button>
+      </>
+    )
+  }
+
+  function MasterBusHarness() {
+    return (
+      <PlayerProvider>
+        <StudioProvider>
+          <MasterBusSeed />
+        </StudioProvider>
+      </PlayerProvider>
+    )
+  }
+
+  const audio = { buffer: fakeBuffer(), peaks: new Float32Array(), duration: 100 }
+
+  it("wires the master chain sum → EQ → compressor → limiter → masterVolume → destination + analysers", async () => {
+    const { gains, biquads, compressors, splitters, analysers } =
+      stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    await act(async () => {
+      render(<MasterBusHarness />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(biquads).toHaveLength(3)
+    const [lowShelf, midPeak, highShelf] = biquads
+    expect(lowShelf.type).toBe("lowshelf")
+    expect(midPeak.type).toBe("peaking")
+    expect(highShelf.type).toBe("highshelf")
+
+    expect(compressors).toHaveLength(2)
+    const [compressor, limiter] = compressors
+
+    expect(splitters).toHaveLength(1)
+    expect(analysers).toHaveLength(2)
+    const [analyserLeft, analyserRight] = analysers
+
+    const sum = gains[0]
+    const masterVolume = gains[gains.length - 1]
+
+    expect(sum.connect).toHaveBeenCalledWith(lowShelf)
+    expect(lowShelf.connect).toHaveBeenCalledWith(midPeak)
+    expect(midPeak.connect).toHaveBeenCalledWith(highShelf)
+    expect(highShelf.connect).toHaveBeenCalledWith(compressor)
+    expect(compressor.connect).toHaveBeenCalledWith(limiter)
+    expect(limiter.connect).toHaveBeenCalledWith(masterVolume)
+    expect(masterVolume.connect).toHaveBeenCalledWith(splitters[0])
+    expect(splitters[0].connect).toHaveBeenCalledWith(analyserLeft, 0)
+    expect(splitters[0].connect).toHaveBeenCalledWith(analyserRight, 1)
+  })
+
+  it("only builds the master chain once across repeated play runs", async () => {
+    const { biquads } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    function ReplaySeed() {
+      const { dispatch } = useStudio()
+      const seededRef = useRef(false)
+      useEffect(() => {
+        if (seededRef.current) return
+        seededRef.current = true
+        dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
+        dispatch({
+          type: "ADD_CLIP",
+          id: "p0",
+          trackId: "t1",
+          clipId: "c1",
+          startSec: 0,
+          title: "A",
+          durationSec: 100,
+        })
+        dispatch({ type: "SET_PLAYING", playing: true })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [])
+      useStudioPlayback("tok")
+      return (
+        <button onClick={() => dispatch({ type: "SEEK", sec: 5 })}>
+          seek
+        </button>
+      )
+    }
+
+    const { getByRole } = render(
+      <PlayerProvider>
+        <StudioProvider>
+          <ReplaySeed />
+        </StudioProvider>
+      </PlayerProvider>
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(biquads).toHaveLength(3)
+
+    await act(async () => {
+      getByRole("button", { name: "seek" }).click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // A seek reschedules per-track nodes but must not rebuild the master
+    // chain a second time.
+    expect(biquads).toHaveLength(3)
+  })
+
+  it("initializes chain params from DEFAULT_MASTER_BUS at build time", async () => {
+    const { gains, biquads, compressors } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    await act(async () => {
+      render(<MasterBusHarness />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const [lowShelf, midPeak, highShelf] = biquads
+    expect(lowShelf.frequency.value).toBe(DEFAULT_MASTER_BUS.eq.lowShelf.freqHz)
+    expect(lowShelf.gain.value).toBe(DEFAULT_MASTER_BUS.eq.lowShelf.gainDb)
+    expect(midPeak.frequency.value).toBe(DEFAULT_MASTER_BUS.eq.midPeak.freqHz)
+    expect(midPeak.Q.value).toBe(DEFAULT_MASTER_BUS.eq.midPeak.q)
+    expect(highShelf.frequency.value).toBe(
+      DEFAULT_MASTER_BUS.eq.highShelf.freqHz
+    )
+
+    const [compressor, limiter] = compressors
+    expect(compressor.threshold.value).toBe(
+      DEFAULT_MASTER_BUS.compressor.thresholdDb
+    )
+    expect(compressor.ratio.value).toBe(DEFAULT_MASTER_BUS.compressor.ratio)
+    expect(compressor.attack.value).toBe(
+      DEFAULT_MASTER_BUS.compressor.attackSec
+    )
+    expect(compressor.release.value).toBe(
+      DEFAULT_MASTER_BUS.compressor.releaseSec
+    )
+
+    // Limiter ratio/attack are fixed constants, not driven by user state.
+    expect(limiter.ratio.value).toBe(LIMITER_RATIO)
+    expect(limiter.attack.value).toBeCloseTo(LIMITER_ATTACK_SEC)
+    expect(limiter.threshold.value).toBe(DEFAULT_MASTER_BUS.limiterCeilingDb)
+
+    const masterVolume = gains[gains.length - 1]
+    expect(masterVolume.gain.value).toBeCloseTo(
+      dbToGain(DEFAULT_MASTER_BUS.masterVolumeDb)
+    )
+  })
+
+  it("exposes analyser refs once the chain is built", async () => {
+    const { box } = stubAudioContext()
+    const raf = stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    const { getByTestId } = render(<MasterBusHarness />)
+    expect(getByTestId("analyser-left-probe")).toHaveTextContent("null")
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The ref itself is already populated by this point — refs don't trigger
+    // a re-render on mutation, so force one (a rAF tick dispatches
+    // SET_PLAYHEAD) to observe it reflected in the DOM.
+    act(() => {
+      box.instance!.currentTime = 1
+      raf.tick(1000)
+    })
+
+    expect(getByTestId("analyser-left-probe")).toHaveTextContent("ready")
+    expect(getByTestId("analyser-right-probe")).toHaveTextContent("ready")
+  })
+
+  it("live-retunes master volume without rescheduling sources", async () => {
+    const { sources, gains } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    const { getByRole } = render(<MasterBusHarness />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(1)
+    const masterVolume = gains[gains.length - 1]
+    expect(masterVolume.gain.value).toBeCloseTo(1)
+
+    await act(async () => {
+      getByRole("button", { name: "set master volume" }).click()
+    })
+    expect(masterVolume.gain.value).toBeCloseTo(dbToGain(-12))
+    expect(sources).toHaveLength(1)
+    expect(sources[0].stop).not.toHaveBeenCalled()
+  })
+
+  it("live-retunes EQ bands without rescheduling sources", async () => {
+    const { sources, biquads } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    const { getByRole } = render(<MasterBusHarness />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const [lowShelf, midPeak, highShelf] = biquads
+
+    await act(async () => {
+      getByRole("button", { name: "set low eq" }).click()
+      getByRole("button", { name: "set mid eq" }).click()
+      getByRole("button", { name: "set high eq" }).click()
+    })
+
+    expect(lowShelf.frequency.value).toBe(60)
+    expect(lowShelf.gain.value).toBe(4)
+    expect(midPeak.frequency.value).toBe(2000)
+    expect(midPeak.gain.value).toBe(-3)
+    expect(midPeak.Q.value).toBe(2)
+    expect(highShelf.frequency.value).toBe(6000)
+    expect(highShelf.gain.value).toBe(5)
+
+    expect(sources).toHaveLength(1)
+    expect(sources[0].stop).not.toHaveBeenCalled()
+  })
+
+  it("live-retunes the compressor and limiter ceiling without rescheduling sources", async () => {
+    const { sources, compressors } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    const { getByRole } = render(<MasterBusHarness />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const [compressor, limiter] = compressors
+
+    await act(async () => {
+      getByRole("button", { name: "set compressor" }).click()
+      getByRole("button", { name: "set limiter ceiling" }).click()
+    })
+
+    expect(compressor.threshold.value).toBe(-10)
+    expect(compressor.ratio.value).toBe(6)
+    expect(compressor.attack.value).toBe(0.05)
+    expect(compressor.release.value).toBe(0.2)
+    expect(limiter.threshold.value).toBe(-1)
+    // Ratio/attack remain fixed even after a limiter-ceiling change.
+    expect(limiter.ratio.value).toBe(LIMITER_RATIO)
+    expect(limiter.attack.value).toBeCloseTo(LIMITER_ATTACK_SEC)
+
+    expect(sources).toHaveLength(1)
+    expect(sources[0].stop).not.toHaveBeenCalled()
   })
 })
