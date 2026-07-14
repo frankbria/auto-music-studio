@@ -848,6 +848,11 @@ describe("studioReducer masterBus (US-19.5)", () => {
     })
   })
 
+  it("SET_MASTER_COMPRESSOR with no fields returns the same state object", () => {
+    const s = base()
+    expect(studioReducer(s, { type: "SET_MASTER_COMPRESSOR" })).toBe(s)
+  })
+
   it("SET_MASTER_COMPRESSOR ignores non-finite fields", () => {
     const s = base()
     expect(

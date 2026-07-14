@@ -488,6 +488,15 @@ export function studioReducer(
     }
     case "SET_MASTER_COMPRESSOR": {
       const { thresholdDb, ratio, attackSec, releaseSec } = action
+      // No fields → keep state identity (same rationale as SET_MASTER_EQ).
+      if (
+        thresholdDb === undefined &&
+        ratio === undefined &&
+        attackSec === undefined &&
+        releaseSec === undefined
+      ) {
+        return state
+      }
       if (
         (thresholdDb !== undefined && !Number.isFinite(thresholdDb)) ||
         (ratio !== undefined && !Number.isFinite(ratio)) ||
