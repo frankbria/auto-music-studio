@@ -101,6 +101,7 @@ function stubAudioContext(initialState: AudioContextState = "running") {
       currentTime: number
       state: AudioContextState
       resume: () => Promise<void>
+      destination: object
     } | null
   } = { instance: null }
   class FakeAudioContext {
@@ -1225,7 +1226,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
   }
 
   it("wires the master chain sum → EQ → compressor → masterVolume → limiter → destination + analysers", async () => {
-    const { gains, biquads, compressors, splitters, analysers } =
+    const { gains, biquads, compressors, splitters, analysers, box } =
       stubAudioContext()
     stubRaf()
     getClipAudioMock.mockResolvedValue(audio)
@@ -1261,6 +1262,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     // the limiter's output — the actual signal reaching the destination.
     expect(compressor.connect).toHaveBeenCalledWith(masterVolume)
     expect(masterVolume.connect).toHaveBeenCalledWith(limiter)
+    expect(limiter.connect).toHaveBeenCalledWith(box.instance!.destination)
     expect(limiter.connect).toHaveBeenCalledWith(splitters[0])
     expect(splitters[0].connect).toHaveBeenCalledWith(analyserLeft, 0)
     expect(splitters[0].connect).toHaveBeenCalledWith(analyserRight, 1)
