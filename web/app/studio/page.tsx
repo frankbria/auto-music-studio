@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AddTrackButton, TrackLane } from "@/components/studio/TrackLane"
+import { ExportMenu } from "@/components/studio/ExportMenu"
 import { MasterBusPanel } from "@/components/studio/MasterBusPanel"
 import { Playhead } from "@/components/studio/Playhead"
 import { RulerArea } from "@/components/studio/RulerArea"
@@ -105,7 +106,11 @@ function TempoInput() {
   )
 }
 
-function StudioHeader() {
+function StudioHeader({
+  onMixdownComplete,
+}: {
+  onMixdownComplete?: () => void
+}) {
   const { state, dispatch } = useStudio()
   return (
     <div className="flex items-center justify-between gap-2 border-b border-border p-4">
@@ -114,6 +119,7 @@ function StudioHeader() {
         <TransportControls />
         <TempoInput />
         <SnapControls />
+        <ExportMenu onMixdownComplete={onMixdownComplete} />
         <Button
           type="button"
           variant="outline"
@@ -224,6 +230,9 @@ function StudioTimeline() {
 function StudioView() {
   useSongPreload()
   const { accessToken } = useAuth()
+  // Bumped when a mixdown export completes so the workspace panel refetches and
+  // the new "Studio"-badged clip appears (US-19.6).
+  const [refreshKey, setRefreshKey] = useState(0)
   // The playback engine is owned by this shared ancestor, not by the
   // timeline or the side panel individually — both StudioTimeline (via
   // context/props) and the Master tab (via these refs) need to observe the
@@ -233,7 +242,7 @@ function StudioView() {
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <StudioHeader />
+        <StudioHeader onMixdownComplete={() => setRefreshKey((n) => n + 1)} />
         <StudioTimeline />
       </div>
       {/* Clip library / master bus, tabbed (US-19.1, US-19.5). Hidden below lg
@@ -249,7 +258,7 @@ function StudioView() {
             <TabsTrigger value="master">Master</TabsTrigger>
           </TabsList>
           <TabsContent value="workspace" className="min-h-0 overflow-y-auto">
-            <WorkspacePanel />
+            <WorkspacePanel refreshKey={refreshKey} />
           </TabsContent>
           <TabsContent value="master" className="min-h-0 overflow-y-auto">
             <MasterBusPanel
