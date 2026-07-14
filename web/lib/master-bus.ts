@@ -44,6 +44,9 @@ export const LIMITER_CEILING_DB_MAX = 0
  * standing in for a true limiter — see the plan's "no AudioWorklet" note). */
 export const LIMITER_RATIO = 20
 export const LIMITER_ATTACK_SEC = 0.001
+// Faster than the Web Audio default (0.25s) so the ceiling lets go quickly
+// instead of audibly pumping on transient-heavy material.
+export const LIMITER_RELEASE_SEC = 0.05
 
 export type MasterBusState = {
   masterVolumeDb: number

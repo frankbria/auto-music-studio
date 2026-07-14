@@ -9,6 +9,7 @@ import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import {
   DEFAULT_MASTER_BUS,
   LIMITER_ATTACK_SEC,
+  LIMITER_RELEASE_SEC,
   LIMITER_RATIO,
 } from "@/lib/master-bus"
 import { dbToGain } from "@/lib/track-audio"
@@ -1346,9 +1347,10 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
       DEFAULT_MASTER_BUS.compressor.releaseSec
     )
 
-    // Limiter ratio/attack are fixed constants, not driven by user state.
+    // Limiter ratio/attack/release are fixed constants, not driven by user state.
     expect(limiter.ratio.value).toBe(LIMITER_RATIO)
     expect(limiter.attack.value).toBeCloseTo(LIMITER_ATTACK_SEC)
+    expect(limiter.release.value).toBeCloseTo(LIMITER_RELEASE_SEC)
     expect(limiter.threshold.value).toBe(DEFAULT_MASTER_BUS.limiterCeilingDb)
 
     const masterVolume = gains[gains.length - 1]

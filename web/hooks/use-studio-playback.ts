@@ -8,6 +8,7 @@ import { getAudioContextCtor } from "@/lib/audio-context"
 import { getClipAudio } from "@/lib/clip-audio-cache"
 import {
   LIMITER_ATTACK_SEC,
+  LIMITER_RELEASE_SEC,
   LIMITER_RATIO,
   type MasterBusState,
 } from "@/lib/master-bus"
@@ -179,6 +180,7 @@ export function useStudioPlayback(token: string | null): MasterBusRefs {
     const limiter = ctx.createDynamicsCompressor()
     limiter.ratio.value = LIMITER_RATIO
     limiter.attack.value = LIMITER_ATTACK_SEC
+    limiter.release.value = LIMITER_RELEASE_SEC
     const masterVolume = ctx.createGain()
     const splitter = ctx.createChannelSplitter(2)
     const analyserLeft = ctx.createAnalyser()
