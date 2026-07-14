@@ -107,8 +107,13 @@ def arrangement_duration(tracks: list[TrackMix]) -> float:
 
 
 def _audible_tracks(tracks: list[TrackMix]) -> list[TrackMix]:
-    """Tracks that should sound: muted dropped, and if any is soloed only solos."""
-    has_solo = any(t.solo for t in tracks)
+    """Tracks that should sound: muted dropped, and if any is soloed only solos.
+
+    Mute beats solo: a track that is both soloed and muted stays silent AND does
+    not count as "a solo exists" — otherwise soloing-then-muting one track would
+    silence the entire mix.
+    """
+    has_solo = any(t.solo and not t.muted for t in tracks)
     return [t for t in tracks if not t.muted and (t.solo or not has_solo)]
 
 

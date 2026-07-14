@@ -116,13 +116,23 @@ export function useStudioExport({
     }
   }
 
-  // Clean up a pending poll if the component unmounts mid-export.
-  useEffect(() => clearTimer, [])
+  // Clean up on unmount: clear the pending timer AND stop an in-flight poll
+  // from rescheduling when its fetch resolves after cleanup (without the ref
+  // guard the loop would keep polling until MAX_POLLS after navigation).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      clearTimer()
+    }
+  }, [])
 
   const poll = useCallback(async () => {
     const job = jobRef.current
     if (!job) return
     const result = await fetchJobStatus(job.id, job.token)
+    if (!mountedRef.current) return
     // A reset between the request and its response supersedes this job.
     if (jobRef.current?.id !== job.id) return
 

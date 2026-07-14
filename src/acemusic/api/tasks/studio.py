@@ -43,11 +43,28 @@ from acemusic.studio_mixdown import (
 from ..models import Clip, Job
 from ..services.clips import native_format
 from ..services.studio import (
+    MAX_TIMELINE_SEC,
     STUDIO_DAW_EXPORT_JOB_TYPE,
     STUDIO_MIXDOWN_JOB_TYPE,
     studio_export_storage_path,
 )
-from .common import download_clip, load_clip, store_clip
+from .common import JobProcessingError, download_clip, load_clip, store_clip
+
+
+def _checked_duration(track_mixes: list[TrackMix]) -> float:
+    """Arrangement length, re-checked against the timeline cap with real clip lengths.
+
+    The request-model caps bound ``start_sec``/``duration_sec``, but an untrimmed
+    placement runs the full source clip — so only here, after download, is the true
+    timeline length known. The mixer allocates a silent timeline of this length, so
+    exceeding the cap is a memory-exhaustion vector, not just a slow job.
+    """
+    duration = arrangement_duration(track_mixes)
+    if duration > MAX_TIMELINE_SEC:
+        raise JobProcessingError(
+            f"Arrangement is {duration:.0f}s long, above the {MAX_TIMELINE_SEC:.0f}s export limit."
+        )
+    return duration
 
 
 async def _download_sources(job: Job, storage: StorageBackend, tmp: Path) -> tuple[dict[str, Path], list[Clip]]:
@@ -106,7 +123,7 @@ def _build_track_mixes(tracks: list[dict], clip_local: dict[str, Path]) -> list[
 
 def _render_mixdown(track_mixes: list[TrackMix], fmt: str, tmp: Path) -> tuple[bytes, float]:
     """Mix to WAV, convert to ``fmt``, return the bytes and the arrangement duration (sync)."""
-    duration = arrangement_duration(track_mixes)
+    duration = _checked_duration(track_mixes)
     raw = tmp / "mix.wav"
     mixdown_arrangement(track_mixes, output_path=raw, total_duration_sec=duration)
     final = tmp / f"mix.{fmt}"
@@ -152,7 +169,7 @@ async def process_studio_mixdown_job(job: Job, storage: StorageBackend) -> dict[
 
 def _assemble_bundle(tracks: list[dict], track_mixes: list[TrackMix], project_name, bpm, markers, tmp: Path) -> bytes:
     """Bounce per-track stems, assemble the DAW ZIP, return its bytes (sync)."""
-    duration = arrangement_duration(track_mixes)
+    duration = _checked_duration(track_mixes)
     track_files: list[StudioTrackFile] = []
     for index, (track, mix) in enumerate(zip(tracks, track_mixes)):
         stem_path = tmp / f"stem-{index}.wav"

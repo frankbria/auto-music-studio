@@ -134,6 +134,22 @@ class TestMixdown:
         n = min(len(solo_data), len(a_only))
         assert _rms(solo_data[:n] - a_only[:n]) < 1e-3
 
+    def test_muted_solo_track_falls_back_to_all_unmuted(self, tmp_path) -> None:
+        a = _write_tone(tmp_path / "a.wav", duration_s=1.0)
+        b = _write_tone(tmp_path / "b.wav", duration_s=1.0)
+        out = tmp_path / "mix.wav"
+        # Mute beats solo: with the only soloed track muted, track B still sounds
+        # (a naive has_solo check would silence the whole mix).
+        mixdown_arrangement(
+            [
+                TrackMix(placements=[PlacementMix(audio_path=a, start_sec=0.0)], solo=True, muted=True),
+                TrackMix(placements=[PlacementMix(audio_path=b, start_sec=0.0)]),
+            ],
+            output_path=out,
+        )
+        data, _ = _read_wav(out)
+        assert _rms(data) > 0.01
+
     def test_volume_db_attenuates(self, tmp_path) -> None:
         a = _write_tone(tmp_path / "a.wav", duration_s=1.0)
         loud = tmp_path / "loud.wav"

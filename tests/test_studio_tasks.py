@@ -177,6 +177,19 @@ class TestMixdownHandler:
         with pytest.raises(JobProcessingError):
             await tasks.process_studio_mixdown_job(job, storage)
 
+    async def test_overlong_arrangement_fails_job(self, storage, monkeypatch) -> None:
+        from acemusic.api.tasks.common import JobProcessingError
+
+        user, workspace, clips = await _setup(storage, "studio-task-overlong@example.com", n_clips=1)
+        job = _mix_job(user, workspace, [clips[0], clips[0]])
+        await job.insert()
+        # The field caps bound start_sec, but an untrimmed placement runs the full
+        # source clip — fake a source long enough to blow past the timeline cap
+        # (a real multi-hour WAV fixture would be absurd).
+        monkeypatch.setattr(tasks, "arrangement_duration", lambda _mixes: 5 * 3600.0)
+        with pytest.raises(JobProcessingError, match="export limit"):
+            await tasks.process_studio_mixdown_job(job, storage)
+
 
 class TestDawExportHandler:
     async def test_bundles_stems_and_metadata(self, storage) -> None:
