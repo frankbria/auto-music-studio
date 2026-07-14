@@ -53,7 +53,7 @@ function ChannelBar({
         aria-label={`${label} channel level`}
         aria-valuemin={METER_FLOOR_DB}
         aria-valuemax={0}
-        aria-valuenow={Math.round(levels.peakDb)}
+        aria-valuenow={Math.round(Math.min(0, levels.peakDb))}
         className="relative h-32 w-3 overflow-hidden rounded-sm bg-muted"
       >
         <div
@@ -125,9 +125,22 @@ export function StereoMeter({
       return { peakDb, rmsDb, holdDb: holdRef.current.db }
     }
 
+    // Returning the previous object when levels are unchanged lets React
+    // bail out of the re-render — during silence/pause the loop keeps
+    // ticking but stops repainting.
+    function replaceIfChanged(prev: ChannelLevels, next: ChannelLevels) {
+      return prev.peakDb === next.peakDb &&
+        prev.rmsDb === next.rmsDb &&
+        prev.holdDb === next.holdDb
+        ? prev
+        : next
+    }
+
     function tick(nowMs: number) {
-      setLeft(readChannel(analyserLeft.current, leftHoldRef, nowMs))
-      setRight(readChannel(analyserRight.current, rightHoldRef, nowMs))
+      const nextLeft = readChannel(analyserLeft.current, leftHoldRef, nowMs)
+      const nextRight = readChannel(analyserRight.current, rightHoldRef, nowMs)
+      setLeft((prev) => replaceIfChanged(prev, nextLeft))
+      setRight((prev) => replaceIfChanged(prev, nextRight))
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)

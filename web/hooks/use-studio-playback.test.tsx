@@ -1223,7 +1223,7 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     duration: 100,
   }
 
-  it("wires the master chain sum → EQ → compressor → limiter → masterVolume → destination + analysers", async () => {
+  it("wires the master chain sum → EQ → compressor → masterVolume → limiter → destination + analysers", async () => {
     const { gains, biquads, compressors, splitters, analysers } =
       stubAudioContext()
     stubRaf()
@@ -1255,9 +1255,12 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     expect(lowShelf.connect).toHaveBeenCalledWith(midPeak)
     expect(midPeak.connect).toHaveBeenCalledWith(highShelf)
     expect(highShelf.connect).toHaveBeenCalledWith(compressor)
-    expect(compressor.connect).toHaveBeenCalledWith(limiter)
-    expect(limiter.connect).toHaveBeenCalledWith(masterVolume)
-    expect(masterVolume.connect).toHaveBeenCalledWith(splitters[0])
+    // Master volume feeds INTO the limiter (not after it) so the configured
+    // ceiling is a true output cap even at +6 dB fader boost; the meter taps
+    // the limiter's output — the actual signal reaching the destination.
+    expect(compressor.connect).toHaveBeenCalledWith(masterVolume)
+    expect(masterVolume.connect).toHaveBeenCalledWith(limiter)
+    expect(limiter.connect).toHaveBeenCalledWith(splitters[0])
     expect(splitters[0].connect).toHaveBeenCalledWith(analyserLeft, 0)
     expect(splitters[0].connect).toHaveBeenCalledWith(analyserRight, 1)
   })

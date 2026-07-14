@@ -48,7 +48,7 @@ type ActiveSource = { source: AudioBufferSourceNode }
 type TrackNodes = { gain: GainNode; panner: StereoPannerNode }
 
 /** The master bus's own post-sum processing chain (US-19.5): sum → EQ →
- * compressor → limiter → masterVolume → [destination, metering splitter]. */
+ * compressor → masterVolume → limiter → [destination, metering splitter]. */
 type MasterBusNodes = {
   lowShelf: BiquadFilterNode
   midPeak: BiquadFilterNode
@@ -186,14 +186,19 @@ export function useStudioPlayback(token: string | null): MasterBusRefs {
     const analyserLeft = ctx.createAnalyser()
     const analyserRight = ctx.createAnalyser()
 
+    // Master volume sits between compressor and limiter: after the compressor
+    // so the fader doesn't change compression amount, but before the limiter
+    // so the configured ceiling is a true output cap even at +6 dB boost.
+    // The metering splitter taps the limiter's output — the actual signal
+    // reaching the destination.
     sum.connect(lowShelf)
     lowShelf.connect(midPeak)
     midPeak.connect(highShelf)
     highShelf.connect(compressor)
-    compressor.connect(limiter)
-    limiter.connect(masterVolume)
-    masterVolume.connect(ctx.destination)
-    masterVolume.connect(splitter)
+    compressor.connect(masterVolume)
+    masterVolume.connect(limiter)
+    limiter.connect(ctx.destination)
+    limiter.connect(splitter)
     splitter.connect(analyserLeft, 0)
     splitter.connect(analyserRight, 1)
 
