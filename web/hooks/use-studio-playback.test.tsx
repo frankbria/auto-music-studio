@@ -27,6 +27,12 @@ class FakeGainNode {
   gain = { value: 1 }
 }
 
+class FakePannerNode {
+  connect = vi.fn()
+  disconnect = vi.fn()
+  pan = { value: 0 }
+}
+
 class FakeSourceNode {
   buffer: AudioBuffer | null = null
   playbackRate = { value: 1 }
@@ -42,6 +48,9 @@ class FakeSourceNode {
  * context "suspended" until resumed from a user gesture. */
 function stubAudioContext(initialState: AudioContextState = "running") {
   const sources: FakeSourceNode[] = []
+  // gains[0] is always the master gain; per-track gains follow (US-19.4).
+  const gains: FakeGainNode[] = []
+  const panners: FakePannerNode[] = []
   const box: {
     instance: {
       currentTime: number
@@ -53,7 +62,16 @@ function stubAudioContext(initialState: AudioContextState = "running") {
     currentTime = 0
     state: AudioContextState = initialState
     destination = {}
-    createGain = vi.fn(() => new FakeGainNode())
+    createGain = vi.fn(() => {
+      const g = new FakeGainNode()
+      gains.push(g)
+      return g
+    })
+    createStereoPanner = vi.fn(() => {
+      const p = new FakePannerNode()
+      panners.push(p)
+      return p
+    })
     createBufferSource = vi.fn(() => {
       const s = new FakeSourceNode()
       sources.push(s)
@@ -69,7 +87,7 @@ function stubAudioContext(initialState: AudioContextState = "running") {
     }
   }
   vi.stubGlobal("AudioContext", FakeAudioContext)
-  return { sources, box }
+  return { sources, gains, panners, box }
 }
 
 function stubRaf() {
@@ -807,5 +825,186 @@ describe("useStudioPlayback loop region (US-19.3)", () => {
     })
     expect(getByTestId("playhead-probe")).toHaveTextContent(/^6$/)
     expect(sources).toHaveLength(1)
+  })
+})
+
+describe("useStudioPlayback per-track controls (US-19.4)", () => {
+  function ControlsSeed({
+    setup = [],
+  }: {
+    setup?: import("@/contexts/studio-context").StudioAction[]
+  }) {
+    const { dispatch } = useStudio()
+    const seededRef = useRef(false)
+    useEffect(() => {
+      if (seededRef.current) return
+      seededRef.current = true
+      dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
+      dispatch({ type: "ADD_TRACK", id: "t2", trackType: "ai" })
+      dispatch({
+        type: "ADD_CLIP",
+        id: "p0",
+        trackId: "t1",
+        clipId: "c1",
+        startSec: 0,
+        title: "A",
+        durationSec: 100,
+      })
+      dispatch({
+        type: "ADD_CLIP",
+        id: "p1",
+        trackId: "t2",
+        clipId: "c2",
+        startSec: 0,
+        title: "B",
+        durationSec: 100,
+      })
+      for (const a of setup) dispatch(a)
+      dispatch({ type: "SET_PLAYING", playing: true })
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    useStudioPlayback("tok")
+    return (
+      <>
+        <button onClick={() => dispatch({ type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -6 })}>
+          duck t1
+        </button>
+        <button onClick={() => dispatch({ type: "SET_TRACK_PAN", trackId: "t1", pan: -100 })}>
+          pan t1 left
+        </button>
+        <button onClick={() => dispatch({ type: "TOGGLE_TRACK_MUTE", trackId: "t1" })}>
+          mute t1
+        </button>
+        <button onClick={() => dispatch({ type: "TOGGLE_TRACK_SOLO", trackId: "t2" })}>
+          solo t2
+        </button>
+      </>
+    )
+  }
+
+  function ControlsHarness(props: {
+    setup?: import("@/contexts/studio-context").StudioAction[]
+  }) {
+    return (
+      <PlayerProvider>
+        <StudioProvider>
+          <ControlsSeed {...props} />
+        </StudioProvider>
+      </PlayerProvider>
+    )
+  }
+
+  const audio = {
+    buffer: fakeBuffer(),
+    peaks: new Float32Array(),
+    duration: 100,
+  }
+
+  it("routes each source through its own track's gain → panner → master chain", async () => {
+    const { sources, gains, panners } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    await act(async () => {
+      render(<ControlsHarness />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // gains[0] = master; then one gain+panner per track, in track order.
+    expect(gains).toHaveLength(3)
+    expect(panners).toHaveLength(2)
+    expect(sources).toHaveLength(2)
+    expect(sources[0].connect).toHaveBeenCalledWith(gains[1])
+    expect(sources[1].connect).toHaveBeenCalledWith(gains[2])
+    expect(gains[1].connect).toHaveBeenCalledWith(panners[0])
+    expect(panners[0].connect).toHaveBeenCalledWith(gains[0])
+  })
+
+  it("initializes gain and pan from the track's volume/pan state", async () => {
+    const { gains, panners } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    await act(async () => {
+      render(
+        <ControlsHarness
+          setup={[
+            { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -6 },
+            { type: "SET_TRACK_PAN", trackId: "t1", pan: 50 },
+          ]}
+        />
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(gains[1].gain.value).toBeCloseTo(0.501, 2)
+    expect(panners[0].pan.value).toBeCloseTo(0.5)
+    // t2 untouched: unity gain, centered.
+    expect(gains[2].gain.value).toBe(1)
+    expect(panners[1].pan.value).toBe(0)
+  })
+
+  it("schedules a muted track at zero gain, and solo silences non-soloed tracks", async () => {
+    const { gains } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    await act(async () => {
+      render(
+        <ControlsHarness
+          setup={[
+            { type: "TOGGLE_TRACK_MUTE", trackId: "t1" },
+            { type: "TOGGLE_TRACK_SOLO", trackId: "t2" },
+          ]}
+        />
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(gains[1].gain.value).toBe(0) // muted (and not soloed)
+    expect(gains[2].gain.value).toBe(1) // soloed
+  })
+
+  it("live-updates volume, pan, mute, and solo mid-playback without rescheduling sources", async () => {
+    const { sources, gains, panners } = stubAudioContext()
+    stubRaf()
+    getClipAudioMock.mockResolvedValue(audio)
+
+    const { getByRole } = render(<ControlsHarness />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(sources).toHaveLength(2)
+    expect(gains[1].gain.value).toBe(1)
+
+    await act(async () => {
+      getByRole("button", { name: "duck t1" }).click()
+      getByRole("button", { name: "pan t1 left" }).click()
+    })
+    expect(gains[1].gain.value).toBeCloseTo(0.501, 2)
+    expect(panners[0].pan.value).toBe(-1)
+
+    await act(async () => {
+      getByRole("button", { name: "solo t2" }).click()
+    })
+    // t1 is now implicitly silenced by t2's solo; t2 keeps its own gain.
+    expect(gains[1].gain.value).toBe(0)
+    expect(gains[2].gain.value).toBe(1)
+
+    await act(async () => {
+      getByRole("button", { name: "solo t2" }).click() // un-solo
+      getByRole("button", { name: "mute t1" }).click()
+    })
+    expect(gains[1].gain.value).toBe(0) // muted
+    expect(gains[2].gain.value).toBe(1)
+
+    // The whole point: none of the above tore down or restarted audio.
+    expect(sources).toHaveLength(2)
+    expect(sources[0].stop).not.toHaveBeenCalled()
+    expect(sources[1].stop).not.toHaveBeenCalled()
   })
 })

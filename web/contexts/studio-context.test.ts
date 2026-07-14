@@ -491,6 +491,128 @@ describe("studioReducer loop region (US-19.3)", () => {
   })
 })
 
+describe("studioReducer per-track controls (US-19.4)", () => {
+  function withTrack(): StudioState {
+    return studioReducer(base(), { type: "ADD_TRACK", id: "t1", trackType: "ai" })
+  }
+
+  it("ADD_TRACK defaults volume to 0 dB, pan centered, not muted, not soloed", () => {
+    const s = withTrack()
+    expect(s.tracks[0]).toMatchObject({
+      volumeDb: 0,
+      pan: 0,
+      muted: false,
+      solo: false,
+    })
+  })
+
+  it("SET_TRACK_VOLUME sets the track's volume and clamps to [-60, +6] dB", () => {
+    let s = studioReducer(withTrack(), {
+      type: "SET_TRACK_VOLUME",
+      trackId: "t1",
+      volumeDb: -12,
+    })
+    expect(s.tracks[0].volumeDb).toBe(-12)
+    s = studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: 20 })
+    expect(s.tracks[0].volumeDb).toBe(6)
+    s = studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: -99 })
+    expect(s.tracks[0].volumeDb).toBe(-60)
+  })
+
+  it("SET_TRACK_VOLUME ignores a non-finite value and unknown tracks", () => {
+    const s = withTrack()
+    expect(
+      studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "t1", volumeDb: NaN })
+    ).toBe(s)
+    expect(
+      studioReducer(s, { type: "SET_TRACK_VOLUME", trackId: "nope", volumeDb: -6 })
+    ).toBe(s)
+  })
+
+  it("SET_TRACK_PAN sets the track's pan and clamps to [-100, +100]", () => {
+    let s = studioReducer(withTrack(), {
+      type: "SET_TRACK_PAN",
+      trackId: "t1",
+      pan: -40,
+    })
+    expect(s.tracks[0].pan).toBe(-40)
+    s = studioReducer(s, { type: "SET_TRACK_PAN", trackId: "t1", pan: 250 })
+    expect(s.tracks[0].pan).toBe(100)
+    s = studioReducer(s, { type: "SET_TRACK_PAN", trackId: "t1", pan: -250 })
+    expect(s.tracks[0].pan).toBe(-100)
+  })
+
+  it("SET_TRACK_PAN ignores a non-finite value and unknown tracks", () => {
+    const s = withTrack()
+    expect(
+      studioReducer(s, { type: "SET_TRACK_PAN", trackId: "t1", pan: NaN })
+    ).toBe(s)
+    expect(studioReducer(s, { type: "SET_TRACK_PAN", trackId: "nope", pan: 10 })).toBe(
+      s
+    )
+  })
+
+  it("TOGGLE_TRACK_MUTE flips only the targeted track", () => {
+    let s = studioReducer(withTrack(), {
+      type: "ADD_TRACK",
+      id: "t2",
+      trackType: "ai",
+    })
+    s = studioReducer(s, { type: "TOGGLE_TRACK_MUTE", trackId: "t1" })
+    expect(s.tracks[0].muted).toBe(true)
+    expect(s.tracks[1].muted).toBe(false)
+    s = studioReducer(s, { type: "TOGGLE_TRACK_MUTE", trackId: "t1" })
+    expect(s.tracks[0].muted).toBe(false)
+  })
+
+  it("TOGGLE_TRACK_SOLO flips solo and allows multiple simultaneous solos", () => {
+    let s = studioReducer(withTrack(), {
+      type: "ADD_TRACK",
+      id: "t2",
+      trackType: "ai",
+    })
+    s = studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "t1" })
+    s = studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "t2" })
+    expect(s.tracks.map((t) => t.solo)).toEqual([true, true])
+    s = studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "t1" })
+    expect(s.tracks.map((t) => t.solo)).toEqual([false, true])
+  })
+
+  it("TOGGLE_TRACK_MUTE / TOGGLE_TRACK_SOLO on unknown tracks are no-ops", () => {
+    const s = withTrack()
+    expect(studioReducer(s, { type: "TOGGLE_TRACK_MUTE", trackId: "nope" })).toBe(s)
+    expect(studioReducer(s, { type: "TOGGLE_TRACK_SOLO", trackId: "nope" })).toBe(s)
+  })
+
+  it("SET_TRACK_COLOR recolors only the targeted track", () => {
+    let s = studioReducer(withTrack(), {
+      type: "ADD_TRACK",
+      id: "t2",
+      trackType: "loop",
+    })
+    s = studioReducer(s, {
+      type: "SET_TRACK_COLOR",
+      trackId: "t1",
+      color: "#f43f5e",
+    })
+    expect(s.tracks[0].color).toBe("#f43f5e")
+    expect(s.tracks[1].color).toBe(TRACK_TYPES.loop.color)
+    expect(
+      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "nope", color: "#000" })
+    ).toBe(s)
+  })
+
+  it("SET_TRACK_COLOR ignores an empty or whitespace color", () => {
+    const s = withTrack()
+    expect(
+      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "t1", color: "" })
+    ).toBe(s)
+    expect(
+      studioReducer(s, { type: "SET_TRACK_COLOR", trackId: "t1", color: "   " })
+    ).toBe(s)
+  })
+})
+
 describe("studioReducer markers (US-19.3)", () => {
   it("ADD_MARKER appends a marker, clamping its position to >= 0", () => {
     const s1 = studioReducer(base(), {

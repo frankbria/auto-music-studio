@@ -26,7 +26,7 @@ export const BASE_PX_PER_SEC = 100
  * than under their strips. A single exported constant so the ruler's spacer,
  * the lane's strip, and the playhead's offset can't drift apart.
  */
-export const TRACK_STRIP_PX = 160
+export const TRACK_STRIP_PX = 208
 
 export const MIN_ZOOM = 0.25
 export const MAX_ZOOM = 4
@@ -163,6 +163,8 @@ export function timelineDurationSec(placements: Placement[]): number {
 
 /** One clip scheduled to play through the studio's AudioContext. */
 export type ScheduledClip = {
+  /** The placement this source plays — the same clip can sit on many tracks. */
+  placementId: string
   clipId: string
   /** AudioContext-relative time to start this source (>= audioContextNow). */
   when: number
@@ -200,7 +202,13 @@ export function computePlaybackSchedule(
     if (endSec <= playheadSec) continue
     const offset = Math.max(0, playheadSec - p.startSec) * rate
     const when = audioContextNow + Math.max(0, p.startSec - playheadSec)
-    schedule.push({ clipId: p.clipId, when, offset, playbackRate: rate })
+    schedule.push({
+      placementId: p.id,
+      clipId: p.clipId,
+      when,
+      offset,
+      playbackRate: rate,
+    })
   }
   return schedule.sort((a, b) => a.when - b.when)
 }

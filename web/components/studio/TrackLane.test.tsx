@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { act, useEffect, useRef } from "react"
 
 import { AddTrackButton, TrackLane } from "./TrackLane"
-import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import {
+  StudioProvider,
+  useStudio,
+  type StudioAction,
+} from "@/contexts/studio-context"
 import { TRACK_STRIP_PX } from "@/lib/timeline"
 import { TRACK_TYPES, type TrackType } from "@/lib/track-types"
 
@@ -32,14 +36,17 @@ function Harness({
   clips = [],
   trackType = "ai",
   snapOff = false,
+  setup = [],
 }: {
   clips?: SeedClip[]
   trackType?: TrackType
   snapOff?: boolean
+  /** Extra actions dispatched after seeding (US-19.4 control state). */
+  setup?: StudioAction[]
 }) {
   return (
     <StudioProvider>
-      <Seed clips={clips} trackType={trackType} snapOff={snapOff} />
+      <Seed clips={clips} trackType={trackType} snapOff={snapOff} setup={setup} />
     </StudioProvider>
   )
 }
@@ -48,10 +55,12 @@ function Seed({
   clips,
   trackType,
   snapOff,
+  setup,
 }: {
   clips: SeedClip[]
   trackType: TrackType
   snapOff: boolean
+  setup: StudioAction[]
 }) {
   const { state, dispatch } = useStudio()
   const seededRef = useRef(false)
@@ -73,12 +82,26 @@ function Seed({
         clipBpm: c.clipBpm,
       })
     })
+    for (const a of setup) dispatch(a)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const track = state.tracks.find((t) => t.id === "t1")
   if (!track) return null
-  return <TrackLane track={track} pxPerSec={20} token="tok" />
+  return (
+    <>
+      <TrackLane track={track} pxPerSec={20} token="tok" />
+      <div data-testid="t1-probe">
+        {JSON.stringify({
+          volumeDb: track.volumeDb,
+          pan: track.pan,
+          muted: track.muted,
+          solo: track.solo,
+          color: track.color,
+        })}
+      </div>
+    </>
+  )
 }
 
 afterEach(() => {
@@ -121,6 +144,134 @@ describe("TrackLane control strip", () => {
     expect(screen.getByTestId("track-strip").style.width).toBe(
       `${TRACK_STRIP_PX}px`
     )
+  })
+})
+
+describe("TrackLane per-track controls (US-19.4)", () => {
+  const probe = () => JSON.parse(screen.getByTestId("t1-probe").textContent!)
+
+  it("renders the volume fader at the track's level with the dB range", () => {
+    render(<Harness />)
+    const fader = screen.getByRole("slider", { name: "Track volume" })
+    expect(fader).toHaveAttribute("aria-valuenow", "0")
+    expect(fader).toHaveAttribute("aria-valuemin", "-60")
+    expect(fader).toHaveAttribute("aria-valuemax", "6")
+  })
+
+  it("changes the track's volume from the fader keyboard", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const fader = screen.getByRole("slider", { name: "Track volume" })
+    fader.focus()
+    await user.keyboard("{ArrowDown}")
+    expect(probe().volumeDb).toBe(-1)
+    await user.keyboard("{Home}")
+    expect(probe().volumeDb).toBe(-60)
+  })
+
+  it("changes the track's pan from the pan popover", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole("button", { name: "Track pan" }))
+    const pan = screen.getByRole("slider", { name: "Pan" })
+    expect(pan).toHaveAttribute("aria-valuenow", "0")
+    pan.focus()
+    await user.keyboard("{ArrowLeft}")
+    expect(probe().pan).toBe(-1)
+  })
+
+  it("labels the pan trigger with the current position", () => {
+    render(
+      <Harness setup={[{ type: "SET_TRACK_PAN", trackId: "t1", pan: -100 }]} />
+    )
+    expect(screen.getByRole("button", { name: "Track pan" })).toHaveTextContent(
+      "L100"
+    )
+  })
+
+  it("mute toggles pressed state and dims the lane", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const mute = screen.getByRole("button", { name: "Mute track" })
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    expect(mute).toHaveAttribute("aria-pressed", "false")
+    expect(region.className).not.toMatch(/opacity-50/)
+
+    await user.click(mute)
+    expect(mute).toHaveAttribute("aria-pressed", "true")
+    expect(probe().muted).toBe(true)
+    expect(region.className).toMatch(/opacity-50/)
+
+    await user.click(mute)
+    expect(probe().muted).toBe(false)
+  })
+
+  it("solo toggles pressed state", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const solo = screen.getByRole("button", { name: "Solo track" })
+    await user.click(solo)
+    expect(solo).toHaveAttribute("aria-pressed", "true")
+    expect(probe().solo).toBe(true)
+  })
+
+  it("dims a non-soloed lane while another track is soloed", () => {
+    render(
+      <Harness
+        setup={[
+          { type: "ADD_TRACK", id: "t2", trackType: "ai" },
+          { type: "TOGGLE_TRACK_SOLO", trackId: "t2" },
+        ]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    expect(region.className).toMatch(/opacity-50/)
+  })
+
+  it("does not dim a soloed lane while solos are active", () => {
+    render(
+      <Harness
+        setup={[
+          { type: "ADD_TRACK", id: "t2", trackType: "ai" },
+          { type: "TOGGLE_TRACK_SOLO", trackId: "t2" },
+          { type: "TOGGLE_TRACK_SOLO", trackId: "t1" },
+        ]}
+      />
+    )
+    const region = screen.getByRole("region", { name: "Track 1 timeline" })
+    expect(region.className).not.toMatch(/opacity-50/)
+  })
+
+  it("AI Regenerate opens a prompt dialog", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole("button", { name: "Regenerate track" }))
+    expect(
+      screen.getByRole("dialog", { name: /Regenerate/ })
+    ).toBeInTheDocument()
+  })
+
+  it("disables regenerate on audio and vocal tracks (nothing to prompt-generate)", () => {
+    render(<Harness trackType="audio" />)
+    expect(
+      screen.getByRole("button", { name: "Regenerate track" })
+    ).toBeDisabled()
+  })
+
+  it("changes the track color from the swatch popover", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole("button", { name: "Track color" }))
+    await user.click(screen.getByRole("button", { name: "Color Rose" }))
+    expect(probe().color).toBe("#f43f5e")
+    // Visually applied: the strip's accent border follows the track color.
+    expect(screen.getByTestId("track-strip").style.borderLeft).toContain(
+      "rgb(244, 63, 94)"
+    )
+    // Picking a color dismisses the popover (click-to-pick-and-dismiss).
+    expect(
+      screen.queryByRole("button", { name: "Color Rose" })
+    ).not.toBeInTheDocument()
   })
 })
 

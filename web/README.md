@@ -248,6 +248,32 @@ DAW export, US-19.6):
   click adds a snapped flag, dragging moves it (clamped to the timeline),
   clicking opens a popover to rename or delete.
 
+## Per-Track Controls (US-19.4)
+
+Each track strip (`components/studio/TrackLane.tsx`, now `TRACK_STRIP_PX`
+208px) carries a fader, pan, mute/solo, a color swatch, and an AI regenerate
+action, on top of the name edit from US-19.1:
+
+- **Volume / pan** — `volumeDb` (`[-60, +6]`, -60 renders as -∞/silence) and
+  `pan` (`[-100, +100]`, labeled `L`/`C`/`R`) live on `StudioTrack` in
+  `contexts/studio-context.tsx`, set via `SET_TRACK_VOLUME` / `SET_TRACK_PAN`
+  (clamped in the reducer) from a `Slider` inside the strip's popover.
+- **Mute / solo** — `TOGGLE_TRACK_MUTE` / `TOGGLE_TRACK_SOLO`. Solo is a
+  filter, not a radio button — any number of tracks can be soloed at once.
+  `lib/track-audio.ts`'s `isTrackSilenced`/`effectiveTrackGain` are the single
+  source of truth for whether a track is silenced, shared by the lane's dimmed
+  styling and the audio engine so sight and sound can't diverge.
+- **Color** — `SET_TRACK_COLOR` from a swatch picker in the strip popover,
+  overriding the track type's default color.
+- **Audio graph** — `hooks/use-studio-playback.ts` gives each track its own
+  `GainNode` → `StereoPannerNode` chain (built per schedule run, retuned live
+  on control changes via a ref so a fader move never tears down and
+  reschedules the running audio) before fanning into the shared master gain.
+- **AI regenerate** — `components/studio/TrackRegenerateDialog.tsx` submits a
+  prompt through the existing `/api/generate` (or sounds) pipeline and appends
+  the finished clip to the end of the track once generation completes;
+  regeneration is additive, never a replacement.
+
 ## Adding components
 
 To add components to your app, run the following command:

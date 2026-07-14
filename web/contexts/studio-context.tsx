@@ -15,6 +15,7 @@ import {
   type Placement,
   type SnapResolution,
 } from "@/lib/timeline"
+import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/lib/track-audio"
 import {
   BPM_MAX,
   BPM_MIN,
@@ -29,6 +30,12 @@ export type StudioTrack = {
   /** Which clip category this track accepts (US-19.2). */
   trackType: TrackType
   color: string
+  /** Fader level in dB, [-60, +6]; -60 renders as -∞ / silence (US-19.4). */
+  volumeDb: number
+  /** Stereo position, [-100, +100] mapping to StereoPannerNode -1..1 (US-19.4). */
+  pan: number
+  muted: boolean
+  solo: boolean
   clips: Placement[]
 }
 
@@ -89,6 +96,11 @@ export type StudioAction =
     }
   | { type: "REMOVE_TRACK"; trackId: string }
   | { type: "RENAME_TRACK"; trackId: string; name: string }
+  | { type: "SET_TRACK_VOLUME"; trackId: string; volumeDb: number }
+  | { type: "SET_TRACK_PAN"; trackId: string; pan: number }
+  | { type: "TOGGLE_TRACK_MUTE"; trackId: string }
+  | { type: "TOGGLE_TRACK_SOLO"; trackId: string }
+  | { type: "SET_TRACK_COLOR"; trackId: string; color: string }
   | {
       type: "ADD_CLIP"
       id: string
@@ -123,6 +135,19 @@ export type StudioAction =
   | { type: "MOVE_MARKER"; markerId: string; sec: number }
   | { type: "DELETE_MARKER"; markerId: string }
 
+/** Replace one track via `update`; unknown ids are a strict no-op. */
+function updateTrack(
+  state: StudioState,
+  trackId: string,
+  update: (t: StudioTrack) => StudioTrack
+): StudioState {
+  if (!state.tracks.some((t) => t.id === trackId)) return state
+  return {
+    ...state,
+    tracks: state.tracks.map((t) => (t.id === trackId ? update(t) : t)),
+  }
+}
+
 export function studioReducer(
   state: StudioState,
   action: StudioAction
@@ -135,6 +160,10 @@ export function studioReducer(
         trackType: action.trackType,
         // Type color by default — the type IS the visual identity (US-19.2).
         color: action.color ?? TRACK_TYPES[action.trackType].color,
+        volumeDb: 0,
+        pan: 0,
+        muted: false,
+        solo: false,
         clips: [],
       }
       return { ...state, tracks: [...state.tracks, track] }
@@ -144,14 +173,37 @@ export function studioReducer(
         ...state,
         tracks: state.tracks.filter((t) => t.id !== action.trackId),
       }
-    case "RENAME_TRACK": {
-      if (!state.tracks.some((t) => t.id === action.trackId)) return state
-      return {
-        ...state,
-        tracks: state.tracks.map((t) =>
-          t.id === action.trackId ? { ...t, name: action.name } : t
-        ),
-      }
+    case "RENAME_TRACK":
+      return updateTrack(state, action.trackId, (t) => ({
+        ...t,
+        name: action.name,
+      }))
+    case "SET_TRACK_VOLUME": {
+      if (!Number.isFinite(action.volumeDb)) return state
+      const volumeDb = Math.min(
+        VOLUME_DB_MAX,
+        Math.max(VOLUME_DB_MIN, action.volumeDb)
+      )
+      return updateTrack(state, action.trackId, (t) => ({ ...t, volumeDb }))
+    }
+    case "SET_TRACK_PAN": {
+      if (!Number.isFinite(action.pan)) return state
+      const pan = Math.min(100, Math.max(-100, action.pan))
+      return updateTrack(state, action.trackId, (t) => ({ ...t, pan }))
+    }
+    case "TOGGLE_TRACK_MUTE":
+      return updateTrack(state, action.trackId, (t) => ({
+        ...t,
+        muted: !t.muted,
+      }))
+    case "TOGGLE_TRACK_SOLO":
+      return updateTrack(state, action.trackId, (t) => ({ ...t, solo: !t.solo }))
+    case "SET_TRACK_COLOR": {
+      // Applied verbatim as CSS (border/background) — an empty value would
+      // silently erase the track's visual identity.
+      const color = action.color.trim()
+      if (!color) return state
+      return updateTrack(state, action.trackId, (t) => ({ ...t, color }))
     }
     case "ADD_CLIP": {
       const track = state.tracks.find((t) => t.id === action.trackId)
