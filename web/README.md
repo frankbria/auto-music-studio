@@ -274,6 +274,36 @@ action, on top of the name edit from US-19.1:
   the finished clip to the end of the track once generation completes;
   regeneration is additive, never a replacement.
 
+## Master Bus Controls (US-19.5)
+
+The studio's right aside is now tabbed **Workspace | Master**
+(`app/studio/page.tsx`); the Master tab holds `MasterBusPanel` with a live
+`StereoMeter` on top. The playback engine is owned by `StudioView` (called
+once) so both the timeline and the panel observe the same `AudioContext`.
+
+- **Audio chain** — `hooks/use-studio-playback.ts` splices the bus between
+  the track sum and the destination: sum → low shelf → mid peak → high shelf
+  (BiquadFilters) → compressor → master volume → limiter
+  (`DynamicsCompressorNode`, fixed 20:1 / 1ms attack / 50ms release / hard
+  knee) → destination, with a `ChannelSplitter` → dual `AnalyserNode` (L/R)
+  metering tap on the final output. Built once per `AudioContext`; survives
+  play/stop. Master volume sits *before* the limiter so the configured
+  ceiling stays a real output cap, and *after* the compressor so fader moves
+  don't change compression amount.
+- **State** — `masterBus: MasterBusState` on `StudioState`
+  (`lib/master-bus.ts` has the types, defaults, and ranges), set via
+  `SET_MASTER_VOLUME` / `SET_MASTER_EQ` / `SET_MASTER_COMPRESSOR` /
+  `SET_MASTER_LIMITER_CEILING` (clamped + NaN-guarded in the reducer). A
+  dedicated effect retunes the live nodes on change — same
+  never-restart-the-run ref pattern as the per-track controls.
+- **Metering** — `lib/metering.ts` (pure peak/RMS dBFS math + peak-hold
+  decay) drives `components/studio/StereoMeter.tsx`'s rAF loop: peak + RMS
+  bars, 1.5s peak-hold, clip indicators, -60 dBFS floor.
+- **Limiter caveat** — the ceiling is a soft limiter built on
+  `DynamicsCompressorNode`; Chromium's fixed internal makeup gain means a
+  -6 dB ceiling caps a near-0 dBFS tone at ≈ -2 dBFS rather than exactly -6.
+  Exact adherence needs an AudioWorklet limiter (deferred by design).
+
 ## Adding components
 
 To add components to your app, run the following command:
