@@ -46,7 +46,7 @@ MAX_PLACEMENTS_PER_TRACK = 256
 class PlacementRequest(BaseModel):
     """A clip placed on a track's timeline at ``start_sec``, optionally trimmed."""
 
-    clip_id: str
+    clip_id: str = Field(min_length=1)
     start_sec: float = Field(ge=0.0)
     duration_sec: float | None = Field(default=None, gt=0.0)
 
