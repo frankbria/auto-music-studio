@@ -4,11 +4,58 @@ import { act, useRef } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { MasterBusPanel } from "./MasterBusPanel"
+import { AuthContext } from "@/contexts/auth-context"
 import { StudioProvider, useStudio } from "@/contexts/studio-context"
+import type { StudioExportState } from "@/hooks/use-studio-export"
 import { DEFAULT_MASTER_BUS } from "@/lib/master-bus"
 import { stubRaf } from "@/test/raf-stub"
 
+const push = vi.fn()
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+
+// --- Mock the export hook + workspace resolution so Send to Mastering can be
+// exercised without the network; the submit→poll lifecycle has its own tests. ---
+const exportMixdown = vi.fn()
+let hookState: StudioExportState = { phase: "idle" }
+let capturedOnComplete: ((clipId: string | null) => void) | undefined
+
+vi.mock("@/hooks/use-studio-export", () => ({
+  useStudioExport: (opts?: {
+    onMixdownComplete?: (clipId: string | null) => void
+  }) => {
+    capturedOnComplete = opts?.onMixdownComplete
+    return {
+      state: hookState,
+      exportMixdown,
+      exportDaw: vi.fn(),
+      reset: vi.fn(),
+    }
+  },
+}))
+
+vi.mock("@/hooks/use-workspaces", () => ({
+  useWorkspaces: () => ({
+    defaultWorkspace: { id: "w1", is_default: true },
+    workspaces: [],
+    loading: false,
+    error: false,
+  }),
+}))
+
+const auth = {
+  user: { id: "u1" },
+  accessToken: "tok",
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  completeLogin: vi.fn(),
+  logout: vi.fn(),
+} as never
+
 afterEach(() => {
+  hookState = { phase: "idle" }
+  capturedOnComplete = undefined
+  vi.clearAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -16,22 +63,42 @@ afterEach(() => {
  * the panel must render fine before playback ever starts (US-19.5). */
 function Harness({
   limiter = { current: null },
+  withTrack = false,
 }: {
   limiter?: { current: DynamicsCompressorNode | null }
+  withTrack?: boolean
 }) {
   return (
-    <StudioProvider>
-      <Seed limiter={limiter} />
-    </StudioProvider>
+    <AuthContext.Provider value={auth}>
+      <StudioProvider>
+        <Seed limiter={limiter} withTrack={withTrack} />
+      </StudioProvider>
+    </AuthContext.Provider>
   )
 }
 
 function Seed({
   limiter,
+  withTrack = false,
 }: {
   limiter: { current: DynamicsCompressorNode | null }
+  withTrack?: boolean
 }) {
-  const { state } = useStudio()
+  const { state, dispatch } = useStudio()
+  // Seed one non-empty track so Send to Mastering has content to bounce.
+  if (withTrack && state.tracks.length === 0) {
+    dispatch({ type: "ADD_TRACK", id: "t1", trackType: "ai" })
+    dispatch({
+      type: "ADD_CLIP",
+      id: "pl1",
+      trackId: "t1",
+      clipId: "c1",
+      startSec: 0,
+      title: "Clip",
+      durationSec: 10,
+      generationMode: null,
+    })
+  }
   const analyserLeft = useRef<AnalyserNode | null>(null)
   const analyserRight = useRef<AnalyserNode | null>(null)
   return (
@@ -257,5 +324,52 @@ describe("MasterBusPanel limiter-active indicator (US-19.5)", () => {
       "data-active",
       "false"
     )
+  })
+})
+
+describe("MasterBusPanel Send to Mastering (US-19.6)", () => {
+  it("renders a Send to Mastering button", () => {
+    stubRaf()
+    render(<Harness withTrack />)
+    expect(
+      screen.getByRole("button", { name: /send to mastering/i })
+    ).toBeInTheDocument()
+  })
+
+  it("runs a WAV mixdown of the arrangement on click", async () => {
+    stubRaf()
+    const user = userEvent.setup()
+    render(<Harness withTrack />)
+    await user.click(
+      screen.getByRole("button", { name: /send to mastering/i })
+    )
+    expect(exportMixdown).toHaveBeenCalledOnce()
+    const [body, token] = exportMixdown.mock.calls[0]
+    expect(token).toBe("tok")
+    expect(body.format).toBe("wav")
+    expect(body.workspace_id).toBe("w1")
+    expect(body.tracks).toHaveLength(1)
+  })
+
+  it("disables the button with no content to bounce", () => {
+    stubRaf()
+    render(<Harness />)
+    expect(
+      screen.getByRole("button", { name: /send to mastering/i })
+    ).toBeDisabled()
+  })
+
+  it("navigates to the mastering page with the new clip once the mixdown completes", () => {
+    stubRaf()
+    render(<Harness withTrack />)
+    act(() => capturedOnComplete?.("mix1"))
+    expect(push).toHaveBeenCalledWith("/release?tab=mastering&clip=mix1")
+  })
+
+  it("shows inline progress while the mixdown runs", () => {
+    hookState = { phase: "polling", progress: "Mixing" }
+    stubRaf()
+    render(<Harness withTrack />)
+    expect(screen.getByRole("status")).toHaveTextContent("Mixing")
   })
 })
