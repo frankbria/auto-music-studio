@@ -9,6 +9,7 @@ import { StudioProvider, useStudio } from "@/contexts/studio-context"
 import {
   DEFAULT_MASTER_BUS,
   LIMITER_ATTACK_SEC,
+  LIMITER_KNEE_DB,
   LIMITER_RELEASE_SEC,
   LIMITER_RATIO,
 } from "@/lib/master-bus"
@@ -1354,6 +1355,10 @@ describe("useStudioPlayback master bus (US-19.5)", () => {
     expect(limiter.ratio.value).toBe(LIMITER_RATIO)
     expect(limiter.attack.value).toBeCloseTo(LIMITER_ATTACK_SEC)
     expect(limiter.release.value).toBeCloseTo(LIMITER_RELEASE_SEC)
+    // Hard knee — with the Web Audio default (30 dB) the full 20:1 ratio only
+    // engages 15 dB above threshold, so a -6 dB ceiling would never cap
+    // realistic (non-clipping) material. Live-demo verified.
+    expect(limiter.knee.value).toBe(LIMITER_KNEE_DB)
     expect(limiter.threshold.value).toBe(DEFAULT_MASTER_BUS.limiterCeilingDb)
 
     const masterVolume = gains[gains.length - 1]

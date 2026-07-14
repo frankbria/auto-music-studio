@@ -47,6 +47,9 @@ export const LIMITER_ATTACK_SEC = 0.001
 // Faster than the Web Audio default (0.25s) so the ceiling lets go quickly
 // instead of audibly pumping on transient-heavy material.
 export const LIMITER_RELEASE_SEC = 0.05
+// Hard knee. The Web Audio default (30 dB) only reaches full ratio 15 dB
+// above threshold, so a -6 dB ceiling would never cap non-clipping material.
+export const LIMITER_KNEE_DB = 0
 
 export type MasterBusState = {
   masterVolumeDb: number
