@@ -650,8 +650,8 @@ class TestClipStreaming:
             assert "retry-after" in third.headers
 
 
-# Fields the public read keeps owner-only: an internal structural id and the
-# generation recipe. Nothing on the song page renders them for a visitor.
+# Fields the public read keeps owner-only: internal structural ids and the
+# generation recipe. Nothing a visitor sees on the song page renders them.
 OWNER_ONLY_FIELDS = ("workspace_id", "seed", "inference_steps")
 
 
@@ -756,6 +756,27 @@ class TestGetClipPublic:
         assert body["workspace_id"] == str(clip.workspace_id)
         assert body["seed"] == 1234
         assert body["inference_steps"] == 30
+
+    async def test_non_owner_response_redacts_ancestry(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-lineage-anon@example.com")
+        parent = await _make_clip(owner, wav_bytes, is_public=False)
+        child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
+
+        # Raw ancestor ids are the same correlation vector as workspace_id (and
+        # an ObjectId embeds its creation time), so a public clip must not reveal
+        # that a *private* parent exists. get_lineage already refuses to leak
+        # other users' ancestors; this keeps the metadata read consistent.
+        body = (await client.get(_public_url(str(child.id)))).json()
+        assert body["parent_clip_ids"] == []
+        assert str(parent.id) not in json.dumps(body)
+
+    async def test_owner_response_keeps_ancestry(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-lineage-owner@example.com")
+        parent = await _make_clip(owner, wav_bytes, is_public=False)
+        child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
+
+        body = (await client.get(_public_url(str(child.id)), headers=_auth_headers(owner, settings))).json()
+        assert body["parent_clip_ids"] == [str(parent.id)]
 
     async def test_user_id_is_never_exposed(self, client, settings, local_storage, wav_bytes) -> None:
         owner = await _make_user("public-noleak-owner@example.com")

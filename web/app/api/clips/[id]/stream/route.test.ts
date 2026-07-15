@@ -97,7 +97,7 @@ describe("GET /api/clips/[id]/stream", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("?format=mp3")
   })
 
-  it("passes a 416 through (unsatisfiable range)", async () => {
+  it("passes a 416 through, keeping the Content-Range that tells the client the real length", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -115,6 +115,9 @@ describe("GET /api/clips/[id]/stream", () => {
       ctx("c1")
     )
     expect(res.status).toBe(416)
+    // RFC 9110: a 416 carries the resource length so the client can retry with
+    // a satisfiable range. Dropping it strands a seeking player.
+    expect(res.headers.get("content-range")).toBe("bytes */500")
   })
 
   it("passes a 404 through for a private or unknown clip", async () => {

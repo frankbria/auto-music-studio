@@ -173,11 +173,20 @@ class PublicClipResponse(ClipResponse):
 
     Extends :class:`ClipResponse` with ``is_owner`` — computed server-side, so
     the owner's id never reaches the wire — and blanks the fields a stranger has
-    no business seeing: ``workspace_id`` (an internal structural id, and a way to
-    correlate a user's public clips) plus ``seed``/``inference_steps`` (the
-    generation recipe). Nothing on the public song page renders them; the owner
-    still needs ``workspace_id`` for the remix flow, so their own read keeps all
-    three. Widening this response widens what the whole internet can read.
+    no business seeing:
+
+    * ``workspace_id`` and ``parent_clip_ids`` — internal ids that correlate a
+      user's clips to each other. An ancestor is often *private*, and an
+      ObjectId embeds its creation time, so echoing ancestry would reveal that a
+      private clip exists and roughly when it was made. :func:`get_lineage`
+      already refuses to leak ancestors across users; this keeps the metadata
+      read consistent with that.
+    * ``seed``/``inference_steps`` — the generation recipe.
+
+    Nothing a visitor sees on the public song page renders any of them (the
+    lineage panel is an owner-scoped, authenticated read), while the owner still
+    needs them for the remix and lineage flows, so their own read keeps all four.
+    Widening this response widens what the whole internet can read.
     """
 
     # Widened from ClipResponse's ``str``: null for a non-owner, set for the owner.
@@ -189,7 +198,7 @@ class PublicClipResponse(ClipResponse):
         is_owner = current_user_id is not None and str(clip.user_id) == current_user_id
         fields = ClipResponse.from_clip(clip).model_dump()
         if not is_owner:
-            fields.update(workspace_id=None, seed=None, inference_steps=None)
+            fields.update(workspace_id=None, seed=None, inference_steps=None, parent_clip_ids=[])
         return cls(**fields, is_owner=is_owner)
 
 

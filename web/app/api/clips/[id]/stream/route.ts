@@ -54,16 +54,21 @@ export async function GET(
     )
   }
 
-  // 206 is a success here, so gate on the error range rather than res.ok.
-  if (res.status >= 400) {
-    const body = await res.json().catch(() => ({}))
-    return NextResponse.json(body, { status: res.status })
-  }
-
   const headers = new Headers()
   for (const name of PASSTHROUGH_HEADERS) {
     const value = res.headers.get(name)
     if (value) headers.set(name, value)
   }
+
+  // 206 is a success here, so gate on the error range rather than res.ok. Errors
+  // still keep the headers above: a 416 carries `Content-Range: bytes */{length}`,
+  // which is how a seeking client learns the real length and retries.
+  if (res.status >= 400) {
+    const body = await res.json().catch(() => ({}))
+    headers.set("content-type", "application/json")
+    headers.delete("content-length") // the JSON body's length differs from upstream's
+    return NextResponse.json(body, { status: res.status, headers })
+  }
+
   return new NextResponse(res.body, { status: res.status, headers })
 }
