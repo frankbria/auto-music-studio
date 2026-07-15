@@ -1,10 +1,18 @@
 "use client"
 
 import { useEffect, useRef, useState, type RefObject } from "react"
+import { useRouter } from "next/navigation"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Rocket01Icon } from "@hugeicons/core-free-icons"
 
+import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { StereoMeter } from "@/components/studio/StereoMeter"
 import { useStudio } from "@/contexts/studio-context"
+import { useAuth } from "@/hooks/use-auth"
+import { useStudioExport } from "@/hooks/use-studio-export"
+import { useWorkspaces } from "@/hooks/use-workspaces"
+import { buildMixdownRequest, DEFAULT_STUDIO_PROJECT_NAME } from "@/lib/studio-export"
 import {
   COMPRESSOR_ATTACK_SEC_MAX,
   COMPRESSOR_ATTACK_SEC_MIN,
@@ -137,6 +145,74 @@ function LimiterIndicator({
       />
       Limiting
     </span>
+  )
+}
+
+
+/** "Send to Mastering" (US-19.6): bounce the arrangement to a WAV clip, then
+ * navigate to the release/mastering page with that clip pre-selected. Uses the
+ * same export hook as ExportMenu; navigation happens on completion. */
+function SendToMastering() {
+  const { state } = useStudio()
+  const { accessToken } = useAuth()
+  const { defaultWorkspace } = useWorkspaces()
+  const router = useRouter()
+  const { state: exportState, exportMixdown } = useStudioExport({
+    onMixdownComplete: (clipId) => {
+      if (clipId) {
+        router.push(`/release?tab=mastering&clip=${encodeURIComponent(clipId)}`)
+      }
+    },
+  })
+
+  const workspaceId = defaultWorkspace?.id
+  const hasContent = state.tracks.some((t) => t.clips.length > 0)
+  const busy =
+    exportState.phase === "submitting" || exportState.phase === "polling"
+  const disabled = !workspaceId || !accessToken || !hasContent || busy
+
+  function sendToMastering() {
+    if (!accessToken || !workspaceId) return
+    void exportMixdown(
+      buildMixdownRequest(state, {
+        workspaceId,
+        projectName: DEFAULT_STUDIO_PROJECT_NAME,
+        format: "wav",
+      }),
+      accessToken
+    )
+  }
+
+  const progress =
+    exportState.phase === "submitting"
+      ? "Queued…"
+      : exportState.phase === "polling"
+        ? (exportState.progress ?? "Queued…")
+        : exportState.phase === "error"
+          ? exportState.message
+          : null
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-4">
+      <Button
+        type="button"
+        size="sm"
+        onClick={sendToMastering}
+        disabled={disabled}
+      >
+        <HugeiconsIcon icon={Rocket01Icon} data-icon="inline-start" />
+        Send to Mastering
+      </Button>
+      {progress && (
+        <span
+          role="status"
+          className="text-xs text-muted-foreground"
+          data-phase={exportState.phase}
+        >
+          {progress}
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -314,6 +390,8 @@ export function MasterBusPanel({
           }
         />
       </div>
+
+      <SendToMastering />
     </div>
   )
 }

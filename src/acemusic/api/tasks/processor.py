@@ -45,6 +45,7 @@ from .export import EXPORT_JOB_HANDLERS
 from .extraction import EXTRACTION_JOB_HANDLERS
 from .iterative import ITERATIVE_JOB_HANDLERS
 from .mastering import MASTERING_JOB_HANDLERS
+from .studio import STUDIO_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ class JobProcessor:
             **EXTRACTION_JOB_HANDLERS,
             **EXPORT_JOB_HANDLERS,
             **DAW_EXPORT_JOB_HANDLERS,
+            **STUDIO_JOB_HANDLERS,
         }.items():
             self._handlers[job_type] = partial(self._run_storage_handler, storage_handler)
         # Iterative generation handlers (US-10.3) are generative: they need the
