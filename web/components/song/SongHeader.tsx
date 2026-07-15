@@ -37,8 +37,10 @@ export type SongHeaderProps = {
   isPublic?: boolean
   /**
    * Whether the viewer owns this clip (US-20.0). Only the owner may change
-   * visibility, so the Publish toggle is hidden otherwise. Defaults to true so
-   * the existing owner-only callers keep their toggle without passing it.
+   * visibility, so the Publish toggle is hidden otherwise. Defaults to **false**:
+   * this header renders on a public page now, so an omitted prop must fail
+   * closed (toggle hidden) rather than offer a stranger a control that would
+   * only 404 anyway.
    */
   isOwner?: boolean
   /** Extra controls rendered at the end of the action row (e.g. the menu). */
@@ -51,7 +53,7 @@ export function SongHeader({
   onShare,
   onPublishToggle,
   isPublic: isPublicProp,
-  isOwner = true,
+  isOwner = false,
   actions,
 }: SongHeaderProps) {
   const { state, dispatch } = usePlayer()
