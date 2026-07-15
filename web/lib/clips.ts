@@ -1,11 +1,13 @@
 // Player track model + backend URL builders for clip media (US-15.6).
 //
 // The playbar plays `Track` objects that already carry their display metadata
-// and a resolvable `audioUrl`. The `clipAudioUrl`/`clipArtworkUrl` helpers
-// build the backend paths (GET /api/v1/clips/{id}/audio | /artwork) so that, as
-// soon as a clip-browsing UI lands, it can turn a clip id into a playable
-// Track. Those backend endpoints are owner-scoped/public on the FastAPI side;
-// wiring the same-origin proxy + auth for streaming is a later story.
+// and a resolvable `audioUrl`. `clipAudioUrl` points at the same-origin stream
+// proxy so an <audio src> resolves against this app rather than the (non-public)
+// backend origin.
+//
+// ponytail: `clipArtworkUrl` still builds a bare /api/v1 backend path with no
+// proxy route behind it, so cover art does not load. Left as-is — US-20.0 needs
+// audio, and artwork wants its own proxy + placeholder story.
 
 /** A single playable item in the player queue. */
 export type Track = {
@@ -37,9 +39,17 @@ export function trackFromClip(clip: {
   }
 }
 
-/** Backend audio stream path for a clip. */
+/**
+ * Same-origin stream path for a clip's audio (US-20.0).
+ *
+ * Targets the `/stream` proxy, not `/audio`: this URL is consumed as an
+ * `<audio src>`, which cannot attach a Bearer token, so it has to reach the
+ * endpoint that serves public clips anonymously (and supports seeking). A
+ * private clip therefore does not play through this path — see the route's
+ * comment.
+ */
 export function clipAudioUrl(id: string): string {
-  return `/api/v1/clips/${encodeURIComponent(id)}/audio`
+  return `/api/clips/${encodeURIComponent(id)}/stream`
 }
 
 /** Backend cover-art path for a clip. */

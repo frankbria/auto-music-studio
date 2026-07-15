@@ -5,9 +5,13 @@
 * ``PATCH  /clips/{id}``      → rename and/or publish (title, is_public; US-17.6)
 * ``DELETE /clips/{id}``      → remove the record and its stored audio
 * ``GET    /clips/{id}/audio``→ stream audio, byte ranges + ``?format=`` (US-9.3)
+* ``GET    /clips/{id}/public``→ metadata for anonymous/non-owner callers (US-20.0)
 
-CRUD is owner-scoped; the audio/stream endpoints honor ``is_public``, which the
-PATCH publish toggle sets (guarded — see :func:`acemusic.api.services.clips.update_clip_fields`).
+CRUD is owner-scoped; the audio/stream/public endpoints honor ``is_public``, which
+the PATCH publish toggle sets (guarded — see :func:`acemusic.api.services.clips.update_clip_fields`).
+Note ``GET /clips/{id}`` and ``GET /clips/{id}/public`` are deliberately distinct:
+the former 404s on another user's clip even when public, the latter is the
+narrower, redacted read that makes link sharing work.
 Access and filter rules live in :mod:`acemusic.api.services.clips`.
 """
 
@@ -48,10 +52,12 @@ PER_PAGE_MAX = 100
 # (mirrors the jobs/generation routers), so unauthenticated requests get 401.
 router = APIRouter(prefix="/clips", tags=["clips"], dependencies=[Depends(get_current_user)])
 
-# US-14.2: the streaming endpoint must serve *public* clips to anonymous
-# listeners, so it lives on a separate router without the blanket auth gate
-# above. Auth is still resolved per-request (get_current_user_optional) to
-# enforce private-clip access. Mounted alongside ``router`` in main.py.
+# Public-facing clip reads live here: they must serve *public* clips to
+# anonymous callers (US-14.2 audio streaming, US-20.0 metadata), so this router
+# omits the blanket auth gate above. Auth is still resolved per-request
+# (get_current_user_optional) to enforce private-clip access, and every route
+# here MUST resolve visibility through a get_clip_for_streaming-style helper
+# rather than trusting the caller. Mounted alongside ``router`` in main.py.
 stream_router = APIRouter(prefix="/clips", tags=["clips"])
 
 
@@ -160,6 +166,40 @@ class ClipResponse(BaseModel):
             is_public=clip.is_public,
             created_at=clip.created_at,
         )
+
+
+class PublicClipResponse(ClipResponse):
+    """A clip as served by the anonymous public read (US-20.0).
+
+    Extends :class:`ClipResponse` with ``is_owner`` — computed server-side, so
+    the owner's id never reaches the wire — and blanks the fields a stranger has
+    no business seeing:
+
+    * ``workspace_id`` and ``parent_clip_ids`` — internal ids that correlate a
+      user's clips to each other. An ancestor is often *private*, and an
+      ObjectId embeds its creation time, so echoing ancestry would reveal that a
+      private clip exists and roughly when it was made. :func:`get_lineage`
+      already refuses to leak ancestors across users; this keeps the metadata
+      read consistent with that.
+    * ``seed``/``inference_steps`` — the generation recipe.
+
+    Nothing a visitor sees on the public song page renders any of them (the
+    lineage panel is an owner-scoped, authenticated read), while the owner still
+    needs them for the remix and lineage flows, so their own read keeps all four.
+    Widening this response widens what the whole internet can read.
+    """
+
+    # Widened from ClipResponse's ``str``: null for a non-owner, set for the owner.
+    workspace_id: str | None
+    is_owner: bool
+
+    @classmethod
+    def from_clip_for(cls, clip: Clip, current_user_id: str | None) -> "PublicClipResponse":
+        is_owner = current_user_id is not None and str(clip.user_id) == current_user_id
+        fields = ClipResponse.from_clip(clip).model_dump()
+        if not is_owner:
+            fields.update(workspace_id=None, seed=None, inference_steps=None, parent_clip_ids=[])
+        return cls(**fields, is_owner=is_owner)
 
 
 class ClipListResponse(BaseModel):
@@ -398,6 +438,31 @@ async def get_clip_audio(
             )
 
     return Response(content=audio, media_type=media_type, headers=headers)
+
+
+@stream_router.get(
+    "/{clip_id}/public",
+    response_model=PublicClipResponse,
+    dependencies=[Depends(enforce_stream_rate_limit)],
+)
+async def get_clip_public(
+    clip_id: str,
+    current: CurrentUser | None = Depends(get_current_user_optional),
+) -> PublicClipResponse:
+    """Read a public clip's metadata without authentication (US-20.0).
+
+    The read side of link sharing: ``{origin}/song/{id}`` has to open for a
+    signed-out recipient. Visibility follows the streaming rules exactly
+    (:func:`get_clip_for_streaming`, US-14.2) — anonymous callers see public
+    clips and get an indistinguishable 404 for private-or-unknown ones, while
+    authenticated callers get 403 on another user's private clip.
+
+    Deliberately *not* the owner-scoped CRUD ``GET /clips/{id}``, which still
+    404s on another user's clip even when it is public. This is a separate,
+    narrower path: see :class:`PublicClipResponse` for what a stranger may read.
+    """
+    clip = await get_clip_for_streaming(clip_id, current.user_id if current else None)
+    return PublicClipResponse.from_clip_for(clip, current.user_id if current else None)
 
 
 @stream_router.get("/{clip_id}/stream", dependencies=[Depends(enforce_stream_rate_limit)])

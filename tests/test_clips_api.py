@@ -8,6 +8,7 @@ over a local MongoDB (``mongo_db``) and real LocalStorage, mirroring
 and skip when it is absent (CI does not install it).
 """
 
+import json
 import shutil
 import time
 
@@ -43,6 +44,10 @@ def _audio_url(clip_id: str) -> str:
 
 def _stream_url(clip_id: str) -> str:
     return f"{API_V1_PREFIX}/clips/{clip_id}/stream"
+
+
+def _public_url(clip_id: str) -> str:
+    return f"{API_V1_PREFIX}/clips/{clip_id}/public"
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +322,20 @@ async def _make_user(email: str):
     return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
 
 
-async def _make_clip(user, audio_bytes: bytes, *, fmt: str = "wav", is_public: bool = False, store: bool = True):
-    """Insert a clip owned by ``user`` and (optionally) store its audio bytes."""
+async def _make_clip(
+    user,
+    audio_bytes: bytes,
+    *,
+    fmt: str = "wav",
+    is_public: bool = False,
+    store: bool = True,
+    **fields,
+):
+    """Insert a clip owned by ``user`` and (optionally) store its audio bytes.
+
+    Extra ``fields`` land on the Clip verbatim, so tests that assert on display
+    or redacted metadata (title, seed, ...) can set just what they check.
+    """
     clip_id = PydanticObjectId()
     workspace_id = PydanticObjectId()
     file_path = f"{user.id}/{workspace_id}/clips/{clip_id}.{fmt}"
@@ -331,6 +348,7 @@ async def _make_clip(user, audio_bytes: bytes, *, fmt: str = "wav", is_public: b
         file_path=file_path,
         format=fmt,
         is_public=is_public,
+        **fields,
     )
     await clip.insert()
     return clip
@@ -630,3 +648,154 @@ class TestClipStreaming:
             third = await limited_client.get(url)
             assert third.status_code == 429
             assert "retry-after" in third.headers
+
+
+# Fields the public read keeps owner-only: internal structural ids and the
+# generation recipe. Nothing a visitor sees on the song page renders them.
+OWNER_ONLY_FIELDS = ("workspace_id", "seed", "inference_steps")
+
+
+@pytest.mark.integration
+class TestGetClipPublic:
+    """US-20.0: GET /clips/{id}/public — optional auth, is_public-scoped metadata."""
+
+    # --- Authentication / access control -----------------------------------
+
+    async def test_anonymous_reads_public_clip(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-anon-pub@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True, title="Midnight Drive", style_tags=["synthwave"])
+
+        resp = await client.get(_public_url(str(clip.id)))  # no auth header
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["title"] == "Midnight Drive"
+        assert body["style_tags"] == ["synthwave"]
+        assert body["is_public"] is True
+        assert body["is_owner"] is False
+
+    async def test_anonymous_private_clip_returns_404(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-anon-priv@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False, title="Secret Demo")
+
+        # 404 (not 403) so a stranger cannot tell a private clip exists, and the
+        # title must not leak through the error body.
+        resp = await client.get(_public_url(str(clip.id)))
+        assert resp.status_code == 404
+        assert "Secret Demo" not in resp.text
+
+    async def test_anonymous_unknown_clip_returns_404(self, client, local_storage) -> None:
+        resp = await client.get(_public_url(str(PydanticObjectId())))
+        assert resp.status_code == 404
+
+    async def test_malformed_id_returns_404(self, client, local_storage) -> None:
+        resp = await client.get(_public_url("not-an-object-id"))
+        assert resp.status_code == 404
+
+    async def test_authenticated_non_owner_reads_public_clip(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-nonowner-owner@example.com")
+        other = await _make_user("public-nonowner-user@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(other, settings))
+        assert resp.status_code == 200
+        assert resp.json()["is_owner"] is False
+
+    async def test_authenticated_non_owner_private_clip_returns_403(
+        self, client, settings, local_storage, wav_bytes
+    ) -> None:
+        owner = await _make_user("public-priv-owner@example.com")
+        other = await _make_user("public-priv-user@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False)
+
+        # Authenticated callers get the 403/404 distinction (get_clip_for_streaming).
+        resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(other, settings))
+        assert resp.status_code == 403
+
+    async def test_owner_reads_own_public_clip(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-own-pub@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))
+        assert resp.status_code == 200
+        assert resp.json()["is_owner"] is True
+
+    async def test_owner_reads_own_private_clip(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-own-priv@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=False)
+
+        resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))
+        assert resp.status_code == 200
+        assert resp.json()["is_owner"] is True
+
+    async def test_invalid_token_is_rejected(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-badtoken@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        # An explicitly-supplied bad token is a 401, not an anonymous request.
+        resp = await client.get(_public_url(str(clip.id)), headers={"Authorization": "Bearer not-a-real-token"})
+        assert resp.status_code == 401
+
+    # --- Redaction ---------------------------------------------------------
+
+    async def test_non_owner_response_redacts_owner_only_fields(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-redact-anon@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True, seed=1234, inference_steps=30)
+
+        body = (await client.get(_public_url(str(clip.id)))).json()
+        for field in OWNER_ONLY_FIELDS:
+            assert body[field] is None, f"{field} must not reach a non-owner"
+        # The owner's internal ids must not leak anywhere in the payload.
+        assert str(clip.workspace_id) not in json.dumps(body)
+        assert str(clip.user_id) not in json.dumps(body)
+
+    async def test_owner_response_keeps_owner_only_fields(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-redact-owner@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True, seed=1234, inference_steps=30)
+
+        body = (await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))).json()
+        assert body["workspace_id"] == str(clip.workspace_id)
+        assert body["seed"] == 1234
+        assert body["inference_steps"] == 30
+
+    async def test_non_owner_response_redacts_ancestry(self, client, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-lineage-anon@example.com")
+        parent = await _make_clip(owner, wav_bytes, is_public=False)
+        child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
+
+        # Raw ancestor ids are the same correlation vector as workspace_id (and
+        # an ObjectId embeds its creation time), so a public clip must not reveal
+        # that a *private* parent exists. get_lineage already refuses to leak
+        # other users' ancestors; this keeps the metadata read consistent.
+        body = (await client.get(_public_url(str(child.id)))).json()
+        assert body["parent_clip_ids"] == []
+        assert str(parent.id) not in json.dumps(body)
+
+    async def test_owner_response_keeps_ancestry(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-lineage-owner@example.com")
+        parent = await _make_clip(owner, wav_bytes, is_public=False)
+        child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
+
+        body = (await client.get(_public_url(str(child.id)), headers=_auth_headers(owner, settings))).json()
+        assert body["parent_clip_ids"] == [str(parent.id)]
+
+    async def test_user_id_is_never_exposed(self, client, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-noleak-owner@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        # Even the owner's own read never carries the raw owner id — ownership
+        # is communicated only through is_owner.
+        body = (await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))).json()
+        assert "user_id" not in body
+
+    # --- Rate limiting -----------------------------------------------------
+
+    async def test_exceeding_rate_limit_returns_429(self, settings, local_storage, wav_bytes) -> None:
+        owner = await _make_user("public-ratelimit@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=True)
+
+        limited = settings.model_copy(update={"stream_rate_limit_per_minute": 2})
+        async with _async_client(create_app(limited)) as limited_client:
+            url = _public_url(str(clip.id))
+            assert (await limited_client.get(url)).status_code == 200
+            assert (await limited_client.get(url)).status_code == 200
+            assert (await limited_client.get(url)).status_code == 429

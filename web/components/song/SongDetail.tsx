@@ -11,8 +11,7 @@ import { SongHeader } from "@/components/song/SongHeader"
 import { SongLyrics } from "@/components/song/SongLyrics"
 import { SongMetadata } from "@/components/song/SongMetadata"
 import { SongPlayer } from "@/components/song/SongPlayer"
-import { useClip } from "@/hooks/use-clip"
-import { useRequireAuth } from "@/hooks/use-require-auth"
+import { usePublicClip } from "@/hooks/use-public-clip"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 import { isFullSongEligible } from "@/lib/song-structure"
@@ -24,14 +23,14 @@ import type { Clip } from "@/lib/workspace-clips"
 // (US-17.2) dispatches through useSongActions: modal workflows open the
 // placeholder container, editor/studio navigate, downloads fetch audio, and
 // delete confirms first.
+//
+// This page is public (US-20.0): a shared /song/{id} link has to open for a
+// signed-out visitor, so there is deliberately no auth gate here and the data
+// comes from the is_public-scoped public read. Anything that acts on the clip
+// is owner-only and hidden accordingly — see SongDetailContent.
 
 export function SongDetail({ clipId }: { clipId: string }) {
-  const { isLoading: authLoading, isAuthenticated } = useRequireAuth()
-  const { clip, loading, error, notFound } = useClip(clipId)
-
-  // Render nothing until authed — useRequireAuth redirects otherwise, and this
-  // avoids flashing protected content during the check (matches CreatePage).
-  if (authLoading || !isAuthenticated) return null
+  const { clip, loading, error, notFound } = usePublicClip(clipId)
 
   if (loading) {
     return (
@@ -73,6 +72,9 @@ export function SongDetail({ clipId }: { clipId: string }) {
 function SongDetailContent({ clip }: { clip: Clip }) {
   const { isFreeTier } = useSubscriptionTier()
   const actions = useSongActions(clip)
+  // Server-computed (US-20.0). Absent => not from the public read, so require an
+  // explicit true rather than letting undefined read as ownership.
+  const isOwner = clip.is_owner === true
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8 p-8 lg:flex-row">
@@ -80,17 +82,23 @@ function SongDetailContent({ clip }: { clip: Clip }) {
         <SongHeader
           clip={clip}
           isPublic={actions.isPublic}
+          isOwner={isOwner}
           onPublishToggle={actions.togglePublish}
+          // Every item in the menu acts on the clip (edit, remix, publish,
+          // delete), so a visitor gets no menu at all rather than a shell of
+          // disabled rows. Like/Dislike/Share stay — anyone can re-share a link.
           actions={
-            <SongActionsMenu
-              isPublic={actions.isPublic}
-              isFreeTier={isFreeTier}
-              onAction={actions.handleAction}
-              // Full Song only makes sense for a short seed; hide it otherwise.
-              hiddenActionIds={
-                isFullSongEligible(clip) ? undefined : ["get-full-song"]
-              }
-            />
+            isOwner ? (
+              <SongActionsMenu
+                isPublic={actions.isPublic}
+                isFreeTier={isFreeTier}
+                onAction={actions.handleAction}
+                // Full Song only makes sense for a short seed; hide it otherwise.
+                hiddenActionIds={
+                  isFullSongEligible(clip) ? undefined : ["get-full-song"]
+                }
+              />
+            ) : undefined
           }
         />
         {/* Download errors surface here; delete errors show in their dialog. */}

@@ -61,7 +61,7 @@ describe("SongHeader", () => {
   it("optimistically toggles publish and emits the callback", async () => {
     const user = userEvent.setup()
     const onPublishToggle = vi.fn()
-    renderHeader({ onPublishToggle })
+    renderHeader({ isOwner: true, onPublishToggle })
     await user.click(
       screen.getByRole("button", { name: "Publish (make public)" })
     )
@@ -73,13 +73,35 @@ describe("SongHeader", () => {
 
   it("toggles publish inline even without a callback (no persisting parent)", async () => {
     const user = userEvent.setup()
-    renderHeader()
+    renderHeader({ isOwner: true })
     await user.click(
       screen.getByRole("button", { name: "Publish (make public)" })
     )
     expect(
       screen.getByRole("button", { name: "Unpublish (make private)" })
     ).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("hides the publish toggle from a non-owner, keeping like/dislike/share", () => {
+    renderHeader({ isOwner: false })
+    expect(
+      screen.queryByRole("button", { name: /publish \(make public\)/i })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /unpublish/i })
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Like" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Dislike" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument()
+  })
+
+  it("fails closed: an omitted isOwner hides the publish toggle", () => {
+    // The header renders on a public page (US-20.0), so a caller that forgets
+    // the prop must not hand a stranger a control over someone else's clip.
+    renderHeader()
+    expect(
+      screen.queryByRole("button", { name: /publish \(make public\)/i })
+    ).not.toBeInTheDocument()
   })
 
   it("emits dislike and share callbacks", async () => {

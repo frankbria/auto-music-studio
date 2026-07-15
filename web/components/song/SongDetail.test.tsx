@@ -6,12 +6,18 @@ import { SongDetail } from "@/components/song/SongDetail"
 import { PlayerProvider } from "@/contexts/player-context"
 import type { Clip } from "@/lib/workspace-clips"
 
+// Mutable so a test can render the page as a signed-out visitor (US-20.0);
+// defaults to a signed-in user, which is what most cases exercise.
+const SIGNED_IN = { accessToken: "tok", isLoading: false, isAuthenticated: true }
+const ANONYMOUS = { accessToken: null, isLoading: false, isAuthenticated: false }
+let authValue: {
+  accessToken: string | null
+  isLoading: boolean
+  isAuthenticated: boolean
+} = SIGNED_IN
+
 vi.mock("@/hooks/use-auth", () => ({
-  useAuth: () => ({
-    accessToken: "tok",
-    isLoading: false,
-    isAuthenticated: true,
-  }),
+  useAuth: () => authValue,
 }))
 
 const push = vi.fn()
@@ -39,6 +45,9 @@ function clip(overrides: Partial<Clip> = {}): Clip {
     generation_mode: "generate",
     is_public: false,
     created_at: "2026-01-01T00:00:00Z",
+    // The subject of most cases is the owner viewing their own song; the
+    // non-owner/visitor cases override this.
+    is_owner: true,
     ...overrides,
   }
 }
@@ -94,6 +103,7 @@ function renderDetail(clipId = "c1") {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  authValue = SIGNED_IN
 })
 
 describe("SongDetail", () => {
@@ -358,5 +368,132 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i)
     expect(screen.getByRole("dialog")).toBeInTheDocument()
     expect(push).not.toHaveBeenCalledWith("/")
+  })
+})
+
+// US-20.0 — a shared link has to open for someone who isn't the owner.
+describe("SongDetail (public link)", () => {
+  it("renders a public song for a signed-out visitor instead of redirecting", async () => {
+    authValue = ANONYMOUS
+    stubFetch({ clip: clip({ is_public: true, is_owner: false }) })
+    renderDetail()
+
+    // The page itself: title, metadata, style tags, and a player.
+    expect(await screen.findByText("Midnight Drive")).toBeInTheDocument()
+    expect(screen.getByText("lofi")).toBeInTheDocument()
+    expect(screen.getByText("120")).toBeInTheDocument()
+    expect(screen.queryByTestId("song-not-found")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
+  })
+
+  it("reads through the public endpoint without an Authorization header when signed out", async () => {
+    authValue = ANONYMOUS
+    const fetchMock = stubFetch({ clip: clip({ is_public: true, is_owner: false }) })
+    renderDetail()
+    await screen.findByText("Midnight Drive")
+
+    const call = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/public")
+    )
+    expect(call).toBeDefined()
+    const headers = (call?.[1]?.headers ?? {}) as Record<string, string>
+    expect(headers.authorization).toBeUndefined()
+  })
+
+  it("hides owner-only controls from a non-owner but keeps like/dislike/share", async () => {
+    stubFetch({ clip: clip({ is_public: true, is_owner: false }) })
+    renderDetail()
+    await screen.findByText("Midnight Drive")
+
+    expect(
+      screen.queryByRole("button", { name: /publish \(make public\)/i })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /unpublish/i })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /song actions menu/i })
+    ).not.toBeInTheDocument()
+
+    // Anyone can re-share a public link, and reactions are client-side.
+    expect(screen.getByRole("button", { name: "Like" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Dislike" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument()
+  })
+
+  it("still shows owner controls when the viewer owns the clip", async () => {
+    stubFetch({ clip: clip({ is_public: true, is_owner: true }) })
+    renderDetail()
+    await screen.findByText("Midnight Drive")
+
+    expect(
+      screen.getByRole("button", { name: /unpublish/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /song actions menu/i })
+    ).toBeInTheDocument()
+  })
+
+  it("shows not-found (never the title) for a private clip the visitor can't see", async () => {
+    authValue = ANONYMOUS
+    // The backend 404s a stranger on a private clip; 403 collapses the same way.
+    stubFetch({ clipStatus: 404 })
+    renderDetail()
+
+    expect(await screen.findByTestId("song-not-found")).toBeInTheDocument()
+    expect(screen.queryByText("Midnight Drive")).not.toBeInTheDocument()
+  })
+
+  it("treats a 403 as not-found so it can't confirm a private clip exists", async () => {
+    stubFetch({ clipStatus: 403 })
+    renderDetail()
+
+    expect(await screen.findByTestId("song-not-found")).toBeInTheDocument()
+    expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
+  })
+
+  it("still renders a public song when the viewer's token has expired", async () => {
+    // get_current_user_optional 401s an explicitly-supplied stale token, so a
+    // signed-in-but-expired viewer must not fare worse than a signed-out one,
+    // who sees this song fine.
+    const c = clip({ is_public: true, is_owner: false })
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes("/users/me")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ subscription_tier: "free" }), { status: 200 })
+        )
+      }
+      if (url.includes("/similar")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ clips: [] }), { status: 200 })
+        )
+      }
+      const auth = (init?.headers ?? {}) as Record<string, string>
+      if (auth.authorization) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "Access token has expired." }), {
+            status: 401,
+          })
+        )
+      }
+      return Promise.resolve(new Response(JSON.stringify(c), { status: 200 }))
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    renderDetail()
+
+    expect(await screen.findByText("Midnight Drive")).toBeInTheDocument()
+    expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
+  })
+
+  it("shows the loading state (not an error) while an anonymous read is in flight", async () => {
+    authValue = ANONYMOUS
+    // Never resolves — pins the state an anonymous visitor sees mid-fetch.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})))
+    renderDetail()
+
+    expect(await screen.findByTestId("song-loading")).toBeInTheDocument()
+    expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
   })
 })
