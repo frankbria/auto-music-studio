@@ -294,6 +294,16 @@ Each channel tracks its own status through the sequence `draft → ready → sub
 
 A preset is a named snapshot of generation parameters. Every creative field accepted by `POST /api/v1/generate` (except `prompt` and `preset_id`) can be saved in a preset; all fields are optional — a preset pins down only what the user chooses to fix. Preset names are unique per user. All endpoints are owner-scoped (404 for missing or another user's preset).
 
+### Studio Export (US-19.6)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/studio/mixdown` | Bounce a studio arrangement to a single audio file (`format`: `wav` default, `flac`, `mp3`); returns 202 + `job_id`. The result is stored as a workspace clip (`generation_mode="studio"`, `parent_clip_ids` lineage to every source clip) |
+| `POST /api/v1/studio/export/daw` | Assemble a DAW hand-off bundle — one full-timeline WAV stem per track plus `project.json` (tempo, markers, track names, per-track volume/pan/mute/solo); returns 202 + `job_id` |
+| `GET /api/v1/studio/export/daw/{job_id}` | Download the assembled ZIP (`application/zip`); 409 until the job completes, 404 if unknown/unowned |
+
+Arrangement state has no backend persistence, so each request carries the full arrangement (tracks → placements referencing workspace clips with `start_sec`/`duration_sec` offsets and per-track `volume_db`/`pan`/`muted`/`solo`). The workspace and every referenced clip are ownership-checked up front (404 before any job is created), and requests are bounded: 1–64 tracks, ≤256 placements per track, ≥1 placement overall, field and computed timeline length capped at 4 hours (the worker re-checks the real arrangement duration, since an untrimmed placement runs its full source clip). Mixing is a pure 48 kHz stereo sum with per-track gain/pan; mute beats solo, and a soloed-but-muted track does not silence the rest. Progress is reported through the generic job status endpoint (`Downloading tracks` → `Mixing`/`Bundling` → `Uploading`). `flac`/`mp3` mixdowns require ffmpeg on the API host; DAW ZIPs are stored under `exports/` keyed by job id and are not cascade-deleted.
+
 ## Stem separation backends
 
 `acemusic stems <clip_id>` separates a clip into stems. Two engines are available
