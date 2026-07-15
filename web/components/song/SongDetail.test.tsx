@@ -452,6 +452,41 @@ describe("SongDetail (public link)", () => {
     expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
   })
 
+  it("still renders a public song when the viewer's token has expired", async () => {
+    // get_current_user_optional 401s an explicitly-supplied stale token, so a
+    // signed-in-but-expired viewer must not fare worse than a signed-out one,
+    // who sees this song fine.
+    const c = clip({ is_public: true, is_owner: false })
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes("/users/me")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ subscription_tier: "free" }), { status: 200 })
+        )
+      }
+      if (url.includes("/similar")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ clips: [] }), { status: 200 })
+        )
+      }
+      const auth = (init?.headers ?? {}) as Record<string, string>
+      if (auth.authorization) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "Access token has expired." }), {
+            status: 401,
+          })
+        )
+      }
+      return Promise.resolve(new Response(JSON.stringify(c), { status: 200 }))
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    renderDetail()
+
+    expect(await screen.findByText("Midnight Drive")).toBeInTheDocument()
+    expect(screen.queryByTestId("song-error")).not.toBeInTheDocument()
+  })
+
   it("shows the loading state (not an error) while an anonymous read is in flight", async () => {
     authValue = ANONYMOUS
     // Never resolves — pins the state an anonymous visitor sees mid-fetch.

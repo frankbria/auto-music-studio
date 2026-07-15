@@ -31,9 +31,23 @@ export function usePublicClip(id: string | undefined) {
   useEffect(() => {
     if (authLoading || !id) return
     let active = true
-    fetch(`/api/clips/${encodeURIComponent(id)}/public`, {
-      headers: accessToken ? { authorization: `Bearer ${accessToken}` } : {},
-    })
+    const url = `/api/clips/${encodeURIComponent(id)}/public`
+
+    // A token that is present but stale is a 401 (get_current_user_optional
+    // rejects an explicitly-supplied bad token rather than treating it as
+    // anonymous). The clip may still be public, so retry once without the
+    // header: an expired session must not hide a song that a signed-out
+    // stranger can see. `is_owner` comes back false, which is the truth for a
+    // viewer we can no longer identify.
+    async function read(): Promise<Response> {
+      if (!accessToken) return fetch(url)
+      const res = await fetch(url, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      return res.status === 401 ? fetch(url) : res
+    }
+
+    read()
       .then(async (res) => {
         if (res.status === 404 || res.status === 403) {
           if (active) setOutcome({ id, kind: "notFound" })
