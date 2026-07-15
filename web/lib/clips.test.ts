@@ -9,13 +9,18 @@ import {
 } from "@/lib/clips"
 
 describe("clip url builders", () => {
-  it("builds the audio + artwork backend paths", () => {
-    expect(clipAudioUrl("abc")).toBe("/api/v1/clips/abc/audio")
+  it("points audio at the same-origin stream proxy", () => {
+    // Must be same-origin (/api/...), not a bare backend path: an <audio src>
+    // resolves against this app, where /api/v1/* does not exist.
+    expect(clipAudioUrl("abc")).toBe("/api/clips/abc/stream")
+  })
+
+  it("builds the artwork backend path", () => {
     expect(clipArtworkUrl("abc")).toBe("/api/v1/clips/abc/artwork")
   })
 
   it("encodes ids with unsafe characters", () => {
-    expect(clipAudioUrl("a/b?c")).toBe("/api/v1/clips/a%2Fb%3Fc/audio")
+    expect(clipAudioUrl("a/b?c")).toBe("/api/clips/a%2Fb%3Fc/stream")
   })
 })
 

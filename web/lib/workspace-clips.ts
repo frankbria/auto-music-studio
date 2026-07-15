@@ -11,7 +11,12 @@ export type SortOrder = "newest" | "oldest"
 /** A clip as returned by GET /api/v1/clips (ClipResponse). No `updated_at`. */
 export type Clip = {
   id: string
-  workspace_id: string
+  /**
+   * Null only on the public read (US-20.0) when the viewer isn't the owner —
+   * the authed reads always carry it. Owner-only flows (e.g. Mashup) may rely
+   * on it, since they're hidden for non-owners.
+   */
+  workspace_id: string | null
   title: string | null
   format: string | null
   duration: number | null
@@ -27,6 +32,13 @@ export type Clip = {
   generation_mode: string | null
   is_public: boolean
   created_at: string
+  /**
+   * Server-computed viewer ownership, present only on the public read (US-20.0);
+   * the owner-scoped reads omit it because everything they return is already the
+   * caller's. Undefined therefore means "not from the public read", so gate on
+   * `=== true` rather than treating absence as ownership.
+   */
+  is_owner?: boolean
 }
 
 /** A workspace as returned by GET /api/v1/workspaces (WorkspaceResponse). */

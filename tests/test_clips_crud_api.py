@@ -378,8 +378,11 @@ class TestGetClip:
         public = await _insert_clip(owner, workspace, is_public=True)
         headers = _auth_headers(other, settings)
 
-        # CRUD is owner-scoped (issue #78); public visibility applies only to
-        # the audio endpoint (US-9.3).
+        # CRUD stays owner-scoped (issue #78) — this 404 is the point, not a bug.
+        # Public visibility is honored only by the separate is_public-scoped
+        # routes: /audio (US-9.3), /stream (US-14.2), and /public (US-20.0, the
+        # redacted metadata read that backs link sharing). A non-owner reaching
+        # a public clip's metadata goes through /public, never through here.
         assert (await client.get(f"{CLIPS_URL}/{private.id}", headers=headers)).status_code == 404
         assert (await client.get(f"{CLIPS_URL}/{public.id}", headers=headers)).status_code == 404
 

@@ -17,13 +17,14 @@ export function ClipMultiSelector({
   selected,
   onChange,
 }: {
-  workspaceId: string
+  /** Null when the viewer isn't the owner (public read, US-20.0) — nothing to pick from. */
+  workspaceId: string | null
   selected: string[]
   onChange: (ids: string[]) => void
 }) {
   const { data, loading } = useClips(
-    { workspace_id: workspaceId, per_page: 50 },
-    { enabled: true }
+    { workspace_id: workspaceId ?? "", per_page: 50 },
+    { enabled: workspaceId !== null }
   )
 
   const eligible = (data?.clips ?? []).filter(

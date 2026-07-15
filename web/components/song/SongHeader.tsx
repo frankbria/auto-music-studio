@@ -35,6 +35,12 @@ export type SongHeaderProps = {
    * action menu shares it), this wins over the local optimistic toggle.
    */
   isPublic?: boolean
+  /**
+   * Whether the viewer owns this clip (US-20.0). Only the owner may change
+   * visibility, so the Publish toggle is hidden otherwise. Defaults to true so
+   * the existing owner-only callers keep their toggle without passing it.
+   */
+  isOwner?: boolean
   /** Extra controls rendered at the end of the action row (e.g. the menu). */
   actions?: ReactNode
 }
@@ -45,6 +51,7 @@ export function SongHeader({
   onShare,
   onPublishToggle,
   isPublic: isPublicProp,
+  isOwner = true,
   actions,
 }: SongHeaderProps) {
   const { state, dispatch } = usePlayer()
@@ -134,16 +141,18 @@ export function SongHeader({
         >
           <HugeiconsIcon icon={Share01Icon} size={18} />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={isPublic ? "Unpublish (make private)" : "Publish (make public)"}
-          aria-pressed={isPublic}
-          onClick={togglePublish}
-          className={cn(isPublic && "text-primary")}
-        >
-          <HugeiconsIcon icon={GlobeIcon} size={18} />
-        </Button>
+        {isOwner && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={isPublic ? "Unpublish (make private)" : "Publish (make public)"}
+            aria-pressed={isPublic}
+            onClick={togglePublish}
+            className={cn(isPublic && "text-primary")}
+          >
+            <HugeiconsIcon icon={GlobeIcon} size={18} />
+          </Button>
+        )}
         {actions && <div className="ml-auto">{actions}</div>}
       </div>
 
