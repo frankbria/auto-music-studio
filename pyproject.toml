@@ -31,7 +31,7 @@ dependencies = [
     "fastapi>=0.110",
     # Required by FastAPI to parse multipart/form-data (cover-art upload, US-13.1).
     "python-multipart>=0.0.9",
-    "pydantic-settings>=2.7",
+    "pydantic-settings>=2.14.2",
     # Beanie 2.x is the ODM; it uses pymongo's native async client
     # (AsyncMongoClient) directly — Motor is deprecated and no longer used.
     # dnspython is required for Atlas mongodb+srv:// connection strings.
