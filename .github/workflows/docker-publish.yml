@@ -40,7 +40,7 @@ jobs:
       # Derive tags: `latest` for main plus the git SHA for traceability.
       - name: Derive image tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: frankbria/ace-step
           tags: |
