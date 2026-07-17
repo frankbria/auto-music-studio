@@ -16,7 +16,7 @@ dependencies = [
     # which is not NumPy-2 compatible (import fails). The core audio stack (librosa,
     # numba, scipy, soundfile, pydub) runs fine on numpy 1.x. Lift once basic-pitch
     # ships a numpy-2-ready backend (e.g. tensorflow >= 2.16).
-    "numpy>=1.24.0,<2",
+    "numpy>=2.4.6,<3",
     "librosa>=0.10.0",
     "soundfile>=0.14.0",
     "pydub>=0.25.1",
