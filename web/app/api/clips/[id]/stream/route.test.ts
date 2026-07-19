@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { NextRequest } from "next/server"
+import { NextRequest } from "next/server"
 
+import { ACCESS_COOKIE } from "@/lib/auth"
 import { GET } from "@/app/api/clips/[id]/stream/route"
 
-function req(url: string, init: RequestInit = {}): NextRequest {
-  return new Request(url, init) as unknown as NextRequest
+function req(
+  url: string,
+  init: { headers?: Record<string, string>; cookie?: string } = {}
+): NextRequest {
+  const r = new NextRequest(new URL(url), { headers: init.headers })
+  if (init.cookie) r.cookies.set(ACCESS_COOKIE, init.cookie)
+  return r
 }
 
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) })
@@ -41,6 +47,43 @@ describe("GET /api/clips/[id]/stream", () => {
 
     const [, opts] = fetchMock.mock.calls[0]
     expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+  })
+
+  it("falls back to the access cookie as a Bearer token when no header is present (private clip)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("audio", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await GET(
+      req("http://localhost/api/clips/c1/stream", { cookie: "cookieTok" }),
+      ctx("c1")
+    )
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer cookieTok"
+    )
+  })
+
+  it("prefers an explicit Authorization header over the access cookie", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("audio", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await GET(
+      req("http://localhost/api/clips/c1/stream", {
+        headers: { authorization: "Bearer headerTok" },
+        cookie: "cookieTok",
+      }),
+      ctx("c1")
+    )
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer headerTok"
+    )
   })
 
   it("forwards the Range header and passes a 206 through with its range headers", async () => {

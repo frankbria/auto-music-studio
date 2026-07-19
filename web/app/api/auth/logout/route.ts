@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-import { REFRESH_COOKIE } from "@/lib/auth"
-import { BACKEND_URL, cookieOptions } from "@/lib/auth-server"
+import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/auth"
+import { BACKEND_URL, accessCookieOptions, cookieOptions } from "@/lib/auth-server"
 
 // Revoke the refresh token on the backend (best-effort) and clear the cookie.
 export async function POST(request: NextRequest) {
@@ -15,5 +15,6 @@ export async function POST(request: NextRequest) {
   }
   const out = new NextResponse(null, { status: 204 })
   out.cookies.set(REFRESH_COOKIE, "", cookieOptions(0))
+  out.cookies.set(ACCESS_COOKIE, "", accessCookieOptions(0))
   return out
 }
