@@ -30,7 +30,7 @@ from acemusic.api.utils.range_requests import (
     parse_range_header,
     parse_range_header_multi,
 )
-from acemusic.api.utils.rate_limit import FixedWindowRateLimiter
+from acemusic.api.utils.rate_limit import FixedWindowRateLimiter, _client_key
 from acemusic.storage import get_storage_backend
 
 requires_ffmpeg = pytest.mark.skipif(
@@ -183,6 +183,98 @@ class TestFixedWindowRateLimiter:
         limiter.check("new-ip")  # triggers a prune sweep
         assert "old-ip" not in limiter._hits
         assert "new-ip" in limiter._hits
+
+
+class TestClientKey:
+    """issue #283: key on the real client behind a trusted BFF proxy, but only
+    when the peer is trusted — otherwise a forwarded header would be spoofable."""
+
+    @staticmethod
+    def _request(peer_ip: str | None, xff: str | None = None):
+        from starlette.requests import Request
+
+        headers = [(b"x-forwarded-for", xff.encode())] if xff is not None else []
+        scope = {
+            "type": "http",
+            "headers": headers,
+            "client": (peer_ip, 12345) if peer_ip else None,
+        }
+        return Request(scope)
+
+    def test_untrusted_peer_ignores_forwarded_header(self) -> None:
+        # AC2/AC3: a direct/untrusted caller's X-Forwarded-For is not trusted;
+        # the limiter keys on the real socket peer.
+        req = self._request("203.0.113.9", xff="1.1.1.1")
+        assert _client_key(req, frozenset()) == "203.0.113.9"
+
+    def test_trusted_proxy_uses_leftmost_forwarded_client(self) -> None:
+        # AC1: behind a trusted BFF, key on the forwarded real client IP so two
+        # visitors don't collapse into the proxy's single egress IP.
+        req = self._request("10.0.0.2", xff="198.51.100.7, 10.0.0.2")
+        assert _client_key(req, frozenset({"10.0.0.2"})) == "198.51.100.7"
+
+    def test_trusted_proxy_without_forwarded_header_falls_back_to_peer(self) -> None:
+        # AC4: nothing forwarded -> behave exactly like today (peer IP).
+        req = self._request("10.0.0.2", xff=None)
+        assert _client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
+
+    def test_trusted_proxy_with_blank_forwarded_header_falls_back_to_peer(self) -> None:
+        req = self._request("10.0.0.2", xff="  ")
+        assert _client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
+
+    def test_missing_client_is_anonymous(self) -> None:
+        req = self._request(None)
+        assert _client_key(req, frozenset()) == "anonymous"
+
+    def test_ipv6_mapped_peer_matches_plain_trusted_ip(self) -> None:
+        # A dual-stack socket may report ::ffff:127.0.0.1 for a proxy an operator
+        # listed as 127.0.0.1; normalization must still recognize it as trusted.
+        req = self._request("::ffff:127.0.0.1", xff="198.51.100.7")
+        assert _client_key(req, frozenset({"127.0.0.1"})) == "198.51.100.7"
+
+    def test_forwarded_client_is_normalized_to_one_bucket(self) -> None:
+        # An IPv4-mapped and plain form of the same visitor key one bucket.
+        trusted = frozenset({"10.0.0.2"})
+        mapped = _client_key(self._request("10.0.0.2", xff="::ffff:1.1.1.1"), trusted)
+        plain = _client_key(self._request("10.0.0.2", xff="1.1.1.1"), trusted)
+        assert mapped == plain == "1.1.1.1"
+
+
+class TestEnforceStreamRateLimit:
+    """issue #283: the dependency must key per forwarded client behind a trusted
+    proxy — exercises the real settings/limiter wiring, not just _client_key."""
+
+    @staticmethod
+    def _request(app, xff: str):
+        from starlette.requests import Request
+
+        return Request(
+            {
+                "type": "http",
+                "app": app,
+                "headers": [(b"x-forwarded-for", xff.encode())],
+                "client": ("10.0.0.2", 12345),
+            }
+        )
+
+    def test_distinct_forwarded_clients_get_distinct_buckets(self) -> None:
+        from types import SimpleNamespace
+
+        from acemusic.api.utils.rate_limit import enforce_stream_rate_limit
+
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(trusted_proxy_set=frozenset({"10.0.0.2"})),
+                stream_limiter=FixedWindowRateLimiter(limit=1, window_seconds=60.0),
+            )
+        )
+        # Two visitors, one shared proxy IP: each is allowed its own single hit.
+        enforce_stream_rate_limit(self._request(app, "1.1.1.1"))
+        enforce_stream_rate_limit(self._request(app, "2.2.2.2"))
+        # The first visitor's second hit exceeds their own bucket (not the other's).
+        with pytest.raises(HTTPException) as exc:
+            enforce_stream_rate_limit(self._request(app, "1.1.1.1"))
+        assert exc.value.status_code == 429
 
 
 # ---------------------------------------------------------------------------

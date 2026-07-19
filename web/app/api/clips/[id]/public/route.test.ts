@@ -62,6 +62,25 @@ describe("GET /api/clips/[id]/public", () => {
     expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
   })
 
+  it("forwards the real client IP so the limiter keys per visitor (#283)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "c1" }), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await GET(
+      req("http://localhost/api/clips/c1/public", {
+        headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.2" },
+      }),
+      ctx("c1")
+    )
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect((opts.headers as Record<string, string>)["x-forwarded-for"]).toBe(
+      "198.51.100.7"
+    )
+  })
+
   it("passes backend error status and body through verbatim", async () => {
     const fetchMock = vi
       .fn()

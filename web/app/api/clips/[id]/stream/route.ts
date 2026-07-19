@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { ACCESS_COOKIE } from "@/lib/auth"
 import { BACKEND_URL } from "@/lib/auth-server"
-import { fetchWithTimeout } from "@/lib/proxy-fetch"
+import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id}/stream (US-20.0), the
 // URL an <audio> element points at. Distinct from the sibling /audio route,
@@ -52,6 +52,7 @@ export async function GET(
       `${BACKEND_URL}/api/v1/clips/${encodeURIComponent(id)}/stream${query}`,
       {
         headers: {
+          ...clientIpHeaders(request),
           ...(auth ? { authorization: auth } : {}),
           ...(range ? { range } : {}),
         },
