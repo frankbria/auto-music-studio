@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   decodeAccessToken,
+  decodeTokenExp,
   isSupportedProvider,
   parseStateSetCookies,
   safeInternalPath,
@@ -26,6 +27,23 @@ describe("decodeAccessToken", () => {
   it("returns null for a malformed token", () => {
     expect(decodeAccessToken("not-a-jwt")).toBeNull()
     expect(decodeAccessToken("")).toBeNull()
+  })
+})
+
+describe("decodeTokenExp", () => {
+  it("returns the exp claim in milliseconds", () => {
+    // exp is seconds-since-epoch in a JWT; the helper returns ms.
+    expect(decodeTokenExp(jwt({ exp: 1_700_000_000 }))).toBe(1_700_000_000_000)
+  })
+
+  it("returns null when exp is missing or not a number", () => {
+    expect(decodeTokenExp(jwt({ sub: "u1" }))).toBeNull()
+    expect(decodeTokenExp(jwt({ exp: "soon" }))).toBeNull()
+  })
+
+  it("returns null for a malformed token", () => {
+    expect(decodeTokenExp("not-a-jwt")).toBeNull()
+    expect(decodeTokenExp("")).toBeNull()
   })
 })
 

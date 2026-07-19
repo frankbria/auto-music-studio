@@ -58,6 +58,25 @@ export function decodeAccessToken(token: string): AuthUser | null {
 }
 
 /**
+ * Read the (unverified) `exp` claim from a JWT and return it in milliseconds,
+ * or null if the token is malformed or carries no numeric `exp`. Used to
+ * schedule a refresh-ahead before the access token dies. Trust is established
+ * server-side; this is only a timing hint for the client.
+ */
+export function decodeTokenExp(token: string): number | null {
+  try {
+    const payload = token.split(".")[1]
+    if (!payload) return null
+    let b64 = payload.replace(/-/g, "+").replace(/_/g, "/")
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4)
+    const claims = JSON.parse(atob(b64)) as { exp?: unknown }
+    return typeof claims.exp === "number" ? claims.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Pull `oauth_state_*` cookies out of a backend `Set-Cookie` header list,
  * returning just the `name`/`value` so the BFF can re-emit them under its own
  * path. Cookie attributes (path/secure/etc.) are intentionally dropped.
