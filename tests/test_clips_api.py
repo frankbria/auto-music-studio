@@ -232,6 +232,13 @@ class TestClientKey:
         req = self._request("::ffff:127.0.0.1", xff="198.51.100.7")
         assert _client_key(req, frozenset({"127.0.0.1"})) == "198.51.100.7"
 
+    def test_forwarded_client_is_normalized_to_one_bucket(self) -> None:
+        # An IPv4-mapped and plain form of the same visitor key one bucket.
+        trusted = frozenset({"10.0.0.2"})
+        mapped = _client_key(self._request("10.0.0.2", xff="::ffff:1.1.1.1"), trusted)
+        plain = _client_key(self._request("10.0.0.2", xff="1.1.1.1"), trusted)
+        assert mapped == plain == "1.1.1.1"
+
 
 class TestEnforceStreamRateLimit:
     """issue #283: the dependency must key per forwarded client behind a trusted

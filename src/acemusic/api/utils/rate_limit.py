@@ -84,7 +84,9 @@ def _client_key(request: Request, trusted_proxies: Collection[str]) -> str:
         forwarded = request.headers.get("x-forwarded-for", "")
         client = forwarded.split(",")[0].strip()
         if client:
-            return client
+            # Normalize like the peer so an edge that emits both ::ffff:1.1.1.1
+            # and 1.1.1.1 for one visitor keys a single bucket, not two.
+            return _normalize_ip(client)
     return peer
 
 
