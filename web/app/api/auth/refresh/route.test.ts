@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { REFRESH_COOKIE } from "@/lib/auth"
+import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/auth"
 import { POST } from "./route"
 
 function request(cookie?: string): NextRequest {
@@ -50,7 +50,11 @@ describe("refresh route", () => {
     )
     const res = await POST(request("old-token"))
     expect(res.status).toBe(200)
-    expect(res.headers.get("set-cookie")).toContain(`${REFRESH_COOKIE}=newR`)
+    const setCookie = res.headers.get("set-cookie") ?? ""
+    expect(setCookie).toContain(`${REFRESH_COOKIE}=newR`)
+    // The access token is mirrored into a clip-scoped httpOnly cookie (#282).
+    expect(setCookie).toContain(`${ACCESS_COOKIE}=a`)
+    expect(setCookie).toContain("Path=/api/clips")
     expect(await res.json()).toEqual({ access_token: "a", expires_in: 900 })
   })
 })

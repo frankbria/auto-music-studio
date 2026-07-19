@@ -1,15 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server"
 
+import { ACCESS_COOKIE } from "@/lib/auth"
 import { BACKEND_URL } from "@/lib/auth-server"
 import { fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id}/stream (US-20.0), the
 // URL an <audio> element points at. Distinct from the sibling /audio route,
 // which this deliberately leaves alone: /audio requires a token and buffers a
-// whole body for the Download items, whereas an <audio src> cannot attach an
-// Authorization header at all — so playback has to reach an endpoint that
-// serves public clips anonymously. Auth is forwarded when present (fetch-based
-// callers), absent for <audio>; the backend resolves visibility either way.
+// whole body for the Download items.
+//
+// An <audio src> cannot attach an Authorization header, so to play a *private*
+// clip it falls back to the httpOnly `ams_access_token` cookie the browser
+// sends automatically (issue #282): if no header is present, that cookie is
+// forwarded as the Bearer token. Explicit header (fetch callers) wins; with
+// neither, the request reaches the backend anonymously and only public clips
+// resolve. The backend enforces visibility either way.
 //
 // Range is forwarded and the range/caching headers are copied back so seeking
 // keeps working — a 206 must arrive at the browser as a 206 with its
@@ -29,7 +34,12 @@ export async function GET(
   request: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
-  const auth = request.headers.get("authorization")
+  // Prefer an explicit Bearer header (fetch callers); fall back to the
+  // clip-scoped access cookie so an <audio src> can authenticate (issue #282).
+  const cookieToken = request.cookies.get(ACCESS_COOKIE)?.value
+  const auth =
+    request.headers.get("authorization") ??
+    (cookieToken ? `Bearer ${cookieToken}` : null)
   const range = request.headers.get("range")
   const { id } = await ctx.params
 

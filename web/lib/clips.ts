@@ -43,10 +43,10 @@ export function trackFromClip(clip: {
  * Same-origin stream path for a clip's audio (US-20.0).
  *
  * Targets the `/stream` proxy, not `/audio`: this URL is consumed as an
- * `<audio src>`, which cannot attach a Bearer token, so it has to reach the
- * endpoint that serves public clips anonymously (and supports seeking). A
- * private clip therefore does not play through this path — see the route's
- * comment.
+ * `<audio src>`, which cannot attach a Bearer token. The proxy falls back to
+ * the httpOnly `ams_access_token` cookie the browser sends automatically, so a
+ * signed-in owner's *private* clip plays too (issue #282); public clips still
+ * resolve anonymously. Seeking is supported. See the route's comment.
  */
 export function clipAudioUrl(id: string): string {
   return `/api/clips/${encodeURIComponent(id)}/stream`

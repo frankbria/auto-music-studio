@@ -4,6 +4,15 @@
 /** httpOnly cookie the BFF uses to hold the backend refresh token. */
 export const REFRESH_COOKIE = "ams_refresh_token"
 
+/**
+ * httpOnly cookie holding the short-lived access token, scoped to `/api/clips`.
+ * Exists so an `<audio src>` (which cannot attach an Authorization header) can
+ * still authenticate to the stream proxy for a private clip: the browser sends
+ * this cookie automatically. httpOnly keeps it out of client JS; the `/api/clips`
+ * path keeps it off every other request. Mirrors the access token's lifetime.
+ */
+export const ACCESS_COOKIE = "ams_access_token"
+
 /** Prefix of the backend's per-flow OAuth state cookie (`oauth_state_<flow_id>`). */
 export const OAUTH_STATE_PREFIX = "oauth_state_"
 

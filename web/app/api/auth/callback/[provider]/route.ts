@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-import { REFRESH_COOKIE, isSupportedProvider } from "@/lib/auth"
+import { ACCESS_COOKIE, REFRESH_COOKIE, isSupportedProvider } from "@/lib/auth"
 import {
   BACKEND_URL,
   REFRESH_MAX_AGE,
+  accessCookieOptions,
   clearStateCookies,
   collectStateCookies,
   cookieOptions,
@@ -50,6 +51,8 @@ export async function POST(
     expires_in: body.expires_in,
   })
   out.cookies.set(REFRESH_COOKIE, body.refresh_token, cookieOptions(REFRESH_MAX_AGE))
+  // Clip-scoped access cookie so <audio> can stream private clips (issue #282).
+  out.cookies.set(ACCESS_COOKIE, body.access_token, accessCookieOptions(body.expires_in))
   clearStateCookies(request, out)
   return out
 }

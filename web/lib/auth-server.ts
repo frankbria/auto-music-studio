@@ -23,6 +23,24 @@ export function cookieOptions(maxAge: number) {
   }
 }
 
+/** Fallback access-cookie lifetime (15 min) when the backend omits `expires_in`. */
+const ACCESS_COOKIE_FALLBACK_MAX_AGE = 15 * 60
+
+/**
+ * Cookie options for the access token, scoped to `/api/clips` so the token is
+ * only sent on clip media requests (the `<audio>` stream proxy) rather than
+ * every request to the app. `maxAge` mirrors the token's `expires_in`.
+ */
+export function accessCookieOptions(maxAge: number | undefined) {
+  // A finite number (including 0, used to clear the cookie) is honoured as-is;
+  // only a missing/malformed `expires_in` falls back to the default lifetime.
+  const resolved =
+    typeof maxAge === "number" && Number.isFinite(maxAge)
+      ? maxAge
+      : ACCESS_COOKIE_FALLBACK_MAX_AGE
+  return { ...cookieOptions(resolved), path: "/api/clips" }
+}
+
 /** Build a `Cookie` header of the `oauth_state_*` cookies to forward to the backend. */
 export function collectStateCookies(request: NextRequest): string {
   return request.cookies
