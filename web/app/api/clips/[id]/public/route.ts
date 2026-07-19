@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { fetchWithTimeout } from "@/lib/proxy-fetch"
+import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id}/public (US-20.0) — the
 // redacted, is_public-scoped metadata read behind a shared /song/{id} link.
@@ -25,6 +25,7 @@ export async function GET(
       {
         headers: {
           accept: "application/json",
+          ...clientIpHeaders(request),
           ...(auth ? { authorization: auth } : {}),
         },
       }

@@ -6,10 +6,25 @@ curb abuse. Swap for a Redis-backed limiter (e.g. slowapi) if the API ever runs
 multiple workers that must share one limit.
 """
 
+import ipaddress
 import time
+from collections.abc import Collection
 from threading import Lock
 
 from fastapi import HTTPException, Request, status
+
+
+def _normalize_ip(value: str) -> str:
+    """Canonicalize an IP so an IPv4-mapped form (``::ffff:127.0.0.1``) compares
+    equal to its plain IPv4 (``127.0.0.1``); pass non-IP values (``"anonymous"``,
+    a hostname) through raw."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
 
 
 class FixedWindowRateLimiter:
@@ -46,14 +61,35 @@ class FixedWindowRateLimiter:
                 )
 
 
-def _client_key(request: Request) -> str:
-    # ponytail: keyed by the raw socket peer IP. Behind a trusted reverse proxy,
-    # parse a validated X-Forwarded-For here — spoofable headers are intentionally
-    # not trusted by default.
-    return request.client.host if request.client else "anonymous"
+def _client_key(request: Request, trusted_proxies: Collection[str]) -> str:
+    """Rate-limit key: the real client IP.
+
+    Keyed by the raw socket peer IP, except when that peer is a configured
+    trusted proxy (#283): a same-origin BFF proxies every visitor server-side,
+    so they'd all share the proxy's egress IP. When the peer is trusted, key on
+    the client it forwarded in ``X-Forwarded-For`` (leftmost = original client)
+    instead.
+
+    The header is honored *only* when the immediate peer is trusted, so a
+    directly reachable backend can't be evaded by a spoofed header (AC2/AC3).
+    The forwarded *value* is only as trustworthy as that proxy: the trusted
+    proxy MUST set/replace ``X-Forwarded-For`` with the real client and not pass
+    through a client-supplied one — otherwise a client could still choose its
+    own key. That sanitizing is a property of the deployment's edge, not of this
+    function; see ``ACEMUSIC_API_TRUSTED_PROXIES`` in ``.env.example``.
+    """
+    peer = _normalize_ip(request.client.host) if request.client else "anonymous"
+    trusted = {_normalize_ip(ip) for ip in trusted_proxies}
+    if peer in trusted:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client = forwarded.split(",")[0].strip()
+        if client:
+            return client
+    return peer
 
 
 def enforce_stream_rate_limit(request: Request) -> None:
     """FastAPI dependency: rate-limit by client IP using the app's limiter."""
     limiter: FixedWindowRateLimiter = request.app.state.stream_limiter
-    limiter.check(_client_key(request))
+    trusted = request.app.state.settings.trusted_proxy_set
+    limiter.check(_client_key(request, trusted))

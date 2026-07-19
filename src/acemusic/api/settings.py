@@ -176,6 +176,15 @@ class ApiSettings(BaseSettings):
     # deployments (swap for a shared store if the API runs multiple workers).
     stream_rate_limit_per_minute: int = Field(default=100, ge=1)
 
+    # Reverse proxies whose forwarded client-IP header the limiter trusts (#283).
+    # A same-origin BFF proxy calls the backend server-side, so every visitor
+    # arrives as the proxy's egress IP and the per-IP limiter collapses to one
+    # shared bucket. Listing the proxy's IP here lets the limiter key on the
+    # real client from its X-Forwarded-For instead. Empty by default: trust
+    # nobody, so a directly-reachable backend can't be evaded with a spoofed
+    # header (the header is only honored when the peer is a listed proxy).
+    trusted_proxies: Annotated[list[str], NoDecode] = []
+
     # Compute status endpoint (US-11.4). Per-target health-probe budget for
     # ``GET /api/v1/compute/status``; the local and remote checks run in parallel,
     # each bounded by this timeout, so the aggregate response stays well under the
@@ -303,6 +312,19 @@ class ApiSettings(BaseSettings):
                 f"mongodb_max_pool_size ({self.mongodb_max_pool_size})"
             )
         return self
+
+    @property
+    def trusted_proxy_set(self) -> frozenset[str]:
+        """Trusted-proxy IPs as a set for O(1) membership in the limiter."""
+        return frozenset(self.trusted_proxies)
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _split_trusted_proxies(cls, value: object) -> object:
+        """Accept a comma-separated string; blank/unset -> [] (trust nobody)."""
+        if isinstance(value, str):
+            return [ip.strip() for ip in value.split(",") if ip.strip()]
+        return value
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

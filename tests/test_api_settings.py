@@ -49,6 +49,30 @@ class TestApiSettings:
         assert "https://evil.example.com" not in settings.cors_allow_origins
 
 
+class TestTrustedProxies:
+    """issue #283: proxies whose forwarded client-IP header the limiter trusts."""
+
+    def test_default_is_empty(self, monkeypatch):
+        """Unset -> trust nobody, i.e. today's peer-IP-only behavior (AC4)."""
+        monkeypatch.delenv("ACEMUSIC_API_TRUSTED_PROXIES", raising=False)
+        settings = ApiSettings(_env_file=None)
+        assert settings.trusted_proxies == []
+        assert settings.trusted_proxy_set == frozenset()
+
+    def test_parsed_from_comma_separated_env(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_TRUSTED_PROXIES", "10.0.0.2, 127.0.0.1")
+        settings = ApiSettings(_env_file=None)
+        assert settings.trusted_proxies == ["10.0.0.2", "127.0.0.1"]
+        assert settings.trusted_proxy_set == frozenset({"10.0.0.2", "127.0.0.1"})
+
+    def test_blank_env_is_empty(self, monkeypatch):
+        """A blank value behaves like unset (trust nobody), unlike CORS which
+        falls back to localhost defaults — an empty trust set is the safe one."""
+        monkeypatch.setenv("ACEMUSIC_API_TRUSTED_PROXIES", "  ")
+        settings = ApiSettings(_env_file=None)
+        assert settings.trusted_proxies == []
+
+
 class TestAuthSettings:
     """OAuth2 / JWT configuration (US-8.3)."""
 
