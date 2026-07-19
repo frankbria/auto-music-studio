@@ -48,7 +48,7 @@ jobs:
             type=sha,format=long
 
       - name: Build and push
-        uses: docker/build-push-action@v7.2.0
+        uses: docker/build-push-action@v7.3.0
         with:
           context: docker
           push: true
