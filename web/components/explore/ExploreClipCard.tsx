@@ -57,9 +57,13 @@ export function ExploreClipCard({
         <HugeiconsIcon
           icon={MusicNote01Icon}
           size={28}
+          aria-hidden
           className="group-hover/card:opacity-0"
         />
-        <span className="absolute inset-0 flex items-center justify-center bg-background/30 opacity-0 transition-opacity group-hover/card:opacity-100">
+        <span
+          aria-hidden
+          className="absolute inset-0 flex items-center justify-center bg-background/30 opacity-0 transition-opacity group-hover/card:opacity-100"
+        >
           <HugeiconsIcon icon={PlayIcon} size={28} className="fill-current" />
         </span>
         {rank != null && (
