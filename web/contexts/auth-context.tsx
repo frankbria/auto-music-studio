@@ -57,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // is transient — keep the current token and let the caller retry; signing out
   // a valid user on a backend blip would be worse than the blip.
   const refreshing = useRef<Promise<string | null> | null>(null)
+  const refreshAbort = useRef<AbortController | null>(null)
   // Bumped by logout to invalidate any refresh issued before it: since
   // AuthProvider is root-mounted (never unmounts on the client-side nav to
   // /login), a refresh in flight when the user signs out would otherwise resolve
@@ -65,7 +66,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback((): Promise<string | null> => {
     if (refreshing.current) return refreshing.current
     const epoch = sessionEpoch.current
-    const inflight = fetch("/api/auth/refresh", { method: "POST" })
+    // The controller lets logout abort an in-flight refresh: aborting discards
+    // the response before the browser applies its rotated Set-Cookie, so an
+    // HTTP/2-reordered refresh can't reinstate the session cookies after logout.
+    const controller = new AbortController()
+    refreshAbort.current = controller
+    const inflight = fetch("/api/auth/refresh", {
+      method: "POST",
+      signal: controller.signal,
+    })
       .then(async (res) => {
         // A logout while this request was in flight invalidates its result.
         if (sessionEpoch.current !== epoch) return null
@@ -81,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch(() => null)
       .finally(() => {
         refreshing.current = null
+        if (refreshAbort.current === controller) refreshAbort.current = null
       })
     refreshing.current = inflight
     return inflight
@@ -162,8 +172,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const logout = useCallback(async () => {
-    // Invalidate any in-flight refresh and clear the token up front, so a
-    // background refresh resolving mid-logout can't resurrect the session.
+    // Cancel any in-flight refresh before anything else so its rotated
+    // Set-Cookie is never applied; the epoch bump additionally drops a refresh
+    // whose response already arrived but whose handler hasn't run. Only then
+    // clear the token and hit /logout, whose cookie-clear is now the last write.
+    refreshAbort.current?.abort()
     sessionEpoch.current += 1
     setAccessToken(null)
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {})

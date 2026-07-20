@@ -220,13 +220,15 @@ describe("AuthProvider", () => {
       releaseRefresh = resolve
     })
     let call = 0
-    const fetchMock = vi.fn(async (url: string) => {
+    let refreshSignal: AbortSignal | undefined
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/auth/logout") return ok({})
       if (url !== "/api/auth/refresh") return unauthorized
       call += 1
       // Mount restores an (already-expired) token so the visibility listener
       // will start a background refresh; that second refresh hangs on the gate.
       if (call === 1) return ok({ access_token: tokenExpiring(-10) })
+      refreshSignal = init?.signal ?? undefined
       await gate
       return ok({ access_token: tokenExpiring(15 * 60) })
     })
@@ -250,9 +252,12 @@ describe("AuthProvider", () => {
     await waitFor(() =>
       expect(screen.getByTestId("state")).toHaveTextContent("out")
     )
+    // logout aborts the in-flight refresh so the browser never applies its
+    // rotated Set-Cookie (the HTTP/2-reorder cookie-resurrection vector).
+    expect(refreshSignal?.aborted).toBe(true)
 
-    // The in-flight refresh now resolves 2xx — it must NOT flip the session
-    // back to authenticated.
+    // Even if the (aborted) refresh still resolves 2xx, it must NOT flip the
+    // in-memory session back to authenticated.
     await act(async () => {
       releaseRefresh()
       await gate
