@@ -79,20 +79,33 @@ function mockClip(
 
 // Varied pool: titles, styles, ages, and engagement all differ so trending and
 // charts produce distinct orderings (and so the 24h vs 7d toggle visibly moves).
+// `key`/`model` vary across the pool so the Search page's key and model filters
+// (US-20.2) narrow to a real subset instead of matching everything or nothing.
+const TURBO = "ace-step-v1-turbo"
 const POOL: Clip[] = [
-  mockClip("clip-neon", "Neon Skyline", ["synthwave", "electronic"], "2026-07-19T09:00:00Z", { plays: 8200, likes: 640, shares: 210 }),
-  mockClip("clip-velvet", "Velvet Static", ["lofi", "chill"], "2026-07-19T06:30:00Z", { plays: 5400, likes: 980, shares: 90 }),
-  mockClip("clip-emberr", "Ember Roads", ["rock", "indie"], "2026-07-18T22:10:00Z", { plays: 12100, likes: 720, shares: 340 }),
-  mockClip("clip-glass", "Glass Cathedral", ["classical", "ambient"], "2026-07-18T14:00:00Z", { plays: 3100, likes: 410, shares: 620 }),
-  mockClip("clip-gold", "Gold Rush 88", ["hip-hop", "trap"], "2026-07-17T20:45:00Z", { plays: 15800, likes: 1240, shares: 470 }),
-  mockClip("clip-tide", "Tidal Bloom", ["pop", "dance"], "2026-07-17T11:20:00Z", { plays: 9700, likes: 1580, shares: 260 }),
-  mockClip("clip-brass", "Midnight Brass", ["jazz", "soul"], "2026-07-16T19:05:00Z", { plays: 2600, likes: 300, shares: 55 }),
-  mockClip("clip-dust", "Dust & Denim", ["country", "folk"], "2026-07-15T08:15:00Z", { plays: 4300, likes: 520, shares: 130 }),
-  mockClip("clip-mono", "Monochrome Heart", ["rnb", "soul"], "2026-07-14T17:40:00Z", { plays: 7100, likes: 890, shares: 175 }),
-  mockClip("clip-pulse", "Pulse Theory", ["electronic", "techno"], "2026-07-13T05:00:00Z", { plays: 11200, likes: 610, shares: 400 }),
-  mockClip("clip-paper", "Paper Lanterns", ["lofi", "ambient"], "2026-07-12T12:30:00Z", { plays: 1900, likes: 260, shares: 40 }),
-  mockClip("clip-crown", "Crownfall", ["rock", "metal"], "2026-07-11T21:55:00Z", { plays: 6800, likes: 700, shares: 220 }),
+  mockClip("clip-neon", "Neon Skyline", ["synthwave", "electronic"], "2026-07-19T09:00:00Z", { plays: 8200, likes: 640, shares: 210 }, { key: "A minor", model: TURBO }),
+  mockClip("clip-velvet", "Velvet Static", ["lofi", "chill"], "2026-07-19T06:30:00Z", { plays: 5400, likes: 980, shares: 90 }, { key: "C major" }),
+  mockClip("clip-emberr", "Ember Roads", ["rock", "indie"], "2026-07-18T22:10:00Z", { plays: 12100, likes: 720, shares: 340 }, { key: "E minor", model: TURBO }),
+  mockClip("clip-glass", "Glass Cathedral", ["classical", "ambient"], "2026-07-18T14:00:00Z", { plays: 3100, likes: 410, shares: 620 }, { key: "D major" }),
+  mockClip("clip-gold", "Gold Rush 88", ["hip-hop", "trap"], "2026-07-17T20:45:00Z", { plays: 15800, likes: 1240, shares: 470 }, { key: "G minor", model: TURBO }),
+  mockClip("clip-tide", "Tidal Bloom", ["pop", "dance"], "2026-07-17T11:20:00Z", { plays: 9700, likes: 1580, shares: 260 }, { key: "C major" }),
+  mockClip("clip-brass", "Midnight Brass", ["jazz", "soul"], "2026-07-16T19:05:00Z", { plays: 2600, likes: 300, shares: 55 }, { key: "F major" }),
+  mockClip("clip-dust", "Dust & Denim", ["country", "folk"], "2026-07-15T08:15:00Z", { plays: 4300, likes: 520, shares: 130 }, { key: "G major" }),
+  mockClip("clip-mono", "Monochrome Heart", ["rnb", "soul"], "2026-07-14T17:40:00Z", { plays: 7100, likes: 890, shares: 175 }, { key: "A minor", model: TURBO }),
+  mockClip("clip-pulse", "Pulse Theory", ["electronic", "techno"], "2026-07-13T05:00:00Z", { plays: 11200, likes: 610, shares: 400 }, { key: "D minor" }),
+  mockClip("clip-paper", "Paper Lanterns", ["lofi", "ambient"], "2026-07-12T12:30:00Z", { plays: 1900, likes: 260, shares: 40 }, { key: "C major" }),
+  mockClip("clip-crown", "Crownfall", ["rock", "metal"], "2026-07-11T21:55:00Z", { plays: 6800, likes: 700, shares: 220 }, { key: "E minor", model: TURBO }),
 ]
+
+/**
+ * The full discovery pool. The Search page (US-20.2) searches/filters/sorts this
+ * same mock set client-side — there is no public discovery search endpoint yet
+ * (the `GET /clips` list is auth-gated and owner-scoped). Swap for a public
+ * search fetch when one lands; callers consume the getter, not the pool.
+ */
+export function getAllClips(): Clip[] {
+  return [...POOL]
+}
 
 /**
  * Trending clips for a time range. 24h weights recent virality (likes + shares);
