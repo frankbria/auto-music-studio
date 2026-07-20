@@ -34,8 +34,9 @@ describe("SearchPageClient", () => {
 
   it("reflects a filter change back into the URL (AC4)", async () => {
     render(<SearchPageClient />)
-    // Mount syncs the (empty) state to a bare path.
-    expect(replace).toHaveBeenLastCalledWith("/search", { scroll: false })
+    // The URL is the source of truth, so mounting doesn't rewrite it — only a
+    // user action does.
+    expect(replace).not.toHaveBeenCalled()
 
     const rockChips = screen.getAllByRole("button", { name: "Rock" })
     await userEvent.click(rockChips[0])

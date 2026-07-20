@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, SearchRemoveIcon } from "@hugeicons/core-free-icons"
 
@@ -47,7 +47,12 @@ function SortDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1" aria-label="Sort by">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1"
+          aria-label={`Sort by: ${label}`}
+        >
           {label}
           <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
         </Button>
@@ -85,6 +90,12 @@ export function SearchView({
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => onChange({ q: value }), delayMs)
   }
+
+  // Cancel a pending commit if the page unmounts mid-debounce (avoids a
+  // router.replace against an unmounted component).
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
 
   const results = searchClips(params)
   const page = paginate(results, params.page)
@@ -210,6 +221,7 @@ function NoResults() {
       <HugeiconsIcon
         icon={SearchRemoveIcon}
         size={32}
+        aria-hidden
         className="text-muted-foreground"
       />
       <p className="font-medium">No songs found</p>

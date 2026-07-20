@@ -45,7 +45,12 @@ function FilterSelect({
       <Label>{label}</Label>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="justify-between gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="justify-between gap-1"
+            aria-label={`${label}: ${value ? optionLabel(value) : "Any"}`}
+          >
             <span className="truncate">{value ? optionLabel(value) : "Any"}</span>
             <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
           </Button>
@@ -73,10 +78,7 @@ function ComingSoonFilter({ label }: { label: string }) {
   return (
     <div className="flex flex-col gap-1.5 opacity-50">
       <Label>{label}</Label>
-      <div
-        aria-disabled
-        className="flex h-8 items-center rounded-md border border-dashed border-border px-3 text-xs text-muted-foreground"
-      >
+      <div className="flex h-8 items-center rounded-md border border-dashed border-border px-3 text-xs text-muted-foreground">
         Coming soon
       </div>
     </div>
@@ -103,7 +105,8 @@ export function SearchFilters({
 
   const bpm = (raw: string): number | null => {
     const n = Number.parseInt(raw, 10)
-    return Number.isFinite(n) ? n : null
+    // `min={0}` on the input is advisory only, so clamp negatives here.
+    return Number.isFinite(n) ? Math.max(0, n) : null
   }
 
   return (
@@ -124,7 +127,7 @@ export function SearchFilters({
             }
             className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           >
-            Clear all
+            Clear filters
           </button>
         )}
       </div>
