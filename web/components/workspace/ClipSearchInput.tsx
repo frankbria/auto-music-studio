@@ -11,10 +11,14 @@ export function ClipSearchInput({
   value,
   onChange,
   className,
+  placeholder = "Search clips",
+  ariaLabel = "Search clips",
 }: {
   value: string
   onChange: (value: string) => void
   className?: string
+  placeholder?: string
+  ariaLabel?: string
 }) {
   return (
     <div className={cn("relative", className)}>
@@ -27,8 +31,8 @@ export function ClipSearchInput({
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Search clips"
-        aria-label="Search clips"
+        placeholder={placeholder}
+        aria-label={ariaLabel}
         className="px-9"
       />
       {value && (
