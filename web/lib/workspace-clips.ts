@@ -39,6 +39,14 @@ export type Clip = {
    * `=== true` rather than treating absence as ownership.
    */
   is_owner?: boolean
+  /**
+   * Engagement counters for discovery ranking (trending/charts, US-20.1).
+   * Optional: the backend has no counters yet, so authed/owner reads omit them
+   * and only the Explore mock service populates them. Gate on presence.
+   */
+  play_count?: number
+  like_count?: number
+  share_count?: number
 }
 
 /** A workspace as returned by GET /api/v1/workspaces (WorkspaceResponse). */
