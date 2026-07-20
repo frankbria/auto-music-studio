@@ -39,41 +39,44 @@ export function safeInternalPath(raw: string | null, fallback = "/create"): stri
 }
 
 /**
- * Decode the (unverified) JWT payload purely to show identity in the UI. The
- * token's trust is established server-side; this is display-only. Returns null
- * if the token is missing the expected claims or is malformed.
+ * Base64url-decode a JWT's payload segment into its claims, or null if the
+ * token is malformed. Unverified — trust is established server-side; callers use
+ * this only to read display identity and timing hints.
  */
-export function decodeAccessToken(token: string): AuthUser | null {
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const payload = token.split(".")[1]
     if (!payload) return null
     let b64 = payload.replace(/-/g, "+").replace(/_/g, "/")
     b64 += "=".repeat((4 - (b64.length % 4)) % 4)
-    const claims = JSON.parse(atob(b64)) as { sub?: string; email?: string }
-    if (!claims.sub || !claims.email) return null
-    return { id: claims.sub, email: claims.email }
+    return JSON.parse(atob(b64)) as Record<string, unknown>
   } catch {
     return null
   }
 }
 
 /**
- * Read the (unverified) `exp` claim from a JWT and return it in milliseconds,
- * or null if the token is malformed or carries no numeric `exp`. Used to
- * schedule a refresh-ahead before the access token dies. Trust is established
- * server-side; this is only a timing hint for the client.
+ * Decode the (unverified) JWT payload purely to show identity in the UI.
+ * Returns null if the token is missing the expected claims or is malformed.
  */
-export function decodeTokenExp(token: string): number | null {
-  try {
-    const payload = token.split(".")[1]
-    if (!payload) return null
-    let b64 = payload.replace(/-/g, "+").replace(/_/g, "/")
-    b64 += "=".repeat((4 - (b64.length % 4)) % 4)
-    const claims = JSON.parse(atob(b64)) as { exp?: unknown }
-    return typeof claims.exp === "number" ? claims.exp * 1000 : null
-  } catch {
+export function decodeAccessToken(token: string): AuthUser | null {
+  const claims = decodeJwtPayload(token)
+  const sub = claims?.sub
+  const email = claims?.email
+  if (typeof sub !== "string" || !sub || typeof email !== "string" || !email) {
     return null
   }
+  return { id: sub, email }
+}
+
+/**
+ * Read the (unverified) `exp` claim from a JWT and return it in milliseconds,
+ * or null if the token is malformed or carries no numeric `exp`. Used to
+ * schedule a refresh-ahead before the access token dies.
+ */
+export function decodeTokenExp(token: string): number | null {
+  const exp = decodeJwtPayload(token)?.exp
+  return typeof exp === "number" ? exp * 1000 : null
 }
 
 /**

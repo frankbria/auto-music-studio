@@ -90,23 +90,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   // Refresh-ahead: schedule a renewal ~REFRESH_SKEW_MS before the current
-  // token's `exp`. A token already past expiry isn't scheduled here (a returning
-  // tab or the retry chain below recovers it) — this avoids a busy-loop if the
-  // backend ever hands back a stale token.
+  // token's `exp`. A token that arrives already past its safety window (clock
+  // skew, a very short lifetime) schedules at the retry cadence rather than
+  // being skipped — otherwise a foreground tab that never fires visibilitychange
+  // could sit on a dead token (the very bug #285 is about). The retry cadence
+  // also caps any busy-loop if the backend ever hands back a stale token.
   useEffect(() => {
     if (!accessToken) return
     const exp = decodeTokenExp(accessToken)
-    if (exp === null || exp <= Date.now()) return
+    if (exp === null) return // no exp claim → nothing to schedule against
+    let active = true
     let timer: ReturnType<typeof setTimeout>
     const run = async () => {
       // A successful refresh rotates the token, re-running this effect to
       // schedule the next renewal. A transient failure leaves the token
       // unchanged (no re-run), so re-arm a short retry rather than let it die.
+      // `active` stops a retry from orphaning if the effect tore down mid-flight
+      // (e.g. logout during the in-flight refresh) and looping forever.
       const rotated = await refresh()
-      if (!rotated) timer = setTimeout(run, REFRESH_RETRY_MS)
+      if (active && !rotated) timer = setTimeout(run, REFRESH_RETRY_MS)
     }
-    timer = setTimeout(run, Math.max(0, exp - REFRESH_SKEW_MS - Date.now()))
-    return () => clearTimeout(timer)
+    const untilRefresh = exp - REFRESH_SKEW_MS - Date.now()
+    timer = setTimeout(run, untilRefresh > 0 ? untilRefresh : REFRESH_RETRY_MS)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
   }, [accessToken, refresh])
 
   // A backgrounded tab throttles timers, so the scheduled refresh can fire late.

@@ -193,8 +193,11 @@ describe("AuthProvider", () => {
           <Probe />
         </AuthProvider>
       )
+      // Advance 0ms: flush the mount refresh without firing the expired token's
+      // scheduled retry (armed at REFRESH_RETRY_MS), so `call` reflects only the
+      // mount request here.
       await act(async () => {
-        await vi.runOnlyPendingTimersAsync()
+        await vi.advanceTimersByTimeAsync(0)
       })
       expect(call).toBe(1)
       expect(screen.getByTestId("state")).toHaveTextContent("in:")

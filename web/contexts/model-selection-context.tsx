@@ -72,20 +72,29 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
   // The no-token case is handled in the isLoading derivation below (no seeding
   // to wait for), so this effect only runs the authenticated fetch.
   //
-  // ponytail: deliberately does NOT reset seedResolved/userTouched when
-  // accessToken changes. In this app accessToken flips null→token once on mount
-  // (auth-context restores it once; logout navigates away and unmounts this
-  // provider), so the re-fetch window never occurs in practice — and resetting
-  // userTouched would risk clobbering a model the user explicitly picked.
+  // Keyed on token *presence*, not identity: the access token now rotates
+  // mid-session (auth refresh-ahead, #285), and this seed only needs to run once
+  // per session — re-fetching /me on every rotation is wasted work. The current
+  // token is read from a ref so a rotation doesn't retrigger, while the initial
+  // null→token transition still seeds. seedResolved/userTouched are deliberately
+  // never reset, so a rotation can't reopen the window that clobbers a user pick.
+  const hasToken = accessToken !== null
+  // Latest token in a ref (updated in an effect, not during render) so the seed
+  // effect reads it without a `accessToken` dep — a rotation updates the ref but
+  // doesn't retrigger the /me fetch.
+  const tokenRef = useRef(accessToken)
   useEffect(() => {
-    if (authLoading || !accessToken) return
+    tokenRef.current = accessToken
+  }, [accessToken])
+  useEffect(() => {
+    if (authLoading || !tokenRef.current) return
     let active = true
     // Bound the fetch: isLoading is gated on seedResolved (set in .finally), so a
     // hung profile request would otherwise leave the Create buttons permanently
     // disabled. On abort, .catch keeps the default model/free tier and .finally
     // still resolves the seed.
     fetch("/api/users/me", {
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${tokenRef.current}` },
       signal: AbortSignal.timeout(5000),
     })
       .then(async (res) => (res.ok ? ((await res.json()) as UserProfile) : null))
@@ -105,7 +114,7 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false
     }
-  }, [accessToken, authLoading])
+  }, [hasToken, authLoading])
 
   // Loading until the models list settles and — when there's a user whose saved
   // default could still arrive — the profile seed resolves. With no token (auth
