@@ -57,10 +57,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // is transient — keep the current token and let the caller retry; signing out
   // a valid user on a backend blip would be worse than the blip.
   const refreshing = useRef<Promise<string | null> | null>(null)
+  // Bumped by logout to invalidate any refresh issued before it: since
+  // AuthProvider is root-mounted (never unmounts on the client-side nav to
+  // /login), a refresh in flight when the user signs out would otherwise resolve
+  // afterwards and resurrect the token — re-authing a session they just ended.
+  const sessionEpoch = useRef(0)
   const refresh = useCallback((): Promise<string | null> => {
     if (refreshing.current) return refreshing.current
+    const epoch = sessionEpoch.current
     const inflight = fetch("/api/auth/refresh", { method: "POST" })
       .then(async (res) => {
+        // A logout while this request was in flight invalidates its result.
+        if (sessionEpoch.current !== epoch) return null
         if (res.status === 401 || res.status === 403) {
           setAccessToken(null)
           return null
@@ -154,8 +162,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const logout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {})
+    // Invalidate any in-flight refresh and clear the token up front, so a
+    // background refresh resolving mid-logout can't resurrect the session.
+    sessionEpoch.current += 1
     setAccessToken(null)
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {})
     router.push("/login")
   }, [router])
 

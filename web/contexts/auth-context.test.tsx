@@ -214,6 +214,52 @@ describe("AuthProvider", () => {
     }
   })
 
+  it("does not let an in-flight refresh resurrect the session after logout", async () => {
+    let releaseRefresh: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    let call = 0
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/auth/logout") return ok({})
+      if (url !== "/api/auth/refresh") return unauthorized
+      call += 1
+      // Mount restores an (already-expired) token so the visibility listener
+      // will start a background refresh; that second refresh hangs on the gate.
+      if (call === 1) return ok({ access_token: tokenExpiring(-10) })
+      await gate
+      return ok({ access_token: tokenExpiring(15 * 60) })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("state")).toHaveTextContent("in:")
+    )
+
+    // Kick off a background refresh, then log out while it is still in flight.
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    await waitFor(() => expect(call).toBe(2))
+    await user.click(screen.getByRole("button", { name: "logout" }))
+    await waitFor(() =>
+      expect(screen.getByTestId("state")).toHaveTextContent("out")
+    )
+
+    // The in-flight refresh now resolves 2xx — it must NOT flip the session
+    // back to authenticated.
+    await act(async () => {
+      releaseRefresh()
+      await gate
+    })
+    expect(screen.getByTestId("state")).toHaveTextContent("out")
+  })
+
   it("clears the session on logout", async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url === "/api/auth/refresh" ? ok({ access_token: accessToken }) : ok({})
