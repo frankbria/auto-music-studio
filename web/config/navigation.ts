@@ -6,6 +6,7 @@ import {
   MixerIcon,
   MusicNote01Icon,
   Notification01Icon,
+  Playlist01Icon,
   Search01Icon,
   TestTube01Icon,
   TradeUpIcon,
@@ -30,6 +31,7 @@ export const mainNav: NavLinkItem[] = [
   { id: "create", label: "Create", href: "/create", icon: MusicNote01Icon },
   { id: "studio", label: "Studio", href: "/studio", icon: MixerIcon },
   { id: "library", label: "Library", href: "/me", icon: LibraryIcon },
+  { id: "playlists", label: "Playlists", href: "/playlists", icon: Playlist01Icon },
   { id: "search", label: "Search", href: "/search", icon: Search01Icon },
   { id: "feed", label: "Feed", href: "/feed", icon: TradeUpIcon },
   {

@@ -21,6 +21,7 @@ import {
   EMPTY_AUDIO_INPUTS,
   type AudioInputsValue,
 } from "@/components/create/AudioInputs"
+import type { InspirationSelection } from "@/lib/audio-inputs"
 
 /**
  * The Simple creation form (US-16.1): describe a song in plain language and go.
@@ -31,7 +32,12 @@ import {
  */
 export function SimpleCreationForm({
   onGenerated,
-}: { onGenerated?: () => void } = {}) {
+  initialInspiration,
+}: {
+  onGenerated?: () => void
+  /** Pre-attached inspiration (US-20.3 "Use as Inspiration" deep link → chip). */
+  initialInspiration?: InspirationSelection
+} = {}) {
   const router = useRouter()
   const { accessToken } = useAuth()
   const { models, selectedModel, isLoading: modelLoading } = useModelSelection()
@@ -44,7 +50,11 @@ export function SimpleCreationForm({
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   // Attached reference audio / voice / inspiration (US-16.8). Tracked here so
   // Clear all resets them and they persist across Simple/Advanced tab switches.
-  const [inputs, setInputs] = useState<AudioInputsValue>(EMPTY_AUDIO_INPUTS)
+  const [inputs, setInputs] = useState<AudioInputsValue>(
+    initialInspiration
+      ? { ...EMPTY_AUDIO_INPUTS, inspiration: initialInspiration }
+      : EMPTY_AUDIO_INPUTS
+  )
   // Neutral notice for non-generation messages, kept separate from the
   // generation state machine.
   const [notice, setNotice] = useState<string | null>(null)
