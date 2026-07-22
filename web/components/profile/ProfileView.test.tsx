@@ -63,6 +63,7 @@ describe("ProfileView (US-20.5)", () => {
 
     await user.click(btn)
     expect(btn).toHaveTextContent("Follow")
+    expect(btn).toHaveAttribute("aria-pressed", "false")
     expect(count).toHaveAttribute("title", base.toLocaleString("en"))
   })
 
