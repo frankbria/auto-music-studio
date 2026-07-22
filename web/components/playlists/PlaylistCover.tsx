@@ -1,49 +1,37 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import { MusicNote01Icon } from "@hugeicons/core-free-icons"
 
-import { coverClips, type Playlist } from "@/lib/playlists"
+import type { Playlist } from "@/lib/playlists"
 import { cn } from "@/lib/utils"
-import type { Clip } from "@/lib/workspace-clips"
 
-// Playlist cover (US-20.3). Custom upload wins; otherwise an auto-mosaic of the
-// first up-to-4 songs. There's no authed artwork proxy (real <img src=.../artwork>
-// would 401), so each mosaic tile is a music-note glyph, not a real thumbnail —
-// swap the tile for the clip's artwork when a public artwork endpoint exists.
+// Playlist cover (US-20.3). Custom upload wins; otherwise an auto-mosaic. There's
+// no authed artwork proxy (a real <img src=.../artwork> would 401), so the mosaic
+// is glyph tiles, not real thumbnails — swap a tile for the clip's artwork when a
+// public artwork endpoint exists. An empty playlist shows a single glyph so it
+// reads as "no songs yet" rather than a full cover.
 
-/** One glyph tile of the mosaic. */
-function Tile({ className }: { className?: string }) {
+function box(className?: string) {
+  return cn("relative aspect-square w-full overflow-hidden rounded-md bg-muted", className)
+}
+
+function Glyph({ size }: { size: number }) {
   return (
-    <span
-      className={cn(
-        "flex items-center justify-center bg-muted text-muted-foreground",
-        className
-      )}
-    >
-      <HugeiconsIcon icon={MusicNote01Icon} size={20} aria-hidden />
+    <span className="flex size-full items-center justify-center bg-muted text-muted-foreground">
+      <HugeiconsIcon icon={MusicNote01Icon} size={size} aria-hidden />
     </span>
   )
 }
 
 export function PlaylistCover({
   playlist,
-  clips,
   className,
 }: {
   playlist: Playlist
-  /** Resolved cover clips; defaults to the playlist's first 4 songs. */
-  clips?: Clip[]
   className?: string
 }) {
-  const tiles = clips ?? coverClips(playlist)
-
-  const box = cn(
-    "relative aspect-square w-full overflow-hidden rounded-md bg-muted",
-    className
-  )
-
   if (playlist.coverDataUrl) {
     return (
-      <div className={box}>
+      <div className={box(className)}>
         {/* eslint-disable-next-line @next/next/no-img-element -- object URL, not an optimizable asset */}
         <img
           src={playlist.coverDataUrl}
@@ -54,19 +42,27 @@ export function PlaylistCover({
     )
   }
 
-  // 2×2 grid; fewer than 4 songs → fill remaining slots with plain glyph tiles so
-  // the cover is always a full square (1 song still reads as a cover, not a crop).
-  const slots = Array.from({ length: 4 }, (_, i) => tiles[i] ?? null)
+  const count = playlist.clipIds.length
 
+  if (count === 0) {
+    return (
+      <div className={box(className)} role="img" aria-label={`${playlist.name} cover`}>
+        <Glyph size={28} />
+      </div>
+    )
+  }
+
+  // 2×2 glyph mosaic. Not thumbnails yet (see note above) — the grid is a stand-in
+  // until real artwork lands.
   return (
     <div
-      className={cn(box, "grid grid-cols-2 grid-rows-2 gap-px")}
+      className={cn(box(className), "grid grid-cols-2 grid-rows-2 gap-px")}
       data-testid="playlist-mosaic"
       role="img"
       aria-label={`${playlist.name} cover`}
     >
-      {slots.map((clip, i) => (
-        <Tile key={clip?.id ?? `empty-${i}`} />
+      {Array.from({ length: 4 }, (_, i) => (
+        <Glyph key={i} size={18} />
       ))}
     </div>
   )

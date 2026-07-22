@@ -16,10 +16,16 @@ const pl = (over: Partial<Playlist> = {}): Playlist => ({
 })
 
 describe("PlaylistCover", () => {
-  it("renders a glyph mosaic by default (AC4)", () => {
-    render(<PlaylistCover playlist={pl()} clips={[]} />)
+  it("renders a glyph mosaic when the playlist has songs (AC4)", () => {
+    render(<PlaylistCover playlist={pl({ clipIds: ["a", "b"] })} />)
     expect(screen.getByTestId("playlist-mosaic")).toBeInTheDocument()
-    expect(screen.queryByRole("img", { name: "Mix cover" })).toBeInTheDocument()
+    expect(screen.getByRole("img", { name: "Mix cover" })).toBeInTheDocument()
+  })
+
+  it("renders a single glyph (no mosaic) for an empty playlist", () => {
+    render(<PlaylistCover playlist={pl()} />)
+    expect(screen.queryByTestId("playlist-mosaic")).not.toBeInTheDocument()
+    expect(screen.getByRole("img", { name: "Mix cover" })).toBeInTheDocument()
   })
 
   it("renders the custom cover image when uploaded (AC4)", () => {

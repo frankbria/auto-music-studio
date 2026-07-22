@@ -27,9 +27,6 @@ export type Playlist = {
   createdAt: string
 }
 
-/** Max thumbnails composited into an auto-mosaic cover. */
-export const MOSAIC_SLOTS = 4
-
 function newId(): string {
   // crypto.randomUUID exists in browsers and the jsdom/node test env.
   return `pl-${crypto.randomUUID()}`
@@ -129,11 +126,6 @@ export function setCover(pl: Playlist, coverDataUrl: string | null): Playlist {
 export function playlistClips(pl: Playlist, pool: Clip[] = getAllClips()): Clip[] {
   const byId = new Map(pool.map((c) => [c.id, c]))
   return pl.clipIds.map((id) => byId.get(id)).filter((c): c is Clip => c != null)
-}
-
-/** The first up-to-4 resolved clips used to build the auto-mosaic cover. */
-export function coverClips(pl: Playlist, pool: Clip[] = getAllClips()): Clip[] {
-  return playlistClips(pl, pool).slice(0, MOSAIC_SLOTS)
 }
 
 /** Public share URL for a playlist. `origin` comes from the caller (window.location). */

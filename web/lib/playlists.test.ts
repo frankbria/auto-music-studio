@@ -4,10 +4,8 @@ import {
   addClip,
   buildInspirationHref,
   buildShareUrl,
-  coverClips,
   createPlaylist,
   initialPlaylists,
-  MOSAIC_SLOTS,
   playlistClips,
   removeClip,
   renamePlaylist,
@@ -103,7 +101,7 @@ describe("setCover", () => {
   })
 })
 
-describe("playlistClips / coverClips", () => {
+describe("playlistClips", () => {
   const pool = [
     { id: "x", title: "X" },
     { id: "y", title: "Y" },
@@ -113,12 +111,6 @@ describe("playlistClips / coverClips", () => {
 
   it("resolves ids to clips in playlist order, dropping unknown ids", () => {
     expect(playlistClips(pl, pool).map((c) => c.id)).toEqual(["z", "x"])
-  })
-
-  it("caps cover clips at MOSAIC_SLOTS", () => {
-    const many: Playlist = { ...base(), clipIds: ["x", "y", "z", "x", "y"] }
-    // dedup not enforced here (ids can repeat in the test pool lookup); just assert cap
-    expect(coverClips(many, pool).length).toBeLessThanOrEqual(MOSAIC_SLOTS)
   })
 })
 

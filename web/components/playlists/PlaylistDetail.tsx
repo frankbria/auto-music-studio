@@ -59,11 +59,28 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
   const clips = playlistClips(playlist)
   const isPublic = playlist.visibility === "public"
 
+  // Free the previous object URL before replacing/clearing so uploads don't leak
+  // blobs. (Unmount without clearing still leaks the last one — acceptable for a
+  // session-only mock cover; revisit if covers move to real uploads.)
+  const revokePrevCover = () => {
+    if (playlist.coverDataUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(playlist.coverDataUrl)
+    }
+  }
+
   const onUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) setCover(playlist.id, URL.createObjectURL(file))
+    if (file) {
+      revokePrevCover()
+      setCover(playlist.id, URL.createObjectURL(file))
+    }
     // Reset so re-selecting the same file fires change again.
     e.target.value = ""
+  }
+
+  const clearCover = () => {
+    revokePrevCover()
+    setCover(playlist.id, null)
   }
 
   const copyShare = async () => {
@@ -95,7 +112,7 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
       {/* Header */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-end">
         <div className="w-40 shrink-0">
-          <PlaylistCover playlist={playlist} clips={clips.slice(0, 4)} />
+          <PlaylistCover playlist={playlist} />
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -127,7 +144,7 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
               Upload cover
             </Button>
             {playlist.coverDataUrl && (
-              <Button variant="ghost" onClick={() => setCover(playlist.id, null)}>
+              <Button variant="ghost" onClick={clearCover}>
                 <HugeiconsIcon icon={Image01Icon} size={16} />
                 Use mosaic
               </Button>
@@ -156,7 +173,12 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
             </div>
             {isPublic ? (
               <div className="flex items-center gap-2">
-                <code className="max-w-xs truncate rounded bg-muted px-2 py-1 text-xs">
+                {/* Origin is client-only, so the server renders the path and the
+                    client fills in the full URL — suppress the hydration diff. */}
+                <code
+                  suppressHydrationWarning
+                  className="max-w-xs truncate rounded bg-muted px-2 py-1 text-xs"
+                >
                   {buildShareUrl(
                     typeof window !== "undefined" ? window.location.origin : "",
                     playlist.id
