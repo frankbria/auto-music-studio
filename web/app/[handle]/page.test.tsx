@@ -57,4 +57,11 @@ describe("/@handle route shim", () => {
     expect(() => render(<ProfilePage />)).toThrow("NEXT_NOT_FOUND")
     expect(notFound).toHaveBeenCalled()
   })
+
+  it("404s a malformed percent-encoded segment instead of throwing URIError", () => {
+    // A lone "%"/bad escape would make decodeURIComponent throw; degrade to 404.
+    paramsRef.current = { handle: "%zz" }
+    expect(() => render(<ProfilePage />)).toThrow("NEXT_NOT_FOUND")
+    expect(notFound).toHaveBeenCalled()
+  })
 })

@@ -45,18 +45,26 @@ function Stat({
   value: number
   testid?: string
 }) {
+  const exact = value.toLocaleString("en")
   return (
     <span className="flex items-baseline gap-1">
       {/* Compact display, exact count on hover (and for assertions) — a single */}
-      {/* follow won't move "12.8K", so the title carries the real number. */}
+      {/* follow won't move "12.8K", so the title carries the real number. The */}
+      {/* visible compact form is aria-hidden; screen readers get the sr-only exact. */}
       <span
         data-testid={testid}
-        title={value.toLocaleString("en")}
+        title={exact}
+        aria-hidden
         className="font-semibold tabular-nums text-foreground"
       >
         {compact.format(value)}
       </span>
-      <span className="text-sm text-muted-foreground">{label}</span>
+      <span aria-hidden className="text-sm text-muted-foreground">
+        {label}
+      </span>
+      <span className="sr-only">
+        {exact} {label}
+      </span>
     </span>
   )
 }
