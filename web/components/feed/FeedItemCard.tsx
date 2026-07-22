@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -86,24 +86,35 @@ export function FeedItemCard({
   const liked = state.likedIds.includes(item.id)
   const styleText = item.style_tags.join(", ")
 
-  // Sync the audio element to `active`: play when scrolled into view, pause when
-  // out. play() may reject under the browser autoplay policy (no gesture yet); we
-  // swallow it and the play button stays available. No setState here.
+  // Start this item's audio, first pausing the global bottom playbar so the two
+  // never overlap (entering the feed mid-playback would otherwise double up).
+  // play() may reject under the autoplay policy (no gesture yet) — swallowed; the
+  // play button stays available.
+  const startAudio = useCallback(
+    (audio: HTMLAudioElement) => {
+      dispatch({ type: "pause" })
+      void audio.play().catch(() => {})
+    },
+    [dispatch]
+  )
+
+  // Sync the audio element to `active`: play when scrolled into view, pause (and
+  // rewind) when out. No setState here — the element's own events drive isPlaying.
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
     if (active) {
-      void audio.play().catch(() => {})
+      startAudio(audio)
     } else {
       audio.pause()
       audio.currentTime = 0
     }
-  }, [active])
+  }, [active, startAudio])
 
   const togglePlay = () => {
     const audio = audioRef.current
     if (!audio) return
-    if (audio.paused) void audio.play().catch(() => {})
+    if (audio.paused) startAudio(audio)
     else audio.pause()
   }
 
