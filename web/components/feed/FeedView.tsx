@@ -80,18 +80,17 @@ export function FeedView() {
     return () => obs.disconnect()
   }, [loadMore, feed.hasMore])
 
-  const registerItem = (key: string) => (el: HTMLElement | null) => {
-    const map = itemEls.current
-    const prev = map.get(key)
-    if (prev) activeObserver.current?.unobserve(prev)
-    if (el) {
-      map.set(key, el)
-      activeObserver.current?.observe(el)
-    } else {
-      map.delete(key)
-      ratios.current.delete(key)
-    }
-  }
+  // Stable ref callback (reads the key from data-key). Kept identity-stable so a
+  // re-render — e.g. when the active item changes — doesn't detach/reattach every
+  // item and churn the ratio map. Items are append-only, so there's no per-item
+  // unobserve; the observer's disconnect() on unmount is the only cleanup needed.
+  const registerItem = useCallback((el: HTMLElement | null) => {
+    if (!el) return
+    const key = el.dataset.key
+    if (!key) return
+    itemEls.current.set(key, el)
+    activeObserver.current?.observe(el)
+  }, [])
 
   return (
     <div
@@ -103,7 +102,7 @@ export function FeedView() {
         <div
           key={item.key}
           data-key={item.key}
-          ref={registerItem(item.key)}
+          ref={registerItem}
           className="h-full w-full snap-start snap-always"
         >
           <FeedItemCard item={item} active={item.key === activeKey} />
