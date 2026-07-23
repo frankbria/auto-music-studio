@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { MasteringTab } from "@/components/mastering/mastering-tab"
 import { SelectedSongSummary } from "@/components/release/SelectedSongSummary"
 import { SongSelector } from "@/components/release/SongSelector"
 import { useClip } from "@/hooks/use-clip"
@@ -101,14 +102,7 @@ export function ReleasePageContent() {
           <TabsTrigger value="distribute">Distribute</TabsTrigger>
         </TabsList>
         <TabsContent value="mastering" className="pt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Mastering</CardTitle>
-              <CardDescription>
-                Mastering controls will appear here.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+          <MasteringTab selectedClip={clip ?? null} />
         </TabsContent>
         <TabsContent value="distribute" className="pt-4">
           <Card>

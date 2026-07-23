@@ -41,6 +41,13 @@ vi.mock("@/components/release/SongSelector", () => ({
     </div>
   ),
 }))
+// The mastering tab has its own tests and pulls in auth/job hooks; stub it so
+// the page test stays focused on selection/URL wiring.
+vi.mock("@/components/mastering/mastering-tab", () => ({
+  MasteringTab: ({ selectedClip }: { selectedClip: { id: string } | null }) => (
+    <div data-testid="mastering-tab">{selectedClip?.id ?? "no-clip"}</div>
+  ),
+}))
 vi.mock("@/components/release/SelectedSongSummary", () => ({
   SelectedSongSummary: ({
     clip,
