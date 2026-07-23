@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle01Icon } from "@hugeicons/core-free-icons"
@@ -44,26 +44,20 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   const router = useRouter()
   const { accessToken } = useAuth()
   const notify = useNotify()
-  const job = useMasteringJob()
+  // Raise a notification when the job completes (AC5) via the hook's fire-once
+  // onComplete seam (kept in a ref there, so this closure sees the latest clip).
+  const job = useMasteringJob({
+    onComplete: () =>
+      notify({
+        type: "mastering_complete",
+        message: `Mastering complete for "${selectedClip?.title ?? "your song"}"`,
+        href: "/release",
+      }),
+  })
   const jobId =
     job.state.phase === "completed" ? job.state.detail.job_id : undefined
   const previews = useMasteringPreviews(jobId)
   const [approve, setApprove] = useState<ApproveState>({ phase: "idle" })
-
-  // Raise a notification the first time each job completes (AC5). Keyed by job_id
-  // so re-renders don't re-fire; notify targets the shared store, not local state.
-  const notifiedRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (job.state.phase !== "completed") return
-    const id = job.state.detail.job_id
-    if (notifiedRef.current === id) return
-    notifiedRef.current = id
-    notify({
-      type: "mastering_complete",
-      message: `Mastering complete for "${selectedClip?.title ?? "your song"}"`,
-      href: "/release",
-    })
-  }, [job.state, notify, selectedClip])
 
   async function handleApprove() {
     if (!jobId || !previews.selectedId) return
@@ -164,9 +158,16 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
 
     return (
       <div className="flex flex-col gap-6">
-        {/* Distinct status for the completed job: preview ready vs approved (AC2). */}
+        {/* Distinct status for the completed job: preview ready vs approved (AC2).
+            Gated the same way as the approval banner below — an "approved" phase
+            only shows for the still-selected approved preview, so selecting a
+            different candidate falls back to "preview ready" (no contradiction). */}
         <MasteringStatus
-          status={approve.phase === "approved" ? "approved" : "preview_ready"}
+          status={
+            approve.phase === "approved" && approve.previewId === previews.selectedId
+              ? "approved"
+              : "preview_ready"
+          }
         />
 
         <PreviewList

@@ -17,15 +17,8 @@ import {
   masteringHistory,
   type MasteringHistoryEntry,
 } from "@/lib/mastering-history"
-import { MASTERING_PROFILES, MASTERING_SERVICES } from "@/lib/mastering"
+import { profileLabel, serviceLabel } from "@/lib/mastering"
 import { cn } from "@/lib/utils"
-
-function profileLabel(value: string) {
-  return MASTERING_PROFILES.find((p) => p.value === value)?.label ?? value
-}
-function serviceLabel(value: string) {
-  return MASTERING_SERVICES.find((s) => s.value === value)?.label ?? value
-}
 
 /**
  * Mastering history (US-21.3): past mastering jobs for the current user with their

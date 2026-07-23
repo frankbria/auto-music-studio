@@ -39,6 +39,12 @@ export function masteringDisplayStatus(entry: MasteringHistoryEntry): MasteringD
       return "failed"
     case "completed":
       return entry.isApproved ? "approved" : "preview_ready"
+    default: {
+      // Exhaustiveness guard: if MasteringStatus ever grows a member, this fails
+      // to compile instead of returning undefined and throwing in the badge.
+      const unexpected: never = entry.status
+      return unexpected
+    }
   }
 }
 

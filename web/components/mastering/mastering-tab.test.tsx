@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -15,8 +15,14 @@ let jobState: MasteringJobState
 const submit = vi.fn()
 const retry = vi.fn()
 const reset = vi.fn()
+// Capture the onComplete the tab passes so a test can fire it (the real hook
+// invokes it once, from its poll loop, when a job reaches completed).
+let capturedOnComplete: ((detail: unknown) => void) | undefined
 vi.mock("@/hooks/use-mastering-job", () => ({
-  useMasteringJob: () => ({ state: jobState, submit, retry, reset }),
+  useMasteringJob: (opts?: { onComplete?: (detail: unknown) => void }) => {
+    capturedOnComplete = opts?.onComplete
+    return { state: jobState, submit, retry, reset }
+  },
 }))
 
 let previewsResult: UseMasteringPreviews
@@ -167,12 +173,18 @@ describe("MasteringTab", () => {
     // The approval banner is gone; Approve is offered for the new selection.
     expect(screen.queryByText("Mastered", { selector: "[data-slot='badge']" })).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: /approve master/i })).toBeInTheDocument()
+    // And the top status pill no longer contradicts it: it falls back to
+    // "Preview ready" for the newly-selected, unapproved candidate (review #1).
+    expect(screen.getByRole("status")).toHaveTextContent(/preview ready/i)
   })
 
   it("raises a mastering_complete notification when a job completes (AC5)", () => {
     jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
     previewsResult = readyPreviews
     render(<MasteringTab selectedClip={clip("Velvet Static")} />)
+
+    // The tab wires notify() through the hook's onComplete; firing it notifies.
+    act(() => capturedOnComplete?.({ job_id: "j1", status: "completed" }))
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "mastering_complete" })
     )
