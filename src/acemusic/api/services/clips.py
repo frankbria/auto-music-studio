@@ -22,7 +22,7 @@ from fastapi import HTTPException, status
 
 from acemusic.storage import get_storage_backend
 
-from ..models import ArtworkOption, Clip
+from ..models import ArtworkOption, Clip, VisibilityState
 from . import daw_export as daw_export_service, workspaces as workspace_service
 from .common import coerce_object_id
 
@@ -156,15 +156,17 @@ async def find_similar_clips(
 async def get_clip_for_audio_access(clip_id: str, current_user_id: str) -> Clip:
     """Return ``clip_id``'s clip if ``current_user_id`` may retrieve its audio.
 
-    Raises 404 for malformed/unknown ids and 403 for another user's private
-    clip. Unlike jobs (which 404 to hide existence), clips deliberately
-    distinguish 403 so sharing flows can tell "ask the owner" from "gone".
+    Raises 404 for malformed/unknown ids and 403 for another user's *private*
+    clip (US-20.7: unlisted and public both allow non-owner access — unlisted
+    is "link sharing", not "hidden"). Unlike jobs (which 404 to hide existence),
+    clips deliberately distinguish 403 so sharing flows can tell "ask the owner"
+    from "gone".
     """
     oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
     if clip is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
-    if str(clip.user_id) != current_user_id and not clip.is_public:
+    if str(clip.user_id) != current_user_id and clip.visibility == VisibilityState.PRIVATE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip is private.")
     return clip
 
@@ -309,19 +311,28 @@ async def update_clip_fields(
     *,
     title: str | None = None,
     is_public: bool | None = None,
+    visibility: VisibilityState | None = None,
 ) -> Clip:
-    """Apply the client-writable clip fields — title (rename) and/or is_public
-    (the US-17.6 publish toggle). ``None`` leaves a field unchanged. A title
-    supplied in the same call is applied before the publish guard runs, so a
-    rename-and-publish request is validated against the new title."""
+    """Apply the client-writable clip fields — title (rename) and/or visibility
+    (US-20.7's three-state control, superseding US-17.6's ``is_public`` toggle).
+    ``None`` leaves a field unchanged. A title supplied in the same call is
+    applied before the publish guard runs, so a rename-and-publish request is
+    validated against the new title.
+
+    ``visibility`` is the source of truth; a legacy ``is_public`` bool is mapped
+    onto it (True -> public, False -> private) when ``visibility`` itself is not
+    given, so old callers/tests keep working unchanged.
+    """
     clip = await get_owned_clip(clip_id, user_id)
     if title is not None:
         clip.title = title
-    if is_public:
+    if visibility is None and is_public is not None:
+        visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
+    if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
-    if is_public is not None:
-        clip.is_public = is_public
-    if title is not None or is_public is not None:
+    if visibility is not None:
+        clip.visibility = visibility
+    if title is not None or visibility is not None:
         await clip.save()
     return clip
 

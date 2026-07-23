@@ -5,12 +5,14 @@ consistent clip shape as the platform migrates from SQLite to MongoDB.
 """
 
 from datetime import datetime
+from typing import Any
 
 from beanie import Document, PydanticObjectId
-from pydantic import Field
+from pydantic import Field, model_validator
 from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from .common import utcnow
+from .distribution import VisibilityState
 
 
 class Clip(Document):
@@ -50,8 +52,30 @@ class Clip(Document):
     # with that release. Globally unique via the partial index below — a recording
     # gets exactly one ISRC, never reused — while clips without one stay None.
     isrc: str | None = None
+    # US-20.7: visibility is the source of truth (private/unlisted/public).
+    visibility: VisibilityState = VisibilityState.PRIVATE
+    # ponytail: is_public is a stored denormalization synced from `visibility`
+    # (see the validators below) purely so existing Mongo queries filtering on
+    # {"is_public": True} keep matching without a data migration. Never set it
+    # directly — set `visibility` instead.
     is_public: bool = False  # documents predating US-9.3 load as private
     created_at: datetime = Field(default_factory=utcnow)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backfill_visibility_from_legacy_is_public(cls, data: Any) -> Any:
+        # Documents written before US-20.7 have is_public but no visibility key
+        # at all; without this they'd silently load as PRIVATE (the field
+        # default) and a legacy public clip would regress to private.
+        if isinstance(data, dict) and "visibility" not in data and "is_public" in data:
+            data = dict(data)
+            data["visibility"] = VisibilityState.PUBLIC if data["is_public"] else VisibilityState.PRIVATE
+        return data
+
+    @model_validator(mode="after")
+    def _sync_is_public(self) -> "Clip":
+        self.is_public = self.visibility == VisibilityState.PUBLIC
+        return self
 
     class Settings:
         name = "clips"
