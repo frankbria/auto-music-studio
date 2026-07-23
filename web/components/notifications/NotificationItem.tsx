@@ -48,7 +48,13 @@ export function NotificationItem({ notification }: { notification: AppNotificati
         >
           {notification.message}
         </span>
-        <span className="mt-0.5 block text-xs text-muted-foreground">
+        {/* Relative time uses Date.now(), which differs between the static
+            prerender and client hydration — suppress the expected text mismatch
+            (React's documented escape hatch for timestamps). */}
+        <span
+          suppressHydrationWarning
+          className="mt-0.5 block text-xs text-muted-foreground"
+        >
           {relativeTime(notification.createdAt)}
         </span>
       </span>
@@ -56,6 +62,7 @@ export function NotificationItem({ notification }: { notification: AppNotificati
       {!notification.read && (
         <span
           data-testid="unread-dot"
+          role="img"
           aria-label="Unread"
           className="mt-2 size-2 shrink-0 rounded-full bg-primary"
         />

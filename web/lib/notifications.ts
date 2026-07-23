@@ -8,8 +8,8 @@
 // sidebar bell badge off this seed + these pure helpers. When the API lands, swap
 // the seed for a fetch and the helpers for PATCH calls — callers won't change.
 //
-// ponytail: session-scoped, synchronous, no persistence and no polling — there is
-// nothing to poll against yet. Real-time updates arrive with the real endpoint.
+// Session-scoped, synchronous, no persistence and no polling — there is nothing
+// to poll against yet. Real-time updates arrive with the real endpoint.
 
 import type { IconSvgElement } from "@hugeicons/react"
 import {
