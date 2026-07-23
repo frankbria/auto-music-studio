@@ -74,8 +74,21 @@ class Clip(Document):
 
     @model_validator(mode="after")
     def _sync_is_public(self) -> "Clip":
+        # Keeps the invariant on construction and on load (Beanie re-validates
+        # query results). It does NOT fire on plain attribute assignment
+        # (validate_assignment is False on beanie.Document), so writers must not
+        # assign `visibility` directly — use `set_visibility` below.
         self.is_public = self.visibility == VisibilityState.PUBLIC
         return self
+
+    def set_visibility(self, visibility: VisibilityState) -> None:
+        # The only correct way to change visibility on an existing document.
+        # Setting the field alone would leave the `is_public` denormalization
+        # stale in stored BSON (the after-validator doesn't run on assignment),
+        # which would leak unlisted/private clips into `{"is_public": True}`
+        # server-side queries (search/explore/similar). Set both together.
+        self.visibility = visibility
+        self.is_public = visibility == VisibilityState.PUBLIC
 
     class Settings:
         name = "clips"

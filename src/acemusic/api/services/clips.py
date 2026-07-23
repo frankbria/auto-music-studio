@@ -332,7 +332,7 @@ async def update_clip_fields(
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
     if visibility is not None:
-        clip.visibility = visibility
+        clip.set_visibility(visibility)
     if title is not None or visibility is not None:
         await clip.save()
     return clip

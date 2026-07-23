@@ -187,6 +187,27 @@ class TestVisibilityTransitions:
         assert stored.visibility == VisibilityState.PRIVATE
         assert stored.is_public is False
 
+    async def test_is_public_denormalization_synced_in_raw_bson(self, client, settings) -> None:
+        # Reading a clip back through Clip.get()/ClipResponse re-runs the sync
+        # validator and self-heals is_public, so it masks a stale stored value.
+        # Server-side queries (search/explore/similar) filter the raw BSON on
+        # {"is_public": True}, so the DENORMALIZATION IN STORAGE must be correct.
+        # Assert on the raw pymongo document — this is what caught set-on-assign
+        # not re-running the after-validator.
+        user = await _make_user(f"vis-raw-bson-{next(_SEQ)}@example.com")
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace)
+        headers = _auth_headers(user, settings)
+        raw = Clip.get_pymongo_collection()
+
+        await client.patch(f"{CLIPS_URL}/{clip.id}", json={"visibility": "public"}, headers=headers)
+        doc = await raw.find_one({"_id": clip.id})
+        assert doc["visibility"] == "public" and doc["is_public"] is True
+
+        await client.patch(f"{CLIPS_URL}/{clip.id}", json={"visibility": "unlisted"}, headers=headers)
+        doc = await raw.find_one({"_id": clip.id})
+        assert doc["visibility"] == "unlisted" and doc["is_public"] is False  # not stale True
+
     async def test_public_without_title_returns_422(self, client, settings) -> None:
         user = await _make_user(f"vis-no-title-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)

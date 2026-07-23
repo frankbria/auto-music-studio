@@ -225,7 +225,7 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
 
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
     if clip is not None and clip.visibility != visibility:
-        clip.visibility = visibility
+        clip.set_visibility(visibility)
         await clip.save()
     return release
 
