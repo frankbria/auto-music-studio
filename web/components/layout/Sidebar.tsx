@@ -16,6 +16,7 @@ import {
   type NavDialogItem,
   type NavLinkItem,
 } from "@/config/navigation"
+import { useUnreadCount } from "@/contexts/notifications-context"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
 import {
@@ -49,10 +50,13 @@ function NavLink({
   item,
   expanded,
   active,
+  badge,
 }: {
   item: NavLinkItem
   expanded: boolean
   active: boolean
+  /** Unread count overlaid on the icon (0/undefined hides it). Used by the bell. */
+  badge?: number
 }) {
   return (
     <Link
@@ -67,7 +71,18 @@ function NavLink({
         !expanded && "justify-center px-0"
       )}
     >
-      <HugeiconsIcon icon={item.icon} size={22} className="shrink-0" />
+      <span className="relative shrink-0">
+        <HugeiconsIcon icon={item.icon} size={22} />
+        {badge ? (
+          <span
+            data-testid="nav-unread-badge"
+            aria-label={`${badge} unread`}
+            className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
+          >
+            {badge > 99 ? "99+" : badge}
+          </span>
+        ) : null}
+      </span>
       {expanded && <span className="truncate text-sm">{item.label}</span>}
     </Link>
   )
@@ -158,6 +173,7 @@ function NavDialog({
 export function Sidebar() {
   const pathname = usePathname()
   const [expanded, setExpanded] = useState(false)
+  const unreadCount = useUnreadCount()
 
   return (
     <aside
@@ -192,6 +208,7 @@ export function Sidebar() {
             item={item}
             expanded={expanded}
             active={isActive(pathname, item.href)}
+            badge={item.id === "notifications" ? unreadCount : undefined}
           />
         ))}
       </nav>

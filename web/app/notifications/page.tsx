@@ -1,7 +1,7 @@
+import { NotificationsView } from "@/components/notifications/NotificationsView"
+
+// Notifications route /notifications (US-20.6). State comes from the root
+// NotificationsProvider (app/layout), shared with the sidebar bell badge.
 export default function NotificationsPage() {
-  return (
-    <div className="p-8">
-      <h1 className="text-2xl font-semibold">Notifications</h1>
-    </div>
-  )
+  return <NotificationsView />
 }
