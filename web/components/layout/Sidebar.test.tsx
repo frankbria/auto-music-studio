@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Sidebar } from "@/components/layout"
 import { AuthProvider } from "@/contexts/auth-context"
+import { NotificationsProvider } from "@/contexts/notifications-context"
 import { mainNav } from "@/config/navigation"
 import { LAYOUT } from "@/lib/constants/layout"
+import { initialNotifications, unreadCount } from "@/lib/notifications"
 import { routerMock } from "@/test/router-mock"
 
 // The Sidebar's account menu now reads auth state, so renders need a provider.
@@ -142,5 +144,24 @@ describe("Sidebar navigation (US-15.3)", () => {
     await user.click(screen.getByRole("button", { name: "Account" }))
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
+  })
+})
+
+describe("Sidebar notifications badge (US-20.6, AC5)", () => {
+  it("shows the unread count on the Notifications item when a provider is present", () => {
+    render(
+      <AuthProvider>
+        <NotificationsProvider>
+          <Sidebar />
+        </NotificationsProvider>
+      </AuthProvider>
+    )
+    const badge = screen.getByTestId("nav-unread-badge")
+    expect(badge).toHaveTextContent(String(unreadCount(initialNotifications)))
+  })
+
+  it("renders no badge without a provider (degrades to 0)", () => {
+    renderSidebar()
+    expect(screen.queryByTestId("nav-unread-badge")).not.toBeInTheDocument()
   })
 })
