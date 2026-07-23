@@ -11,10 +11,11 @@ import { useNotifications } from "@/contexts/notifications-context"
 // indicators, and "Mark all as read". Data + mutations come from the root
 // NotificationsProvider, shared with the sidebar bell badge.
 
-// The seed is 7 items, so "infinite scroll" is a Show-older reveal in PAGE_SIZE
-// chunks rather than an IntersectionObserver — the real feed (US-20.4) already has
-// the observer; swap this for a cursor fetch when the API lands.
-const PAGE_SIZE = 5
+// "Infinite scroll" is a Show-older reveal in PAGE_SIZE chunks rather than an
+// IntersectionObserver — the real feed (US-20.4) already has the observer; swap
+// this for a cursor fetch when the API lands. PAGE_SIZE covers all seven types on
+// the first page; older history reveals on demand.
+export const PAGE_SIZE = 7
 
 export function NotificationsView() {
   const { notifications, unreadCount, markAllRead } = useNotifications()

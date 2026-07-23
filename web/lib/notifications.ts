@@ -122,6 +122,33 @@ export const initialNotifications: AppNotification[] = [
     createdAt: minutesAgo(9 * 24 * 60),
     read: false,
   },
+  // Older, already-read history — makes the paged reveal ("Show older") genuine
+  // without changing the unread count. The first page (PAGE_SIZE) still covers all
+  // seven types above; these repeat types further down the timeline.
+  {
+    id: "n-like-2",
+    type: "like",
+    message: 'Aria liked your song "Paper Moon"',
+    href: "/song/g-jazz",
+    createdAt: minutesAgo(11 * 24 * 60),
+    read: true,
+  },
+  {
+    id: "n-follow-2",
+    type: "follow",
+    message: "Kite started following you",
+    href: "/@ember",
+    createdAt: minutesAgo(14 * 24 * 60),
+    read: true,
+  },
+  {
+    id: "n-dist-2",
+    type: "distribution_update",
+    message: '"Golden Hour" was submitted to Apple Music',
+    href: "/release",
+    createdAt: minutesAgo(20 * 24 * 60),
+    read: true,
+  },
 ]
 
 function minutesAgo(min: number): string {
