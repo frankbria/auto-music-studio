@@ -1,19 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import {
-  MASTERING_PROFILES,
-  MASTERING_SERVICES,
-  type PreviewItem,
-} from "@/lib/mastering"
-
-/** Human label for a profile/service key, falling back to the raw value. */
-function profileLabel(value?: string) {
-  return MASTERING_PROFILES.find((p) => p.value === value)?.label ?? value ?? "—"
-}
-function serviceLabel(value?: string) {
-  return MASTERING_SERVICES.find((s) => s.value === value)?.label ?? value ?? "—"
-}
+import { profileLabel, serviceLabel, type PreviewItem } from "@/lib/mastering"
 
 /** Format a loudness delta with a sign (e.g. "+6.0 dB"), or a dash when absent. */
 function formatDelta(delta?: number | null) {

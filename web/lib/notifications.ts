@@ -162,6 +162,18 @@ export function unreadCount(list: AppNotification[]): number {
   return list.reduce((n, item) => n + (item.read ? 0 : 1), 0)
 }
 
+/** The fields a caller supplies to raise a notification; id/createdAt/read are
+ *  stamped by the store (see notifications-context `notify`). */
+export type NotifyInput = Pick<AppNotification, "type" | "message" | "href">
+
+/** Prepend a new notification (newest first), immutable — the store's insert path. */
+export function addNotification(
+  list: AppNotification[],
+  entry: AppNotification
+): AppNotification[] {
+  return [entry, ...list]
+}
+
 /** Return a new list with the one notification marked read (immutable). */
 export function markRead(list: AppNotification[], id: string): AppNotification[] {
   return list.map((item) => (item.id === id && !item.read ? { ...item, read: true } : item))

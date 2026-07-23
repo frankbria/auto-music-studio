@@ -15,11 +15,13 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { MasteringConfig } from "@/components/mastering/mastering-config"
+import { MasteringHistory } from "@/components/mastering/mastering-history"
 import { MasteringMetrics } from "@/components/mastering/mastering-metrics"
 import { MasteringStatus } from "@/components/mastering/mastering-status"
 import { PreviewList } from "@/components/mastering/preview-list"
 import { PreviewPlayer } from "@/components/mastering/preview-player"
 import { useAuth } from "@/hooks/use-auth"
+import { useNotify } from "@/contexts/notifications-context"
 import { useMasteringJob } from "@/hooks/use-mastering-job"
 import { useMasteringPreviews } from "@/hooks/use-mastering-previews"
 import { approveMasteringPreview } from "@/lib/mastering"
@@ -41,7 +43,17 @@ type ApproveState =
 export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   const router = useRouter()
   const { accessToken } = useAuth()
-  const job = useMasteringJob()
+  const notify = useNotify()
+  // Raise a notification when the job completes (AC5) via the hook's fire-once
+  // onComplete seam (kept in a ref there, so this closure sees the latest clip).
+  const job = useMasteringJob({
+    onComplete: () =>
+      notify({
+        type: "mastering_complete",
+        message: `Mastering complete for "${selectedClip?.title ?? "your song"}"`,
+        href: "/release",
+      }),
+  })
   const jobId =
     job.state.phase === "completed" ? job.state.detail.job_id : undefined
   const previews = useMasteringPreviews(jobId)
@@ -63,16 +75,21 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Mastering</CardTitle>
-        <CardDescription>
-          Choose a profile and service, generate previews, A/B against the
-          original, and approve your master.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>{renderBody()}</CardContent>
-    </Card>
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Mastering</CardTitle>
+          <CardDescription>
+            Choose a profile and service, generate previews, A/B against the
+            original, and approve your master.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>{renderBody()}</CardContent>
+      </Card>
+
+      {/* Past jobs + approved masters (AC4). US-21.3. */}
+      <MasteringHistory />
+    </div>
   )
 
   function renderBody() {
@@ -141,6 +158,18 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
 
     return (
       <div className="flex flex-col gap-6">
+        {/* Distinct status for the completed job: preview ready vs approved (AC2).
+            Gated the same way as the approval banner below — an "approved" phase
+            only shows for the still-selected approved preview, so selecting a
+            different candidate falls back to "preview ready" (no contradiction). */}
+        <MasteringStatus
+          status={
+            approve.phase === "approved" && approve.previewId === previews.selectedId
+              ? "approved"
+              : "preview_ready"
+          }
+        />
+
         <PreviewList
           previews={data.previews}
           selectedId={previews.selectedId}

@@ -58,6 +58,16 @@ export const MASTERING_SERVICES: ServiceOption[] = [
 export const CUSTOM_LUFS_MIN = -70
 export const CUSTOM_LUFS_MAX = -5
 
+/** Human label for a profile key, falling back to the raw value then a dash. */
+export function profileLabel(value?: string): string {
+  return MASTERING_PROFILES.find((p) => p.value === value)?.label ?? value ?? "—"
+}
+
+/** Human label for a service key, falling back to the raw value then a dash. */
+export function serviceLabel(value?: string): string {
+  return MASTERING_SERVICES.find((s) => s.value === value)?.label ?? value ?? "—"
+}
+
 /** The mastering configuration a submission carries (clip id is passed separately). */
 export type MasteringConfig = {
   profile: MasteringProfile
