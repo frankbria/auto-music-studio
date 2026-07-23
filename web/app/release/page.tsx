@@ -1,92 +1,34 @@
 "use client"
 
-import { Suspense } from "react"
+import { Suspense, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
-import { Badge } from "@/components/ui/badge"
 import {
   Card,
-  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { SelectedSongSummary } from "@/components/release/SelectedSongSummary"
+import { SongSelector } from "@/components/release/SongSelector"
 import { useClip } from "@/hooks/use-clip"
 import { useRequireAuth } from "@/hooks/use-require-auth"
-import { formatTime } from "@/lib/clips"
-import type { Clip } from "@/lib/workspace-clips"
 
-// Minimal release landing (US-19.6). The studio's "Send to Mastering" bounces a
-// mix and lands here with the new clip pre-selected via ?clip=. This page only
-// confirms the hand-off (selected-song summary) and stubs Distribute — the full
-// mastering workflow is Stage 21 (US-21.1+), which owns this page's real body.
+// Release page (US-21.1). A single destination for preparing and shipping a
+// song: pick a clip (or arrive pre-selected from the Studio's "Send to
+// Mastering", which navigates here with ?clip=), see its summary, then work
+// through the Mastering and Distribute tabs. The tab body placeholders are
+// filled by US-21.2 (mastering) and US-21.4/21.5 (distribution).
+//
+// Selection is URL-driven (?clip=): the selector writes it and pre-selection
+// reads it, so there's one source of truth and it survives a refresh.
 
 type ReleaseTab = "mastering" | "distribute"
 
 /** Coerce the raw ?tab= value to a known tab (defaults to mastering). */
 function parseTab(raw: string | null): ReleaseTab {
   return raw === "distribute" ? "distribute" : "mastering"
-}
-
-/** The pre-selected song's summary, or an empty state prompting a hand-off. */
-function MasteringTab({
-  clipId,
-  clip,
-  loading,
-  notFound,
-}: {
-  clipId: string | undefined
-  clip: Clip | null
-  loading: boolean
-  notFound: boolean
-}) {
-  if (!clipId) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>No song selected</CardTitle>
-          <CardDescription>
-            Send a mix from the Studio&apos;s master bus to master it here.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    )
-  }
-  if (loading) {
-    return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading song…
-      </p>
-    )
-  }
-  if (notFound || !clip) {
-    return <p className="text-sm text-muted-foreground">Song not found.</p>
-  }
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{clip.title ?? "Untitled"}</CardTitle>
-        <CardDescription>{formatTime(clip.duration ?? 0)}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Badge>Ready for mastering</Badge>
-      </CardContent>
-    </Card>
-  )
-}
-
-function DistributeTab() {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Distribution</CardTitle>
-        <CardDescription>
-          Publishing to streaming platforms is coming soon.
-        </CardDescription>
-      </CardHeader>
-    </Card>
-  )
 }
 
 /** Inner page content (testable without the auth gate / Suspense boundary). */
@@ -98,33 +40,85 @@ export function ReleasePageContent() {
   const clipId = searchParams.get("clip") ?? undefined
   const { clip, loading, notFound } = useClip(clipId)
 
+  // "Change Song" reopens the selector while keeping the current ?clip= (so a
+  // cancel returns to the same song). No clip selected ⇒ selector shows anyway.
+  const [picking, setPicking] = useState(false)
+  const showSelector = !clipId || picking
+
+  /** Patch a single query param while preserving the rest of the URL. */
+  function setParam(key: string, value: string) {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set(key, value)
+    router.replace(`/release?${params.toString()}`)
+  }
+
+  function selectClip(id: string) {
+    setParam("clip", id)
+    setPicking(false)
+  }
+
   return (
     <div className="flex flex-col gap-6 p-8">
       <h1 className="text-2xl font-semibold">Mastering &amp; Distribution</h1>
+
+      {/* Header: song selector or selected-song summary. */}
+      {showSelector ? (
+        <SongSelector
+          onSelect={selectClip}
+          onCancel={clipId ? () => setPicking(false) : undefined}
+        />
+      ) : loading ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading song…
+        </p>
+      ) : notFound || !clip ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Song not found</CardTitle>
+            <CardDescription>
+              That song is unavailable.{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => setPicking(true)}
+              >
+                Choose another
+              </button>
+              .
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
+        <SelectedSongSummary clip={clip} onChangeSong={() => setPicking(true)} />
+      )}
+
       <Tabs
         value={tab}
-        onValueChange={(next) => {
-          // Preserve the rest of the query (notably ?clip= from Send to
-          // Mastering) — replacing with only ?tab= would drop the hand-off.
-          const params = new URLSearchParams(searchParams.toString())
-          params.set("tab", next)
-          router.replace(`/release?${params.toString()}`)
-        }}
+        onValueChange={(next) => setParam("tab", next)}
       >
         <TabsList>
           <TabsTrigger value="mastering">Mastering</TabsTrigger>
           <TabsTrigger value="distribute">Distribute</TabsTrigger>
         </TabsList>
         <TabsContent value="mastering" className="pt-4">
-          <MasteringTab
-            clipId={clipId}
-            clip={clip}
-            loading={loading}
-            notFound={notFound}
-          />
+          <Card>
+            <CardHeader>
+              <CardTitle>Mastering</CardTitle>
+              <CardDescription>
+                Mastering controls will appear here.
+              </CardDescription>
+            </CardHeader>
+          </Card>
         </TabsContent>
         <TabsContent value="distribute" className="pt-4">
-          <DistributeTab />
+          <Card>
+            <CardHeader>
+              <CardTitle>Distribution</CardTitle>
+              <CardDescription>
+                Publishing to streaming platforms is coming soon.
+              </CardDescription>
+            </CardHeader>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

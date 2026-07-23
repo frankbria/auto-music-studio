@@ -25,6 +25,37 @@ vi.mock("@/hooks/use-clip", () => ({
   useClip: (id: string | undefined) => useClip(id),
 }))
 
+// Stub the release children: SongSelector/SelectedSongSummary have their own
+// tests, so here we only assert the page wires selection/URL correctly.
+vi.mock("@/components/release/SongSelector", () => ({
+  SongSelector: ({
+    onSelect,
+    onCancel,
+  }: {
+    onSelect: (id: string) => void
+    onCancel?: () => void
+  }) => (
+    <div data-testid="song-selector">
+      <button onClick={() => onSelect("c2")}>select-c2</button>
+      {onCancel && <button onClick={onCancel}>cancel-pick</button>}
+    </div>
+  ),
+}))
+vi.mock("@/components/release/SelectedSongSummary", () => ({
+  SelectedSongSummary: ({
+    clip,
+    onChangeSong,
+  }: {
+    clip: { title: string | null }
+    onChangeSong: () => void
+  }) => (
+    <div data-testid="selected-summary">
+      <span>{clip.title}</span>
+      <button onClick={onChangeSong}>change-song</button>
+    </div>
+  ),
+}))
+
 import { ReleasePageContent } from "@/app/release/page"
 
 afterEach(() => {
@@ -37,6 +68,15 @@ function noClip() {
   return { clip: null, loading: false, error: false, notFound: false }
 }
 
+function foundClip(title = "My Mixdown") {
+  return {
+    clip: { id: "c1", title, duration: 65, generation_mode: "studio" },
+    loading: false,
+    error: false,
+    notFound: false,
+  }
+}
+
 describe("ReleasePage", () => {
   it("shows the Mastering and Distribute tabs", () => {
     useClip.mockReturnValue(noClip())
@@ -45,30 +85,60 @@ describe("ReleasePage", () => {
     expect(screen.getByRole("tab", { name: /distribute/i })).toBeInTheDocument()
   })
 
-  it("defaults to the Mastering tab with an empty state when no clip is selected", () => {
+  it("defaults to the Mastering tab and shows the selector when no clip is selected", () => {
     useClip.mockReturnValue(noClip())
     render(<ReleasePageContent />)
     expect(
       screen.getByRole("tab", { name: /mastering/i })
     ).toHaveAttribute("aria-selected", "true")
-    expect(screen.getByText(/no song selected/i)).toBeInTheDocument()
+    expect(screen.getByTestId("song-selector")).toBeInTheDocument()
     // No clip param means we never fetch a clip.
     expect(useClip).toHaveBeenCalledWith(undefined)
   })
 
-  it("preselects the clip from ?clip= and shows its summary", () => {
+  it("preselects the clip from ?clip= and shows its summary (not the selector)", () => {
     searchParamsRef.current = new URLSearchParams("tab=mastering&clip=c1")
-    useClip.mockReturnValue({
-      clip: { id: "c1", title: "My Mixdown", duration: 65, generation_mode: "studio" },
-      loading: false,
-      error: false,
-      notFound: false,
-    })
+    useClip.mockReturnValue(foundClip())
     render(<ReleasePageContent />)
     expect(useClip).toHaveBeenCalledWith("c1")
+    expect(screen.getByTestId("selected-summary")).toBeInTheDocument()
     expect(screen.getByText("My Mixdown")).toBeInTheDocument()
-    expect(screen.getByText(/1:05/)).toBeInTheDocument()
-    expect(screen.getByText(/ready for mastering/i)).toBeInTheDocument()
+    expect(screen.queryByTestId("song-selector")).not.toBeInTheDocument()
+  })
+
+  it("writes ?clip= to the URL when a song is selected", async () => {
+    useClip.mockReturnValue(noClip())
+    const user = userEvent.setup()
+    render(<ReleasePageContent />)
+    await user.click(screen.getByText("select-c2"))
+    expect(replace).toHaveBeenCalledWith("/release?clip=c2")
+  })
+
+  it("reopens the selector when Change Song is clicked, then cancel returns to the summary", async () => {
+    searchParamsRef.current = new URLSearchParams("tab=mastering&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    const user = userEvent.setup()
+    render(<ReleasePageContent />)
+
+    await user.click(screen.getByText("change-song"))
+    expect(screen.getByTestId("song-selector")).toBeInTheDocument()
+    expect(screen.queryByTestId("selected-summary")).not.toBeInTheDocument()
+
+    // With a clip still set, the selector offers a cancel back to the summary.
+    await user.click(screen.getByText("cancel-pick"))
+    expect(screen.getByTestId("selected-summary")).toBeInTheDocument()
+  })
+
+  it("shows a not-found state when the preselected clip is missing", () => {
+    searchParamsRef.current = new URLSearchParams("clip=gone")
+    useClip.mockReturnValue({
+      clip: null,
+      loading: false,
+      error: false,
+      notFound: true,
+    })
+    render(<ReleasePageContent />)
+    expect(screen.getByText(/song not found/i)).toBeInTheDocument()
   })
 
   it("opens the Distribute tab from ?tab=distribute", () => {
@@ -90,12 +160,7 @@ describe("ReleasePage", () => {
 
   it("keeps ?clip= when switching tabs", async () => {
     searchParamsRef.current = new URLSearchParams("tab=mastering&clip=c1")
-    useClip.mockReturnValue({
-      clip: { id: "c1", title: "My Mixdown", duration: 65, generation_mode: "studio" },
-      loading: false,
-      error: false,
-      notFound: false,
-    })
+    useClip.mockReturnValue(foundClip())
     const user = userEvent.setup()
     render(<ReleasePageContent />)
     await user.click(screen.getByRole("tab", { name: /distribute/i }))
