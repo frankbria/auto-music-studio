@@ -8,6 +8,9 @@
 
 export type SortOrder = "newest" | "oldest"
 
+/** Tri-state clip visibility (US-20.7). Mirrors the backend enum. */
+export type Visibility = "private" | "unlisted" | "public"
+
 /** A clip as returned by GET /api/v1/clips (ClipResponse). No `updated_at`. */
 export type Clip = {
   id: string
@@ -31,6 +34,12 @@ export type Clip = {
   parent_clip_ids: string[]
   generation_mode: string | null
   is_public: boolean
+  /**
+   * Tri-state visibility (US-20.7). Optional: older reads/mocks may omit it,
+   * so derive with `visibilityOf` rather than reading this directly — it
+   * falls back to `is_public` and keeps the two fields in sync.
+   */
+  visibility?: Visibility
   created_at: string
   /**
    * Server-computed viewer ownership, present only on the public read (US-20.0);
@@ -47,6 +56,14 @@ export type Clip = {
   play_count?: number
   like_count?: number
   share_count?: number
+}
+
+/**
+ * Single source of truth for a clip's visibility (US-20.7). Prefers the
+ * `visibility` field; falls back to `is_public` for reads that predate it.
+ */
+export function visibilityOf(clip: Pick<Clip, "visibility" | "is_public">): Visibility {
+  return clip.visibility ?? (clip.is_public ? "public" : "private")
 }
 
 /** A workspace as returned by GET /api/v1/workspaces (WorkspaceResponse). */

@@ -45,24 +45,41 @@ describe("updateClipVisibility", () => {
     vi.unstubAllGlobals()
   })
 
-  it("PATCHes the BFF route with the token and is_public body", async () => {
+  it("PATCHes the BFF route with the token and a visibility body", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+        new Response(JSON.stringify({ id: "c1", visibility: "public" }), {
           status: 200,
         })
       )
     vi.stubGlobal("fetch", fetchMock)
 
-    const result = await updateClipVisibility("c1", true, "tok")
-    expect(result).toEqual({ ok: true, isPublic: true })
+    const result = await updateClipVisibility("c1", "public", "tok")
+    expect(result).toEqual({ ok: true, visibility: "public" })
 
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/clips/c1")
     expect(opts.method).toBe("PATCH")
     expect(opts.headers.authorization).toBe("Bearer tok")
-    expect(JSON.parse(opts.body)).toEqual({ is_public: true })
+    expect(JSON.parse(opts.body)).toEqual({ visibility: "public" })
+  })
+
+  it("PATCHes with the unlisted visibility", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", visibility: "unlisted" }), {
+          status: 200,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await updateClipVisibility("c1", "unlisted", "tok")
+    expect(result).toEqual({ ok: true, visibility: "unlisted" })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      visibility: "unlisted",
+    })
   })
 
   it("flags a 422 as a guard failure and carries the detail message", async () => {
@@ -75,7 +92,7 @@ describe("updateClipVisibility", () => {
         )
       )
     )
-    const result = await updateClipVisibility("c1", true, "tok")
+    const result = await updateClipVisibility("c1", "public", "tok")
     expect(result).toEqual({
       ok: false,
       guardFailed: true,
@@ -88,13 +105,13 @@ describe("updateClipVisibility", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response("{}", { status: 500 }))
     )
-    const result = await updateClipVisibility("c1", true, "tok")
+    const result = await updateClipVisibility("c1", "public", "tok")
     expect(result).toMatchObject({ ok: false, guardFailed: false })
   })
 
   it("returns a non-guard error when the request throws", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net down")))
-    const result = await updateClipVisibility("c1", false, "tok")
+    const result = await updateClipVisibility("c1", "private", "tok")
     expect(result).toMatchObject({ ok: false, guardFailed: false })
   })
 })

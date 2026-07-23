@@ -153,7 +153,7 @@ describe("useSongActions", () => {
       const [url, opts] = fetchMock.mock.calls[0]
       expect(url).toBe("/api/clips/c1")
       expect(opts.method).toBe("PATCH")
-      expect(JSON.parse(opts.body as string)).toEqual({ is_public: true })
+      expect(JSON.parse(opts.body as string)).toEqual({ visibility: "public" })
       expect(result.current.publishGuard).toBeNull()
     })
 
@@ -242,8 +242,44 @@ describe("useSongActions", () => {
       await waitFor(() => expect(result.current.isPublic).toBe(false))
       expect(result.current.publishGuard).toBeNull()
       expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
-        is_public: false,
+        visibility: "private",
       })
+    })
+  })
+
+  describe("visibility picker (US-20.7)", () => {
+    it("sets unlisted without guarding, even on an incomplete clip", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", visibility: "unlisted" }), {
+          status: 200,
+        })
+      )
+      vi.stubGlobal("fetch", fetchMock)
+      const { result } = setup(clip({ title: null, style_tags: [] }))
+      expect(result.current.visibility).toBe("private")
+
+      await act(async () => {
+        result.current.setVisibility("unlisted")
+      })
+      await waitFor(() => expect(result.current.visibility).toBe("unlisted"))
+      expect(result.current.publishGuard).toBeNull()
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+        visibility: "unlisted",
+      })
+    })
+
+    it("guards going public but not going unlisted, for the same incomplete clip", async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal("fetch", fetchMock)
+      const { result } = setup(clip({ title: null, style_tags: [] }))
+
+      act(() => void result.current.setVisibility("public"))
+      expect(result.current.publishGuard).toEqual({
+        missingTitle: true,
+        missingStyleTags: true,
+      })
+      expect(result.current.visibility).toBe("private")
+      expect(fetchMock).not.toHaveBeenCalled()
     })
   })
 

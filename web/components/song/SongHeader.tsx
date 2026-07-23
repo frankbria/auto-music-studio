@@ -2,39 +2,37 @@
 
 import { useMemo, useState, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  FavouriteIcon,
-  GlobeIcon,
-  Share01Icon,
-  ThumbsDownIcon,
-} from "@hugeicons/core-free-icons"
+import { FavouriteIcon, Share01Icon, ThumbsDownIcon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ShareModal } from "@/components/song/ShareModal"
+import { VisibilityBadge } from "@/components/song/VisibilityBadge"
+import { VisibilityToggle } from "@/components/song/VisibilityToggle"
 import { usePlayer } from "@/contexts/player-context"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { cn } from "@/lib/utils"
-import type { Clip } from "@/lib/workspace-clips"
+import { visibilityOf, type Clip, type Visibility } from "@/lib/workspace-clips"
 
-// Song-detail header (US-17.1 / US-17.6): title, artist, style/version/mode
-// badges, and the inline Like / Dislike / Share / Publish controls. Like and
-// Dislike are wired to the global player store (persisted in localStorage, so
-// they survive a reload — as in ClipCard). Share opens the ShareModal. Publish
-// is prop-driven: SongDetail passes the persisted `isPublic` + a `onPublishToggle`
-// that hits the API with a guard; standalone it falls back to a local optimistic
-// toggle. `onDislike`/`onShare` remain optional observers.
+// Song-detail header (US-17.1 / US-17.6, tri-state in US-20.7): title, artist,
+// style/version/mode/visibility badges, and the inline Like / Dislike / Share /
+// Visibility controls. Like and Dislike are wired to the global player store
+// (persisted in localStorage, so they survive a reload — as in ClipCard). Share
+// opens the ShareModal. The visibility picker is prop-driven: SongDetail passes
+// the persisted `visibility` + an `onVisibilityChange` that hits the API with a
+// guard (only reachable going "public"); standalone it falls back to a local
+// optimistic toggle. `onDislike`/`onShare` remain optional observers.
 
 export type SongHeaderProps = {
   clip: Clip
   onDislike?: (id: string) => void
   onShare?: (id: string) => void
-  onPublishToggle?: (id: string, next: boolean) => void
+  onVisibilityChange?: (id: string, next: Visibility) => void
   /**
-   * Controlled visibility. When the parent owns publish state (US-17.2's
+   * Controlled visibility. When the parent owns visibility state (US-17.2's
    * action menu shares it), this wins over the local optimistic toggle.
    */
-  isPublic?: boolean
+  visibility?: Visibility
   /**
    * Whether the viewer owns this clip (US-20.0). Only the owner may change
    * visibility, so the Publish toggle is hidden otherwise. Defaults to **false**:
@@ -51,8 +49,8 @@ export function SongHeader({
   clip,
   onDislike,
   onShare,
-  onPublishToggle,
-  isPublic: isPublicProp,
+  onVisibilityChange,
+  visibility: visibilityProp,
   isOwner = false,
   actions,
 }: SongHeaderProps) {
@@ -61,9 +59,11 @@ export function SongHeader({
   const dislikedSet = useMemo(() => new Set(state.dislikedIds), [state.dislikedIds])
   const liked = likedSet.has(clip.id)
   const disliked = dislikedSet.has(clip.id)
-  const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
+  const [optimisticVisibility, setOptimisticVisibility] = useState<Visibility | null>(
+    null
+  )
   const [shareOpen, setShareOpen] = useState(false)
-  const isPublic = isPublicProp ?? optimisticPublic ?? clip.is_public
+  const visibility = visibilityProp ?? optimisticVisibility ?? visibilityOf(clip)
 
   const version = versionLabel(clip.model)
   const mode = modeLabel(clip.generation_mode)
@@ -78,14 +78,13 @@ export function SongHeader({
     onShare?.(clip.id)
   }
 
-  function togglePublish() {
-    const next = !isPublic
-    onPublishToggle?.(clip.id, next)
-    // When wired via SongDetail, `isPublic` is controlled by useSongActions
+  function changeVisibility(next: Visibility) {
+    onVisibilityChange?.(clip.id, next)
+    // When wired via SongDetail, `visibility` is controlled by useSongActions
     // (which persists + guards + rolls back), so this local flip is shadowed and
     // the hook owns the visible state. It only takes effect for a standalone,
-    // uncontrolled SongHeader (no isPublic prop) as immediate local feedback.
-    setOptimisticPublic(next)
+    // uncontrolled SongHeader (no visibility prop) as immediate local feedback.
+    setOptimisticVisibility(next)
   }
 
   return (
@@ -98,17 +97,16 @@ export function SongHeader({
         <p className="text-sm text-muted-foreground">Unknown artist</p>
       </div>
 
-      {(version || mode || clip.style_tags.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1">
-          {version && <Badge variant="secondary">{version}</Badge>}
-          {mode && <Badge variant="outline">{mode}</Badge>}
-          {clip.style_tags.map((tag) => (
-            <Badge key={tag} variant="outline">
-              {tag}
-            </Badge>
-          ))}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-1">
+        {version && <Badge variant="secondary">{version}</Badge>}
+        {mode && <Badge variant="outline">{mode}</Badge>}
+        {clip.style_tags.map((tag) => (
+          <Badge key={tag} variant="outline">
+            {tag}
+          </Badge>
+        ))}
+        {isOwner && <VisibilityBadge visibility={visibility} />}
+      </div>
 
       <div className="flex flex-wrap items-center gap-1">
         <Button
@@ -144,16 +142,7 @@ export function SongHeader({
           <HugeiconsIcon icon={Share01Icon} size={18} />
         </Button>
         {isOwner && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={isPublic ? "Unpublish (make private)" : "Publish (make public)"}
-            aria-pressed={isPublic}
-            onClick={togglePublish}
-            className={cn(isPublic && "text-primary")}
-          >
-            <HugeiconsIcon icon={GlobeIcon} size={18} />
-          </Button>
+          <VisibilityToggle value={visibility} onChange={changeVisibility} />
         )}
         {actions && <div className="ml-auto">{actions}</div>}
       </div>

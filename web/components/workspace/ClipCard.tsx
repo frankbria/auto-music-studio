@@ -7,7 +7,6 @@ import {
   Delete02Icon,
   Edit02Icon,
   FavouriteIcon,
-  GlobeIcon,
   LockIcon,
   MoreHorizontalIcon,
   MusicNote01Icon,
@@ -33,6 +32,8 @@ import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
 import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { ShareModal } from "@/components/song/ShareModal"
 import { SongActionModal } from "@/components/song/SongActionModal"
+import { VisibilityBadge } from "@/components/song/VisibilityBadge"
+import { VisibilityToggle } from "@/components/song/VisibilityToggle"
 import { usePlayer } from "@/contexts/player-context"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { setClipDragData, setDragTrackType } from "@/lib/clip-drag"
@@ -41,16 +42,18 @@ import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { formatTime, trackFromClip } from "@/lib/clips"
 import { isFullSongEligible } from "@/lib/song-structure"
 import { cn } from "@/lib/utils"
-import type { Clip } from "@/lib/workspace-clips"
+import type { Clip, Visibility } from "@/lib/workspace-clips"
 
 // US-16.6 / US-17.5 / US-17.6: the reusable clip card. Play, Like and Dislike are
 // wired to the global player store (Like/Dislike persist in localStorage). Share
-// opens the ShareModal; Publish persists through useSongActions (guarded — needs a
-// title + a style tag to go public). The ⋯ menu and Remix CTA also dispatch
-// through useSongActions (US-17.5) — the same registry-driven seam the song-detail
-// menu uses — so any action opens its modal, navigates, downloads, publishes, or
-// confirms a delete wherever a card is rendered. `onDislike`/`onShare`/
-// `onPublishToggle` remain optional observers for parent analytics/refetch.
+// opens the ShareModal; the visibility picker (US-20.7, née the two-state Publish
+// toggle) persists through useSongActions (guarded — needs a title + a style tag
+// to go public; private/unlisted are ungated). The ⋯ menu and Remix CTA also
+// dispatch through useSongActions (US-17.5) — the same registry-driven seam the
+// song-detail menu uses — so any action opens its modal, navigates, downloads,
+// changes visibility, or confirms a delete wherever a card is rendered.
+// `onDislike`/`onShare`/`onVisibilityChange` remain optional observers for
+// parent analytics/refetch.
 // The action vocabulary lives in lib/song-actions (US-17.2) and is re-exported
 // here so existing imports keep working. The card is also a native HTML5 drag
 // source (US-19.1): dragging it onto a Studio track lane carries an "add"
@@ -72,8 +75,8 @@ export type ClipCardProps = {
   onGetFullSong?: (id: string) => void
   onDislike?: (id: string) => void
   onShare?: (id: string) => void
-  /** Publish toggle; `next` is the requested visibility. */
-  onPublishToggle?: (id: string, next: boolean) => void
+  /** Visibility picker (US-20.7); `next` is the requested tri-state value. */
+  onVisibilityChange?: (id: string, next: Visibility) => void
   /** Free-tier users see Pro-only menu items locked (badge + lock, disabled). */
   isFreeTier?: boolean
   /** Called after this clip is deleted so the list can drop the card. */
@@ -120,7 +123,7 @@ export function ClipCard({
   onGetFullSong,
   onDislike,
   onShare,
-  onPublishToggle,
+  onVisibilityChange,
   isFreeTier = false,
   onDeleted,
 }: ClipCardProps) {
@@ -146,8 +149,8 @@ export function ClipCard({
   // sync with parent/refetch updates while still reflecting the user's own edit.
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
   const title = optimisticTitle ?? clip.title
-  // Publish visibility is owned by useSongActions (optimistic + persisted + rollback).
-  const isPublic = actions.isPublic
+  // Visibility is owned by useSongActions (optimistic + persisted + rollback).
+  const visibility = actions.visibility
 
   const version = versionLabel(clip.model)
   const metadataLabel = modeLabel(clip.generation_mode)
@@ -193,12 +196,11 @@ export function ClipCard({
     onShare?.(clip.id)
   }
 
-  function togglePublish() {
-    const next = !isPublic
-    onPublishToggle?.(clip.id, next) // optional observer
+  function changeVisibility(next: Visibility) {
+    onVisibilityChange?.(clip.id, next) // optional observer
     // Persist + guard (needs a title + style tag to go public); optimistic with
     // rollback lives in useSongActions.
-    actions.togglePublish(clip.id, next)
+    actions.setVisibility(next)
   }
 
   return (
@@ -287,20 +289,19 @@ export function ClipCard({
         )}
 
         {/* Badges. */}
-        {(version || metadataLabel) && (
-          <div className="flex flex-wrap items-center gap-1">
-            {version && (
-              <Badge variant="secondary" className="text-[10px]">
-                {version}
-              </Badge>
-            )}
-            {metadataLabel && (
-              <Badge variant="outline" className="text-[10px]">
-                {metadataLabel}
-              </Badge>
-            )}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-1">
+          {version && (
+            <Badge variant="secondary" className="text-[10px]">
+              {version}
+            </Badge>
+          )}
+          {metadataLabel && (
+            <Badge variant="outline" className="text-[10px]">
+              {metadataLabel}
+            </Badge>
+          )}
+          <VisibilityBadge visibility={visibility} />
+        </div>
 
         {/* Style description (full text on hover via title attr). */}
         {styleText && (
@@ -346,18 +347,7 @@ export function ClipCard({
           >
             <HugeiconsIcon icon={Share01Icon} size={16} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={
-              isPublic ? "Unpublish (make private)" : "Publish (make public)"
-            }
-            aria-pressed={isPublic}
-            onClick={togglePublish}
-            className={cn(isPublic && "text-primary")}
-          >
-            <HugeiconsIcon icon={GlobeIcon} size={16} />
-          </Button>
+          <VisibilityToggle value={visibility} onChange={changeVisibility} />
 
           {showFullSong && (
             <Button

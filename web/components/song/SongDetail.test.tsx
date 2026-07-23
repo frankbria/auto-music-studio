@@ -122,7 +122,12 @@ describe("SongDetail", () => {
     expect(screen.getByText("C minor")).toBeInTheDocument()
     // "1:35" (95s) shows in both the player time readout and the metadata.
     expect(screen.getAllByText("1:35").length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText("Private")).toBeInTheDocument()
+    // Scoped: the header's visibility badge also renders "Private" for the owner.
+    expect(
+      within(screen.getByRole("region", { name: "Details" })).getByText(
+        "Private"
+      )
+    ).toBeInTheDocument()
   })
 
   it("renders the waveform player with click-to-seek support", async () => {
@@ -142,7 +147,7 @@ describe("SongDetail", () => {
     expect(screen.getByText("Driving through the night")).toBeInTheDocument()
   })
 
-  it("exposes inline like/dislike/share/publish actions", async () => {
+  it("exposes inline like/dislike/share/visibility actions", async () => {
     stubFetch({ clip: clip() })
     renderDetail()
     await screen.findByText("Midnight Drive")
@@ -150,7 +155,7 @@ describe("SongDetail", () => {
     expect(screen.getByRole("button", { name: "Dislike" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Publish (make public)" })
+      screen.getByRole("button", { name: "Visibility: Private" })
     ).toBeInTheDocument()
   })
 
@@ -268,20 +273,21 @@ describe("SongDetail full action menu (US-17.2)", () => {
     ).toHaveAttribute("aria-disabled", "true")
   })
 
-  it("shares publish state between the menu and the header button", async () => {
+  it("shares publish state between the menu and the header visibility toggle", async () => {
     stubFetch({ clip: clip() })
     renderDetail()
     await openActions()
     await userEvent.click(screen.getByRole("menuitem", { name: /publish/i }))
 
     expect(
-      screen.getByRole("button", { name: "Unpublish (make private)" })
+      screen.getByRole("button", { name: "Visibility: Public" })
     ).toBeInTheDocument()
 
-    // And the other direction: the header button updates the menu label.
+    // And the other direction: the header toggle updates the menu label.
     await userEvent.click(
-      screen.getByRole("button", { name: "Unpublish (make private)" })
+      screen.getByRole("button", { name: "Visibility: Public" })
     )
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Private" }))
     await openActions()
     expect(screen.getByRole("menuitem", { name: /^publish$/i })).toBeInTheDocument()
   })
@@ -406,10 +412,7 @@ describe("SongDetail (public link)", () => {
     await screen.findByText("Midnight Drive")
 
     expect(
-      screen.queryByRole("button", { name: /publish \(make public\)/i })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /unpublish/i })
+      screen.queryByRole("button", { name: /visibility/i })
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /song actions menu/i })
@@ -427,7 +430,7 @@ describe("SongDetail (public link)", () => {
     await screen.findByText("Midnight Drive")
 
     expect(
-      screen.getByRole("button", { name: /unpublish/i })
+      screen.getByRole("button", { name: "Visibility: Public" })
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: /song actions menu/i })
