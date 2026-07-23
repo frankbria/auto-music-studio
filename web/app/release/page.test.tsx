@@ -157,6 +157,15 @@ describe("ReleasePage", () => {
     ).toHaveAttribute("aria-selected", "true")
   })
 
+  it("renders the distribution metadata form prefilled for the selected song", () => {
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    render(<ReleasePageContent />)
+    // The form's Title field is pre-populated from the clip (US-21.4 AC1).
+    expect(screen.getByLabelText(/^title/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /save draft/i })).toBeInTheDocument()
+  })
+
   it("syncs the URL when switching tabs", async () => {
     useClip.mockReturnValue(noClip())
     const user = userEvent.setup()
