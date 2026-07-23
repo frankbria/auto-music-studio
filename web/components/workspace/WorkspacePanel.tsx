@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 
 import { ClipList } from "@/components/workspace/ClipList"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
@@ -11,6 +11,7 @@ import { SortDropdown } from "@/components/workspace/SortDropdown"
 import { WorkspaceBreadcrumb } from "@/components/workspace/WorkspaceBreadcrumb"
 import { usePlayer } from "@/contexts/player-context"
 import { useClips } from "@/hooks/use-clips"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 import { useWorkspaces } from "@/hooks/use-workspaces"
 import {
@@ -23,16 +24,6 @@ import {
 } from "@/lib/workspace-clips"
 
 const PER_PAGE = 20
-
-/** Debounce a rapidly-changing value (search keystrokes). */
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delayMs)
-    return () => clearTimeout(t)
-  }, [value, delayMs])
-  return debounced
-}
 
 /**
  * Right-side clip library for the Create page (US-16.5). Owns search/filter/
