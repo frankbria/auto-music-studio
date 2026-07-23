@@ -251,3 +251,28 @@ class TestVisibilityAudioAccess:
 
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/audio", headers=_auth_headers(stranger, settings))
         assert resp.status_code == 403
+
+
+@pytest.mark.integration
+class TestUnlistedAnonymousLinkAccess:
+    """AC5: an unlisted clip's direct link must open for a signed-out recipient
+    (link sharing = "not hidden"), while a private clip stays an indistinguishable
+    404. Both the anonymous metadata read and stream route through
+    ``get_clip_for_streaming``, so this exercises that shared resolver."""
+
+    async def test_anonymous_can_read_unlisted_clip_metadata(self, client) -> None:
+        owner = await _make_user(f"vis-anon-unlisted-{next(_SEQ)}@example.com")
+        workspace = await _make_workspace(owner)
+        clip = await _insert_clip(owner, workspace, visibility=VisibilityState.UNLISTED)
+
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/public")  # no auth header
+        assert resp.status_code == 200
+        assert resp.json()["visibility"] == "unlisted"
+
+    async def test_anonymous_gets_404_for_private_clip_metadata(self, client) -> None:
+        owner = await _make_user(f"vis-anon-private-{next(_SEQ)}@example.com")
+        workspace = await _make_workspace(owner)
+        clip = await _insert_clip(owner, workspace, visibility=VisibilityState.PRIVATE)
+
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/public")  # no auth header
+        assert resp.status_code == 404

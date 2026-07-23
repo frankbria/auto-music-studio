@@ -176,16 +176,17 @@ async def get_clip_for_streaming(clip_id: str, current_user_id: str | None) -> C
 
     Authenticated requests follow :func:`get_clip_for_audio_access` (404 for
     unknown, 403 for another user's private clip). Anonymous requests
-    (``current_user_id is None``) may only reach public clips; a private or
-    unknown clip is an indistinguishable 404 so the endpoint never reveals a
-    private clip's existence to a stranger.
+    (``current_user_id is None``) may reach public *and* unlisted clips — an
+    unlisted clip is link-shared, so its direct link must open for a signed-out
+    recipient (US-20.7, AC5). A private or unknown clip is an indistinguishable
+    404 so the endpoint never reveals a private clip's existence to a stranger.
     """
     if current_user_id is not None:
         return await get_clip_for_audio_access(clip_id, current_user_id)
 
     oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
-    if clip is None or not clip.is_public:
+    if clip is None or clip.visibility == VisibilityState.PRIVATE:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
     return clip
 
