@@ -2,7 +2,7 @@
 
 import { versionLabel } from "@/lib/clip-labels"
 import { formatTime } from "@/lib/clips"
-import type { Clip } from "@/lib/workspace-clips"
+import { type Clip, visibilityOf } from "@/lib/workspace-clips"
 
 // Song-detail metadata panel (US-17.1): the clip's display fields. Only fields
 // the backend ClipResponse actually carries are shown; null values are skipped
@@ -31,7 +31,8 @@ export function SongMetadata({ clip }: { clip: Clip }) {
   if (clip.duration != null)
     rows.push({ label: "Duration", value: formatTime(clip.duration) })
   rows.push({ label: "Created", value: formatDate(clip.created_at) })
-  rows.push({ label: "Visibility", value: clip.is_public ? "Public" : "Private" })
+  const vis = visibilityOf(clip)
+  rows.push({ label: "Visibility", value: vis[0].toUpperCase() + vis.slice(1) })
 
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
