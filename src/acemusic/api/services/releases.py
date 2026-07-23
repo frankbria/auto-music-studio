@@ -215,9 +215,11 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     does not re-fetch. Visibility is a sharing preference, not part of the
     submission lifecycle, so it is editable in any state (unlike metadata, which
     locks after submission). The source clip's own ``visibility`` (US-20.7,
-    which gates non-owner audio access) is mirrored to match — ``is_public``
-    then auto-syncs on the clip's save. A deleted source clip is tolerated (the
-    release keeps its visibility).
+    which gates non-owner audio access) is mirrored to match via
+    ``Clip.set_visibility``, which syncs the ``is_public`` denormalization
+    in-memory before the save (the after-validator does NOT run on a plain
+    assignment). A deleted source clip is tolerated (the release keeps its
+    visibility).
     """
     release.visibility = visibility
     release.updated_at = utcnow()
