@@ -328,6 +328,10 @@ async def update_clip_fields(
     if title is not None:
         clip.title = title
     if visibility is None and is_public is not None:
+        # A legacy is_public=False can't express UNLISTED, so it collapses an
+        # unlisted clip to PRIVATE. That's intended: a caller old enough to send
+        # the boolean has no unlisted concept, and PRIVATE is the safe (more
+        # restrictive) resolution. Modern clients send `visibility` and skip this.
         visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)

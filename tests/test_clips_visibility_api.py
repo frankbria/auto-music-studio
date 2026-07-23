@@ -39,46 +39,72 @@ class TestAuthGate:
         assert resp.status_code == 401
 
 
+def _model_base_kwargs() -> dict:
+    return dict(
+        id=PydanticObjectId(),
+        workspace_id=PydanticObjectId(),
+        user_id=PydanticObjectId(),
+        file_path="u/w/clips/c.wav",
+    )
+
+
 # ---------------------------------------------------------------------------
-# Model unit test — no DB needed, pure Pydantic validator behavior
+# Model unit test — no DB, no Beanie init. `set_visibility` is a plain method,
+# so `model_construct` (which bypasses Beanie's collection-bound __init__) lets
+# this guard the assignment invariant even when MongoDB is unavailable.
 # ---------------------------------------------------------------------------
 
 
 class TestVisibilityModelSync:
-    def _base_kwargs(self) -> dict:
-        return dict(
-            id=PydanticObjectId(),
-            workspace_id=PydanticObjectId(),
-            user_id=PydanticObjectId(),
-            file_path="u/w/clips/c.wav",
-        )
+    def test_set_visibility_keeps_is_public_synced_on_assignment(self) -> None:
+        # The after-validator that syncs is_public does NOT fire on attribute
+        # assignment (validate_assignment is off), so writers must go through
+        # set_visibility. If they don't, the stale is_public denormalization
+        # leaks unlisted/private clips into {"is_public": True} queries.
+        clip = Clip.model_construct(visibility=VisibilityState.PUBLIC, is_public=True)
 
-    def test_legacy_doc_with_only_is_public_backfills_visibility(self) -> None:
-        # Simulates a pre-US-20.7 Mongo document: no "visibility" key at all.
-        clip = Clip(**self._base_kwargs(), is_public=True)
-        assert clip.visibility == VisibilityState.PUBLIC
-
-        clip = Clip(**self._base_kwargs(), is_public=False)
-        assert clip.visibility == VisibilityState.PRIVATE
-
-    def test_visibility_unlisted_forces_is_public_false(self) -> None:
-        clip = Clip(**self._base_kwargs(), visibility=VisibilityState.UNLISTED)
+        clip.set_visibility(VisibilityState.UNLISTED)
+        assert clip.visibility == VisibilityState.UNLISTED
         assert clip.is_public is False
 
-    def test_visibility_public_forces_is_public_true(self) -> None:
-        clip = Clip(**self._base_kwargs(), visibility=VisibilityState.PUBLIC)
+        clip.set_visibility(VisibilityState.PUBLIC)
         assert clip.is_public is True
 
-    def test_visibility_wins_over_conflicting_is_public(self) -> None:
-        # visibility is the source of truth even if a caller passes a
-        # contradictory is_public alongside it.
-        clip = Clip(**self._base_kwargs(), visibility=VisibilityState.PUBLIC, is_public=False)
-        assert clip.is_public is True
+        clip.set_visibility(VisibilityState.PRIVATE)
+        assert clip.is_public is False
 
 
 # ---------------------------------------------------------------------------
 # Integration — real MongoDB
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestVisibilityValidators:
+    """The before/after validators only run on real Pydantic construction, which
+    for a Beanie Document requires init_beanie — hence the ``mongo_db`` fixture."""
+
+    def test_legacy_doc_with_only_is_public_backfills_visibility(self, mongo_db) -> None:
+        # Simulates a pre-US-20.7 Mongo document: no "visibility" key at all.
+        clip = Clip(**_model_base_kwargs(), is_public=True)
+        assert clip.visibility == VisibilityState.PUBLIC
+
+        clip = Clip(**_model_base_kwargs(), is_public=False)
+        assert clip.visibility == VisibilityState.PRIVATE
+
+    def test_visibility_unlisted_forces_is_public_false(self, mongo_db) -> None:
+        clip = Clip(**_model_base_kwargs(), visibility=VisibilityState.UNLISTED)
+        assert clip.is_public is False
+
+    def test_visibility_public_forces_is_public_true(self, mongo_db) -> None:
+        clip = Clip(**_model_base_kwargs(), visibility=VisibilityState.PUBLIC)
+        assert clip.is_public is True
+
+    def test_visibility_wins_over_conflicting_is_public(self, mongo_db) -> None:
+        # visibility is the source of truth even if a caller passes a
+        # contradictory is_public alongside it.
+        clip = Clip(**_model_base_kwargs(), visibility=VisibilityState.PUBLIC, is_public=False)
+        assert clip.is_public is True
 
 
 def _async_client(app) -> httpx.AsyncClient:
