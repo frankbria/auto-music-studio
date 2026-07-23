@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { getAllClips } from "@/lib/explore"
 import {
   initialNotifications,
   markAllRead,
@@ -9,6 +10,7 @@ import {
   unreadCount,
   type NotificationType,
 } from "@/lib/notifications"
+import { getProfileByHandle } from "@/lib/profiles"
 
 const ALL_TYPES: NotificationType[] = [
   "like",
@@ -25,6 +27,23 @@ describe("notifications seam", () => {
     const types = new Set(initialNotifications.map((n) => n.type))
     for (const t of ALL_TYPES) expect(types.has(t)).toBe(true)
     expect(initialNotifications.every((n) => n.message && n.href)).toBe(true)
+  })
+
+  it("every notification links to real, resolvable content — no dead ends (AC2)", () => {
+    // Guards against linking a Genre.id (g-*) or unknown handle as a /song or
+    // /@profile target, which would dead-end on "not found".
+    const clipIds = new Set(getAllClips().map((c) => c.id))
+    const staticRoutes = new Set(["/release", "/explore"])
+    for (const n of initialNotifications) {
+      const where = `${n.id} → ${n.href}`
+      if (n.href.startsWith("/song/")) {
+        expect(clipIds.has(n.href.slice("/song/".length)), where).toBe(true)
+      } else if (n.href.startsWith("/@")) {
+        expect(getProfileByHandle(n.href.slice(1)), where).not.toBeNull()
+      } else {
+        expect(staticRoutes.has(n.href), where).toBe(true)
+      }
+    }
   })
 
   it("maps every type to a distinct icon + label (AC1)", () => {

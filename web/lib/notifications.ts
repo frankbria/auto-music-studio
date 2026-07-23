@@ -62,23 +62,25 @@ export const NOTIFICATION_META: Record<NotificationType, TypeMeta> = {
 
 const MINUTE = 60_000
 
-/** Seed notifications — one of every type, mixing read + unread, linking to real
- *  content (song ids from the Explore pool, @handles from Profiles). Timestamps
- *  are relative to load so the demo always shows fresh "Xm/Xh ago" values. */
+/** Seed notifications — one of every type, mixing read + unread. Song links use
+ *  real clip ids from the Explore pool (clip-*) — the same `/song/{clip.id}` target
+ *  ExploreClipCard uses — and @handles from Profiles; titles match those clips so
+ *  the link lands on the named song. Timestamps are relative to load so the demo
+ *  always shows fresh "Xm/Xh ago" values. */
 export const initialNotifications: AppNotification[] = [
   {
     id: "n-like-1",
     type: "like",
-    message: 'Ember liked your song "Neon Overdrive"',
-    href: "/song/g-electronic",
+    message: 'Ember liked your song "Neon Skyline"',
+    href: "/song/clip-neon",
     createdAt: minutesAgo(4),
     read: false,
   },
   {
     id: "n-remix-1",
     type: "remix",
-    message: 'Sol remixed your song "Midnight Circuit"',
-    href: "/song/g-rock",
+    message: 'Sol remixed your song "Crownfall"',
+    href: "/song/clip-crown",
     createdAt: minutesAgo(38),
     read: false,
   },
@@ -93,15 +95,15 @@ export const initialNotifications: AppNotification[] = [
   {
     id: "n-gen-1",
     type: "generation_complete",
-    message: 'Your song "Golden Hour" finished generating',
-    href: "/song/g-pop",
+    message: 'Your song "Gold Rush 88" finished generating',
+    href: "/song/clip-gold",
     createdAt: minutesAgo(5 * 60),
     read: true,
   },
   {
     id: "n-master-1",
     type: "mastering_complete",
-    message: 'Mastering complete for "Velvet Skyline"',
+    message: 'Mastering complete for "Velvet Static"',
     href: "/release",
     createdAt: minutesAgo(26 * 60),
     read: true,
@@ -109,7 +111,7 @@ export const initialNotifications: AppNotification[] = [
   {
     id: "n-dist-1",
     type: "distribution_update",
-    message: '"Neon Overdrive" is now live on Spotify',
+    message: '"Neon Skyline" is now live on Spotify',
     href: "/release",
     createdAt: minutesAgo(2 * 24 * 60),
     read: true,
@@ -128,8 +130,8 @@ export const initialNotifications: AppNotification[] = [
   {
     id: "n-like-2",
     type: "like",
-    message: 'Aria liked your song "Paper Moon"',
-    href: "/song/g-jazz",
+    message: 'Aria liked your song "Paper Lanterns"',
+    href: "/song/clip-paper",
     createdAt: minutesAgo(11 * 24 * 60),
     read: true,
   },
@@ -144,7 +146,7 @@ export const initialNotifications: AppNotification[] = [
   {
     id: "n-dist-2",
     type: "distribution_update",
-    message: '"Golden Hour" was submitted to Apple Music',
+    message: '"Gold Rush 88" was submitted to Apple Music',
     href: "/release",
     createdAt: minutesAgo(20 * 24 * 60),
     read: true,
