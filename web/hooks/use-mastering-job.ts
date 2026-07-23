@@ -69,6 +69,14 @@ export function useMasteringJob({
   // referencing itself (hook-immutability lint forbids that).
   const pollRef = useRef<() => void>(() => {})
 
+  // False once unmounted. Both the poll's and the submit's fetches resolve
+  // asynchronously; either can land after the component is gone, so every
+  // post-await branch checks this before it setState/arms a timer/kicks a poll.
+  // Nulling jobRef alone would stop an in-flight *poll*, but a *submit* that
+  // resolves post-unmount re-sets jobRef and would re-arm the loop — this flag
+  // closes that path too (and the shared `retry`).
+  const mountedRef = useRef(true)
+
   const clearTimer = () => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)
@@ -76,22 +84,21 @@ export function useMasteringJob({
     }
   }
 
-  // Clean up on unmount. Nulling jobRef (not just clearing the timer) is what
-  // stops an *in-flight* poll from rescheduling itself after unmount: with no
-  // active job the poll's supersession guard short-circuits before it can
-  // setState or arm a new timer, so no orphaned polling survives navigation.
-  useEffect(
-    () => () => {
+  // Clean up on unmount: mark unmounted, cancel any pending poll, drop the job.
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
       clearTimer()
       jobRef.current = null
-    },
-    []
-  )
+    }
+  }, [])
 
   const poll = useCallback(async () => {
     const job = jobRef.current
     if (!job) return
     const result = await fetchMasteringStatus(job.id, tokenRef.current ?? "")
+    if (!mountedRef.current) return
     // A reset/retry between the request and its response supersedes this job.
     if (jobRef.current?.id !== job.id) return
 
@@ -142,6 +149,9 @@ export function useMasteringJob({
       setState({ phase: "submitting" })
 
       const result = await submitMasteringJob(clipId, config, tokenRef.current ?? "")
+      // Bail if the tab unmounted while the POST was in flight — otherwise the
+      // accepted branch would re-arm jobRef + a poll loop on a dead component.
+      if (!mountedRef.current) return
       switch (result.status) {
         case "accepted":
           jobRef.current = { id: result.jobId, polls: 0 }

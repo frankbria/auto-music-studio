@@ -25,11 +25,11 @@ import { useMasteringPreviews } from "@/hooks/use-mastering-previews"
 import { approveMasteringPreview } from "@/lib/mastering"
 import type { Clip } from "@/lib/workspace-clips"
 
-/** The approval sub-flow's local state. */
+/** The approval sub-flow's local state. `previewId` is the candidate approved. */
 type ApproveState =
   | { phase: "idle" }
   | { phase: "approving" }
-  | { phase: "approved"; clipId: string }
+  | { phase: "approved"; previewId: string }
   | { phase: "error"; message: string }
 
 /**
@@ -49,14 +49,11 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
 
   async function handleApprove() {
     if (!jobId || !previews.selectedId) return
+    const previewId = previews.selectedId
     setApprove({ phase: "approving" })
-    const result = await approveMasteringPreview(
-      jobId,
-      previews.selectedId,
-      accessToken ?? ""
-    )
+    const result = await approveMasteringPreview(jobId, previewId, accessToken ?? "")
     if (result.status === "approved") {
-      setApprove({ phase: "approved", clipId: result.clipId })
+      setApprove({ phase: "approved", previewId })
     } else if (result.status === "unauthorized") {
       // Token expired mid-session — send to login like the rest of the tab does.
       router.push("/login")
@@ -163,7 +160,10 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
           </>
         )}
 
-        {approve.phase === "approved" ? (
+        {/* The banner only stands for the *approved* candidate — re-selecting a
+            different preview brings the Approve button back for that one. */}
+        {approve.phase === "approved" &&
+        approve.previewId === previews.selectedId ? (
           <p className="flex items-center gap-2 text-sm text-foreground">
             <HugeiconsIcon
               icon={CheckmarkCircle01Icon}

@@ -129,6 +129,43 @@ describe("MasteringTab", () => {
     ).toBeInTheDocument()
   })
 
+  it("re-shows Approve after approving one preview and selecting another", async () => {
+    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    // Two candidates; start with m1 selected.
+    const two: UseMasteringPreviews = {
+      state: {
+        status: "ready",
+        data: {
+          source_clip_id: "c1",
+          previews: [
+            { preview_id: "m1", audio_url: "u1", loudness_delta: 6 },
+            { preview_id: "m2", audio_url: "u2", loudness_delta: 3 },
+          ],
+        },
+      },
+      selectedId: "m1",
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
+    previewsResult = two
+    approveMasteringPreview.mockResolvedValue({ status: "approved", clipId: "x", audioUrl: "u" })
+    const user = userEvent.setup()
+    const { rerender } = render(<MasteringTab selectedClip={clip("c1")} />)
+
+    await user.click(screen.getByRole("button", { name: /approve master/i }))
+    await waitFor(() =>
+      expect(screen.getByText("Mastered", { selector: "[data-slot='badge']" })).toBeInTheDocument()
+    )
+
+    // The user now selects a different candidate to keep comparing.
+    previewsResult = { ...two, selectedId: "m2" }
+    rerender(<MasteringTab selectedClip={clip("c1")} />)
+
+    // The approval banner is gone; Approve is offered for the new selection.
+    expect(screen.queryByText("Mastered", { selector: "[data-slot='badge']" })).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /approve master/i })).toBeInTheDocument()
+  })
+
   it("redirects to login when approval is unauthorized", async () => {
     jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
     previewsResult = readyPreviews
