@@ -76,8 +76,17 @@ export function useMasteringJob({
     }
   }
 
-  // Clean up a pending poll if the component unmounts mid-job.
-  useEffect(() => clearTimer, [])
+  // Clean up on unmount. Nulling jobRef (not just clearing the timer) is what
+  // stops an *in-flight* poll from rescheduling itself after unmount: with no
+  // active job the poll's supersession guard short-circuits before it can
+  // setState or arm a new timer, so no orphaned polling survives navigation.
+  useEffect(
+    () => () => {
+      clearTimer()
+      jobRef.current = null
+    },
+    []
+  )
 
   const poll = useCallback(async () => {
     const job = jobRef.current

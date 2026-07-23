@@ -8,6 +8,9 @@ import type { UseMasteringPreviews } from "@/hooks/use-mastering-previews"
 import type { Clip } from "@/lib/workspace-clips"
 
 // --- hook/lib mocks -------------------------------------------------------
+const push = vi.fn()
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
+
 let jobState: MasteringJobState
 const submit = vi.fn()
 const retry = vi.fn()
@@ -124,5 +127,16 @@ describe("MasteringTab", () => {
     expect(
       screen.getByText("Mastered", { selector: "[data-slot='badge']" })
     ).toBeInTheDocument()
+  })
+
+  it("redirects to login when approval is unauthorized", async () => {
+    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    previewsResult = readyPreviews
+    approveMasteringPreview.mockResolvedValue({ status: "unauthorized" })
+    const user = userEvent.setup()
+    render(<MasteringTab selectedClip={clip("c1")} />)
+
+    await user.click(screen.getByRole("button", { name: /approve master/i }))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/login"))
   })
 })

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle01Icon } from "@hugeicons/core-free-icons"
 
@@ -38,6 +39,7 @@ type ApproveState =
  * lifecycle lives in dedicated hooks.
  */
 export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
+  const router = useRouter()
   const { accessToken } = useAuth()
   const job = useMasteringJob()
   const jobId =
@@ -56,7 +58,8 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
     if (result.status === "approved") {
       setApprove({ phase: "approved", clipId: result.clipId })
     } else if (result.status === "unauthorized") {
-      setApprove({ phase: "error", message: "Please sign in again to approve." })
+      // Token expired mid-session — send to login like the rest of the tab does.
+      router.push("/login")
     } else {
       setApprove({ phase: "error", message: result.detail })
     }
