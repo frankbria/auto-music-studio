@@ -2,7 +2,10 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { MasteringStatus } from "@/components/mastering/mastering-status"
+import {
+  MasteringStatus,
+  MasteringStatusBadge,
+} from "@/components/mastering/mastering-status"
 
 afterEach(() => vi.clearAllMocks())
 
@@ -10,8 +13,10 @@ describe("MasteringStatus", () => {
   it.each([
     ["submitting", /submitting/i],
     ["queued", /queued/i],
-    ["processing", /in progress/i],
-  ] as const)("shows a progress status for %s", (status, re) => {
+    ["processing", /processing/i],
+    ["preview_ready", /preview ready/i],
+    ["approved", /approved/i],
+  ] as const)("shows a status for %s", (status, re) => {
     render(<MasteringStatus status={status} />)
     expect(screen.getByRole("status")).toHaveTextContent(re)
   })
@@ -29,5 +34,18 @@ describe("MasteringStatus", () => {
   it("omits Retry when no handler is given", () => {
     render(<MasteringStatus status="failed" error="boom" />)
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument()
+  })
+})
+
+describe("MasteringStatusBadge", () => {
+  it.each([
+    ["queued", /queued/i],
+    ["processing", /processing/i],
+    ["preview_ready", /preview ready/i],
+    ["approved", /approved/i],
+    ["failed", /failed/i],
+  ] as const)("labels the %s state", (status, re) => {
+    render(<MasteringStatusBadge status={status} />)
+    expect(screen.getByText(re)).toBeInTheDocument()
   })
 })

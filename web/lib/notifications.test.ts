@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest"
 
 import { getAllClips } from "@/lib/explore"
 import {
+  addNotification,
   initialNotifications,
   markAllRead,
   markRead,
   NOTIFICATION_META,
   relativeTime,
   unreadCount,
+  type AppNotification,
   type NotificationType,
 } from "@/lib/notifications"
 import { getProfileByHandle } from "@/lib/profiles"
@@ -85,5 +87,21 @@ describe("notifications seam", () => {
     expect(relativeTime(at(3 * 3_600_000), now)).toBe("3h ago")
     expect(relativeTime(at(2 * 86_400_000), now)).toBe("2d ago")
     expect(relativeTime(at(9 * 86_400_000), now)).toBe("1w ago")
+  })
+
+  it("addNotification prepends immutably (newest first)", () => {
+    const base = initialNotifications.slice(0, 2)
+    const entry: AppNotification = {
+      id: "n-live-1",
+      type: "mastering_complete",
+      message: "Mastering complete",
+      href: "/release",
+      createdAt: "2026-07-23T00:00:00Z",
+      read: false,
+    }
+    const next = addNotification(base, entry)
+    expect(next).toHaveLength(3)
+    expect(next[0]).toBe(entry)
+    expect(base).toHaveLength(2) // original untouched
   })
 })

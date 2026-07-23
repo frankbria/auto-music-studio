@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle01Icon } from "@hugeicons/core-free-icons"
@@ -15,11 +15,13 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { MasteringConfig } from "@/components/mastering/mastering-config"
+import { MasteringHistory } from "@/components/mastering/mastering-history"
 import { MasteringMetrics } from "@/components/mastering/mastering-metrics"
 import { MasteringStatus } from "@/components/mastering/mastering-status"
 import { PreviewList } from "@/components/mastering/preview-list"
 import { PreviewPlayer } from "@/components/mastering/preview-player"
 import { useAuth } from "@/hooks/use-auth"
+import { useNotify } from "@/contexts/notifications-context"
 import { useMasteringJob } from "@/hooks/use-mastering-job"
 import { useMasteringPreviews } from "@/hooks/use-mastering-previews"
 import { approveMasteringPreview } from "@/lib/mastering"
@@ -41,11 +43,27 @@ type ApproveState =
 export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const notify = useNotify()
   const job = useMasteringJob()
   const jobId =
     job.state.phase === "completed" ? job.state.detail.job_id : undefined
   const previews = useMasteringPreviews(jobId)
   const [approve, setApprove] = useState<ApproveState>({ phase: "idle" })
+
+  // Raise a notification the first time each job completes (AC5). Keyed by job_id
+  // so re-renders don't re-fire; notify targets the shared store, not local state.
+  const notifiedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (job.state.phase !== "completed") return
+    const id = job.state.detail.job_id
+    if (notifiedRef.current === id) return
+    notifiedRef.current = id
+    notify({
+      type: "mastering_complete",
+      message: `Mastering complete for "${selectedClip?.title ?? "your song"}"`,
+      href: "/release",
+    })
+  }, [job.state, notify, selectedClip])
 
   async function handleApprove() {
     if (!jobId || !previews.selectedId) return
@@ -63,16 +81,21 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Mastering</CardTitle>
-        <CardDescription>
-          Choose a profile and service, generate previews, A/B against the
-          original, and approve your master.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>{renderBody()}</CardContent>
-    </Card>
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Mastering</CardTitle>
+          <CardDescription>
+            Choose a profile and service, generate previews, A/B against the
+            original, and approve your master.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>{renderBody()}</CardContent>
+      </Card>
+
+      {/* Past jobs + approved masters (AC4). US-21.3. */}
+      <MasteringHistory />
+    </div>
   )
 
   function renderBody() {
@@ -141,6 +164,11 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
 
     return (
       <div className="flex flex-col gap-6">
+        {/* Distinct status for the completed job: preview ready vs approved (AC2). */}
+        <MasteringStatus
+          status={approve.phase === "approved" ? "approved" : "preview_ready"}
+        />
+
         <PreviewList
           previews={data.previews}
           selectedId={previews.selectedId}

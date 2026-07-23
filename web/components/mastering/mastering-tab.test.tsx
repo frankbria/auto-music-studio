@@ -26,6 +26,9 @@ vi.mock("@/hooks/use-mastering-previews", () => ({
 
 vi.mock("@/hooks/use-auth", () => ({ useAuth: () => ({ accessToken: "tok" }) }))
 
+const notify = vi.fn()
+vi.mock("@/contexts/notifications-context", () => ({ useNotify: () => notify }))
+
 const approveMasteringPreview = vi.fn()
 vi.mock("@/lib/mastering", async (orig) => {
   const actual = await orig<typeof import("@/lib/mastering")>()
@@ -95,7 +98,7 @@ describe("MasteringTab", () => {
     jobState = { phase: "polling", detail: { job_id: "j1", status: "processing" } }
     previewsResult = { state: { status: "loading" }, selectedId: null, select: vi.fn(), reload: vi.fn() }
     render(<MasteringTab selectedClip={clip("c1")} />)
-    expect(screen.getByRole("status")).toHaveTextContent(/in progress/i)
+    expect(screen.getByRole("status")).toHaveTextContent(/processing/i)
   })
 
   it("shows a failure with a working retry", async () => {
@@ -164,6 +167,18 @@ describe("MasteringTab", () => {
     // The approval banner is gone; Approve is offered for the new selection.
     expect(screen.queryByText("Mastered", { selector: "[data-slot='badge']" })).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: /approve master/i })).toBeInTheDocument()
+  })
+
+  it("raises a mastering_complete notification when a job completes (AC5)", () => {
+    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    previewsResult = readyPreviews
+    render(<MasteringTab selectedClip={clip("Velvet Static")} />)
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "mastering_complete" })
+    )
+    // A distinct "Preview ready" status shows for the completed-not-approved job (AC2).
+    // Scope to the status role — the history section below also lists a preview_ready row.
+    expect(screen.getByRole("status")).toHaveTextContent(/preview ready/i)
   })
 
   it("redirects to login when approval is unauthorized", async () => {
