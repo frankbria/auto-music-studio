@@ -207,12 +207,6 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
     handleAction,
     /** Set the clip's visibility directly (US-20.7 picker). Persists + guards. */
     setVisibility,
-    /**
-     * Back-compat two-state callback (SongHeader/ClipCard's old boolean
-     * shape). Maps `next` onto "public"/"private" via `setVisibility`.
-     */
-    togglePublish: (_id: string, next: boolean) =>
-      void setVisibility(next ? "public" : "private"),
     /** Non-null while the publish guard prompt should show; names what's missing. */
     publishGuard,
     dismissPublishGuard: () => setPublishGuard(null),
