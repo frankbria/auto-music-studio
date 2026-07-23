@@ -214,19 +214,20 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     Takes an already-owned ``release`` (the router has validated ownership), so it
     does not re-fetch. Visibility is a sharing preference, not part of the
     submission lifecycle, so it is editable in any state (unlike metadata, which
-    locks after submission). The source clip's ``is_public`` flag — what actually
-    gates non-owner audio access — is synced too: only ``public`` exposes the clip;
-    ``unlisted``/``private`` keep it owner-only (there is no link-token sharing
-    concept). A deleted source clip is tolerated (the release keeps its visibility).
+    locks after submission). The source clip's own ``visibility`` (US-20.7,
+    which gates non-owner audio access) is mirrored to match via
+    ``Clip.set_visibility``, which syncs the ``is_public`` denormalization
+    in-memory before the save (the after-validator does NOT run on a plain
+    assignment). A deleted source clip is tolerated (the release keeps its
+    visibility).
     """
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
 
-    is_public = visibility == VisibilityState.PUBLIC
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
-    if clip is not None and clip.is_public != is_public:
-        clip.is_public = is_public
+    if clip is not None and clip.visibility != visibility:
+        clip.set_visibility(visibility)
         await clip.save()
     return release
 

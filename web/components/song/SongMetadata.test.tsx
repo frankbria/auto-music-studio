@@ -46,6 +46,11 @@ describe("SongMetadata", () => {
     expect(screen.getByText("Public")).toBeInTheDocument()
   })
 
+  it("shows the three-state visibility label, including Unlisted", () => {
+    render(<SongMetadata clip={clip({ visibility: "unlisted", is_public: false })} />)
+    expect(screen.getByText("Unlisted")).toBeInTheDocument()
+  })
+
   it("omits null fields instead of rendering blanks", () => {
     render(<SongMetadata clip={clip({ bpm: null, key: null, model: null })} />)
     expect(screen.queryByText("BPM")).not.toBeInTheDocument()

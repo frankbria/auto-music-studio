@@ -2,13 +2,17 @@
 
 * ``GET    /clips``           → paginated list with search/filter/sort (US-9.4)
 * ``GET    /clips/{id}``      → clip metadata (404 if missing/not owned)
-* ``PATCH  /clips/{id}``      → rename and/or publish (title, is_public; US-17.6)
+* ``PATCH  /clips/{id}``      → rename and/or change visibility (title, visibility; US-17.6, US-20.7)
 * ``DELETE /clips/{id}``      → remove the record and its stored audio
 * ``GET    /clips/{id}/audio``→ stream audio, byte ranges + ``?format=`` (US-9.3)
 * ``GET    /clips/{id}/public``→ metadata for anonymous/non-owner callers (US-20.0)
 
-CRUD is owner-scoped; the audio/stream/public endpoints honor ``is_public``, which
-the PATCH publish toggle sets (guarded — see :func:`acemusic.api.services.clips.update_clip_fields`).
+CRUD is owner-scoped; the audio endpoint honors the three-state ``visibility``
+(private/unlisted/public — US-20.7): owner always, non-owner for unlisted/public.
+The ``is_public`` field stays a synced denormalization (``visibility == public``)
+so ``{"is_public": True}`` queries (public listings) keep excluding unlisted
+clips unchanged. The PATCH visibility change is guarded going public — see
+:func:`acemusic.api.services.clips.update_clip_fields`.
 Note ``GET /clips/{id}`` and ``GET /clips/{id}/public`` are deliberately distinct:
 the former 404s on another user's clip even when public, the latter is the
 narrower, redacted read that makes link sharing work.
@@ -28,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_existing_user
-from ..models import Clip
+from ..models import Clip, VisibilityState
 from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
@@ -94,16 +98,20 @@ class ClipSearchParams(BaseModel):
 
 
 class ClipUpdate(BaseModel):
-    """Clip edit payload. ``extra="forbid"`` rejects any field other than the two
-    client-writable ones (title, is_public) with 422. Both are optional; an
-    omitted field is left unchanged."""
+    """Clip edit payload. ``extra="forbid"`` rejects any field other than the
+    client-writable ones (title, is_public, visibility) with 422. All are
+    optional; an omitted field is left unchanged."""
 
     model_config = ConfigDict(extra="forbid")
 
     title: Annotated[str, Field(min_length=1, max_length=CLIP_TITLE_MAX_LENGTH)] | None = None
-    # US-17.6 publish toggle. Going public is guarded (title + style tags) in the
-    # service; unpublishing is always allowed.
+    # US-17.6 publish toggle, kept for back-compat. Superseded by `visibility`
+    # (US-20.7); going public via either field is guarded (title + style tags)
+    # in the service, unpublishing is always allowed.
     is_public: bool | None = None
+    # US-20.7 three-state visibility. Takes precedence over is_public when both
+    # are supplied in the same request (see update_clip_fields).
+    visibility: VisibilityState | None = None
 
     @field_validator("title")
     @classmethod
@@ -117,10 +125,12 @@ class ClipUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _reject_explicit_null(self) -> "ClipUpdate":
-        # An omitted title is a no-op; an explicit null is a malformed request
-        # (title has no "cleared" state) and must not masquerade as success.
+        # An omitted field is a no-op; an explicit null is a malformed request
+        # (neither field has a "cleared" state) and must not masquerade as success.
         if "title" in self.model_fields_set and self.title is None:
             raise ValueError("title must be a non-empty string; omit the field to leave it unchanged.")
+        if "visibility" in self.model_fields_set and self.visibility is None:
+            raise ValueError("visibility must be one of private/unlisted/public; omit the field to leave it unchanged.")
         return self
 
 
@@ -143,6 +153,7 @@ class ClipResponse(BaseModel):
     parent_clip_ids: list[str]
     generation_mode: str | None
     is_public: bool
+    visibility: VisibilityState
     created_at: datetime
 
     @classmethod
@@ -164,6 +175,7 @@ class ClipResponse(BaseModel):
             parent_clip_ids=[str(pid) for pid in clip.parent_clip_ids],
             generation_mode=clip.generation_mode,
             is_public=clip.is_public,
+            visibility=clip.visibility,
             created_at=clip.created_at,
         )
 
@@ -367,9 +379,11 @@ async def update_clip(
     body: ClipUpdate,
     current: CurrentUser = Depends(require_existing_user),
 ) -> ClipResponse:
-    """Rename and/or publish the clip; an empty body is a no-op returning the
+    """Rename and/or change visibility; an empty body is a no-op returning the
     current state. Going public without a title or style tags is rejected 422."""
-    clip = await clip_service.update_clip_fields(clip_id, current.user_id, title=body.title, is_public=body.is_public)
+    clip = await clip_service.update_clip_fields(
+        clip_id, current.user_id, title=body.title, is_public=body.is_public, visibility=body.visibility
+    )
     return ClipResponse.from_clip(clip)
 
 

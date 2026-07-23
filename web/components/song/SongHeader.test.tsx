@@ -58,49 +58,48 @@ describe("SongHeader", () => {
     ).toHaveAttribute("aria-pressed", "true")
   })
 
-  it("optimistically toggles publish and emits the callback", async () => {
+  it("optimistically changes visibility and emits the callback", async () => {
     const user = userEvent.setup()
-    const onPublishToggle = vi.fn()
-    renderHeader({ isOwner: true, onPublishToggle })
+    const onVisibilityChange = vi.fn()
+    renderHeader({ isOwner: true, onVisibilityChange })
     await user.click(
-      screen.getByRole("button", { name: "Publish (make public)" })
+      screen.getByRole("button", { name: "Visibility: Private" })
     )
-    expect(onPublishToggle).toHaveBeenCalledWith("c1", true)
+    await user.click(screen.getByRole("menuitemradio", { name: "Public" }))
+    expect(onVisibilityChange).toHaveBeenCalledWith("c1", "public")
     expect(
-      screen.getByRole("button", { name: "Unpublish (make private)" })
+      screen.getByRole("button", { name: "Visibility: Public" })
     ).toBeInTheDocument()
   })
 
-  it("toggles publish inline even without a callback (no persisting parent)", async () => {
+  it("changes visibility inline even without a callback (no persisting parent)", async () => {
     const user = userEvent.setup()
     renderHeader({ isOwner: true })
     await user.click(
-      screen.getByRole("button", { name: "Publish (make public)" })
+      screen.getByRole("button", { name: "Visibility: Private" })
     )
+    await user.click(screen.getByRole("menuitemradio", { name: "Unlisted" }))
     expect(
-      screen.getByRole("button", { name: "Unpublish (make private)" })
-    ).toHaveAttribute("aria-pressed", "true")
+      screen.getByRole("button", { name: "Visibility: Unlisted" })
+    ).toBeInTheDocument()
   })
 
-  it("hides the publish toggle from a non-owner, keeping like/dislike/share", () => {
+  it("hides the visibility toggle from a non-owner, keeping like/dislike/share", () => {
     renderHeader({ isOwner: false })
     expect(
-      screen.queryByRole("button", { name: /publish \(make public\)/i })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /unpublish/i })
+      screen.queryByRole("button", { name: /visibility/i })
     ).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Like" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Dislike" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument()
   })
 
-  it("fails closed: an omitted isOwner hides the publish toggle", () => {
+  it("fails closed: an omitted isOwner hides the visibility toggle", () => {
     // The header renders on a public page (US-20.0), so a caller that forgets
     // the prop must not hand a stranger a control over someone else's clip.
     renderHeader()
     expect(
-      screen.queryByRole("button", { name: /publish \(make public\)/i })
+      screen.queryByRole("button", { name: /visibility/i })
     ).not.toBeInTheDocument()
   })
 

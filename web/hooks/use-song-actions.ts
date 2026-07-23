@@ -12,12 +12,13 @@ import {
 } from "@/lib/clips"
 import { submitRemaster } from "@/lib/editing"
 import { findSongAction, type SongActionId } from "@/lib/song-actions"
-import type { Clip } from "@/lib/workspace-clips"
+import { visibilityOf, type Clip, type Visibility } from "@/lib/workspace-clips"
 
 // US-17.2: dispatch for the full action menu. Routes a selected action to its
 // workflow: navigation (editor/studio), a workflow modal (content lands in
 // US-17.3+), a file download, or an inline operation (the US-17.6 publish
-// toggle — optimistic with real persistence + rollback — and delete).
+// toggle, extended to the tri-state Private/Unlisted/Public picker in
+// US-20.7 — optimistic with real persistence + rollback — and delete).
 
 /** Which publish requirements a clip is missing, for the guard prompt (US-17.6). */
 export type PublishGuard = {
@@ -57,12 +58,16 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [optimisticPublic, setOptimisticPublic] = useState<boolean | null>(null)
-  // Set when a publish is blocked (client guard) or rejected (server 422); drives
-  // the PublishGuardPrompt. Null means no prompt.
+  const [optimisticVisibility, setOptimisticVisibility] = useState<Visibility | null>(
+    null
+  )
+  // Set when going public is blocked (client guard) or rejected (server 422);
+  // drives the PublishGuardPrompt. Null means no prompt. Unlisted has no
+  // requirements, so it never sets this.
   const [publishGuard, setPublishGuard] = useState<PublishGuard | null>(null)
 
-  const isPublic = optimisticPublic ?? clip.is_public
+  const visibility = optimisticVisibility ?? visibilityOf(clip)
+  const isPublic = visibility === "public"
 
   function handleAction(action: SongActionId) {
     const workflow = findSongAction(action)?.workflow
@@ -104,7 +109,7 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
         accessToken
       )
     } else if (action === "publish-toggle") {
-      void doPublish(!isPublic)
+      void setVisibility(isPublic ? "private" : "public")
     } else if (action === "delete") {
       // Start the confirmation clean — actionError is shared with the download
       // flow, so a prior download failure must not show up in this dialog.
@@ -114,26 +119,28 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   }
 
   /**
-   * Publish/unpublish the clip with optimistic UI and rollback (US-17.6).
-   * Going public is guarded client-side (needs a title + a style tag) so the
-   * prompt shows before any request; a server 422 (fields changed since load)
-   * rolls back and prompts too. Other failures roll back and surface an error.
+   * Change the clip's visibility with optimistic UI and rollback (US-17.6,
+   * tri-state in US-20.7). Only going "public" is guarded client-side (needs
+   * a title + a style tag), so the prompt shows before any request; a server
+   * 422 (fields changed since load) rolls back and prompts too. Private and
+   * unlisted have no requirements. Other failures roll back and surface an
+   * error.
    */
-  async function doPublish(next: boolean) {
+  async function setVisibility(next: Visibility) {
     if (!accessToken) return
-    if (next) {
+    if (next === "public") {
       const guard = publishGuardFor(clip)
       if (guard) {
         setPublishGuard(guard)
         return
       }
     }
-    const prev = isPublic
-    setOptimisticPublic(next)
+    const prev = visibility
+    setOptimisticVisibility(next)
     setActionError(null)
     const result = await updateClipVisibility(clip.id, next, accessToken)
     if (!result.ok) {
-      setOptimisticPublic(prev) // rollback
+      setOptimisticVisibility(prev) // rollback
       // Prefer the client-side guard prompt, which names the missing fields.
       // But a server 422 can win a race where local `clip` still looks ready
       // (fields changed since load); recomputing the guard would then be
@@ -177,6 +184,9 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   }
 
   return {
+    /** Tri-state visibility (US-20.7): "private" | "unlisted" | "public". */
+    visibility,
+    /** Back-compat derived flag: `visibility === "public"`. */
     isPublic,
     /** One-click remaster lifecycle (US-17.3); drives the inline progress line. */
     remasterState: remaster.state,
@@ -195,8 +205,8 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
     actionError,
     clearActionError: () => setActionError(null),
     handleAction,
-    /** SongHeader/ClipCard-compatible publish callback (id, next). Persists. */
-    togglePublish: (_id: string, next: boolean) => void doPublish(next),
+    /** Set the clip's visibility directly (US-20.7 picker). Persists + guards. */
+    setVisibility,
     /** Non-null while the publish guard prompt should show; names what's missing. */
     publishGuard,
     dismissPublishGuard: () => setPublishGuard(null),

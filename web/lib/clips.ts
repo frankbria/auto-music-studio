@@ -9,6 +9,8 @@
 // proxy route behind it, so cover art does not load. Left as-is — US-20.0 needs
 // audio, and artwork wants its own proxy + placeholder story.
 
+import type { Visibility } from "@/lib/workspace-clips"
+
 /** A single playable item in the player queue. */
 export type Track = {
   id: string
@@ -97,20 +99,22 @@ export async function downloadClipAudio(
   return true
 }
 
-/** Outcome of a publish-toggle attempt (US-17.6). */
+/** Outcome of a visibility-change attempt (US-17.6 / tri-state in US-20.7). */
 export type VisibilityResult =
-  | { ok: true; isPublic: boolean }
+  | { ok: true; visibility: Visibility }
   | { ok: false; guardFailed: boolean; message: string }
 
 /**
- * Persist a clip's public/private state via `PATCH /api/clips/{id}` (US-17.6).
- * A 422 is the backend publish guard (missing title/style tags) — surfaced as
- * `guardFailed` so the caller can prompt for the missing fields instead of
- * showing a generic error. All other failures return `guardFailed: false`.
+ * Persist a clip's visibility via `PATCH /api/clips/{id}` (US-17.6, extended
+ * to the tri-state Private/Unlisted/Public in US-20.7). A 422 is the backend
+ * publish guard (missing title/style tags, only reachable going "public") —
+ * surfaced as `guardFailed` so the caller can prompt for the missing fields
+ * instead of showing a generic error. All other failures return
+ * `guardFailed: false`.
  */
 export async function updateClipVisibility(
   id: string,
-  isPublic: boolean,
+  visibility: Visibility,
   accessToken: string
 ): Promise<VisibilityResult> {
   let res: Response
@@ -121,7 +125,7 @@ export async function updateClipVisibility(
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ is_public: isPublic }),
+      body: JSON.stringify({ visibility }),
     })
   } catch {
     return {
@@ -130,7 +134,7 @@ export async function updateClipVisibility(
       message: "Couldn't reach the server. Please try again.",
     }
   }
-  if (res.ok) return { ok: true, isPublic }
+  if (res.ok) return { ok: true, visibility }
   const detail = (await res.json().catch(() => ({}))) as { detail?: unknown }
   const message =
     typeof detail.detail === "string"

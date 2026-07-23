@@ -81,9 +81,9 @@ function SongDetailContent({ clip }: { clip: Clip }) {
       <main className="flex min-w-0 flex-1 flex-col gap-6">
         <SongHeader
           clip={clip}
-          isPublic={actions.isPublic}
+          visibility={actions.visibility}
           isOwner={isOwner}
-          onPublishToggle={actions.togglePublish}
+          onVisibilityChange={(_id, next) => actions.setVisibility(next)}
           // Every item in the menu acts on the clip (edit, remix, publish,
           // delete), so a visitor gets no menu at all rather than a shell of
           // disabled rows. Like/Dislike/Share stay — anyone can re-share a link.

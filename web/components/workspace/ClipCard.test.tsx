@@ -175,36 +175,72 @@ describe("ClipCard", () => {
     expect(onShare).toHaveBeenCalledWith("c1")
   })
 
-  it("publishes a ready clip, persisting via the PATCH proxy", async () => {
+  it("shows the current visibility as a badge", () => {
+    renderCard()
+    expect(screen.getByText("Private")).toBeInTheDocument()
+  })
+
+  it("changes visibility to public for a ready clip, persisting via the PATCH proxy", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ id: "c1", visibility: "public" }), {
+          status: 200,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+    const onVisibilityChange = vi.fn()
+    renderCard({ onVisibilityChange })
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Visibility: Private" })
+    )
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Public" }))
+
+    expect(onVisibilityChange).toHaveBeenCalledWith("c1", "public")
+    await waitFor(() =>
+      expect(screen.getByText("Public")).toBeInTheDocument()
+    )
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/clips/c1")
+    expect(opts.method).toBe("PATCH")
+    expect(JSON.parse(opts.body as string)).toEqual({
+      visibility: "public",
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it("changes visibility to unlisted without a guard, even on an incomplete clip", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ id: "c1", is_public: true }), {
+        new Response(JSON.stringify({ id: "c1", visibility: "unlisted" }), {
           status: 200,
         })
       )
     )
     vi.stubGlobal("fetch", fetchMock)
-    const onPublishToggle = vi.fn()
-    renderCard({ onPublishToggle })
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ title: null, style_tags: [] })} />
+      </AllProviders>
+    )
 
-    const publish = screen.getByRole("button", { name: /publish|make public/i })
-    expect(publish).toHaveAttribute("aria-pressed", "false")
-    await userEvent.click(publish)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Visibility: Private" })
+    )
+    await userEvent.click(
+      screen.getByRole("menuitemradio", { name: "Unlisted" })
+    )
 
-    expect(onPublishToggle).toHaveBeenCalledWith("c1", true)
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /unpublish|make private/i })
-      ).toHaveAttribute("aria-pressed", "true")
+      expect(screen.getByText("Unlisted")).toBeInTheDocument()
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/clips/c1",
-      expect.objectContaining({ method: "PATCH" })
-    )
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalled()
     vi.unstubAllGlobals()
   })
 
-  it("prompts instead of publishing an incomplete clip", async () => {
+  it("prompts instead of publishing an incomplete clip, without a PATCH", async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal("fetch", fetchMock)
     render(
@@ -213,8 +249,10 @@ describe("ClipCard", () => {
       </AllProviders>
     )
     await userEvent.click(
-      screen.getByRole("button", { name: /publish|make public/i })
+      screen.getByRole("button", { name: "Visibility: Private" })
     )
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Public" }))
+
     expect(await screen.findByRole("dialog")).toHaveTextContent(
       /before publishing/i
     )
