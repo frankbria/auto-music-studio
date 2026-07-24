@@ -1,6 +1,6 @@
 "use client"
 
-import { cloneElement, useState, type ReactElement } from "react"
+import { cloneElement, useEffect, useRef, useState, type ReactElement } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +15,7 @@ import {
   loadDraft,
   MIN_COVER_ART_PX,
   prefillFromClip,
+  REQUIRED_FIELDS,
   saveDraft,
   validateMetadata,
   type ReleaseCredits,
@@ -93,9 +94,25 @@ function DistributionFormFields({ clip }: { clip: Clip }) {
   }
 
   const errors = validateMetadata(metadata)
-  const requiredMissing = ["title", "artist", "genre"].filter(
-    (k) => errors[k as keyof ReleaseMetadata]
-  ).length
+  const requiredMissing = REQUIRED_FIELDS.filter(({ key }) => errors[key]).length
+
+  // Persist the current edits on unmount so leaving the Distribute tab (Radix
+  // unmounts the inactive panel) or the page doesn't silently drop unsaved work —
+  // the draft is picked back up on return. A ref holds the latest values so the
+  // cleanup, which runs once, saves what's on screen at that moment. The cleanup
+  // calls saveDraft (never setState), so it's clear of the set-state-in-effect lint.
+  const latest = useRef({ clipId: clip.id, metadata })
+  // Keep the ref current in the commit phase (writing it during render is a lint
+  // error) so the unmount cleanup below saves what was last on screen.
+  useEffect(() => {
+    latest.current = { clipId: clip.id, metadata }
+  })
+  useEffect(() => {
+    const ref = latest
+    return () => {
+      saveDraft(ref.current.clipId, ref.current.metadata)
+    }
+  }, [])
 
   function set<K extends keyof ReleaseMetadata>(key: K, value: ReleaseMetadata[K]) {
     setMetadata((m) => ({ ...m, [key]: value }))
@@ -251,7 +268,14 @@ function DistributionFormFields({ clip }: { clip: Clip }) {
               onChange={(e) => void handleCoverUpload(e.target.files?.[0])}
             />
           </Field>
-          <Button type="button" variant="outline" onClick={() => set("coverArt", { kind: "existing" })}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              set("coverArt", { kind: "existing" })
+              setCoverError(null) // clear any prior upload-resolution error
+            }}
+          >
             Use existing art
           </Button>
           {/* ponytail: AI cover-art generation isn't built yet — link is a stub

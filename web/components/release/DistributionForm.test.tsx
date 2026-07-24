@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -91,13 +91,14 @@ describe("DistributionForm", () => {
     expect(screen.getByLabelText(/album/i)).toHaveValue("Night Sessions")
   })
 
-  it("rejects a non-image cover art file (AC3)", async () => {
-    const user = userEvent.setup()
+  it("rejects a non-image cover art file (AC3)", () => {
     render(<DistributionForm clip={makeClip()} />)
     const input = screen.getByLabelText(/upload cover art/i) as HTMLInputElement
+    // fireEvent (not user.upload) so the `accept` attribute doesn't filter the
+    // pdf before the component's own type guard — this tests the backstop.
     const pdf = new File(["x"], "cover.pdf", { type: "application/pdf" })
-    await user.upload(input, pdf)
-    expect(screen.getByText(/jpg or png/i)).toBeInTheDocument()
+    fireEvent.change(input, { target: { files: [pdf] } })
+    expect(screen.getByText(/must be a JPG or PNG/i)).toBeInTheDocument()
   })
 
   it("re-prefills when the selected song changes", () => {
@@ -130,6 +131,27 @@ describe("DistributionForm", () => {
     expect(loadDraft("clip-1")?.album).toBe("Night Sessions")
     rerender(<DistributionForm clip={makeClip()} />)
     expect(screen.getByLabelText(/album/i)).toHaveValue("Night Sessions")
+  })
+
+  it("persists edits on unmount so they survive leaving/returning to the tab (no save click)", () => {
+    const { unmount } = render(<DistributionForm clip={makeClip()} />)
+    // Edit but do NOT click Save — then unmount (as the Radix tab switch does).
+    fireEvent.change(screen.getByLabelText(/album/i), { target: { value: "Night Sessions" } })
+    unmount()
+    expect(loadDraft("clip-1")?.album).toBe("Night Sessions")
+    render(<DistributionForm clip={makeClip()} />)
+    expect(screen.getByLabelText(/album/i)).toHaveValue("Night Sessions")
+  })
+
+  it("clears a stale cover-art error when 'Use existing art' is chosen", async () => {
+    const user = userEvent.setup()
+    render(<DistributionForm clip={makeClip()} />)
+    const input = screen.getByLabelText(/upload cover art/i) as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(["x"], "cover.pdf", { type: "application/pdf" })] } })
+    expect(screen.getByText(/must be a JPG or PNG/i)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /use existing art/i }))
+    expect(screen.queryByText(/must be a JPG or PNG/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/existing cover art/i)).toBeInTheDocument()
   })
 
   it("backfills fields when resuming a draft written by an older version", () => {

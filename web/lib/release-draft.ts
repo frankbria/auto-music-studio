@@ -119,13 +119,21 @@ export function coverArtResolutionError(width: number, height: number): string |
   return null
 }
 
-/** Field-keyed validation errors (AC5). Empty object ⇒ valid. Required: title,
- *  artist, genre. ISRC/UPC are optional but must be well-formed when present. */
+/** Required fields (AC5) — the single source of truth for both validation and the
+ *  "N required fields still need attention" summary, so the two can't drift. */
+export const REQUIRED_FIELDS = [
+  { key: "title", label: "Title" },
+  { key: "artist", label: "Artist" },
+  { key: "genre", label: "Genre" },
+] as const satisfies ReadonlyArray<{ key: keyof ReleaseMetadata; label: string }>
+
+/** Field-keyed validation errors (AC5). Empty object ⇒ valid. Required fields come
+ *  from REQUIRED_FIELDS; ISRC/UPC are optional but must be well-formed when present. */
 export function validateMetadata(m: ReleaseMetadata): Partial<Record<keyof ReleaseMetadata, string>> {
   const errors: Partial<Record<keyof ReleaseMetadata, string>> = {}
-  if (!m.title.trim()) errors.title = "Title is required."
-  if (!m.artist.trim()) errors.artist = "Artist is required."
-  if (!m.genre.trim()) errors.genre = "Genre is required."
+  for (const { key, label } of REQUIRED_FIELDS) {
+    if (!String(m[key] ?? "").trim()) errors[key] = `${label} is required.`
+  }
   if (m.isrc.trim() && !isValidIsrc(m.isrc.trim())) errors.isrc = "Enter a valid ISRC (e.g. US-AMS-25-00001)."
   if (m.upc.trim() && !isValidUpc(m.upc.trim())) errors.upc = "Enter a valid 12-digit UPC."
   return errors
