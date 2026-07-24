@@ -5,12 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation"
 
 import {
   Card,
+  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MasteringTab } from "@/components/mastering/mastering-tab"
+import { DistributionForm } from "@/components/release/DistributionForm"
 import { SelectedSongSummary } from "@/components/release/SelectedSongSummary"
 import { SongSelector } from "@/components/release/SongSelector"
 import { useClip } from "@/hooks/use-clip"
@@ -19,8 +21,9 @@ import { useRequireAuth } from "@/hooks/use-require-auth"
 // Release page (US-21.1). A single destination for preparing and shipping a
 // song: pick a clip (or arrive pre-selected from the Studio's "Send to
 // Mastering", which navigates here with ?clip=), see its summary, then work
-// through the Mastering and Distribute tabs. The tab body placeholders are
-// filled by US-21.2 (mastering) and US-21.4/21.5 (distribution).
+// through the Mastering and Distribute tabs. Mastering (US-21.2) and the
+// distribution metadata form (US-21.4) fill the tab bodies; platform submission
+// lands in US-21.5.
 //
 // Selection is URL-driven (?clip=): the selector writes it and pre-selection
 // reads it, so there's one source of truth and it survives a refresh.
@@ -109,9 +112,14 @@ export function ReleasePageContent() {
             <CardHeader>
               <CardTitle>Distribution</CardTitle>
               <CardDescription>
-                Publishing to streaming platforms is coming soon.
+                Review and edit your release metadata, then save a draft to
+                continue later. Publishing to streaming platforms comes in a
+                later step.
               </CardDescription>
             </CardHeader>
+            <CardContent>
+              <DistributionForm clip={clip ?? null} />
+            </CardContent>
           </Card>
         </TabsContent>
       </Tabs>

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -69,6 +69,7 @@ afterEach(() => {
   searchParamsRef.current = new URLSearchParams()
   useClip.mockReset()
   vi.clearAllMocks()
+  localStorage.clear() // the form auto-saves a draft on unmount — don't leak across tests
 })
 
 function noClip() {
@@ -155,6 +156,30 @@ describe("ReleasePage", () => {
     expect(
       screen.getByRole("tab", { name: /distribute/i })
     ).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("renders the distribution metadata form prefilled for the selected song", () => {
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    render(<ReleasePageContent />)
+    // The form's Title field is pre-populated from the clip (US-21.4 AC1).
+    expect(screen.getByLabelText(/^title/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /save draft/i })).toBeInTheDocument()
+  })
+
+  it("preserves unsaved Distribute-tab edits across a tab switch (Radix unmounts the panel)", () => {
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    const { rerender } = render(<ReleasePageContent />)
+    fireEvent.change(screen.getByLabelText(/album/i), { target: { value: "Night Sessions" } })
+    // Switch to Mastering — Radix unmounts the Distribute panel → save-on-unmount fires.
+    searchParamsRef.current = new URLSearchParams("tab=mastering&clip=c1")
+    rerender(<ReleasePageContent />)
+    expect(screen.getByTestId("mastering-tab")).toBeInTheDocument()
+    // Back to Distribute — the panel remounts and resumes the auto-saved draft.
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    rerender(<ReleasePageContent />)
+    expect(screen.getByLabelText(/album/i)).toHaveValue("Night Sessions")
   })
 
   it("syncs the URL when switching tabs", async () => {
