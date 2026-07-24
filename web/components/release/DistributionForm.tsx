@@ -1,6 +1,13 @@
 "use client"
 
-import { cloneElement, useEffect, useRef, useState, type ReactElement } from "react"
+import {
+  cloneElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -21,6 +28,7 @@ import {
   type ReleaseCredits,
   type ReleaseMetadata,
 } from "@/lib/release-draft"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import type { Clip } from "@/lib/workspace-clips"
 
 /**
@@ -113,6 +121,18 @@ function DistributionFormFields({ clip }: { clip: Clip }) {
       saveDraft(ref.current.clipId, ref.current.metadata)
     }
   }, [])
+
+  // Persist edits as they happen (debounced), keeping localStorage the current
+  // source of truth so a sibling reading the draft — the distribution guided flow
+  // (US-21.5) packages metadata.json from it — never sees a stale, pre-save
+  // snapshot. The clipId is paired with the metadata so a song-switch (which
+  // resets both in the same render) can't misfile one song's edits under another.
+  // Silent: saveDraft only writes storage, never setState, so no "saved" message.
+  const editSnapshot = useMemo(() => ({ clipId: clip.id, metadata }), [clip.id, metadata])
+  const debouncedSnapshot = useDebouncedValue(editSnapshot, 400)
+  useEffect(() => {
+    saveDraft(debouncedSnapshot.clipId, debouncedSnapshot.metadata)
+  }, [debouncedSnapshot])
 
   function set<K extends keyof ReleaseMetadata>(key: K, value: ReleaseMetadata[K]) {
     setMetadata((m) => ({ ...m, [key]: value }))

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -53,6 +53,16 @@ describe("DistributionForm", () => {
     const album = screen.getByLabelText(/album/i)
     await user.type(album, "Night Sessions")
     expect(album).toHaveValue("Night Sessions")
+  })
+
+  it("auto-persists edits to the draft as the user types, so the US-21.5 guided flow reads current metadata", async () => {
+    const user = userEvent.setup()
+    render(<DistributionForm clip={makeClip()} />)
+    await user.type(screen.getByLabelText(/album/i), "Night Sessions")
+    // Debounced save (no unmount / song-switch) keeps localStorage current.
+    await waitFor(() => expect(loadDraft("clip-1")?.album).toBe("Night Sessions"), {
+      timeout: 2000,
+    })
   })
 
   it("highlights missing required fields on save (AC5)", async () => {

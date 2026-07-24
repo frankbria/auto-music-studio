@@ -48,6 +48,14 @@ vi.mock("@/components/mastering/mastering-tab", () => ({
     <div data-testid="mastering-tab">{selectedClip?.id ?? "no-clip"}</div>
   ),
 }))
+// The distribution target selector (US-21.5) fetches SoundCloud status via useAuth
+// and has its own tests; stub it so this page test stays focused on selection/URL
+// wiring (mirrors the mastering-tab stub above).
+vi.mock("@/components/distribution/TargetSelector", () => ({
+  TargetSelector: ({ clip }: { clip: { id: string } | null }) => (
+    <div data-testid="target-selector">{clip?.id ?? "no-clip"}</div>
+  ),
+}))
 vi.mock("@/components/release/SelectedSongSummary", () => ({
   SelectedSongSummary: ({
     clip,
