@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MasteringTab } from "@/components/mastering/mastering-tab"
+import { TargetSelector } from "@/components/distribution/TargetSelector"
 import { DistributionForm } from "@/components/release/DistributionForm"
 import { SelectedSongSummary } from "@/components/release/SelectedSongSummary"
 import { SongSelector } from "@/components/release/SongSelector"
@@ -119,6 +120,18 @@ export function ReleasePageContent() {
             </CardHeader>
             <CardContent>
               <DistributionForm clip={clip ?? null} />
+            </CardContent>
+          </Card>
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>Distribution targets</CardTitle>
+              <CardDescription>
+                Connect SoundCloud for one-click publishing, or prepare a
+                submission package for a guided store.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TargetSelector clip={clip ?? null} />
             </CardContent>
           </Card>
         </TabsContent>
