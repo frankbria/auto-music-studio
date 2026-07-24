@@ -70,9 +70,18 @@ export function channelLabel(channel: string): string {
   return known[channel] ?? channel.charAt(0).toUpperCase() + channel.slice(1)
 }
 
-/** The live external link for a channel, or null when it isn't live / has no URL. */
+/** The live external link for a channel, or null when it isn't live / has no URL.
+ *  `permalink` is backend/external-sourced and rendered as an `<a href>`, so only
+ *  an absolute http(s) URL is allowed through — a `javascript:`/`data:` scheme
+ *  would be an XSS sink (mirrors the repo's other URL-sink guards). */
 export function externalLink(channel: ChannelDistribution): string | null {
-  return channel.status === "live" && channel.permalink ? channel.permalink : null
+  if (channel.status !== "live" || !channel.permalink) return null
+  try {
+    const { protocol } = new URL(channel.permalink)
+    return protocol === "http:" || protocol === "https:" ? channel.permalink : null
+  } catch {
+    return null
+  }
 }
 
 const HOUR = 60 * 60 * 1000

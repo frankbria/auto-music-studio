@@ -34,6 +34,13 @@ describe("externalLink", () => {
   it("is null for non-live statuses even with a permalink", () => {
     expect(externalLink({ channel: "soundcloud", status: "submitted", permalink: "https://x" })).toBeNull()
   })
+
+  it("rejects non-http(s) schemes (XSS guard) and malformed URLs", () => {
+    expect(externalLink({ ...base, permalink: "javascript:alert(document.cookie)" })).toBeNull()
+    expect(externalLink({ ...base, permalink: "data:text/html,<script>x</script>" })).toBeNull()
+    expect(externalLink({ ...base, permalink: "not a url" })).toBeNull()
+    expect(externalLink({ ...base, permalink: "http://ok" })).toBe("http://ok")
+  })
 })
 
 describe("fetchReleases", () => {
