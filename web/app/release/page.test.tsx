@@ -56,6 +56,17 @@ vi.mock("@/components/distribution/TargetSelector", () => ({
     <div data-testid="target-selector">{clip?.id ?? "no-clip"}</div>
   ),
 }))
+// The review screen (US-21.6) has its own tests and renders the submit surface;
+// stub it so the page test stays focused on the Distribute sub-tab wiring.
+vi.mock("@/components/distribution/ReviewScreen", () => ({
+  ReviewScreen: ({ clip }: { clip: { id: string } | null }) => (
+    <div data-testid="review-screen">{clip?.id ?? "no-clip"}</div>
+  ),
+}))
+// The dashboard (US-21.6) polls releases and has its own tests; stub it here.
+vi.mock("@/components/distribution/DashboardList", () => ({
+  DashboardList: () => <div data-testid="dashboard-list" />,
+}))
 vi.mock("@/components/release/SelectedSongSummary", () => ({
   SelectedSongSummary: ({
     clip,
@@ -173,6 +184,30 @@ describe("ReleasePage", () => {
     // The form's Title field is pre-populated from the clip (US-21.4 AC1).
     expect(screen.getByLabelText(/^title/i)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /save draft/i })).toBeInTheDocument()
+  })
+
+  it("shows the Metadata, Review, and Releases sub-tabs on the Distribute tab", () => {
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    render(<ReleasePageContent />)
+    expect(screen.getByRole("tab", { name: /metadata/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /review/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /releases/i })).toBeInTheDocument()
+    // Metadata is the default sub-tab, so the form shows first.
+    expect(screen.getByLabelText(/^title/i)).toBeInTheDocument()
+  })
+
+  it("opens the Review screen and the Releases dashboard from the sub-tabs", async () => {
+    searchParamsRef.current = new URLSearchParams("tab=distribute&clip=c1")
+    useClip.mockReturnValue(foundClip())
+    const user = userEvent.setup()
+    render(<ReleasePageContent />)
+
+    await user.click(screen.getByRole("tab", { name: /review/i }))
+    expect(screen.getByTestId("review-screen")).toHaveTextContent("c1")
+
+    await user.click(screen.getByRole("tab", { name: /releases/i }))
+    expect(screen.getByTestId("dashboard-list")).toBeInTheDocument()
   })
 
   it("preserves unsaved Distribute-tab edits across a tab switch (Radix unmounts the panel)", () => {
