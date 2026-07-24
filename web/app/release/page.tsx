@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MasteringTab } from "@/components/mastering/mastering-tab"
-import { TargetSelector } from "@/components/distribution/TargetSelector"
+import { DashboardList } from "@/components/distribution/DashboardList"
+import { ReviewScreen } from "@/components/distribution/ReviewScreen"
 import { DistributionForm } from "@/components/release/DistributionForm"
 import { SelectedSongSummary } from "@/components/release/SelectedSongSummary"
 import { SongSelector } from "@/components/release/SongSelector"
@@ -24,7 +25,9 @@ import { useRequireAuth } from "@/hooks/use-require-auth"
 // Mastering", which navigates here with ?clip=), see its summary, then work
 // through the Mastering and Distribute tabs. Mastering (US-21.2) and the
 // distribution metadata form (US-21.4) fill the tab bodies; platform submission
-// lands in US-21.5.
+// lands in US-21.5. The Distribute tab splits into Metadata → Review → Releases
+// sub-tabs (US-21.6): edit, then verify the package and submit, then track every
+// release's per-channel status on the dashboard.
 //
 // Selection is URL-driven (?clip=): the selector writes it and pre-selection
 // reads it, so there's one source of truth and it survives a refresh.
@@ -109,31 +112,50 @@ export function ReleasePageContent() {
           <MasteringTab selectedClip={clip ?? null} />
         </TabsContent>
         <TabsContent value="distribute" className="pt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Distribution</CardTitle>
-              <CardDescription>
-                Review and edit your release metadata, then save a draft to
-                continue later. Publishing to streaming platforms comes in a
-                later step.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DistributionForm clip={clip ?? null} />
-            </CardContent>
-          </Card>
-          <Card className="mt-4">
-            <CardHeader>
-              <CardTitle>Distribution targets</CardTitle>
-              <CardDescription>
-                Connect SoundCloud for one-click publishing, or prepare a
-                submission package for a guided store.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <TargetSelector clip={clip ?? null} />
-            </CardContent>
-          </Card>
+          {/* Inner flow (US-21.6): edit metadata → review the package & submit →
+              track releases on the dashboard. Local (not URL-driven) sub-tab —
+              the outer tab already owns the URL; a second param would be noise. */}
+          <Tabs defaultValue="metadata">
+            <TabsList>
+              <TabsTrigger value="metadata">Metadata</TabsTrigger>
+              <TabsTrigger value="review">Review</TabsTrigger>
+              <TabsTrigger value="releases">Releases</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="metadata" className="pt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Distribution</CardTitle>
+                  <CardDescription>
+                    Review and edit your release metadata, then save a draft to
+                    continue later. Review and submit from the Review tab.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <DistributionForm clip={clip ?? null} />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="review" className="pt-4">
+              <ReviewScreen clip={clip ?? null} />
+            </TabsContent>
+
+            <TabsContent value="releases" className="pt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Your releases</CardTitle>
+                  <CardDescription>
+                    Track every release across channels. Statuses refresh
+                    automatically while this tab is open.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <DashboardList />
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>
