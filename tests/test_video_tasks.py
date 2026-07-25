@@ -71,6 +71,38 @@ class TestGetVideoClient:
 
 
 # ---------------------------------------------------------------------------
+# Processor wiring — CI (no DB)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessorWiring:
+    def test_video_job_type_registered(self) -> None:
+        from acemusic.api.tasks.processor import JobProcessor
+
+        assert VIDEO_JOB_TYPE in JobProcessor()._handlers
+
+    async def test_unconfigured_client_fails_claimed_job(self) -> None:
+        from acemusic.api.tasks.processor import JobProcessor
+
+        processor = JobProcessor(video_client_factory=None)
+        with pytest.raises(JobProcessingError, match="not configured"):
+            await processor._run_video_handler(tasks.process_video_job, None)
+
+    async def test_configured_client_and_storage_injected(self) -> None:
+        from acemusic.api.tasks.processor import JobProcessor
+
+        fake_client, fake_storage, seen = object(), object(), {}
+
+        async def handler(job, *, storage, client):
+            seen.update(storage=storage, client=client)
+            return {"ok": True}
+
+        processor = JobProcessor(video_client_factory=lambda: fake_client, storage_factory=lambda: fake_storage)
+        assert await processor._run_video_handler(handler, None) == {"ok": True}
+        assert seen == {"storage": fake_storage, "client": fake_client}
+
+
+# ---------------------------------------------------------------------------
 # Handler — integration (local MongoDB)
 # ---------------------------------------------------------------------------
 
