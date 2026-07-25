@@ -304,6 +304,15 @@ A preset is a named snapshot of generation parameters. Every creative field acce
 
 Arrangement state has no backend persistence, so each request carries the full arrangement (tracks → placements referencing workspace clips with `start_sec`/`duration_sec` offsets and per-track `volume_db`/`pan`/`muted`/`solo`). The workspace and every referenced clip are ownership-checked up front (404 before any job is created), and requests are bounded: 1–64 tracks, ≤256 placements per track, ≥1 placement overall, field and computed timeline length capped at 4 hours (the worker re-checks the real arrangement duration, since an untrimmed placement runs its full source clip). Mixing is a pure 48 kHz stereo sum with per-track gain/pan; mute beats solo, and a soloed-but-muted track does not silence the rest. Progress is reported through the generic job status endpoint (`Downloading tracks` → `Mixing`/`Bundling` → `Uploading`). `flac`/`mp3` mixdowns require ffmpeg on the API host; DAW ZIPs are stored under `exports/` keyed by job id and are not cascade-deleted.
 
+### Music Video Generation (US-22.1)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/videos/generate` | Submit a music-video render for an owned song: visual `prompt` and/or `style_preset` (abstract/cinematic/animated/lyric_video/live_performance/nature), up to 5 http(s) `reference_image_urls`, `lyrics_sync`, `aspect_ratio` (16:9/9:16/1:1), `resolution` (720p/1080p/4k), `frame_rate` (24/30/60), `transitions` (auto/cut/fade/dissolve). Returns 202 + `job_id`. Credit-gated: 5–10 credits by resolution plus a long-song surcharge, deducted atomically with refund on job-creation failure; 402 with `{error, balance, required}` when short; 503 before any charge when no provider is configured |
+| `GET /api/v1/videos/{job_id}/status` | Rendering progress in the video vocabulary: `queued` → `rendering` → `encoding` → `complete` \| `failed`, with `progress` (0–100), `eta_seconds`, and on completion the stored `video_id` |
+
+The render runs on an external provider (Runway/Pika-class) configured by `ACEMUSIC_API_VIDEO_API_URL` + `ACEMUSIC_API_VIDEO_API_KEY` (leave blank to disable; see `.env.example`). The worker downloads the source song, submits it with the options, polls the provider (transient 5xx retried up to 3 times with backoff; a couple of consecutive failed polls are tolerated before the job fails), then stores the rendered MP4 (audio muxed by the provider) and records a `Video` document associating it with the song. Delivery/download UI is US-22.3.
+
 ## Stem separation backends
 
 `acemusic stems <clip_id>` separates a clip into stems. Two engines are available
