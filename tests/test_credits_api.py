@@ -62,6 +62,35 @@ class TestGetCost:
             credits_service.get_cost("video")
 
 
+class TestGetVideoCost:
+    """Runs in CI (no DB): the US-22.1 video cost table is pure logic.
+
+    The documented band is 5-10 credits by resolution and duration: base rate
+    per resolution, a surcharge for songs over the long-duration threshold, and
+    a hard cap at the top of the band.
+    """
+
+    def test_base_costs_by_resolution(self) -> None:
+        assert credits_service.get_video_cost("720p", 10.0) == 5.0
+        assert credits_service.get_video_cost("1080p", 10.0) == 7.0
+        assert credits_service.get_video_cost("4k", 10.0) == 8.0
+
+    def test_long_duration_surcharge(self) -> None:
+        long = credits_service.VIDEO_LONG_DURATION_S + 1
+        assert credits_service.get_video_cost("720p", long) == 7.0
+        assert credits_service.get_video_cost("1080p", long) == 9.0
+
+    def test_cost_capped_at_band_maximum(self) -> None:
+        assert credits_service.get_video_cost("4k", credits_service.VIDEO_LONG_DURATION_S + 1) == 10.0
+
+    def test_unknown_duration_bills_base_rate(self) -> None:
+        assert credits_service.get_video_cost("720p", None) == 5.0
+
+    def test_unknown_resolution_raises(self) -> None:
+        with pytest.raises(ValueError):
+            credits_service.get_video_cost("8k", 10.0)
+
+
 class TestNonPositiveCostGuard:
     """Runs in CI (no DB): the guards raise before any database access. A
     negative cost would otherwise mint credits ($inc of a positive amount

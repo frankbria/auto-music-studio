@@ -41,6 +41,12 @@ class Job(Document):
     # Human-readable progress for long, multi-step jobs (US-10.4 full-song writes
     # "Processing section N of M" per section). None for single-step jobs.
     progress: str | None = None
+    # Structured provider-side progress for jobs tracked against an external
+    # renderer (US-22.1 video writes {"state", "progress", "eta_seconds"}).
+    # Additive and optional so the platform-wide 4-state ``status`` lifecycle
+    # (and the processor's claim query) stays untouched; the feature's own
+    # status endpoint maps this onto its richer vocabulary.
+    progress_detail: dict | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     completed_at: datetime | None = None

@@ -33,6 +33,7 @@ from acemusic.image_client import ImageGenerationClient
 from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
+from acemusic.video_client import VideoGenerationService
 
 from .. import database
 from ..models import Clip, Job, JobStatus
@@ -46,6 +47,7 @@ from .extraction import EXTRACTION_JOB_HANDLERS
 from .iterative import ITERATIVE_JOB_HANDLERS
 from .mastering import MASTERING_JOB_HANDLERS
 from .studio import STUDIO_JOB_HANDLERS
+from .video import VIDEO_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ class JobProcessor:
         runpod_poll_interval: float = 5.0,
         mastering_orchestrator_factory: Callable[[], MasteringOrchestrator] | None = None,
         image_client_factory: Callable[[], ImageGenerationClient | None] | None = None,
+        video_client_factory: Callable[[], VideoGenerationService | None] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
@@ -133,6 +136,10 @@ class JobProcessor:
         # None when no OpenAI key is set; the artwork handler then fails a claimed
         # job with a clear "not configured" message rather than crashing.
         self._image_client_factory = image_client_factory
+        # Video generation (US-22.1). The factory yields the video client, or
+        # None when no provider URL/key is set; the video handler then fails a
+        # claimed job with a clear "not configured" message rather than crashing.
+        self._video_client_factory = video_client_factory
         # A job legitimately stays in `processing` for at most poll_timeout (its
         # own worker fails it after that). Only re-queue jobs older than that
         # window plus a margin, so a startup sweep never reclaims a job a live
@@ -168,6 +175,10 @@ class JobProcessor:
         # get their own injecting wrapper like mastering.
         for job_type, artwork_handler in ARTWORK_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_artwork_handler, artwork_handler)
+        # Video handlers (US-22.1) need storage plus the video client, so they
+        # get their own injecting wrapper like artwork.
+        for job_type, video_handler in VIDEO_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_video_handler, video_handler)
         if handlers:
             self._handlers.update(handlers)
         self._running = False
@@ -344,6 +355,16 @@ class JobProcessor:
                 "Artwork generation is not configured: set ACEMUSIC_API_OPENAI_API_KEY to enable it."
             )
         return await artwork_handler(job, storage=self._storage_factory(), client=client)
+
+    async def _run_video_handler(self, video_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt a video handler (US-22.1), injecting storage and the video client."""
+        client = self._video_client_factory() if self._video_client_factory is not None else None
+        if client is None:
+            raise JobProcessingError(
+                "Video generation is not configured: set ACEMUSIC_API_VIDEO_API_URL "
+                "and ACEMUSIC_API_VIDEO_API_KEY to enable it."
+            )
+        return await video_handler(job, storage=self._storage_factory(), client=client)
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run a generation job — locally via ACE-Step or remotely via RunPod.

@@ -48,6 +48,19 @@ _MASTERING_COSTS = {
     "bakuage": MASTERING_BAKUAGE_COST,
 }
 
+# US-22.1: video rendering is billed within the documented 5-10 credit band by
+# resolution, with a surcharge for long songs (rendering cost scales with both).
+# Kept out of ``_COSTS`` — video is not a generation mode, and the cost is
+# two-dimensional (resolution x duration) where ``_COSTS`` is flat.
+_VIDEO_COSTS = {
+    "720p": 5.0,
+    "1080p": 7.0,
+    "4k": 8.0,
+}
+VIDEO_LONG_DURATION_S = 180.0
+VIDEO_LONG_DURATION_SURCHARGE = 2.0
+VIDEO_MAX_COST = 10.0
+
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50
 
@@ -58,6 +71,23 @@ def get_cost(mode: str) -> float:
         return _COSTS[mode]
     except KeyError:
         raise ValueError(f"Unknown generation mode: {mode!r}") from None
+
+
+def get_video_cost(resolution: str, duration_s: float | None = None) -> float:
+    """Credit cost of one video render at ``resolution`` for a ``duration_s`` song.
+
+    Raises for unknown resolutions. A song longer than ``VIDEO_LONG_DURATION_S``
+    adds the long-duration surcharge; the total is capped at ``VIDEO_MAX_COST``
+    (the top of the documented 5-10 band). ``duration_s`` may be ``None`` — some
+    clips predate duration tracking — and then bills the base rate.
+    """
+    try:
+        cost = _VIDEO_COSTS[resolution]
+    except KeyError:
+        raise ValueError(f"Unknown video resolution: {resolution!r}") from None
+    if duration_s is not None and duration_s > VIDEO_LONG_DURATION_S:
+        cost += VIDEO_LONG_DURATION_SURCHARGE
+    return min(cost, VIDEO_MAX_COST)
 
 
 def get_mastering_cost(service: str) -> float:

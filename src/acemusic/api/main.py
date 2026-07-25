@@ -42,6 +42,7 @@ from .routers import (
     releases,
     studio,
     users,
+    videos,
     workspaces,
 )
 from .settings import ApiSettings
@@ -49,6 +50,7 @@ from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
 from .tasks.processor import JobProcessor
 from .tasks.soundcloud_poller import SoundCloudStatusPoller
+from .tasks.video import get_video_client
 from .utils.rate_limit import FixedWindowRateLimiter as RateLimiter
 
 API_V1_PREFIX = "/api/v1"
@@ -125,6 +127,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     # an OpenAI key is set, else None — the handler then fails a
                     # claimed job with a clear "not configured" error.
                     image_client_factory=lambda: get_image_client(settings),
+                    # Video (US-22.1): the factory yields the video client when
+                    # the provider URL/key are set, else None — the handler then
+                    # fails a claimed job with a clear "not configured" error.
+                    video_client_factory=lambda: get_video_client(settings),
                 )
                 await processor.start()
             app_.state.job_processor = processor
@@ -202,6 +208,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(distribution.router, prefix=API_V1_PREFIX)
     app.include_router(releases.router, prefix=API_V1_PREFIX)
     app.include_router(queue.router, prefix=API_V1_PREFIX)
+    app.include_router(videos.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.

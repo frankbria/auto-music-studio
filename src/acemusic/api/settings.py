@@ -161,6 +161,14 @@ class ApiSettings(BaseSettings):
     openai_api_key: str | None = None
     artwork_generation_enabled: bool = True
 
+    # AI video generation (US-22.1). Optional credentials for the hosted video
+    # rendering provider; a deployment without them runs with video generation
+    # disabled — ``video_enabled`` is False, so the video worker fails a claimed
+    # job with a clear "not configured" error rather than crashing. The provider
+    # is configured by base URL + bearer key (provider-generic, Runway/Pika-class).
+    video_api_url: str | None = None
+    video_api_key: str | None = None
+
     # Release identifiers (US-13.4). ISRC = country code + registrant code issued
     # by the platform operator's national agency; UPC = the operator's 7-digit GS1
     # company prefix. The defaults are demo placeholders ("US"/"A1B"/"0000000") so
@@ -216,6 +224,11 @@ class ApiSettings(BaseSettings):
     def artwork_enabled(self) -> bool:
         """True only when artwork generation is configured and not kill-switched."""
         return bool(self.openai_api_key and self.artwork_generation_enabled)
+
+    @property
+    def video_enabled(self) -> bool:
+        """True only when the video-generation provider is fully configured."""
+        return bool(self.video_api_url and self.video_api_key)
 
     # OAuth ``state`` cookie policy (issue #110, login-CSRF binding). The login
     # flow sets a per-client nonce cookie that the callback requires.
