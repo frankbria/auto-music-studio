@@ -17,6 +17,7 @@ from .refresh_token import RefreshToken
 from .release import Release, ReleaseStatus
 from .soundcloud_connection import SoundCloudConnection
 from .user import User
+from .video import Video
 from .workspace import Workspace
 
 ALL_MODELS = [
@@ -34,6 +35,7 @@ ALL_MODELS = [
     NotificationEvent,
     Counter,
     PlaybackQueue,
+    Video,
 ]
 
 __all__ = [
@@ -58,5 +60,6 @@ __all__ = [
     "Counter",
     "PlaybackQueue",
     "RepeatMode",
+    "Video",
     "ALL_MODELS",
 ]
