@@ -85,25 +85,34 @@ class TestSubmit:
 
 
 class TestRetryPolicy:
-    """The client goes through the shared ``_http.request`` policy: a 5xx is
-    retried up to 3 times with backoff (4 attempts total), then surfaces as a
-    :class:`VideoGenerationError`."""
+    """Unbilled calls (status/download) go through the shared ``_http.request``
+    policy: a 5xx is retried up to 3 times with backoff (4 attempts total), then
+    surfaces as a :class:`VideoGenerationError`. The billed submit call opts out
+    (``retries=0``) — an auto-retry after the provider accepted the job would
+    create and pay for duplicate renders."""
 
-    def test_5xx_retried_then_succeeds(self) -> None:
-        responses = [_resp(500), _resp(502), _resp(200, {"id": "pj-9"})]
-        with patch("httpx.post", side_effect=responses) as post, patch("acemusic._http.time.sleep") as slept:
-            job_id = _client().submit(b"RIFF", "song.wav", {})
-        assert job_id == "pj-9"
-        assert post.call_count == 3
+    def test_status_5xx_retried_then_succeeds(self) -> None:
+        responses = [_resp(500), _resp(502), _resp(200, {"status": "rendering", "progress": 10})]
+        with patch("httpx.get", side_effect=responses) as get, patch("acemusic._http.time.sleep") as slept:
+            update = _client().get_status("pj-1")
+        assert update.state == "rendering"
+        assert get.call_count == 3
         assert slept.call_count == 2
 
-    def test_5xx_exhausts_retries_then_raises(self) -> None:
-        with patch("httpx.post", return_value=_resp(503)) as post, patch("acemusic._http.time.sleep") as slept:
+    def test_status_5xx_exhausts_retries_then_raises(self) -> None:
+        with patch("httpx.get", return_value=_resp(503)) as get, patch("acemusic._http.time.sleep") as slept:
             with pytest.raises(VideoGenerationError, match="503"):
-                _client().submit(b"RIFF", "song.wav", {})
+                _client().get_status("pj-1")
         # Initial attempt + MAX_RETRIES retries.
-        assert post.call_count == 4
+        assert get.call_count == 4
         assert slept.call_count == 3
+
+    def test_billed_submit_does_not_retry_5xx(self) -> None:
+        with patch("httpx.post", return_value=_resp(500)) as post, patch("acemusic._http.time.sleep") as slept:
+            with pytest.raises(VideoGenerationError, match="500"):
+                _client().submit(b"RIFF", "song.wav", {})
+        assert post.call_count == 1
+        assert slept.call_count == 0
 
 
 class TestGetStatus:
@@ -121,6 +130,11 @@ class TestGetStatus:
         with patch("acemusic._http.request", return_value=_resp(200, payload)):
             update = _client().get_status("pj-1")
         assert update.progress is None and update.eta_seconds is None
+
+    def test_non_json_200_wrapped(self) -> None:
+        with patch("acemusic._http.request", return_value=_resp(200, content=b"<html>gateway</html>")):
+            with pytest.raises(VideoGenerationError, match="non-JSON"):
+                _client().get_status("pj-1")
 
     def test_failure_carries_provider_error(self) -> None:
         payload = {"status": "failed", "error": "NSFW prompt rejected"}

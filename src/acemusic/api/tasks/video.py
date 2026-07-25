@@ -26,6 +26,7 @@ from acemusic.video_client import (
 )
 
 from ..models import Job, Video
+from ..services import clips as clip_service
 from ..services.video import VIDEO_JOB_TYPE
 from .common import JobProcessingError, download_clip, load_source_clip
 
@@ -35,10 +36,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 5.0
-# Kept under the processor's stale-requeue window (poll_timeout + 300s, 900s by
-# default) — same reasoning as the mastering orchestrator's total timeout — so a
-# restart's stale sweep can never reclaim a job whose poll loop is still live.
+# Poll budget for the provider render. Note the handler's worst-case wall time
+# (submit + this poll budget + download) can exceed the processor's stale-requeue
+# window (poll_timeout + 300s, 900s by default). The stale sweep only runs at
+# process START, so a single-process deployment is safe (a restart killed the old
+# worker anyway); only a multi-process deployment starting a sibling mid-render
+# could re-queue a live job. Acceptable for now — revisit if video ever runs
+# multi-process (raise stale_after for this job type).
 POLL_TIMEOUT_S = 600.0
+
+# One failed status poll must not kill a paid render that is still progressing on
+# the provider side (connection blips over a minutes-long poll window are
+# expected). Only this many consecutive failures fail the job.
+_MAX_CONSECUTIVE_POLL_FAILURES = 3
 
 
 def get_video_client(settings: "ApiSettings") -> VideoGenerationService | None:
@@ -82,23 +92,30 @@ async def process_video_job(
     audio = await download_clip(storage, clip)
     params = dict(job.input_params or {})
     params.pop("clip_id", None)  # provider gets the audio itself, not our id
+    filename = f"{clip.id}.{clip_service.native_format(clip)}"
 
     try:
-        provider_job_id = await asyncio.to_thread(client.submit, audio, f"{clip.id}.wav", params)
+        provider_job_id = await asyncio.to_thread(client.submit, audio, filename, params)
     except VideoGenerationError as exc:
         raise JobProcessingError(f"Video provider submission failed: {exc}") from exc
 
     deadline = time.monotonic() + poll_timeout
+    poll_failures = 0
     while True:
+        update = None
         try:
             update = await asyncio.to_thread(client.get_status, provider_job_id)
         except VideoGenerationError as exc:
-            raise JobProcessingError(f"Video provider status poll failed: {exc}") from exc
-        await _set_progress(job, update.state, update.progress, update.eta_seconds)
-        if update.state == COMPLETE:
-            break
-        if update.state == FAILED:
-            raise JobProcessingError(f"Video rendering failed: {update.error or 'provider reported failure'}")
+            poll_failures += 1
+            if poll_failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                raise JobProcessingError(f"Video provider status poll failed: {exc}") from exc
+        if update is not None:
+            poll_failures = 0
+            await _set_progress(job, update.state, update.progress, update.eta_seconds)
+            if update.state == COMPLETE:
+                break
+            if update.state == FAILED:
+                raise JobProcessingError(f"Video rendering failed: {update.error or 'provider reported failure'}")
         if time.monotonic() >= deadline:
             raise JobProcessingError(f"Video rendering timed out after {poll_timeout:.0f}s")
         await asyncio.sleep(poll_interval)

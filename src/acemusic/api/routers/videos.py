@@ -16,8 +16,8 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import JobStatus
@@ -27,6 +27,7 @@ from ..services import (
     users as user_service,
     video as video_service,
 )
+from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,17 @@ router = APIRouter(prefix="/videos", tags=["videos"], dependencies=[Depends(get_
 
 # US-22.2's page uploads up to 5 reference images to guide the visual style.
 _MAX_REFERENCE_IMAGES = 5
+
+# Bounds on user-supplied text forwarded to the provider: the prompt cap matches
+# the artwork router's; reference URLs must be web URLs (a file:// or
+# metadata-service URL would turn the provider into an SSRF proxy) of sane length.
+_PROMPT_MAX_LENGTH = 2000
+_REFERENCE_URL_MAX_LENGTH = 2048
+
+
+def _settings(request: Request) -> ApiSettings:
+    return request.app.state.settings
+
 
 # US-22.1's status vocabulary. Job.status covers the endpoints of the lifecycle;
 # the rendering/encoding middle states come from the provider via progress_detail.
@@ -53,7 +65,7 @@ class VideoGenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     clip_id: str
-    prompt: str | None = None
+    prompt: str | None = Field(default=None, max_length=_PROMPT_MAX_LENGTH)
     style_preset: Literal["abstract", "cinematic", "animated", "lyric_video", "live_performance", "nature"] | None = (
         None
     )
@@ -63,6 +75,16 @@ class VideoGenerationRequest(BaseModel):
     resolution: Literal["720p", "1080p", "4k"] = "720p"
     frame_rate: Literal[24, 30, 60] = 30
     transitions: Literal["auto", "cut", "fade", "dissolve"] = "auto"
+
+    @field_validator("reference_image_urls")
+    @classmethod
+    def _check_reference_urls(cls, urls: list[str]) -> list[str]:
+        for url in urls:
+            if len(url) > _REFERENCE_URL_MAX_LENGTH:
+                raise ValueError(f"Reference image URLs must be at most {_REFERENCE_URL_MAX_LENGTH} characters")
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("Reference image URLs must be http(s) URLs")
+        return urls
 
     @model_validator(mode="after")
     def _check_style(self) -> "VideoGenerationRequest":
@@ -101,13 +123,24 @@ async def create_video_job(
     # The router-level dependency already gates auth; declaring it here too gives
     # the handler the resolved CurrentUser (FastAPI dedupes per request).
     current: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(_settings),
 ) -> VideoJobResponse:
     """Validate the song, charge credits, and enqueue a queued video job.
 
     Pydantic returns 422 for invalid bodies and the router dependency returns 401
-    for missing/invalid tokens — both before this runs. Raises 404 (stale token
-    or unknown/unowned clip) and 402 (insufficient credits).
+    for missing/invalid tokens — both before this runs. Raises 503 (provider not
+    configured), 404 (stale token or unknown/unowned clip) and 402 (insufficient
+    credits).
     """
+    # Gate BEFORE any charge: settings are process-static, so an unconfigured
+    # deployment would otherwise take the credits and then have the worker fail
+    # every claimed job with "not configured" — a guaranteed charge for nothing.
+    if not settings.video_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Video generation is not configured on this deployment.",
+        )
+
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")

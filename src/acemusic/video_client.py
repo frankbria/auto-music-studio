@@ -124,8 +124,13 @@ class HttpVideoClient:
             if value is None:
                 continue
             data[key] = [str(v) for v in value] if isinstance(value, list) else str(value)
-        response = self._request(httpx.post, f"{self.base_url}/jobs", files=files, data=data, timeout=_API_TIMEOUT)
-        job_id = response.json().get("id")
+        # retries=0: submission creates a billed render on the provider. A 5xx
+        # after the provider accepted the job would mean an auto-retry creates
+        # (and pays for) duplicate renders — mirrors image_client's policy.
+        response = self._request(
+            httpx.post, f"{self.base_url}/jobs", files=files, data=data, timeout=_API_TIMEOUT, retries=0
+        )
+        job_id = self._json(response).get("id")
         if not job_id:
             raise VideoGenerationError("Video provider returned no job id")
         return str(job_id)
@@ -133,7 +138,7 @@ class HttpVideoClient:
     def get_status(self, provider_job_id: str) -> VideoJobUpdate:
         """GET the job's state, progress percentage, and estimated time remaining."""
         response = self._request(httpx.get, f"{self.base_url}/jobs/{provider_job_id}", timeout=_API_TIMEOUT)
-        payload = response.json()
+        payload = self._json(response)
         return VideoJobUpdate(
             state=normalize_state(payload.get("status")),
             progress=_as_int(payload.get("progress")),
@@ -147,6 +152,17 @@ class HttpVideoClient:
         if not response.content:
             raise VideoGenerationError("Video provider returned an empty result")
         return response.content
+
+    @staticmethod
+    def _json(response: httpx.Response) -> dict[str, Any]:
+        """Parse a JSON body, wrapping a non-JSON 200 (e.g. an HTML error page)."""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise VideoGenerationError("Video provider returned a non-JSON response") from exc
+        if not isinstance(payload, dict):
+            raise VideoGenerationError("Video provider returned an unexpected JSON shape")
+        return payload
 
     def _request(self, method: Any, url: str, **kwargs: Any) -> httpx.Response:
         """Issue one call through the shared 5xx-retry policy, wrapping failures."""

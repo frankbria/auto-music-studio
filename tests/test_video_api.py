@@ -63,6 +63,10 @@ def settings(mongo_db, mongo_settings) -> ApiSettings:
         update={
             "jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx",
             "job_processor_enabled": False,
+            # The generate endpoint 503s before any charge when the provider is
+            # unconfigured (see TestNotConfigured), so these tests configure it.
+            "video_api_url": "https://video.test",
+            "video_api_key": "vk-test",
         }
     )
 
@@ -220,6 +224,25 @@ class TestValidation:
         )
         assert resp.status_code == 422
 
+    async def test_non_http_reference_url_rejected(self, client, settings) -> None:
+        user, _ws, clip = await _user_with_clip("video-ssrf@example.com", balance=10.0)
+        for url in ("file:///etc/passwd", "ftp://x.test/a.png", "javascript:alert(1)"):
+            resp = await client.post(
+                GENERATE_URL,
+                json=_valid_body(clip, reference_image_urls=[url]),
+                headers=_auth_headers(user, settings),
+            )
+            assert resp.status_code == 422, url
+
+    async def test_overlong_prompt_rejected(self, client, settings) -> None:
+        user, _ws, clip = await _user_with_clip("video-longprompt@example.com", balance=10.0)
+        resp = await client.post(
+            GENERATE_URL,
+            json=_valid_body(clip, prompt="x" * 2001),
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+
     async def test_too_many_reference_images_rejected(self, client, settings) -> None:
         user, _ws, clip = await _user_with_clip("video-refs@example.com", balance=10.0)
         resp = await client.post(
@@ -228,6 +251,27 @@ class TestValidation:
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Unconfigured provider — 503 before any charge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestNotConfigured:
+    async def test_returns_503_with_no_charge_or_job(self, settings) -> None:
+        """An unconfigured deployment must refuse up front: the worker would fail
+        every claimed video job with "not configured", so charging first would be
+        a guaranteed charge for nothing."""
+        user, _ws, clip = await _user_with_clip("video-nocfg@example.com", balance=10.0)
+        bare = settings.model_copy(update={"video_api_url": None, "video_api_key": None})
+        async with _async_client(create_app(bare)) as client:
+            resp = await client.post(GENERATE_URL, json=_valid_body(clip), headers=_auth_headers(user, bare))
+        assert resp.status_code == 503
+        assert "not configured" in resp.json()["detail"]
+        assert (await _reload(user)).credits_balance == 10.0
+        assert await Job.find(Job.user_id == user.id).count() == 0
 
 
 # ---------------------------------------------------------------------------

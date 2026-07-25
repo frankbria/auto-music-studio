@@ -186,6 +186,37 @@ class TestProcessVideoJob:
         assert {"state": "rendering", "progress": 40, "eta_seconds": 30.0} in seen
         assert {"state": "encoding", "progress": 90, "eta_seconds": 5.0} in seen
 
+    async def test_transient_poll_failures_tolerated(self, storage) -> None:
+        """A blip in a status poll must not kill a render that is still running."""
+        job, clip = await _make_job_and_clip()
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        real_get_status = client.get_status
+        blips = {"remaining": 2}
+
+        def flaky_get_status(provider_job_id: str) -> VideoJobUpdate:
+            if blips["remaining"] > 0:
+                blips["remaining"] -= 1
+                raise VideoGenerationError("connection reset")
+            return real_get_status(provider_job_id)
+
+        client.get_status = flaky_get_status
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+        assert await Video.find(Video.job_id == job.id).count() == 1
+        assert result["video_ids"]
+
+    async def test_sustained_poll_failure_fails_job(self, storage) -> None:
+        job, clip = await _make_job_and_clip()
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+
+        def always_down(provider_job_id: str) -> VideoJobUpdate:
+            raise VideoGenerationError("connection reset")
+
+        client.get_status = always_down
+        with pytest.raises(JobProcessingError, match="status poll failed"):
+            await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
     async def test_provider_failure_fails_job_without_artifacts(self, storage) -> None:
         job, clip = await _make_job_and_clip()
         storage.upload(clip.file_path, FAKE_AUDIO)
