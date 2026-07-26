@@ -213,9 +213,4 @@ describe("VideoForm", () => {
     expect(prompt).toHaveAttribute("maxlength", "2000")
   })
 
-  it("disables the whole form while submitting", () => {
-    render(<VideoForm clip={clip} onGenerate={vi.fn()} disabled />)
-    expect(screen.getByRole("button", { name: /generate video/i })).toBeDisabled()
-    expect(screen.getByLabelText(/style prompt/i)).toBeDisabled()
-  })
 })

@@ -47,12 +47,9 @@ type ReferenceImage = { file: File; url: string }
 export function VideoForm({
   clip,
   onGenerate,
-  disabled = false,
 }: {
   clip: Clip
   onGenerate: (config: VideoConfig) => void
-  /** Disable the whole form (e.g. while a job is submitting). */
-  disabled?: boolean
 }) {
   const { isFreeTier } = useSubscriptionTier()
 
@@ -83,7 +80,7 @@ export function VideoForm({
   }, [])
 
   const cost = estimateVideoCost(resolution, clip.duration)
-  const canGenerate = !disabled && (prompt.trim() !== "" || preset !== null)
+  const canGenerate = prompt.trim() !== "" || preset !== null
 
   /** Seed the prompt with the preset's text (US-22.2 acceptance criterion). */
   function selectPreset(next: VideoStylePreset) {
@@ -142,7 +139,6 @@ export function VideoForm({
               type="button"
               size="sm"
               variant={preset === p.value ? "default" : "outline"}
-              disabled={disabled}
               aria-pressed={preset === p.value}
               onClick={() => selectPreset(p.value)}
             >
@@ -159,7 +155,6 @@ export function VideoForm({
           id="video-prompt"
           value={prompt}
           maxLength={PROMPT_MAX_LENGTH}
-          disabled={disabled}
           placeholder="Describe the visual aesthetic for your video…"
           onChange={(e) => setPrompt(e.target.value)}
         />
@@ -179,7 +174,6 @@ export function VideoForm({
           type="file"
           accept="image/*"
           multiple
-          disabled={disabled}
           className="text-sm"
           aria-invalid={imageError !== null}
           aria-describedby={imageError ? "video-reference-error" : undefined}
@@ -207,7 +201,6 @@ export function VideoForm({
                   variant="secondary"
                   className="absolute -right-2 -top-2 size-5"
                   aria-label={`Remove ${img.file.name}`}
-                  disabled={disabled}
                   onClick={() => removeImage(img.url)}
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
@@ -223,7 +216,6 @@ export function VideoForm({
         <Switch
           id="video-lyrics-sync"
           checked={lyricsSync}
-          disabled={disabled}
           onCheckedChange={setLyricsSync}
         />
         <Label htmlFor="video-lyrics-sync">Lyrics sync</Label>
@@ -233,7 +225,7 @@ export function VideoForm({
       </div>
 
       {/* Aspect ratio. */}
-      <fieldset className="flex flex-col gap-3" disabled={disabled}>
+      <fieldset className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Aspect ratio</legend>
         <RadioGroup
           value={aspectRatio}
@@ -253,7 +245,7 @@ export function VideoForm({
       </fieldset>
 
       {/* Resolution — 1080p/4K are Pro-gated. */}
-      <fieldset className="flex flex-col gap-3" disabled={disabled}>
+      <fieldset className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Resolution</legend>
         <RadioGroup
           value={resolution}
@@ -297,7 +289,7 @@ export function VideoForm({
       </fieldset>
 
       {/* Frame rate. */}
-      <fieldset className="flex flex-col gap-3" disabled={disabled}>
+      <fieldset className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Frame rate</legend>
         <RadioGroup
           value={String(frameRate)}
@@ -317,7 +309,7 @@ export function VideoForm({
       </fieldset>
 
       {/* Scene transitions. */}
-      <fieldset className="flex flex-col gap-3" disabled={disabled}>
+      <fieldset className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Scene transitions</legend>
         <RadioGroup
           value={transitions}
