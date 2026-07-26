@@ -79,6 +79,8 @@ describe("SONG_ACTION_GROUPS", () => {
     expect(findSongAction("open-studio")?.workflow).toBe("navigation")
     // Open in Editor navigates to /editor/{id} (US-18.1).
     expect(findSongAction("open-editor")?.workflow).toBe("navigation")
+    // Create Music Video navigates to /video/{id} (US-22.2).
+    expect(findSongAction("create-video")?.workflow).toBe("navigation")
     // Remaster is one-click (US-17.3) — inline submit, no modal.
     expect(findSongAction("remaster")?.workflow).toBe("inline")
     expect(findSongAction("publish-toggle")?.workflow).toBe("inline")
@@ -100,7 +102,6 @@ describe("SONG_ACTION_GROUPS", () => {
       "adjust-speed",
       "send-mastering",
       "export-daw",
-      "create-video",
     ] as const) {
       expect(findSongAction(id)?.workflow).toBe("modal")
     }

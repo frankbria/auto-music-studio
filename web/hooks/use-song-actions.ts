@@ -72,9 +72,16 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   function handleAction(action: SongActionId) {
     const workflow = findSongAction(action)?.workflow
     if (workflow === "navigation") {
-      // open-editor → the waveform editor (US-18.1); open-studio → the studio.
+      // open-editor → the waveform editor (US-18.1); create-video → the video
+      // page (US-22.2); open-studio → the studio.
       const id = encodeURIComponent(clip.id)
-      router.push(action === "open-editor" ? `/editor/${id}` : `/studio?song=${id}`)
+      const route =
+        action === "open-editor"
+          ? `/editor/${id}`
+          : action === "create-video"
+            ? `/video/${id}`
+            : `/studio?song=${id}`
+      router.push(route)
       return
     }
     if (workflow === "modal") {

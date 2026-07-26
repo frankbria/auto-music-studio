@@ -82,6 +82,13 @@ describe("useSongActions", () => {
     expect(result.current.activeModal).toBeNull()
   })
 
+  it("routes create-video to the video creation page (US-22.2)", () => {
+    const { result } = setup()
+    act(() => result.current.handleAction("create-video"))
+    expect(push).toHaveBeenCalledWith("/video/c1")
+    expect(result.current.activeModal).toBeNull()
+  })
+
   it("opens and closes the workflow modal for modal actions", () => {
     const { result } = setup()
     act(() => result.current.handleAction("cover"))
