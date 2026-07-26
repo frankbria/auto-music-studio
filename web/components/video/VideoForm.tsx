@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Cancel01Icon, LockIcon } from "@hugeicons/core-free-icons"
 
@@ -68,6 +68,19 @@ export function VideoForm({
   // Bumped to remount the file input so re-selecting the same files re-fires
   // change (DistributionForm cover-art idiom).
   const [imageInputKey, setImageInputKey] = useState(0)
+
+  // Revoke preview URLs on unmount (the form unmounts the moment a job is
+  // submitted). A ref — not [images] deps — so the cleanup only fires once, at
+  // unmount, and never revokes URLs still on screen.
+  const imagesRef = useRef(images)
+  useEffect(() => {
+    imagesRef.current = images
+  }, [images])
+  useEffect(() => {
+    return () => {
+      for (const img of imagesRef.current) URL.revokeObjectURL(img.url)
+    }
+  }, [])
 
   const cost = estimateVideoCost(resolution, clip.duration)
   const canGenerate = !disabled && (prompt.trim() !== "" || preset !== null)

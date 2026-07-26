@@ -195,6 +195,18 @@ describe("VideoForm", () => {
     expect(screen.getByText(/image files only/i)).toBeInTheDocument()
   })
 
+  it("revokes preview object URLs on unmount", () => {
+    const { unmount } = render(<VideoForm clip={clip} onGenerate={vi.fn()} />)
+    const input = screen.getByLabelText(/reference images/i)
+    fireEvent.change(input, {
+      target: { files: [new File(["x"], "a.png", { type: "image/png" })] },
+    })
+    expect(screen.getAllByRole("img", { name: /reference/i })).toHaveLength(1)
+
+    unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a.png")
+  })
+
   it("caps the style prompt at the backend limit", () => {
     renderForm()
     const prompt = screen.getByLabelText(/style prompt/i)
