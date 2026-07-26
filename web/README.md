@@ -304,6 +304,31 @@ once) so both the timeline and the panel observe the same `AudioContext`.
   -6 dB ceiling caps a near-0 dBFS tone at ≈ -2 dBFS rather than exactly -6.
   Exact adherence needs an AudioWorklet limiter (deferred by design).
 
+## Video Creation Page (US-22.2)
+
+The `/video/[songId]` route configures and submits a music-video render over
+the US-22.1 backend. Reached from the song menu's Pro-only "Create Music
+Video" action (`create-video` in `lib/song-actions.ts`, `workflow:
+"navigation"`).
+
+- `app/video/[songId]/page.tsx` — thin route shim; delegates to `VideoCreator`.
+- `components/video/VideoCreator.tsx` — auth guard, `useClip` load/not-found,
+  and the form ⇄ progress swap (the form unmounts the moment a job submits).
+- `components/video/VideoForm.tsx` — style prompt + preset chips that seed it,
+  reference-image picker (local previews only — the backend takes hosted
+  http(s) URLs and no hosting endpoint exists yet, so submissions omit them),
+  lyrics-sync switch, RadioGroup-fieldset pickers (aspect ratio, resolution,
+  frame rate, transitions), live credit estimate, and UI Pro-gating on
+  1080p/4K (lock badge + upgrade copy; server enforcement is Stage 26).
+- `components/video/VideoProgress.tsx` — minimal progress view (state label,
+  bar, ETA, error/retry); the rich delivery UX is US-22.3.
+- `components/video/SourceSongCard.tsx` — title/duration/style tags with
+  play/pause through the cookie-authed `/api/clips/{id}/stream` proxy.
+- `hooks/use-video-job.ts` — submit → poll state machine (mirrors
+  `use-mastering-job`); `lib/video.ts` — typed client + option tables +
+  `estimateVideoCost` (client mirror of `credits.get_video_cost`); BFF proxies
+  under `app/api/videos/`.
+
 ## Adding components
 
 To add components to your app, run the following command:

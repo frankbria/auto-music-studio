@@ -204,7 +204,8 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         id: "create-video",
         label: "Create Music Video",
         icon: Video01Icon,
-        workflow: "modal",
+        // Navigates to the video creation page (US-22.2).
+        workflow: "navigation",
         proOnly: true,
       },
     ],
