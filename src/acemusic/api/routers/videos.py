@@ -434,6 +434,7 @@ class VideoVersionResponse(VideoDetailResponse):
 
     parent_video_id: str | None = None
     edit: dict | None = None
+    duration: float | None = None
 
     @classmethod
     def from_video(cls, video: Video) -> "VideoVersionResponse":
@@ -447,6 +448,7 @@ class VideoVersionResponse(VideoDetailResponse):
             created_at=video.created_at,
             parent_video_id=str(video.parent_video_id) if video.parent_video_id else None,
             edit=video.edit,
+            duration=video.duration,
         )
 
 
@@ -479,13 +481,16 @@ async def edit_video(
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
 
-    # The clip supplies the duration (for range validation) and the workspace the
-    # new version lands in; 404 if it is gone or no longer owned.
+    # The clip supplies the workspace the new version lands in (404 if gone/unowned)
+    # and the duration fallback for videos rendered before per-version durations.
     clip = await clip_service.get_owned_clip(str(source.clip_id), current.user_id)
-    if clip.duration is not None and any(t > clip.duration for t in request.bounded_times()):
+    # Validate the edit range against the *video being edited*, not the whole song:
+    # editing an already-trimmed version must stay within that shorter version.
+    effective_duration = source.duration if source.duration is not None else clip.duration
+    if effective_duration is not None and any(t > effective_duration for t in request.bounded_times()):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Edit times must be within the {clip.duration:.1f}s song.",
+            detail=f"Edit times must be within the {effective_duration:.1f}s video.",
         )
 
     # Bill at the source's resolution (the edit inherits it). Fall back to the base

@@ -159,6 +159,7 @@ class TestProcessVideoJob:
         assert result == {"video_ids": [str(video.id)], "storage_path": video.storage_path}
         assert video.user_id == job.user_id and video.job_id == job.id
         assert video.resolution == "720p" and video.aspect_ratio == "16:9"
+        assert video.duration == clip.duration == 10.0  # original render inherits the song's length
         assert video.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
         # The stored object is the provider's rendered MP4, byte for byte.
         assert storage.download(video.storage_path) == FAKE_MP4
@@ -309,12 +310,27 @@ class TestProcessVideoEditJob:
         assert new.id != source.id  # a new version, original preserved
         assert new.parent_video_id == source.id
         assert new.edit == {"operation": "trim", "start_seconds": 2.0, "end_seconds": 8.0}
+        assert new.duration == 6.0  # a trim resizes the video to its range (8 - 2)
         assert new.clip_id == source.clip_id
         assert new.resolution == "1080p" and new.aspect_ratio == "9:16"
         assert new.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{source.clip_id}/{job.id}.mp4"
         # The source document and its object are untouched.
         assert (await Video.get(source.id)).parent_video_id is None
         assert storage.download(source.storage_path) == FAKE_MP4
+
+    async def test_non_trim_edit_inherits_source_duration(self, storage) -> None:
+        # A lyrics-overlay edit keeps the source video's length (only trim resizes).
+        job, source = await _make_edit_job_and_source(storage)
+        source.duration = 8.0
+        await source.save()
+        job.input_params["edit"] = {"operation": "lyrics_overlay", "lyrics_enabled": True}
+        await job.save()
+        client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
+
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        new = await Video.get(PydanticObjectId(result["video_ids"][0]))
+        assert new.duration == 8.0
 
     async def test_edit_submits_source_media_and_spec(self, storage) -> None:
         job, source = await _make_edit_job_and_source(storage)

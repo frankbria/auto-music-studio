@@ -485,6 +485,7 @@ async def _insert_video(
     resolution: str = "1080p",
     parent_video_id: PydanticObjectId | None = None,
     edit: dict | None = None,
+    duration: float | None = None,
 ) -> Video:
     video_id = PydanticObjectId()
     job_id = PydanticObjectId()
@@ -502,6 +503,7 @@ async def _insert_video(
         published=published,
         parent_video_id=parent_video_id,
         edit=edit,
+        duration=duration,
     )
     await video.insert()
     return video
@@ -805,6 +807,28 @@ class TestVideoEdit:
         )
         assert resp.status_code == 422
         assert (await _reload(user)).credits_balance == 100
+
+    async def test_chained_edit_validated_against_edited_length_not_song(self, client, settings, local_storage) -> None:
+        # An already-trimmed version is 8s even though the song is 30s: editing it
+        # with a range past 8s must 422 (validated against the video, not the song).
+        user, _ws, clip = await _user_with_clip("video-edit-chain@example.com", balance=100, duration=30.0)
+        trimmed = await _insert_video(
+            user, clip, edit={"operation": "trim", "start_seconds": 0.0, "end_seconds": 8.0}, duration=8.0
+        )
+        past = await client.post(
+            _edit_url(str(trimmed.id)),
+            json={"operation": "trim", "start_seconds": 5.0, "end_seconds": 20.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert past.status_code == 422
+        assert (await _reload(user)).credits_balance == 100
+        # A range inside the trimmed length is still accepted.
+        within = await client.post(
+            _edit_url(str(trimmed.id)),
+            json={"operation": "trim", "start_seconds": 2.0, "end_seconds": 6.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert within.status_code == 202
 
     async def test_unknown_video_returns_404_no_charge(self, client, settings, local_storage) -> None:
         user = await _make_user("video-edit-unknown@example.com", balance=100)

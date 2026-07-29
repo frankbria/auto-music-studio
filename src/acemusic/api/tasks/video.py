@@ -165,6 +165,12 @@ async def process_video_job(
         filename = f"{source.id}.mp4"
         clip_id, resolution, aspect_ratio = source.clip_id, source.resolution, source.aspect_ratio
         parent_video_id: Any = source.id
+        # A trim resizes the video to its range; every other edit keeps the
+        # source's length. This is what a later edit-of-this-edit validates against.
+        if edit.get("operation") == "trim":
+            duration = float(edit["end_seconds"]) - float(edit["start_seconds"])
+        else:
+            duration = source.duration
     else:
         clip = await load_source_clip(job)
         media = await download_clip(storage, clip)
@@ -177,6 +183,7 @@ async def process_video_job(
         )
         parent_video_id = None
         edit = None
+        duration = clip.duration
 
     try:
         provider_job_id = await asyncio.to_thread(client.submit, media, filename, provider_params)
@@ -200,6 +207,7 @@ async def process_video_job(
         aspect_ratio=aspect_ratio,
         parent_video_id=parent_video_id,
         edit=edit or None,
+        duration=duration,
     )
     try:
         await video.insert()
