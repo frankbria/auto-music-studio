@@ -12,26 +12,41 @@ resolution/duration-tiered cost is deducted atomically, a job-creation failure
 refunds, and the ledger write is best-effort.
 """
 
+import asyncio
 import logging
+import secrets
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..auth.dependencies import CurrentUser, get_current_user
-from ..models import JobStatus
+from acemusic.storage import get_storage_backend
+
+from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional
+from ..models import JobStatus, Video
 from ..services import (
     clips as clip_service,
     credits as credits_service,
     users as user_service,
     video as video_service,
 )
+from ..services.clips import get_clip_for_streaming
 from ..settings import ApiSettings
+from ..utils.range_requests import build_multipart_ranges_response, parse_range_header_multi
+from ..utils.rate_limit import enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/videos", tags=["videos"], dependencies=[Depends(get_current_user)])
+
+# Delivery reads (metadata/playback) must open for the public song page, so they
+# live on a separate router WITHOUT the router-level auth gate — mirrors the
+# clips ``stream_router``. Each route resolves visibility per request instead.
+public_router = APIRouter(prefix="/videos", tags=["videos"])
+
+# Rendered videos are always MP4 (the worker uploads ``{job_id}.mp4``).
+_VIDEO_MEDIA_TYPE = "video/mp4"
 
 # US-22.2's page uploads up to 5 reference images to guide the visual style.
 _MAX_REFERENCE_IMAGES = 5
@@ -247,3 +262,154 @@ async def get_video_job_status(
         created_at=job.created_at,
         completed_at=job.completed_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# US-22.3 delivery: metadata, playback/download, publish
+# ---------------------------------------------------------------------------
+
+
+class VideoDetailResponse(BaseModel):
+    """A rendered video's metadata (its bytes come from ``/stream``)."""
+
+    id: str
+    clip_id: str
+    job_id: str
+    resolution: str
+    aspect_ratio: str
+    published: bool
+    created_at: datetime
+
+    @classmethod
+    def from_video(cls, video: Video) -> "VideoDetailResponse":
+        return cls(
+            id=str(video.id),
+            clip_id=str(video.clip_id),
+            job_id=str(video.job_id),
+            resolution=video.resolution,
+            aspect_ratio=video.aspect_ratio,
+            published=video.published,
+            created_at=video.created_at,
+        )
+
+
+async def _resolve_viewable_video(video_id: str, viewer_id: str | None) -> Video:
+    """Return the video if the viewer may see it, else raise 404.
+
+    The owner always may. Everyone else may only see it once it is *published*,
+    and then only if they could view the source clip anyway
+    (:func:`get_clip_for_streaming` enforces the clip's own visibility — private
+    clips 404 for strangers). An unpublished, unowned video is an
+    indistinguishable 404 so its existence never leaks.
+    """
+    video = await video_service.get_video_by_id(video_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    if viewer_id is not None and str(video.user_id) == viewer_id:
+        return video
+    if not video.published:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    # Published: defer to the clip's visibility rules (may 404/403 for strangers).
+    await get_clip_for_streaming(str(video.clip_id), viewer_id)
+    return video
+
+
+@router.post("/{video_id}/publish", response_model=VideoDetailResponse)
+async def publish_video(
+    video_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> VideoDetailResponse:
+    """Publish the owner's rendered video so it appears on the song detail page.
+
+    Owner-scoped and idempotent: an unknown or unowned id is a 404 (never
+    reveals another user's video), and re-publishing an already-published video
+    simply returns its current state.
+    """
+    video = await video_service.publish_video(video_id, current.user_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    return VideoDetailResponse.from_video(video)
+
+
+@public_router.get("/for-clip/{clip_id}", response_model=VideoDetailResponse)
+async def get_published_video_for_clip(
+    clip_id: str,
+    current: CurrentUser | None = Depends(get_current_user_optional),
+) -> VideoDetailResponse:
+    """Return the published video for a clip (backs the song page), else 404.
+
+    Anonymous callers may reach it for a public/unlisted clip; a private-or-
+    unknown clip is an indistinguishable 404, and a viewable clip with no
+    published video is a 404 too (the page simply shows no video section).
+    """
+    viewer_id = current.user_id if current else None
+    # Enforce the clip's own visibility first (404/403 for strangers on private).
+    await get_clip_for_streaming(clip_id, viewer_id)
+    video = await video_service.get_published_video_for_clip(clip_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    return VideoDetailResponse.from_video(video)
+
+
+@public_router.get("/{video_id}", response_model=VideoDetailResponse)
+async def get_video(
+    video_id: str,
+    current: CurrentUser | None = Depends(get_current_user_optional),
+) -> VideoDetailResponse:
+    """Return a rendered video's metadata (owner always; others once published)."""
+    video = await _resolve_viewable_video(video_id, current.user_id if current else None)
+    return VideoDetailResponse.from_video(video)
+
+
+@public_router.get("/{video_id}/stream", dependencies=[Depends(enforce_stream_rate_limit)])
+async def stream_video(
+    video_id: str,
+    request: Request,
+    download: bool = Query(default=False, description="Serve as a file download (Content-Disposition: attachment)."),
+    current: CurrentUser | None = Depends(get_current_user_optional),
+) -> Response:
+    """Stream the rendered MP4 with seeking support (206 on Range), or download it.
+
+    Same visibility rules as :func:`get_video`. Honors single- and multi-range
+    requests so the ``<video>`` element can seek; ``?download=1`` forces a
+    save-to-disk response for the Download button.
+    """
+    video = await _resolve_viewable_video(video_id, current.user_id if current else None)
+
+    storage = get_storage_backend()
+    try:
+        data = await asyncio.to_thread(storage.download, video.storage_path)
+    except FileNotFoundError:
+        # The document exists but its object is gone — a data-integrity problem
+        # worth logging, surfaced to the client as a plain 404.
+        logger.warning("Video %s exists but its object %r is missing", video.id, video.storage_path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video file not found.")
+
+    cache_control = "public, max-age=3600" if video.published else "private, no-store"
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="video-{video.id}.mp4"'
+
+    range_header = request.headers.get("range")
+    if range_header is not None:
+        ranges = parse_range_header_multi(range_header, len(data))  # raises 416 if all unsatisfiable
+        if ranges is not None and len(ranges) == 1:
+            start, end = ranges[0]
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+            return Response(
+                content=data[start : end + 1],
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=_VIDEO_MEDIA_TYPE,
+                headers=headers,
+            )
+        if ranges is not None:
+            boundary = secrets.token_hex(16)
+            body, multipart_type = build_multipart_ranges_response(data, ranges, _VIDEO_MEDIA_TYPE, boundary)
+            return Response(
+                content=body,
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=multipart_type,
+                headers=headers,
+            )
+
+    return Response(content=data, media_type=_VIDEO_MEDIA_TYPE, headers=headers)

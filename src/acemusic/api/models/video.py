@@ -27,6 +27,9 @@ class Video(Document):
     storage_path: str
     resolution: str
     aspect_ratio: str
+    # US-22.3: a rendered video is private to its owner until published, at which
+    # point it becomes visible on the (public) song detail page.
+    published: bool = False
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:

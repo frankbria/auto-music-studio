@@ -54,6 +54,12 @@ describe("notifications seam", () => {
     expect(ALL_TYPES.every((t) => NOTIFICATION_META[t].label.length > 0)).toBe(true)
   })
 
+  it("carries meta for the video_complete type (US-22.3)", () => {
+    expect(NOTIFICATION_META.video_complete.label).toBe("Video")
+    expect(NOTIFICATION_META.video_complete.icon).toBeDefined()
+    expect(NOTIFICATION_META.video_complete.tone.length).toBeGreaterThan(0)
+  })
+
   it("counts only unread (AC5)", () => {
     const list = [
       { ...initialNotifications[0], read: false },

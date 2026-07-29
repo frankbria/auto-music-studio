@@ -16,16 +16,33 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Workspace
+from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Video, VisibilityState, Workspace
 from acemusic.api.services import users as user_service
 from acemusic.api.services.video import VIDEO_JOB_TYPE
 from acemusic.api.settings import ApiSettings
+from acemusic.storage import get_storage_backend
 
 GENERATE_URL = f"{API_V1_PREFIX}/videos/generate"
 
 
 def _status_url(job_id: str) -> str:
     return f"{API_V1_PREFIX}/videos/{job_id}/status"
+
+
+def _video_url(video_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/{video_id}"
+
+
+def _stream_url(video_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/{video_id}/stream"
+
+
+def _publish_url(video_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/{video_id}/publish"
+
+
+def _for_clip_url(clip_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/for-clip/{clip_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -426,3 +443,225 @@ class TestStatusEndpoint:
         user = await _make_user("video-st-bad@example.com")
         resp = await client.get(_status_url("not-an-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# US-22.3 delivery: publish, metadata, playback/download, for-clip
+# ---------------------------------------------------------------------------
+
+_MP4_BYTES = b"\x00\x00\x00\x18ftypmp42" + b"\xde\xad\xbe\xef" * 64  # any non-audio bytes; the endpoint sets the type
+
+
+@pytest.fixture
+def local_storage(monkeypatch, tmp_path):
+    """Point the storage backend at a throwaway local root."""
+    monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ACEMUSIC_STORAGE_LOCAL_ROOT", str(tmp_path))
+    return tmp_path
+
+
+async def _make_public(clip: Clip) -> Clip:
+    clip.is_public = True
+    clip.visibility = VisibilityState.PUBLIC
+    await clip.save()
+    return clip
+
+
+async def _insert_video(
+    user,
+    clip: Clip,
+    *,
+    published: bool = False,
+    store: bool = True,
+    data: bytes = _MP4_BYTES,
+    resolution: str = "1080p",
+) -> Video:
+    video_id = PydanticObjectId()
+    job_id = PydanticObjectId()
+    storage_path = f"{user.id}/{clip.workspace_id}/videos/{clip.id}/{job_id}.mp4"
+    if store:
+        get_storage_backend().upload(storage_path, data)
+    video = Video(
+        id=video_id,
+        clip_id=clip.id,
+        user_id=user.id,
+        job_id=job_id,
+        storage_path=storage_path,
+        resolution=resolution,
+        aspect_ratio="16:9",
+        published=published,
+    )
+    await video.insert()
+    return video
+
+
+class TestDeliveryAuthGate:
+    def test_publish_without_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        resp = client.post(_publish_url(str(PydanticObjectId())))
+        assert resp.status_code == 401
+
+
+@pytest.mark.integration
+class TestPublish:
+    async def test_owner_publishes_video(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-pub@example.com")
+        video = await _insert_video(user, clip, published=False)
+        resp = await client.post(_publish_url(str(video.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["published"] is True
+        assert body["id"] == str(video.id)
+        assert body["clip_id"] == str(clip.id)
+        # Persisted, not just echoed back.
+        assert (await Video.get(video.id)).published is True
+
+    async def test_publish_is_idempotent(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-pub-idem@example.com")
+        video = await _insert_video(user, clip, published=True)
+        resp = await client.post(_publish_url(str(video.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        assert resp.json()["published"] is True
+
+    async def test_other_users_video_returns_404_and_stays_private(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-pub-owner@example.com")
+        thief = await _make_user("video-pub-thief@example.com")
+        video = await _insert_video(owner, clip, published=False)
+        resp = await client.post(_publish_url(str(video.id)), headers=_auth_headers(thief, settings))
+        assert resp.status_code == 404
+        assert (await Video.get(video.id)).published is False
+
+    async def test_unknown_video_returns_404(self, client, settings, local_storage) -> None:
+        user = await _make_user("video-pub-unknown@example.com")
+        resp = await client.post(_publish_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+
+@pytest.mark.integration
+class TestVideoDetail:
+    async def test_owner_reads_own_unpublished_video(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-det-own@example.com")
+        video = await _insert_video(user, clip, published=False)
+        resp = await client.get(_video_url(str(video.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["id"] == str(video.id)
+        assert body["resolution"] == "1080p"
+        assert body["aspect_ratio"] == "16:9"
+        assert body["published"] is False
+
+    async def test_stranger_cannot_read_unpublished_video(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-det-owner@example.com")
+        stranger = await _make_user("video-det-stranger@example.com")
+        video = await _insert_video(owner, clip, published=False)
+        resp = await client.get(_video_url(str(video.id)), headers=_auth_headers(stranger, settings))
+        assert resp.status_code == 404
+
+    async def test_anyone_reads_published_video_on_public_clip(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-det-pub@example.com")
+        await _make_public(clip)
+        video = await _insert_video(owner, clip, published=True)
+        # Anonymous (no auth header) may read it — the song page is public.
+        resp = await client.get(_video_url(str(video.id)))
+        assert resp.status_code == 200
+        assert resp.json()["published"] is True
+
+    async def test_unknown_video_returns_404(self, client, settings, local_storage) -> None:
+        resp = await client.get(_video_url(str(PydanticObjectId())))
+        assert resp.status_code == 404
+
+
+@pytest.mark.integration
+class TestVideoStream:
+    async def test_owner_streams_playable_mp4(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-str-own@example.com")
+        video = await _insert_video(user, clip, published=False)
+        resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "video/mp4"
+        assert resp.headers["accept-ranges"] == "bytes"
+        assert resp.content == _MP4_BYTES
+
+    async def test_range_request_returns_206_partial(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-str-range@example.com")
+        video = await _insert_video(user, clip)
+        headers = {**_auth_headers(user, settings), "Range": "bytes=0-9"}
+        resp = await client.get(_stream_url(str(video.id)), headers=headers)
+        assert resp.status_code == 206
+        assert resp.content == _MP4_BYTES[:10]
+        assert resp.headers["content-range"] == f"bytes 0-9/{len(_MP4_BYTES)}"
+
+    async def test_download_sets_content_disposition(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-str-dl@example.com")
+        video = await _insert_video(user, clip)
+        resp = await client.get(
+            _stream_url(str(video.id)), params={"download": "true"}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-disposition"] == f'attachment; filename="video-{video.id}.mp4"'
+
+    async def test_stranger_cannot_stream_unpublished(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-str-owner@example.com")
+        stranger = await _make_user("video-str-stranger@example.com")
+        video = await _insert_video(owner, clip, published=False)
+        resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(stranger, settings))
+        assert resp.status_code == 404
+
+    async def test_published_video_on_private_clip_hidden_from_stranger(self, client, settings, local_storage) -> None:
+        # Published but the source clip stays private: strangers still get 403
+        # (the clip's own visibility governs a published video's reach).
+        owner, _ws, clip = await _user_with_clip("video-str-privclip@example.com")
+        stranger = await _make_user("video-str-privclip-other@example.com")
+        video = await _insert_video(owner, clip, published=True)
+        resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(stranger, settings))
+        assert resp.status_code == 403
+
+    async def test_anonymous_streams_published_public_video(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-str-anon@example.com")
+        await _make_public(clip)
+        video = await _insert_video(owner, clip, published=True)
+        resp = await client.get(_stream_url(str(video.id)))
+        assert resp.status_code == 200
+        assert resp.content == _MP4_BYTES
+
+    async def test_missing_object_returns_404(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-str-nofile@example.com")
+        video = await _insert_video(user, clip, store=False)
+        resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+
+@pytest.mark.integration
+class TestForClip:
+    async def test_owner_gets_published_video_for_clip(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-fc-own@example.com")
+        video = await _insert_video(user, clip, published=True)
+        resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        assert resp.json()["id"] == str(video.id)
+
+    async def test_anonymous_gets_published_video_on_public_clip(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-fc-pub@example.com")
+        await _make_public(clip)
+        video = await _insert_video(owner, clip, published=True)
+        resp = await client.get(_for_clip_url(str(clip.id)))
+        assert resp.status_code == 200
+        assert resp.json()["id"] == str(video.id)
+
+    async def test_unpublished_video_is_not_returned(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-fc-unpub@example.com")
+        await _insert_video(user, clip, published=False)
+        resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_no_video_for_clip_returns_404(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-fc-none@example.com")
+        resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_private_clip_hidden_from_stranger(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-fc-priv@example.com")
+        stranger = await _make_user("video-fc-priv-other@example.com")
+        await _insert_video(owner, clip, published=True)
+        resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(stranger, settings))
+        assert resp.status_code == 403

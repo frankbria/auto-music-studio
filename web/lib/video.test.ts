@@ -8,10 +8,15 @@ import {
   VIDEO_STYLE_PRESETS,
   VIDEO_TRANSITIONS,
   estimateVideoCost,
+  fetchPublishedVideoForClip,
+  fetchVideoDetail,
   fetchVideoStatus,
   presetLabel,
+  publishVideo,
   submitVideoJob,
+  videoStreamUrl,
   type VideoConfig,
+  type VideoDetail,
 } from "@/lib/video"
 
 const config: VideoConfig = {
@@ -185,5 +190,87 @@ describe("fetchVideoStatus", () => {
     vi.restoreAllMocks()
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
     expect(await fetchVideoStatus("j1", "tok")).toEqual({ kind: "transient" })
+  })
+})
+
+const videoDetail: VideoDetail = {
+  id: "v1",
+  clip_id: "c1",
+  job_id: "j1",
+  resolution: "1080p",
+  aspect_ratio: "16:9",
+  published: false,
+  created_at: "2026-07-01T00:00:00Z",
+}
+
+describe("videoStreamUrl", () => {
+  it("points at the BFF stream proxy", () => {
+    expect(videoStreamUrl("v1")).toBe("/api/videos/v1/stream")
+  })
+
+  it("adds the download flag and encodes the id", () => {
+    expect(videoStreamUrl("v 1", { download: true })).toBe("/api/videos/v%201/stream?download=1")
+  })
+})
+
+describe("publishVideo", () => {
+  it("returns the published video on 200", async () => {
+    mockFetch(200, { ...videoDetail, published: true })
+    const result = await publishVideo("v1", "tok")
+    expect(result).toEqual({ status: "published", video: { ...videoDetail, published: true } })
+  })
+
+  it("sends the Bearer token to the publish proxy", async () => {
+    const fetchSpy = mockFetch(200, { ...videoDetail, published: true })
+    await publishVideo("v1", "tok")
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/videos/v1/publish",
+      expect.objectContaining({ method: "POST", headers: { authorization: "Bearer tok" } })
+    )
+  })
+
+  it("maps 401 to unauthorized and 404 to not_found", async () => {
+    mockFetch(401, {})
+    expect(await publishVideo("v1", "tok")).toEqual({ status: "unauthorized" })
+    vi.restoreAllMocks()
+    mockFetch(404, {})
+    expect(await publishVideo("v1", "tok")).toEqual({ status: "not_found" })
+  })
+
+  it("classifies a network error", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
+    expect(await publishVideo("v1", "tok")).toEqual({
+      status: "error",
+      detail: "Publishing failed. Please try again.",
+    })
+  })
+})
+
+describe("fetchVideoDetail / fetchPublishedVideoForClip", () => {
+  it("returns the video on 200", async () => {
+    mockFetch(200, videoDetail)
+    expect(await fetchVideoDetail("v1")).toEqual(videoDetail)
+  })
+
+  it("returns null on 404 (no published video for the clip)", async () => {
+    mockFetch(404, { detail: "Video not found." })
+    expect(await fetchPublishedVideoForClip("c1")).toBeNull()
+  })
+
+  it("forwards the token when one is given, omits it otherwise", async () => {
+    const withToken = mockFetch(200, videoDetail)
+    await fetchPublishedVideoForClip("c1", "tok")
+    expect(withToken).toHaveBeenCalledWith("/api/videos/for-clip/c1", {
+      headers: { authorization: "Bearer tok" },
+    })
+    vi.restoreAllMocks()
+    const anon = mockFetch(200, videoDetail)
+    await fetchPublishedVideoForClip("c1")
+    expect(anon).toHaveBeenCalledWith("/api/videos/for-clip/c1", { headers: {} })
+  })
+
+  it("returns null on a network error", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
+    expect(await fetchVideoDetail("v1")).toBeNull()
   })
 })

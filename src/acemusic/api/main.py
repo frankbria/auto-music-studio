@@ -209,6 +209,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(releases.router, prefix=API_V1_PREFIX)
     app.include_router(queue.router, prefix=API_V1_PREFIX)
     app.include_router(videos.router, prefix=API_V1_PREFIX)
+    # US-22.3 delivery reads (metadata/playback/for-clip) open for the public song page.
+    app.include_router(videos.public_router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
