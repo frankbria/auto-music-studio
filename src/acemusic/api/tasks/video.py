@@ -27,6 +27,7 @@ from acemusic.video_client import (
 
 from ..models import Job, Video
 from ..services import clips as clip_service
+from ..services.common import coerce_object_id
 from ..services.video import VIDEO_JOB_TYPE
 from .common import JobProcessingError, download_clip, load_source_clip
 
@@ -73,32 +74,33 @@ async def _set_progress(job: Job, state: str, progress: int | None, eta_seconds:
     await job.set({Job.progress_detail: detail})
 
 
-async def process_video_job(
-    job: Job,
-    *,
-    storage: StorageBackend,
-    client: VideoGenerationService,
-    poll_interval: float = POLL_INTERVAL_S,
-    poll_timeout: float = POLL_TIMEOUT_S,
-) -> dict[str, Any]:
-    """Render, store and associate the song's music video.
+async def _load_edit_source(job: Job, source_video_id: str) -> Video:
+    """Load the source ``Video`` for an edit job, owner-checked (US-22.4).
 
-    Returns ``{"video_ids": [<id>], "storage_path": <path>}``. Raises
-    :class:`JobProcessingError` on provider failure/timeout; the processor
-    records the message as the job's failure. Transient (5xx) provider errors
-    are already retried inside the client (shared ``_http`` policy, 3 retries).
+    The endpoint already validated ownership before enqueuing; re-checking here
+    (the job's owner must own the source) is defense in depth against a bad or
+    tampered ``source_video_id`` in params.
     """
-    clip = await load_source_clip(job)
-    audio = await download_clip(storage, clip)
-    params = dict(job.input_params or {})
-    params.pop("clip_id", None)  # provider gets the audio itself, not our id
-    filename = f"{clip.id}.{clip_service.native_format(clip)}"
+    oid = coerce_object_id(source_video_id)
+    source = await Video.get(oid) if oid is not None else None
+    if source is None or source.user_id != job.user_id:
+        raise JobProcessingError(f"Edit source video {source_video_id!r} not found")
+    return source
 
-    try:
-        provider_job_id = await asyncio.to_thread(client.submit, audio, filename, params)
-    except VideoGenerationError as exc:
-        raise JobProcessingError(f"Video provider submission failed: {exc}") from exc
 
+async def _await_provider_render(
+    job: Job,
+    client: VideoGenerationService,
+    provider_job_id: str,
+    *,
+    poll_interval: float,
+    poll_timeout: float,
+) -> bytes:
+    """Poll the provider to completion, then download the rendered MP4 bytes.
+
+    Surfaces state/progress/ETA on ``job.progress_detail`` for the status
+    endpoint. Raises :class:`JobProcessingError` on failure/timeout.
+    """
     deadline = time.monotonic() + poll_timeout
     poll_failures = 0
     while True:
@@ -121,21 +123,83 @@ async def process_video_job(
         await asyncio.sleep(poll_interval)
 
     try:
-        data = await asyncio.to_thread(client.download, provider_job_id)
+        return await asyncio.to_thread(client.download, provider_job_id)
     except VideoGenerationError as exc:
         raise JobProcessingError(f"Video download failed: {exc}") from exc
 
-    # Namespace by job id so re-rendering the same song never overwrites an
-    # earlier video (and a failed job's rollback only deletes its own object).
-    path = f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
+
+async def process_video_job(
+    job: Job,
+    *,
+    storage: StorageBackend,
+    client: VideoGenerationService,
+    poll_interval: float = POLL_INTERVAL_S,
+    poll_timeout: float = POLL_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Render (or edit) and store the song's music video.
+
+    An *original* render downloads the source song's audio and submits it. An
+    *edit* (US-22.4, params carry ``source_video_id``) downloads the source
+    rendered MP4 instead and submits it with the edit spec; the result is a new
+    ``Video`` linked to the source via ``parent_video_id`` (the source is never
+    mutated). Returns ``{"video_ids": [<id>], "storage_path": <path>}``. Raises
+    :class:`JobProcessingError` on provider failure/timeout.
+    """
+    params = dict(job.input_params or {})
+    source_video_id = params.get("source_video_id")
+
+    if source_video_id is not None:
+        # Edit: the media is the source video's bytes; the provider gets the edit
+        # spec (operation + fields), and the new render inherits its dimensions.
+        source = await _load_edit_source(job, str(source_video_id))
+        try:
+            media = await asyncio.to_thread(storage.download, source.storage_path)
+        except FileNotFoundError as exc:
+            raise JobProcessingError(f"Source video {source.id} object {source.storage_path!r} is missing") from exc
+        edit = params.get("edit") or {}
+        provider_params: dict[str, Any] = {
+            **edit,
+            "resolution": source.resolution,
+            "aspect_ratio": source.aspect_ratio,
+        }
+        filename = f"{source.id}.mp4"
+        clip_id, resolution, aspect_ratio = source.clip_id, source.resolution, source.aspect_ratio
+        parent_video_id: Any = source.id
+    else:
+        clip = await load_source_clip(job)
+        media = await download_clip(storage, clip)
+        provider_params = {k: v for k, v in params.items() if k != "clip_id"}  # provider gets the audio, not our id
+        filename = f"{clip.id}.{clip_service.native_format(clip)}"
+        clip_id, resolution, aspect_ratio = (
+            clip.id,
+            str(params.get("resolution", "")),
+            str(params.get("aspect_ratio", "")),
+        )
+        parent_video_id = None
+        edit = None
+
+    try:
+        provider_job_id = await asyncio.to_thread(client.submit, media, filename, provider_params)
+    except VideoGenerationError as exc:
+        raise JobProcessingError(f"Video provider submission failed: {exc}") from exc
+
+    data = await _await_provider_render(
+        job, client, provider_job_id, poll_interval=poll_interval, poll_timeout=poll_timeout
+    )
+
+    # Namespace by job id so re-rendering/editing the same song never overwrites
+    # an earlier video (and a failed job's rollback only deletes its own object).
+    path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}.mp4"
     await asyncio.to_thread(storage.upload, path, data)
     video = Video(
-        clip_id=clip.id,
+        clip_id=clip_id,
         user_id=job.user_id,
         job_id=job.id,
         storage_path=path,
-        resolution=str(params.get("resolution", "")),
-        aspect_ratio=str(params.get("aspect_ratio", "")),
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        parent_video_id=parent_video_id,
+        edit=edit or None,
     )
     try:
         await video.insert()

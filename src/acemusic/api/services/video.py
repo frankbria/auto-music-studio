@@ -96,6 +96,27 @@ async def publish_video(video_id: str, user_id: str) -> Video | None:
     return video
 
 
+async def list_clip_videos(clip_id: str, user_id: str) -> list[Video]:
+    """Return all of ``user_id``'s videos for a clip, newest first (US-22.4).
+
+    Backs the edit-history / version list: every non-destructive edit inserts a
+    new :class:`Video` for the same clip, so the owner's videos for that clip are
+    its versions. Served by the ``(clip_id, user_id)`` index. An unknown/malformed
+    clip id or a clip with no videos both yield an empty list.
+
+    ponytail: versions are listed by clip rather than walked as an explicit
+    parent/child tree — simpler and index-served; ``parent_video_id`` on each
+    document still records derivation for display.
+    """
+    oid = coerce_object_id(clip_id)
+    if oid is None:
+        return []
+    uid = coerce_object_id(user_id)
+    if uid is None:
+        return []
+    return await Video.find(Video.clip_id == oid, Video.user_id == uid).sort(-Video.created_at).to_list()
+
+
 async def get_published_video_for_clip(clip_id: str) -> Video | None:
     """Return the most recently created *published* video for a clip, if any.
 

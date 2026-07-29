@@ -360,6 +360,198 @@ async def get_video(
     return VideoDetailResponse.from_video(video)
 
 
+# ---------------------------------------------------------------------------
+# US-22.4 basic editing: non-destructive edits (each produces a new version)
+# ---------------------------------------------------------------------------
+
+# The resolutions credit pricing recognises (mirrors VideoGenerationRequest).
+_KNOWN_RESOLUTIONS = ("720p", "1080p", "4k")
+
+
+class VideoEditRequest(BaseModel):
+    """One non-destructive edit of a rendered video (US-22.4).
+
+    A single tagged shape keyed on ``operation`` (rather than four endpoints):
+    ``trim`` and ``replace_scene`` need a time range, ``replace_scene`` also a
+    new visual ``prompt``, ``lyrics_overlay`` a boolean, ``transitions`` a list
+    of cut-point markers. ``extra="forbid"`` surfaces client typos as 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["trim", "replace_scene", "lyrics_overlay", "transitions"]
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None, ge=0)
+    prompt: str | None = Field(default=None, max_length=_PROMPT_MAX_LENGTH)
+    lyrics_enabled: bool | None = None
+    transition_markers: list[float] | None = Field(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def _check_operation(self) -> "VideoEditRequest":
+        if self.operation in ("trim", "replace_scene"):
+            if self.start_seconds is None or self.end_seconds is None:
+                raise ValueError(f"{self.operation} requires start_seconds and end_seconds")
+            if self.end_seconds <= self.start_seconds:
+                raise ValueError("end_seconds must be greater than start_seconds")
+        if self.operation == "replace_scene" and not self.prompt:
+            raise ValueError("replace_scene requires a prompt")
+        if self.operation == "lyrics_overlay" and self.lyrics_enabled is None:
+            raise ValueError("lyrics_overlay requires lyrics_enabled")
+        if self.operation == "transitions":
+            if not self.transition_markers:
+                raise ValueError("transitions requires at least one transition marker")
+            if any(m < 0 for m in self.transition_markers):
+                raise ValueError("transition markers must be non-negative")
+        return self
+
+    def to_spec(self) -> dict:
+        """The compact edit spec: ``operation`` plus only its relevant fields.
+
+        Stored on the new ``Video`` (drives the version-history label) and
+        forwarded to the provider — so a trim never carries a stray prompt.
+        """
+        spec: dict = {"operation": self.operation}
+        if self.operation in ("trim", "replace_scene"):
+            spec["start_seconds"] = self.start_seconds
+            spec["end_seconds"] = self.end_seconds
+        if self.operation == "replace_scene":
+            spec["prompt"] = self.prompt
+        if self.operation == "lyrics_overlay":
+            spec["lyrics_enabled"] = self.lyrics_enabled
+        if self.operation == "transitions":
+            spec["transition_markers"] = self.transition_markers
+        return spec
+
+    def bounded_times(self) -> list[float]:
+        """The times this edit references — validated against the clip duration."""
+        times = [t for t in (self.start_seconds, self.end_seconds) if t is not None]
+        times.extend(self.transition_markers or [])
+        return times
+
+
+class VideoVersionResponse(VideoDetailResponse):
+    """A rendered video plus its edit lineage, for the version-history list."""
+
+    parent_video_id: str | None = None
+    edit: dict | None = None
+
+    @classmethod
+    def from_video(cls, video: Video) -> "VideoVersionResponse":
+        return cls(
+            id=str(video.id),
+            clip_id=str(video.clip_id),
+            job_id=str(video.job_id),
+            resolution=video.resolution,
+            aspect_ratio=video.aspect_ratio,
+            published=video.published,
+            created_at=video.created_at,
+            parent_video_id=str(video.parent_video_id) if video.parent_video_id else None,
+            edit=video.edit,
+        )
+
+
+@router.post("/{video_id}/edit", response_model=VideoJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def edit_video(
+    video_id: str,
+    request: VideoEditRequest,
+    current: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(_settings),
+) -> VideoJobResponse:
+    """Enqueue a non-destructive edit of the owner's rendered video (US-22.4).
+
+    The source video is never touched; the edit renders a new version linked to
+    it via ``parent_video_id``. Charges the render cost (each edit round-trips
+    the provider) with the same credit-gate flow as ``/generate``. Raises 503
+    (not configured), 404 (unknown/unowned video or its clip), 422 (edit range
+    past the song) and 402 (insufficient credits).
+    """
+    if not settings.video_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Video generation is not configured on this deployment.",
+        )
+
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    source = await video_service.get_owned_video(video_id, current.user_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+
+    # The clip supplies the duration (for range validation) and the workspace the
+    # new version lands in; 404 if it is gone or no longer owned.
+    clip = await clip_service.get_owned_clip(str(source.clip_id), current.user_id)
+    if clip.duration is not None and any(t > clip.duration for t in request.bounded_times()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Edit times must be within the {clip.duration:.1f}s song.",
+        )
+
+    # Bill at the source's resolution (the edit inherits it). Fall back to the base
+    # tier if the source predates resolution tracking, so pricing never raises.
+    resolution = source.resolution if source.resolution in _KNOWN_RESOLUTIONS else "720p"
+    cost = credits_service.get_video_cost(resolution, clip.duration)
+    balance_after = await credits_service.deduct_credits(user.id, cost)
+    if balance_after is None:
+        fresh = await user_service.get_user_by_id(user.id)
+        balance = fresh.credits_balance if fresh is not None else 0.0
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "insufficient_credits", "balance": balance, "required": cost},
+        )
+
+    try:
+        params = {
+            "clip_id": str(source.clip_id),
+            "source_video_id": str(source.id),
+            "resolution": source.resolution,
+            "aspect_ratio": source.aspect_ratio,
+            "edit": request.to_spec(),
+        }
+        job = await video_service.create_video_job(
+            user_id=user.id,
+            workspace_id=clip.workspace_id,
+            params=params,
+        )
+    except BaseException:
+        await credits_service.refund_credits(user.id, cost)
+        raise
+    try:
+        await credits_service.record_transaction(
+            user_id=user.id,
+            amount=-cost,
+            action_type=video_service.VIDEO_JOB_TYPE,
+            job_id=str(job.id),
+            balance_after=balance_after,
+        )
+    except Exception:
+        logger.exception("Credit ledger write failed for edit job %s (user %s)", job.id, user.id)
+    return VideoJobResponse(job_id=str(job.id))
+
+
+@router.get(
+    "/{video_id}/versions",
+    response_model=list[VideoVersionResponse],
+    response_model_exclude_none=True,
+)
+async def list_video_versions(
+    video_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> list[VideoVersionResponse]:
+    """List every version of the owner's video (edit history), newest first.
+
+    Owner-scoped: an unknown or unowned id is a 404. Returns all of the owner's
+    videos for the source's clip — the original plus each non-destructive edit —
+    each with its ``created_at`` and (for edits) its parent link and edit spec.
+    """
+    source = await video_service.get_owned_video(video_id, current.user_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    videos = await video_service.list_clip_videos(str(source.clip_id), current.user_id)
+    return [VideoVersionResponse.from_video(v) for v in videos]
+
+
 @public_router.get("/{video_id}/stream", dependencies=[Depends(enforce_stream_rate_limit)])
 async def stream_video(
     video_id: str,
