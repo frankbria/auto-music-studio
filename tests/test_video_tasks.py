@@ -11,6 +11,7 @@ tests need a local MongoDB (Beanie) and are ``integration``.
 from __future__ import annotations
 
 import pytest
+from beanie import PydanticObjectId
 
 from acemusic.api.models import Clip, Job, Video, Workspace
 from acemusic.api.services import users as user_service
@@ -28,16 +29,26 @@ FAKE_AUDIO = b"RIFF" + b"\x00" * 100
 class FakeVideoService:
     """Plays back a scripted sequence of status updates, then serves the MP4."""
 
-    def __init__(self, updates: list[VideoJobUpdate], *, submit_error: str | None = None) -> None:
+    def __init__(
+        self,
+        updates: list[VideoJobUpdate],
+        *,
+        submit_error: str | None = None,
+        expect_media: bytes | None = FAKE_AUDIO,
+    ) -> None:
         self.updates = list(updates)
         self.submit_error = submit_error
+        self.expect_media = expect_media
         self.submitted: list[tuple[str, dict]] = []
+        self.submitted_media: list[bytes] = []
         self.polls = 0
 
     def submit(self, audio_bytes: bytes, filename: str, params: dict) -> str:
         if self.submit_error:
             raise VideoGenerationError(self.submit_error)
-        assert audio_bytes == FAKE_AUDIO
+        if self.expect_media is not None:
+            assert audio_bytes == self.expect_media
+        self.submitted_media.append(audio_bytes)
         self.submitted.append((filename, params))
         return "pj-1"
 
@@ -148,6 +159,7 @@ class TestProcessVideoJob:
         assert result == {"video_ids": [str(video.id)], "storage_path": video.storage_path}
         assert video.user_id == job.user_id and video.job_id == job.id
         assert video.resolution == "720p" and video.aspect_ratio == "16:9"
+        assert video.duration == clip.duration == 10.0  # original render inherits the song's length
         assert video.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
         # The stored object is the provider's rendered MP4, byte for byte.
         assert storage.download(video.storage_path) == FAKE_MP4
@@ -249,4 +261,101 @@ class TestProcessVideoJob:
         client = FakeVideoService(_updates_to_complete())
 
         with pytest.raises(JobProcessingError, match="no longer exists"):
+            await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+
+# ---------------------------------------------------------------------------
+# Edit jobs (US-22.4) — integration
+# ---------------------------------------------------------------------------
+
+
+async def _make_edit_job_and_source(storage: LocalStorage) -> tuple[Job, Video]:
+    """A source Video (its MP4 stored) plus a queued edit job referencing it."""
+    user = await user_service.get_or_create_user(email="ve@e.com", provider="google", oauth_id="g-ve", name="VE")
+    workspace = Workspace(name="WS", user_id=user.id)
+    await workspace.insert()
+    clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="song.wav", title="Song", duration=10.0)
+    await clip.insert()
+    source = Video(
+        clip_id=clip.id,
+        user_id=user.id,
+        job_id=(await Job(user_id=user.id, workspace_id=workspace.id, job_type=VIDEO_JOB_TYPE).insert()).id,
+        storage_path=f"{user.id}/{workspace.id}/videos/{clip.id}/orig.mp4",
+        resolution="1080p",
+        aspect_ratio="9:16",
+    )
+    storage.upload(source.storage_path, FAKE_MP4)
+    await source.insert()
+    params = {
+        "clip_id": str(clip.id),
+        "source_video_id": str(source.id),
+        "resolution": source.resolution,
+        "aspect_ratio": source.aspect_ratio,
+        "edit": {"operation": "trim", "start_seconds": 2.0, "end_seconds": 8.0},
+    }
+    job = Job(user_id=user.id, workspace_id=workspace.id, job_type=VIDEO_JOB_TYPE, input_params=params)
+    await job.insert()
+    return job, source
+
+
+@pytest.mark.integration
+class TestProcessVideoEditJob:
+    async def test_edit_stores_new_version_linked_to_source(self, storage) -> None:
+        job, source = await _make_edit_job_and_source(storage)
+        client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
+
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        new = await Video.get(PydanticObjectId(result["video_ids"][0]))
+        assert new.id != source.id  # a new version, original preserved
+        assert new.parent_video_id == source.id
+        assert new.edit == {"operation": "trim", "start_seconds": 2.0, "end_seconds": 8.0}
+        assert new.duration == 6.0  # a trim resizes the video to its range (8 - 2)
+        assert new.clip_id == source.clip_id
+        assert new.resolution == "1080p" and new.aspect_ratio == "9:16"
+        assert new.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{source.clip_id}/{job.id}.mp4"
+        # The source document and its object are untouched.
+        assert (await Video.get(source.id)).parent_video_id is None
+        assert storage.download(source.storage_path) == FAKE_MP4
+
+    async def test_non_trim_edit_inherits_source_duration(self, storage) -> None:
+        # A lyrics-overlay edit keeps the source video's length (only trim resizes).
+        job, source = await _make_edit_job_and_source(storage)
+        source.duration = 8.0
+        await source.save()
+        job.input_params["edit"] = {"operation": "lyrics_overlay", "lyrics_enabled": True}
+        await job.save()
+        client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
+
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        new = await Video.get(PydanticObjectId(result["video_ids"][0]))
+        assert new.duration == 8.0
+
+    async def test_edit_submits_source_media_and_spec(self, storage) -> None:
+        job, source = await _make_edit_job_and_source(storage)
+        client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
+
+        await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        (filename, params), *_ = client.submitted
+        assert filename == f"{source.id}.mp4"
+        assert params["operation"] == "trim"
+        assert params["start_seconds"] == 2.0
+        assert "source_video_id" not in params  # provider gets the media + spec, not our ids
+
+    async def test_missing_source_object_fails_job(self, storage) -> None:
+        job, source = await _make_edit_job_and_source(storage)
+        storage.delete(source.storage_path)
+        client = FakeVideoService(_updates_to_complete(), expect_media=None)
+
+        with pytest.raises(JobProcessingError, match="is missing"):
+            await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+    async def test_deleted_source_document_fails_job(self, storage) -> None:
+        job, source = await _make_edit_job_and_source(storage)
+        await source.delete()
+        client = FakeVideoService(_updates_to_complete(), expect_media=None)
+
+        with pytest.raises(JobProcessingError, match="not found"):
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)

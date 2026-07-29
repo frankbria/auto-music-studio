@@ -45,6 +45,14 @@ def _for_clip_url(clip_id: str) -> str:
     return f"{API_V1_PREFIX}/videos/for-clip/{clip_id}"
 
 
+def _edit_url(video_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/{video_id}/edit"
+
+
+def _versions_url(video_id: str) -> str:
+    return f"{API_V1_PREFIX}/videos/{video_id}/versions"
+
+
 # ---------------------------------------------------------------------------
 # Auth gate — runs in CI (no DB; plain TestClient does not run the lifespan)
 # ---------------------------------------------------------------------------
@@ -475,6 +483,9 @@ async def _insert_video(
     store: bool = True,
     data: bytes = _MP4_BYTES,
     resolution: str = "1080p",
+    parent_video_id: PydanticObjectId | None = None,
+    edit: dict | None = None,
+    duration: float | None = None,
 ) -> Video:
     video_id = PydanticObjectId()
     job_id = PydanticObjectId()
@@ -490,6 +501,9 @@ async def _insert_video(
         resolution=resolution,
         aspect_ratio="16:9",
         published=published,
+        parent_video_id=parent_video_id,
+        edit=edit,
+        duration=duration,
     )
     await video.insert()
     return video
@@ -691,3 +705,245 @@ class TestForClip:
         await _insert_video(owner, clip, published=True)
         resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# US-22.4 editing: POST /videos/{video_id}/edit + GET /videos/{video_id}/versions
+# ---------------------------------------------------------------------------
+
+
+class TestEditAuthGate:
+    def test_edit_without_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        resp = client.post(_edit_url(str(PydanticObjectId())), json={"operation": "trim"})
+        assert resp.status_code == 401
+
+    def test_versions_without_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        resp = client.get(_versions_url(str(PydanticObjectId())))
+        assert resp.status_code == 401
+
+
+@pytest.mark.integration
+class TestVideoEdit:
+    async def test_trim_returns_202_and_persists_edit_job(self, client, settings, local_storage) -> None:
+        user, ws, clip = await _user_with_clip("video-edit-trim@example.com", balance=100)
+        source = await _insert_video(user, clip, resolution="1080p")
+        body = {"operation": "trim", "start_seconds": 2.0, "end_seconds": 8.0}
+        resp = await client.post(_edit_url(str(source.id)), json=body, headers=_auth_headers(user, settings))
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        job = await Job.get(PydanticObjectId(job_id))
+        assert job is not None
+        assert job.job_type == VIDEO_JOB_TYPE
+        assert job.status == JobStatus.QUEUED
+        assert job.workspace_id == ws.id
+        params = job.input_params
+        assert params["source_video_id"] == str(source.id)
+        assert params["clip_id"] == str(clip.id)
+        assert params["edit"] == {"operation": "trim", "start_seconds": 2.0, "end_seconds": 8.0}
+        # Source video is never mutated by enqueuing an edit.
+        assert (await Video.get(source.id)).parent_video_id is None
+
+    async def test_replace_scene_carries_prompt_only(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-scene@example.com", balance=100)
+        source = await _insert_video(user, clip)
+        body = {"operation": "replace_scene", "start_seconds": 1.0, "end_seconds": 4.0, "prompt": "sunset over waves"}
+        resp = await client.post(_edit_url(str(source.id)), json=body, headers=_auth_headers(user, settings))
+        assert resp.status_code == 202
+        job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+        assert job.input_params["edit"] == {
+            "operation": "replace_scene",
+            "start_seconds": 1.0,
+            "end_seconds": 4.0,
+            "prompt": "sunset over waves",
+        }
+
+    async def test_lyrics_overlay_toggle(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-lyrics@example.com", balance=100)
+        source = await _insert_video(user, clip)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "lyrics_overlay", "lyrics_enabled": True},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+        assert job.input_params["edit"] == {"operation": "lyrics_overlay", "lyrics_enabled": True}
+
+    async def test_transitions_markers(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-trans@example.com", balance=100)
+        source = await _insert_video(user, clip)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "transitions", "transition_markers": [1.5, 3.0]},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+        assert job.input_params["edit"] == {"operation": "transitions", "transition_markers": [1.5, 3.0]}
+
+    async def test_charges_source_resolution_cost(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-cost@example.com", balance=100, duration=10.0)
+        source = await _insert_video(user, clip, resolution="1080p")
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        # 1080p base cost is 7 credits (short song, no surcharge).
+        assert (await _reload(user)).credits_balance == pytest.approx(93.0)
+        txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        assert any(t.amount == pytest.approx(-7.0) for t in txns)
+
+    async def test_edit_range_past_song_returns_422_no_charge(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-oob@example.com", balance=100, duration=10.0)
+        source = await _insert_video(user, clip)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 5.0, "end_seconds": 30.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 422
+        assert (await _reload(user)).credits_balance == 100
+
+    async def test_chained_edit_validated_against_edited_length_not_song(self, client, settings, local_storage) -> None:
+        # An already-trimmed version is 8s even though the song is 30s: editing it
+        # with a range past 8s must 422 (validated against the video, not the song).
+        user, _ws, clip = await _user_with_clip("video-edit-chain@example.com", balance=100, duration=30.0)
+        trimmed = await _insert_video(
+            user, clip, edit={"operation": "trim", "start_seconds": 0.0, "end_seconds": 8.0}, duration=8.0
+        )
+        past = await client.post(
+            _edit_url(str(trimmed.id)),
+            json={"operation": "trim", "start_seconds": 5.0, "end_seconds": 20.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert past.status_code == 422
+        assert (await _reload(user)).credits_balance == 100
+        # A range inside the trimmed length is still accepted.
+        within = await client.post(
+            _edit_url(str(trimmed.id)),
+            json={"operation": "trim", "start_seconds": 2.0, "end_seconds": 6.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert within.status_code == 202
+
+    async def test_unknown_video_returns_404_no_charge(self, client, settings, local_storage) -> None:
+        user = await _make_user("video-edit-unknown@example.com", balance=100)
+        resp = await client.post(
+            _edit_url(str(PydanticObjectId())),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 404
+        assert (await _reload(user)).credits_balance == 100
+
+    async def test_other_users_video_returns_404(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-edit-owner@example.com")
+        thief = await _make_user("video-edit-thief@example.com", balance=100)
+        source = await _insert_video(owner, clip)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(thief, settings),
+        )
+        assert resp.status_code == 404
+
+    async def test_insufficient_credits_returns_402(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-edit-broke@example.com", balance=1.0)
+        source = await _insert_video(user, clip, resolution="1080p")
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 402
+        assert resp.json()["detail"]["error"] == "insufficient_credits"
+
+    async def test_not_configured_returns_503_no_charge(self, mongo_db, mongo_settings, local_storage) -> None:
+        cfg = mongo_settings.model_copy(
+            update={
+                "jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx",
+                "job_processor_enabled": False,
+                "video_api_url": None,
+                "video_api_key": None,
+            }
+        )
+        user, _ws, clip = await _user_with_clip("video-edit-503@example.com", balance=100)
+        source = await _insert_video(user, clip)
+        async with _async_client(create_app(cfg)) as ac:
+            resp = await ac.post(
+                _edit_url(str(source.id)),
+                json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+                headers=_auth_headers(user, cfg),
+            )
+        assert resp.status_code == 503
+        assert (await _reload(user)).credits_balance == 100
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"operation": "trim", "start_seconds": 1.0},  # missing end
+            {"operation": "trim", "start_seconds": 5.0, "end_seconds": 2.0},  # end <= start
+            {"operation": "replace_scene", "start_seconds": 1.0, "end_seconds": 4.0},  # no prompt
+            {"operation": "lyrics_overlay"},  # no lyrics_enabled
+            {"operation": "transitions"},  # no markers
+            {"operation": "transitions", "transition_markers": [-1.0]},  # negative marker
+            {"operation": "bogus"},  # unknown operation
+            {"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0, "surprise": 1},  # extra field
+        ],
+    )
+    async def test_invalid_bodies_return_422(self, client, settings, local_storage, body) -> None:
+        user, _ws, clip = await _user_with_clip(
+            f"video-edit-invalid-{hash(str(body)) & 0xffff}@example.com", balance=100
+        )
+        source = await _insert_video(user, clip)
+        resp = await client.post(_edit_url(str(source.id)), json=body, headers=_auth_headers(user, settings))
+        assert resp.status_code == 422
+
+
+@pytest.mark.integration
+class TestVideoVersions:
+    async def test_lists_versions_newest_first_with_lineage(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-ver-list@example.com")
+        original = await _insert_video(user, clip, resolution="1080p")
+        edited = await _insert_video(
+            user,
+            clip,
+            resolution="1080p",
+            parent_video_id=original.id,
+            edit={"operation": "trim", "start_seconds": 1.0, "end_seconds": 5.0},
+        )
+        resp = await client.get(_versions_url(str(original.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        items = resp.json()
+        assert [i["id"] for i in items] == [str(edited.id), str(original.id)]
+        # The edit carries its lineage; the original omits the null fields.
+        assert items[0]["parent_video_id"] == str(original.id)
+        assert items[0]["edit"]["operation"] == "trim"
+        assert "parent_video_id" not in items[1]
+        assert "edit" not in items[1]
+        assert all("created_at" in i for i in items)
+
+    async def test_from_edited_video_lists_the_same_lineage(self, client, settings, local_storage) -> None:
+        # Asking for versions of any member returns the whole clip's history.
+        user, _ws, clip = await _user_with_clip("video-ver-any@example.com")
+        original = await _insert_video(user, clip)
+        edited = await _insert_video(user, clip, parent_video_id=original.id, edit={"operation": "lyrics_overlay"})
+        resp = await client.get(_versions_url(str(edited.id)), headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        assert {i["id"] for i in resp.json()} == {str(original.id), str(edited.id)}
+
+    async def test_unknown_video_returns_404(self, client, settings, local_storage) -> None:
+        user = await _make_user("video-ver-unknown@example.com")
+        resp = await client.get(_versions_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_other_users_video_returns_404(self, client, settings, local_storage) -> None:
+        owner, _ws, clip = await _user_with_clip("video-ver-owner@example.com")
+        stranger = await _make_user("video-ver-stranger@example.com")
+        source = await _insert_video(owner, clip)
+        resp = await client.get(_versions_url(str(source.id)), headers=_auth_headers(stranger, settings))
+        assert resp.status_code == 404

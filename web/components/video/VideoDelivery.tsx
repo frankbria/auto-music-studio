@@ -4,6 +4,7 @@ import { useState } from "react"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
+import { VideoEditor } from "@/components/video/VideoEditor"
 import { useAuth } from "@/hooks/use-auth"
 import { publishVideo, videoStreamUrl } from "@/lib/video"
 
@@ -32,6 +33,7 @@ export function VideoDelivery({
 }) {
   const { accessToken } = useAuth()
   const [publish, setPublish] = useState<PublishState>({ status: "idle" })
+  const [editing, setEditing] = useState(false)
 
   async function handlePublish() {
     setPublish({ status: "publishing" })
@@ -41,10 +43,16 @@ export function VideoDelivery({
         setPublish({ status: "published" })
         return
       case "unauthorized":
-        setPublish({ status: "error", message: "Please sign in again to publish." })
+        setPublish({
+          status: "error",
+          message: "Please sign in again to publish.",
+        })
         return
       case "not_found":
-        setPublish({ status: "error", message: "This video is no longer available." })
+        setPublish({
+          status: "error",
+          message: "This video is no longer available.",
+        })
         return
       case "error":
         setPublish({ status: "error", message: result.detail })
@@ -79,13 +87,28 @@ export function VideoDelivery({
             onClick={handlePublish}
             disabled={publish.status === "publishing"}
           >
-            {publish.status === "publishing" ? "Publishing…" : "Publish to song page"}
+            {publish.status === "publishing"
+              ? "Publishing…"
+              : "Publish to song page"}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setEditing((e) => !e)}
+          aria-expanded={editing}
+        >
+          {editing ? "Close editor" : "Edit video"}
+        </Button>
         <Button size="sm" variant="ghost" onClick={onReset}>
           Generate another
         </Button>
       </div>
+      {editing && (
+        <div className="mt-2 rounded-lg border p-4">
+          <VideoEditor videoId={videoId} />
+        </div>
+      )}
       {publish.status === "published" && (
         <p className="text-sm text-muted-foreground">
           Published — it now appears on the song page.

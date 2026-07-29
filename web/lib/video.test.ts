@@ -7,12 +7,15 @@ import {
   VIDEO_RESOLUTIONS,
   VIDEO_STYLE_PRESETS,
   VIDEO_TRANSITIONS,
+  editOperationLabel,
   estimateVideoCost,
   fetchPublishedVideoForClip,
   fetchVideoDetail,
   fetchVideoStatus,
+  fetchVideoVersions,
   presetLabel,
   publishVideo,
+  submitVideoEdit,
   submitVideoJob,
   videoStreamUrl,
   type VideoConfig,
@@ -49,8 +52,16 @@ describe("option tables", () => {
       "live_performance",
       "nature",
     ])
-    expect(VIDEO_ASPECT_RATIOS.map((a) => a.value)).toEqual(["16:9", "9:16", "1:1"])
-    expect(VIDEO_RESOLUTIONS.map((r) => r.value)).toEqual(["720p", "1080p", "4k"])
+    expect(VIDEO_ASPECT_RATIOS.map((a) => a.value)).toEqual([
+      "16:9",
+      "9:16",
+      "1:1",
+    ])
+    expect(VIDEO_RESOLUTIONS.map((r) => r.value)).toEqual([
+      "720p",
+      "1080p",
+      "4k",
+    ])
     expect(VIDEO_FRAME_RATES.map((f) => f.value)).toEqual([24, 30, 60])
     expect(VIDEO_TRANSITIONS.map((t) => t.value)).toEqual([
       "auto",
@@ -62,7 +73,9 @@ describe("option tables", () => {
   })
 
   it("marks exactly 1080p and 4k as Pro-only", () => {
-    const proOnly = VIDEO_RESOLUTIONS.filter((r) => r.proOnly).map((r) => r.value)
+    const proOnly = VIDEO_RESOLUTIONS.filter((r) => r.proOnly).map(
+      (r) => r.value
+    )
     expect(proOnly).toEqual(["1080p", "4k"])
   })
 
@@ -103,7 +116,11 @@ describe("submitVideoJob", () => {
     expect(url).toBe("/api/videos/generate")
     expect(init?.headers).toMatchObject({ authorization: "Bearer tok" })
     const body = JSON.parse(String(init?.body))
-    expect(body).toMatchObject({ clip_id: "c1", prompt: "neon city", resolution: "720p" })
+    expect(body).toMatchObject({
+      clip_id: "c1",
+      prompt: "neon city",
+      resolution: "720p",
+    })
     // Optional fields that are unset must not be sent (extra="forbid" upstream
     // is fine with them, but null would 422).
     expect(body).not.toHaveProperty("style_preset")
@@ -128,7 +145,9 @@ describe("submitVideoJob", () => {
   })
 
   it("classifies 422 as invalid with the detail message", async () => {
-    mockFetch(422, { detail: [{ msg: "Provide a style prompt or a style_preset" }] })
+    mockFetch(422, {
+      detail: [{ msg: "Provide a style prompt or a style_preset" }],
+    })
     expect(await submitVideoJob("c1", config, "tok")).toEqual({
       status: "invalid",
       detail: "Provide a style prompt or a style_preset",
@@ -136,7 +155,9 @@ describe("submitVideoJob", () => {
   })
 
   it("classifies 503 as unavailable (video not configured)", async () => {
-    mockFetch(503, { detail: "Video generation is not configured on this deployment." })
+    mockFetch(503, {
+      detail: "Video generation is not configured on this deployment.",
+    })
     expect(await submitVideoJob("c1", config, "tok")).toEqual({
       status: "unavailable",
       detail: "Video generation is not configured on this deployment.",
@@ -161,15 +182,30 @@ describe("fetchVideoStatus", () => {
   })
 
   it("classifies complete with the detail (video id)", async () => {
-    mockFetch(200, { job_id: "j1", status: "complete", progress: 100, video_id: "v1" })
+    mockFetch(200, {
+      job_id: "j1",
+      status: "complete",
+      progress: 100,
+      video_id: "v1",
+    })
     expect(await fetchVideoStatus("j1", "tok")).toEqual({
       kind: "complete",
-      detail: { job_id: "j1", status: "complete", progress: 100, video_id: "v1" },
+      detail: {
+        job_id: "j1",
+        status: "complete",
+        progress: 100,
+        video_id: "v1",
+      },
     })
   })
 
   it("classifies failed with the error message", async () => {
-    mockFetch(200, { job_id: "j1", status: "failed", progress: 0, error: "render died" })
+    mockFetch(200, {
+      job_id: "j1",
+      status: "failed",
+      progress: 0,
+      error: "render died",
+    })
     expect(await fetchVideoStatus("j1", "tok")).toEqual({
       kind: "failed",
       error: "render died",
@@ -178,7 +214,9 @@ describe("fetchVideoStatus", () => {
 
   it("classifies 401 as unauthorized and other 4xx as failed", async () => {
     mockFetch(401, {})
-    expect(await fetchVideoStatus("j1", "tok")).toEqual({ kind: "unauthorized" })
+    expect(await fetchVideoStatus("j1", "tok")).toEqual({
+      kind: "unauthorized",
+    })
     vi.restoreAllMocks()
     mockFetch(404, { detail: "Video job not found." })
     expect((await fetchVideoStatus("j1", "tok")).kind).toBe("failed")
@@ -209,7 +247,9 @@ describe("videoStreamUrl", () => {
   })
 
   it("adds the download flag and encodes the id", () => {
-    expect(videoStreamUrl("v 1", { download: true })).toBe("/api/videos/v%201/stream?download=1")
+    expect(videoStreamUrl("v 1", { download: true })).toBe(
+      "/api/videos/v%201/stream?download=1"
+    )
   })
 })
 
@@ -217,7 +257,10 @@ describe("publishVideo", () => {
   it("returns the published video on 200", async () => {
     mockFetch(200, { ...videoDetail, published: true })
     const result = await publishVideo("v1", "tok")
-    expect(result).toEqual({ status: "published", video: { ...videoDetail, published: true } })
+    expect(result).toEqual({
+      status: "published",
+      video: { ...videoDetail, published: true },
+    })
   })
 
   it("sends the Bearer token to the publish proxy", async () => {
@@ -225,7 +268,10 @@ describe("publishVideo", () => {
     await publishVideo("v1", "tok")
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/videos/v1/publish",
-      expect.objectContaining({ method: "POST", headers: { authorization: "Bearer tok" } })
+      expect.objectContaining({
+        method: "POST",
+        headers: { authorization: "Bearer tok" },
+      })
     )
   })
 
@@ -266,11 +312,157 @@ describe("fetchVideoDetail / fetchPublishedVideoForClip", () => {
     vi.restoreAllMocks()
     const anon = mockFetch(200, videoDetail)
     await fetchPublishedVideoForClip("c1")
-    expect(anon).toHaveBeenCalledWith("/api/videos/for-clip/c1", { headers: {} })
+    expect(anon).toHaveBeenCalledWith("/api/videos/for-clip/c1", {
+      headers: {},
+    })
   })
 
   it("returns null on a network error", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
     expect(await fetchVideoDetail("v1")).toBeNull()
+  })
+})
+
+describe("editOperationLabel", () => {
+  it("labels each operation and falls back to Original render", () => {
+    expect(editOperationLabel("trim")).toBe("Trim")
+    expect(editOperationLabel("replace_scene")).toBe("Scene replacement")
+    expect(editOperationLabel("lyrics_overlay")).toBe("Lyrics overlay")
+    expect(editOperationLabel("transitions")).toBe("Transition timing")
+    expect(editOperationLabel(undefined)).toBe("Original render")
+    expect(editOperationLabel("bogus")).toBe("Original render")
+  })
+})
+
+describe("submitVideoEdit", () => {
+  it("posts the payload and returns the accepted job id", async () => {
+    const spy = mockFetch(202, { job_id: "job-9" })
+    const result = await submitVideoEdit(
+      "v1",
+      { operation: "trim", start_seconds: 2, end_seconds: 8 },
+      "tok"
+    )
+    expect(result).toEqual({ status: "accepted", jobId: "job-9" })
+    expect(spy).toHaveBeenCalledWith("/api/videos/v1/edit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer tok",
+      },
+      body: JSON.stringify({
+        operation: "trim",
+        start_seconds: 2,
+        end_seconds: 8,
+      }),
+    })
+  })
+
+  it("maps 402 to insufficient_credits with the balance payload", async () => {
+    mockFetch(402, {
+      detail: { error: "insufficient_credits", balance: 3, required: 7 },
+    })
+    const result = await submitVideoEdit(
+      "v1",
+      { operation: "lyrics_overlay", lyrics_enabled: true },
+      "tok"
+    )
+    expect(result).toEqual({
+      status: "insufficient_credits",
+      balance: 3,
+      required: 7,
+    })
+  })
+
+  it("maps 422 to invalid with the message", async () => {
+    mockFetch(422, { detail: "end_seconds must be greater than start_seconds" })
+    const result = await submitVideoEdit(
+      "v1",
+      { operation: "trim", start_seconds: 5, end_seconds: 2 },
+      "tok"
+    )
+    expect(result).toEqual({
+      status: "invalid",
+      detail: "end_seconds must be greater than start_seconds",
+    })
+  })
+
+  it("maps 401 to unauthorized and 503 to unavailable", async () => {
+    mockFetch(401, {})
+    expect(
+      await submitVideoEdit(
+        "v1",
+        { operation: "lyrics_overlay", lyrics_enabled: false },
+        "t"
+      )
+    ).toEqual({
+      status: "unauthorized",
+    })
+    vi.restoreAllMocks()
+    mockFetch(503, { detail: "off" })
+    expect(
+      await submitVideoEdit(
+        "v1",
+        { operation: "lyrics_overlay", lyrics_enabled: false },
+        "t"
+      )
+    ).toEqual({
+      status: "unavailable",
+      detail: "off",
+    })
+  })
+
+  it("returns error on a network failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
+    const result = await submitVideoEdit(
+      "v1",
+      { operation: "trim", start_seconds: 0, end_seconds: 1 },
+      "t"
+    )
+    expect(result.status).toBe("error")
+  })
+})
+
+describe("fetchVideoVersions", () => {
+  it("returns the version array on 200", async () => {
+    const versions = [
+      {
+        id: "v2",
+        clip_id: "c",
+        job_id: "j",
+        resolution: "1080p",
+        aspect_ratio: "16:9",
+        published: false,
+        created_at: "2026-07-29T00:00:00Z",
+        parent_video_id: "v1",
+        edit: { operation: "trim" },
+      },
+      {
+        id: "v1",
+        clip_id: "c",
+        job_id: "j",
+        resolution: "1080p",
+        aspect_ratio: "16:9",
+        published: false,
+        created_at: "2026-07-28T00:00:00Z",
+      },
+    ]
+    const spy = mockFetch(200, versions)
+    expect(await fetchVideoVersions("v1", "tok")).toEqual(versions)
+    expect(spy).toHaveBeenCalledWith("/api/videos/v1/versions", {
+      headers: { authorization: "Bearer tok" },
+    })
+  })
+
+  it("returns [] on error status or a non-array body", async () => {
+    mockFetch(404, { detail: "nope" })
+    expect(await fetchVideoVersions("v1", "tok")).toEqual([])
+    vi.restoreAllMocks()
+    mockFetch(200, { not: "an array" })
+    expect(await fetchVideoVersions("v1", "tok")).toEqual([])
+  })
+
+  it("returns [] on a network error", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
+    expect(await fetchVideoVersions("v1", "tok")).toEqual([])
   })
 })

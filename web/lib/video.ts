@@ -26,7 +26,12 @@ export type VideoFrameRate = 24 | 30 | 60
 export type VideoTransitions = "auto" | "cut" | "fade" | "dissolve"
 
 /** The render lifecycle states the status endpoint reports. */
-export type VideoState = "queued" | "rendering" | "encoding" | "complete" | "failed"
+export type VideoState =
+  | "queued"
+  | "rendering"
+  | "encoding"
+  | "complete"
+  | "failed"
 
 // Backend request bounds (src/acemusic/api/routers/videos.py).
 export const MAX_REFERENCE_IMAGES = 5
@@ -45,27 +50,32 @@ export const VIDEO_STYLE_PRESETS: PresetOption[] = [
   {
     value: "abstract",
     label: "Abstract",
-    prompt: "Abstract flowing shapes and colors that pulse with the music's energy.",
+    prompt:
+      "Abstract flowing shapes and colors that pulse with the music's energy.",
   },
   {
     value: "cinematic",
     label: "Cinematic",
-    prompt: "Cinematic film scenes with dramatic lighting and sweeping camera moves.",
+    prompt:
+      "Cinematic film scenes with dramatic lighting and sweeping camera moves.",
   },
   {
     value: "animated",
     label: "Animated",
-    prompt: "Vibrant animated illustration style with smooth, expressive motion.",
+    prompt:
+      "Vibrant animated illustration style with smooth, expressive motion.",
   },
   {
     value: "lyric_video",
     label: "Lyric Video",
-    prompt: "Typography-driven lyric video with animated text as the visual focus.",
+    prompt:
+      "Typography-driven lyric video with animated text as the visual focus.",
   },
   {
     value: "live_performance",
     label: "Live Performance",
-    prompt: "Live concert performance footage with stage lighting and crowd energy.",
+    prompt:
+      "Live concert performance footage with stage lighting and crowd energy.",
   },
   {
     value: "nature",
@@ -74,11 +84,12 @@ export const VIDEO_STYLE_PRESETS: PresetOption[] = [
   },
 ]
 
-export const VIDEO_ASPECT_RATIOS: { value: VideoAspectRatio; label: string }[] = [
-  { value: "16:9", label: "16:9 Landscape" },
-  { value: "9:16", label: "9:16 Vertical" },
-  { value: "1:1", label: "1:1 Square" },
-]
+export const VIDEO_ASPECT_RATIOS: { value: VideoAspectRatio; label: string }[] =
+  [
+    { value: "16:9", label: "16:9 Landscape" },
+    { value: "9:16", label: "9:16 Vertical" },
+    { value: "1:1", label: "1:1 Square" },
+  ]
 
 /** A resolution's display metadata; Pro-only tiers are subscription-gated. */
 export type ResolutionOption = {
@@ -108,7 +119,9 @@ export const VIDEO_TRANSITIONS: { value: VideoTransitions; label: string }[] = [
 
 /** Human label for a preset key, falling back to the raw value then a dash. */
 export function presetLabel(value?: string): string {
-  return VIDEO_STYLE_PRESETS.find((p) => p.value === value)?.label ?? value ?? "—"
+  return (
+    VIDEO_STYLE_PRESETS.find((p) => p.value === value)?.label ?? value ?? "—"
+  )
 }
 
 // Client-side mirror of the server cost formula (src/acemusic/api/services/
@@ -222,7 +235,11 @@ export async function submitVideoJob(
   // Drop unset optional fields: the backend forbids unknown keys and treats
   // null prompt/preset as "neither provided", so absence is the safe encoding.
   const payload: Record<string, unknown> = { clip_id: clipId, ...config }
-  for (const key of ["prompt", "style_preset", "reference_image_urls"] as const) {
+  for (const key of [
+    "prompt",
+    "style_preset",
+    "reference_image_urls",
+  ] as const) {
     if (payload[key] === undefined) delete payload[key]
   }
 
@@ -237,13 +254,19 @@ export async function submitVideoJob(
       body: JSON.stringify(payload),
     })
   } catch {
-    return { status: "error", detail: "Video generation failed. Please try again." }
+    return {
+      status: "error",
+      detail: "Video generation failed. Please try again.",
+    }
   }
 
   if (res.status === 202) {
     const body = (await res.json().catch(() => ({}))) as { job_id?: string }
     if (!body.job_id) {
-      return { status: "error", detail: "Server returned an unexpected response." }
+      return {
+        status: "error",
+        detail: "Server returned an unexpected response.",
+      }
     }
     return { status: "accepted", jobId: body.job_id }
   }
@@ -252,8 +275,9 @@ export async function submitVideoJob(
   const body = await res.json().catch(() => ({}))
   if (res.status === 402) {
     // The 402 detail is an object {error, balance, required}.
-    const detail = (body as { detail?: { balance?: number; required?: number } })
-      .detail
+    const detail = (
+      body as { detail?: { balance?: number; required?: number } }
+    ).detail
     return {
       status: "insufficient_credits",
       balance: detail?.balance ?? 0,
@@ -261,7 +285,10 @@ export async function submitVideoJob(
     }
   }
   if (res.status === 422) {
-    return { status: "invalid", detail: extractDetail(body, "Please check your input.") }
+    return {
+      status: "invalid",
+      detail: extractDetail(body, "Please check your input."),
+    }
   }
   if (res.status === 503) {
     return {
@@ -282,7 +309,10 @@ export async function submitVideoJob(
  * unpublished) video — the same trick the clip stream proxy uses (issue #282).
  * `download` forces a save-to-disk response (Content-Disposition: attachment).
  */
-export function videoStreamUrl(videoId: string, opts?: { download?: boolean }): string {
+export function videoStreamUrl(
+  videoId: string,
+  opts?: { download?: boolean }
+): string {
   const base = `/api/videos/${encodeURIComponent(videoId)}/stream`
   return opts?.download ? `${base}?download=1` : base
 }
@@ -306,11 +336,141 @@ export async function publishVideo(
   if (res.status === 404) return { status: "not_found" }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    return { status: "error", detail: extractDetail(body, "Publishing failed. Please try again.") }
+    return {
+      status: "error",
+      detail: extractDetail(body, "Publishing failed. Please try again."),
+    }
   }
   const video = (await res.json().catch(() => null)) as VideoDetail | null
-  if (!video) return { status: "error", detail: "Server returned an unexpected response." }
+  if (!video)
+    return {
+      status: "error",
+      detail: "Server returned an unexpected response.",
+    }
   return { status: "published", video }
+}
+
+// --- US-22.4 basic editing -------------------------------------------------
+
+/** The non-destructive edit operations (mirrors the backend VideoEditRequest). */
+export type VideoEditOperation =
+  | "trim"
+  | "replace_scene"
+  | "lyrics_overlay"
+  | "transitions"
+
+/** A single edit request payload (only the fields the operation needs). */
+export type VideoEditPayload =
+  | { operation: "trim"; start_seconds: number; end_seconds: number }
+  | {
+      operation: "replace_scene"
+      start_seconds: number
+      end_seconds: number
+      prompt: string
+    }
+  | { operation: "lyrics_overlay"; lyrics_enabled: boolean }
+  | { operation: "transitions"; transition_markers: number[] }
+
+/** A rendered video plus its edit lineage (mirrors the backend VideoVersionResponse). */
+export type VideoVersion = VideoDetail & {
+  parent_video_id?: string
+  edit?: { operation: VideoEditOperation; [key: string]: unknown }
+}
+
+/** Human label for an edit operation (for the version-history list). */
+export function editOperationLabel(op?: string): string {
+  switch (op) {
+    case "trim":
+      return "Trim"
+    case "replace_scene":
+      return "Scene replacement"
+    case "lyrics_overlay":
+      return "Lyrics overlay"
+    case "transitions":
+      return "Transition timing"
+    default:
+      return "Original render"
+  }
+}
+
+/** Submit a non-destructive edit through the BFF proxy; classified like a render. */
+export async function submitVideoEdit(
+  videoId: string,
+  payload: VideoEditPayload,
+  accessToken: string
+): Promise<SubmitVideoResult> {
+  let res: Response
+  try {
+    res = await fetch(`/api/videos/${encodeURIComponent(videoId)}/edit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    return { status: "error", detail: "Video edit failed. Please try again." }
+  }
+
+  if (res.status === 202) {
+    const body = (await res.json().catch(() => ({}))) as { job_id?: string }
+    if (!body.job_id)
+      return {
+        status: "error",
+        detail: "Server returned an unexpected response.",
+      }
+    return { status: "accepted", jobId: body.job_id }
+  }
+  if (res.status === 401) return { status: "unauthorized" }
+
+  const body = await res.json().catch(() => ({}))
+  if (res.status === 402) {
+    const detail = (
+      body as { detail?: { balance?: number; required?: number } }
+    ).detail
+    return {
+      status: "insufficient_credits",
+      balance: detail?.balance ?? 0,
+      required: detail?.required ?? 0,
+    }
+  }
+  if (res.status === 422) {
+    return {
+      status: "invalid",
+      detail: extractDetail(body, "Please check your edit."),
+    }
+  }
+  if (res.status === 503) {
+    return {
+      status: "unavailable",
+      detail: extractDetail(body, "Video editing is currently unavailable."),
+    }
+  }
+  return {
+    status: "error",
+    detail: extractDetail(body, "Video edit failed. Please try again."),
+  }
+}
+
+/** Fetch a video's version history (newest first) through the BFF proxy; `[]` on error. */
+export async function fetchVideoVersions(
+  videoId: string,
+  accessToken: string
+): Promise<VideoVersion[]> {
+  try {
+    const res = await fetch(
+      `/api/videos/${encodeURIComponent(videoId)}/versions`,
+      {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }
+    )
+    if (!res.ok) return []
+    const body = await res.json().catch(() => null)
+    return Array.isArray(body) ? (body as VideoVersion[]) : []
+  } catch {
+    return []
+  }
 }
 
 /** Fetch one rendered video's metadata through the BFF proxy; `null` if absent. */
@@ -318,7 +478,10 @@ export async function fetchVideoDetail(
   videoId: string,
   accessToken?: string
 ): Promise<VideoDetail | null> {
-  return fetchVideoDetailAt(`/api/videos/${encodeURIComponent(videoId)}`, accessToken)
+  return fetchVideoDetailAt(
+    `/api/videos/${encodeURIComponent(videoId)}`,
+    accessToken
+  )
 }
 
 /** Fetch the published video for a clip (the song page's "Music video"); `null` if none. */
@@ -326,11 +489,17 @@ export async function fetchPublishedVideoForClip(
   clipId: string,
   accessToken?: string
 ): Promise<VideoDetail | null> {
-  return fetchVideoDetailAt(`/api/videos/for-clip/${encodeURIComponent(clipId)}`, accessToken)
+  return fetchVideoDetailAt(
+    `/api/videos/for-clip/${encodeURIComponent(clipId)}`,
+    accessToken
+  )
 }
 
 /** Shared GET-and-parse for the two VideoDetail endpoints — 404/error both mean "no video". */
-async function fetchVideoDetailAt(url: string, accessToken?: string): Promise<VideoDetail | null> {
+async function fetchVideoDetailAt(
+  url: string,
+  accessToken?: string
+): Promise<VideoDetail | null> {
   try {
     const res = await fetch(url, {
       headers: accessToken ? { authorization: `Bearer ${accessToken}` } : {},
@@ -360,7 +529,10 @@ export async function fetchVideoStatus(
   // A 4xx other than 401 is terminal (404 = unknown/not-owned job) — polling
   // can never recover, so fail fast. 5xx/network stay transient (retried).
   if (res.status >= 400 && res.status < 500) {
-    return { kind: "failed", error: "Video generation failed. Please try again." }
+    return {
+      kind: "failed",
+      error: "Video generation failed. Please try again.",
+    }
   }
   if (!res.ok) return { kind: "transient" }
 
