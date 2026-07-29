@@ -28,7 +28,7 @@ dependencies = [
     # fastapi + pydantic-settings are core (not an optional extra): from Layer 2
     # onward the HTTP API is a required component of the package, and the test
     # suite imports acemusic.api. Only the server runner (uvicorn) is optional.
-    "fastapi>=0.110",
+    "fastapi>=0.139.0",
     # Required by FastAPI to parse multipart/form-data (cover-art upload, US-13.1).
     "python-multipart>=0.0.9",
     "pydantic-settings>=2.14.2",
