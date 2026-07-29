@@ -22,7 +22,10 @@ const MAX_POLLS = 720
 export type VideoJobState =
   | { phase: "idle" }
   | { phase: "submitting" }
-  | { phase: "polling"; detail?: VideoStatusDetail }
+  // `jobId` is known the moment the 202 lands (before the first poll), so the
+  // app-level VideoJobsProvider can start watching it for the completion
+  // notification even if the user navigates away immediately (US-22.3 AC2).
+  | { phase: "polling"; jobId: string; detail?: VideoStatusDetail }
   | { phase: "complete"; detail: VideoStatusDetail }
   | { phase: "error"; message: string }
 
@@ -149,7 +152,7 @@ export function useVideoJob(): UseVideoJob {
       switch (result.status) {
         case "accepted":
           jobRef.current = { id: result.jobId, polls: 0 }
-          setState({ phase: "polling" })
+          setState({ phase: "polling", jobId: result.jobId })
           // Poll immediately so a fast job doesn't sit idle for the first interval.
           void poll()
           return

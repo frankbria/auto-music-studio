@@ -11,6 +11,7 @@ import { SongHeader } from "@/components/song/SongHeader"
 import { SongLyrics } from "@/components/song/SongLyrics"
 import { SongMetadata } from "@/components/song/SongMetadata"
 import { SongPlayer } from "@/components/song/SongPlayer"
+import { SongVideo } from "@/components/song/SongVideo"
 import { usePublicClip } from "@/hooks/use-public-clip"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
@@ -112,6 +113,8 @@ function SongDetailContent({ clip }: { clip: Clip }) {
           onDismiss={actions.dismissRemaster}
         />
         <SongPlayer clip={clip} />
+        {/* Published music video, if the owner rendered and published one (US-22.3). */}
+        <SongVideo clipId={clip.id} />
         <section aria-label="Details" className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold">Details</h2>
           <SongMetadata clip={clip} />

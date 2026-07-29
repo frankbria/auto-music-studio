@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/contexts/auth-context"
 import { NotificationsProvider } from "@/contexts/notifications-context"
 import { PlayerProvider } from "@/contexts/player-context"
+import { VideoJobsProvider } from "@/contexts/video-jobs-context"
 import { cn } from "@/lib/utils"
 
 export const metadata: Metadata = {
@@ -31,11 +32,16 @@ export default function RootLayout({
         <ThemeProvider>
           <AuthProvider>
             <NotificationsProvider>
-              <PlayerProvider>
-                <AppShell>{children}</AppShell>
-                {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
-                <BottomPlaybar />
-              </PlayerProvider>
+              {/* Watches in-flight video renders across navigation so completion
+                  notifies globally (US-22.3). Inside Notifications (needs notify)
+                  and Auth (needs the token). */}
+              <VideoJobsProvider>
+                <PlayerProvider>
+                  <AppShell>{children}</AppShell>
+                  {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
+                  <BottomPlaybar />
+                </PlayerProvider>
+              </VideoJobsProvider>
             </NotificationsProvider>
           </AuthProvider>
         </ThemeProvider>

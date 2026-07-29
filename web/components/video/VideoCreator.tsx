@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect } from "react"
 import Link from "next/link"
 
 import {
@@ -12,6 +13,7 @@ import {
 import { SourceSongCard } from "@/components/video/SourceSongCard"
 import { VideoForm } from "@/components/video/VideoForm"
 import { VideoProgress } from "@/components/video/VideoProgress"
+import { useVideoJobs } from "@/contexts/video-jobs-context"
 import { useClip } from "@/hooks/use-clip"
 import { useRequireAuth } from "@/hooks/use-require-auth"
 import { useVideoJob } from "@/hooks/use-video-job"
@@ -27,6 +29,15 @@ export function VideoCreator({ songId }: { songId: string }) {
   const { isLoading: authLoading, isAuthenticated } = useRequireAuth()
   const { clip, loading, notFound } = useClip(songId)
   const { state, submit, retry, reset } = useVideoJob()
+  const { track } = useVideoJobs()
+
+  // Register the render with the app-level watcher the instant it's accepted, so
+  // its completion still notifies if the user navigates away (US-22.3 AC2).
+  // track() is idempotent, so re-firing across polls is harmless.
+  const trackingJobId = state.phase === "polling" ? state.jobId : null
+  useEffect(() => {
+    if (trackingJobId) track({ jobId: trackingJobId, songId })
+  }, [trackingJobId, songId, track])
 
   // Render nothing until authed — useRequireAuth redirects otherwise (mirrors
   // app/release/page.tsx).
@@ -74,7 +85,12 @@ export function VideoCreator({ songId }: { songId: string }) {
               {state.phase === "idle" ? (
                 <VideoForm clip={clip} onGenerate={handleGenerate} />
               ) : (
-                <VideoProgress state={state} onRetry={retry} onReset={reset} />
+                <VideoProgress
+                  state={state}
+                  songId={songId}
+                  onRetry={retry}
+                  onReset={reset}
+                />
               )}
             </CardContent>
           </Card>

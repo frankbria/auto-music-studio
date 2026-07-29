@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { VideoDelivery } from "@/components/video/VideoDelivery"
 import type { VideoJobState } from "@/hooks/use-video-job"
 import type { VideoState } from "@/lib/video"
 
@@ -29,10 +30,13 @@ function formatEta(seconds: number): string {
  */
 export function VideoProgress({
   state,
+  songId,
   onRetry,
   onReset,
 }: {
   state: VideoJobState
+  /** The source song id — the completed view links its published video back here. */
+  songId: string
   onRetry: () => void
   onReset: () => void
 }) {
@@ -53,13 +57,20 @@ export function VideoProgress({
   }
 
   if (state.phase === "complete") {
+    // A completed job always carries its video_id (US-22.1 status endpoint); the
+    // guard keeps the type honest and degrades gracefully if it's ever absent.
+    if (state.detail.video_id) {
+      return (
+        <VideoDelivery
+          videoId={state.detail.video_id}
+          songId={songId}
+          onReset={onReset}
+        />
+      )
+    }
     return (
       <div role="status" className="flex flex-col gap-3">
         <p className="text-sm font-medium">Your music video is ready.</p>
-        <p className="text-sm text-muted-foreground">
-          Delivery and download arrive in the next story — find the render under
-          this song once they land.
-        </p>
         <div>
           <Button size="sm" variant="outline" onClick={onReset}>
             Generate another

@@ -171,6 +171,24 @@ export type SubmitVideoResult =
   | { status: "unavailable"; detail: string }
   | { status: "error"; detail: string }
 
+/** A rendered video's metadata (US-22.3), mirroring the backend VideoDetailResponse. */
+export type VideoDetail = {
+  id: string
+  clip_id: string
+  job_id: string
+  resolution: VideoResolution | string
+  aspect_ratio: VideoAspectRatio | string
+  published: boolean
+  created_at: string
+}
+
+/** The outcome of publishing a video, classified for the delivery UI. */
+export type PublishVideoResult =
+  | { status: "published"; video: VideoDetail }
+  | { status: "unauthorized" }
+  | { status: "not_found" }
+  | { status: "error"; detail: string }
+
 /** A single status poll's outcome, classified for the job state machine. */
 export type VideoPollResult =
   | { kind: "pending"; detail: VideoStatusDetail }
@@ -254,6 +272,73 @@ export async function submitVideoJob(
   return {
     status: "error",
     detail: extractDetail(body, "Video generation failed. Please try again."),
+  }
+}
+
+/** The playback/download URL for a rendered video, served through the BFF proxy.
+ *
+ * A bare `<video src>` / download `<a href>` can't send an Authorization header,
+ * so the proxy falls back to the httpOnly access cookie for a private (owner-only,
+ * unpublished) video — the same trick the clip stream proxy uses (issue #282).
+ * `download` forces a save-to-disk response (Content-Disposition: attachment).
+ */
+export function videoStreamUrl(videoId: string, opts?: { download?: boolean }): string {
+  const base = `/api/videos/${encodeURIComponent(videoId)}/stream`
+  return opts?.download ? `${base}?download=1` : base
+}
+
+/** Publish a rendered video (owner-only) through the BFF proxy and classify it. */
+export async function publishVideo(
+  videoId: string,
+  accessToken: string
+): Promise<PublishVideoResult> {
+  let res: Response
+  try {
+    res = await fetch(`/api/videos/${encodeURIComponent(videoId)}/publish`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+    })
+  } catch {
+    return { status: "error", detail: "Publishing failed. Please try again." }
+  }
+
+  if (res.status === 401) return { status: "unauthorized" }
+  if (res.status === 404) return { status: "not_found" }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    return { status: "error", detail: extractDetail(body, "Publishing failed. Please try again.") }
+  }
+  const video = (await res.json().catch(() => null)) as VideoDetail | null
+  if (!video) return { status: "error", detail: "Server returned an unexpected response." }
+  return { status: "published", video }
+}
+
+/** Fetch one rendered video's metadata through the BFF proxy; `null` if absent. */
+export async function fetchVideoDetail(
+  videoId: string,
+  accessToken?: string
+): Promise<VideoDetail | null> {
+  return fetchVideoDetailAt(`/api/videos/${encodeURIComponent(videoId)}`, accessToken)
+}
+
+/** Fetch the published video for a clip (the song page's "Music video"); `null` if none. */
+export async function fetchPublishedVideoForClip(
+  clipId: string,
+  accessToken?: string
+): Promise<VideoDetail | null> {
+  return fetchVideoDetailAt(`/api/videos/for-clip/${encodeURIComponent(clipId)}`, accessToken)
+}
+
+/** Shared GET-and-parse for the two VideoDetail endpoints — 404/error both mean "no video". */
+async function fetchVideoDetailAt(url: string, accessToken?: string): Promise<VideoDetail | null> {
+  try {
+    const res = await fetch(url, {
+      headers: accessToken ? { authorization: `Bearer ${accessToken}` } : {},
+    })
+    if (!res.ok) return null
+    return (await res.json().catch(() => null)) as VideoDetail | null
+  } catch {
+    return null
   }
 }
 

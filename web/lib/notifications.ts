@@ -20,15 +20,17 @@ import {
   MusicNote01Icon,
   Upload01Icon,
   UserAdd01Icon,
+  Video01Icon,
 } from "@hugeicons/core-free-icons"
 
-/** The seven notification kinds from spec section 31. */
+/** The notification kinds (spec section 31, plus video_complete from US-22.3). */
 export type NotificationType =
   | "like"
   | "remix"
   | "follow"
   | "generation_complete"
   | "mastering_complete"
+  | "video_complete"
   | "distribution_update"
   | "system"
 
@@ -56,6 +58,7 @@ export const NOTIFICATION_META: Record<NotificationType, TypeMeta> = {
     label: "Generation",
   },
   mastering_complete: { icon: MixerIcon, tone: "text-amber-500", label: "Mastering" },
+  video_complete: { icon: Video01Icon, tone: "text-fuchsia-500", label: "Video" },
   distribution_update: { icon: Upload01Icon, tone: "text-sky-500", label: "Distribution" },
   system: { icon: Megaphone01Icon, tone: "text-muted-foreground", label: "System" },
 }

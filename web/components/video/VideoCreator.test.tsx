@@ -31,6 +31,11 @@ vi.mock("@/hooks/use-video-job", () => ({
   useVideoJob: () => ({ state: jobState, submit, retry: vi.fn(), reset: vi.fn() }),
 }))
 
+const track = vi.fn()
+vi.mock("@/contexts/video-jobs-context", () => ({
+  useVideoJobs: () => ({ track }),
+}))
+
 // Sibling components own their behavior tests; stub them to isolate composition.
 vi.mock("@/components/video/SourceSongCard", () => ({
   SourceSongCard: ({ clip: c }: { clip: Clip }) => (
@@ -66,6 +71,7 @@ describe("VideoCreator", () => {
   it("swaps the form for the progress view once a job is running", () => {
     jobState = {
       phase: "polling",
+      jobId: "j1",
       detail: { job_id: "j1", status: "rendering", progress: 10 },
     }
     render(<VideoCreator songId="c1" />)
@@ -73,6 +79,18 @@ describe("VideoCreator", () => {
       screen.queryByRole("button", { name: "mock-generate" })
     ).not.toBeInTheDocument()
     expect(screen.getByRole("status")).toHaveTextContent(/rendering/i)
+  })
+
+  it("registers a running job with the app-level watcher for cross-nav notifications", () => {
+    jobState = { phase: "polling", jobId: "job-42" }
+    render(<VideoCreator songId="c1" />)
+    expect(track).toHaveBeenCalledWith({ jobId: "job-42", songId: "c1" })
+  })
+
+  it("does not track while idle", () => {
+    jobState = { phase: "idle" }
+    render(<VideoCreator songId="c1" />)
+    expect(track).not.toHaveBeenCalled()
   })
 
   it("shows a loading state while the song loads", () => {
