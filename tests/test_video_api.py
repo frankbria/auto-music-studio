@@ -630,6 +630,22 @@ class TestVideoStream:
         resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
+    async def test_malformed_video_id_returns_404(self, client, settings, local_storage) -> None:
+        user = await _make_user("video-str-bad@example.com")
+        resp = await client.get(_stream_url("not-an-id"), headers=_auth_headers(user, settings))
+        assert resp.status_code == 404
+
+    async def test_multi_range_returns_206_multipart(self, client, settings, local_storage) -> None:
+        user, _ws, clip = await _user_with_clip("video-str-multi@example.com")
+        video = await _insert_video(user, clip)
+        headers = {**_auth_headers(user, settings), "Range": "bytes=0-3,8-11"}
+        resp = await client.get(_stream_url(str(video.id)), headers=headers)
+        assert resp.status_code == 206
+        assert resp.headers["content-type"].startswith("multipart/byteranges")
+        # Both requested slices appear in the multipart body.
+        assert _MP4_BYTES[0:4] in resp.content
+        assert _MP4_BYTES[8:12] in resp.content
+
 
 @pytest.mark.integration
 class TestForClip:

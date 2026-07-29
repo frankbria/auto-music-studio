@@ -65,6 +65,23 @@ describe("VideoDelivery", () => {
     expect(screen.getByRole("button", { name: /publish to song page/i })).toBeInTheDocument()
   })
 
+  it("maps unauthorized and not_found to their own messages", async () => {
+    publishMock.mockResolvedValueOnce({ status: "unauthorized" })
+    const { unmount } = render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/sign in again/i)
+    )
+    unmount()
+
+    publishMock.mockResolvedValueOnce({ status: "not_found" })
+    render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/no longer available/i)
+    )
+  })
+
   it("resets to generate another", () => {
     const onReset = vi.fn()
     render(<VideoDelivery videoId="v1" songId="s1" onReset={onReset} />)
