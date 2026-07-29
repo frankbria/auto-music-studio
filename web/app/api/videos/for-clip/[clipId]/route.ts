@@ -1,12 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/videos/for-clip/{clip_id} (US-22.3) — the
 // published video for a clip, backing the song page's "Music video" section.
 // Optional auth (the song page is public): auth is forwarded only when present.
 // Verbatim pass-through — 200 with the video, or 404 when the clip has no
 // published video (or isn't viewable), which the page reads as "no video".
+//
+// Anonymously reachable from the public song page, so it mirrors clips/[id]/public:
+// fetchWithTimeout fails closed (502) on a stalled backend, and clientIpHeaders
+// preserves the real client IP for backend rate limiting (issue #283).
 
 export async function GET(
   request: NextRequest,
@@ -16,9 +21,15 @@ export async function GET(
   const { clipId } = await ctx.params
   let res: Response
   try {
-    res = await fetch(
+    res = await fetchWithTimeout(
       `${BACKEND_URL}/api/v1/videos/for-clip/${encodeURIComponent(clipId)}`,
-      { headers: { accept: "application/json", ...(auth ? { authorization: auth } : {}) } }
+      {
+        headers: {
+          accept: "application/json",
+          ...clientIpHeaders(request),
+          ...(auth ? { authorization: auth } : {}),
+        },
+      }
     )
   } catch {
     return NextResponse.json(
