@@ -51,7 +51,7 @@ acemusic = "acemusic.cli:app"
 [project.optional-dependencies]
 audio-ml = [
     "demucs>=4.0",
-    "torch>=2.12.1",
+    "torch>=2.13.0",
     "torchaudio>=2.0",
 ]
 dev = [
