@@ -57,6 +57,14 @@ export function VideoJobsProvider({ children }: { children: React.ReactNode }) {
     activeRef.current = active
   }, [active])
 
+  // Keep notify in a ref too, so the poll loop can depend on nothing and mount
+  // exactly once — a reset of that timer would restart the delay and (if notify
+  // were ever non-stable) could drop a completion. Matches tokenRef/activeRef.
+  const notifyRef = useRef(notify)
+  useEffect(() => {
+    notifyRef.current = notify
+  }, [notify])
+
   const track = useCallback((job: TrackedJob) => {
     setActive((list) => (list.some((j) => j.jobId === job.jobId) ? list : [...list, job]))
   }, [])
@@ -74,7 +82,7 @@ export function VideoJobsProvider({ children }: { children: React.ReactNode }) {
         const result = await fetchVideoStatus(job.jobId, token)
         if (cancelled) return
         if (result.kind === "complete") {
-          notify({
+          notifyRef.current({
             type: "video_complete",
             message: "Your music video is ready.",
             href: `/video/${job.songId}`,
@@ -94,7 +102,9 @@ export function VideoJobsProvider({ children }: { children: React.ReactNode }) {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [notify])
+    // Depends on nothing: the loop reads token/watch-list/notify through refs, so
+    // it mounts once and never restarts its timer.
+  }, [])
 
   const value = useMemo<VideoJobsContextValue>(() => ({ track }), [track])
   return <VideoJobsContext.Provider value={value}>{children}</VideoJobsContext.Provider>
