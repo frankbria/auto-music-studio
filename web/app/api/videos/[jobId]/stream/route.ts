@@ -38,7 +38,9 @@ export async function GET(
   const range = request.headers.get("range")
   const { jobId: videoId } = await ctx.params
 
-  const download = new URL(request.url).searchParams.get("download")
+  // Match the value, not mere presence: this is a public proxy, so `?download=0`
+  // / `?download=false` must NOT force a download (only the "1" the client sends).
+  const download = new URL(request.url).searchParams.get("download") === "1"
   const query = download ? `?download=1` : ""
 
   let res: Response

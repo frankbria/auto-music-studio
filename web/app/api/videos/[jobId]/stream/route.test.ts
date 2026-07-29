@@ -71,6 +71,14 @@ describe("GET /api/videos/[jobId]/stream", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="video-v1.mp4"')
   })
 
+  it("does not force download for a falsy download value (public proxy)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("mp4", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await GET(req("http://localhost/api/videos/v1/stream?download=0"), ctx("v1"))
+    expect(fetchMock.mock.calls[0][0]).not.toContain("download")
+  })
+
   it("forwards Range and passes a 206 through with its range headers intact", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response("part", {

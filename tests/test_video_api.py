@@ -635,6 +635,16 @@ class TestVideoStream:
         resp = await client.get(_stream_url("not-an-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
+    async def test_unsatisfiable_range_returns_416(self, client, settings, local_storage) -> None:
+        # A wholly-unsatisfiable Range must 416 with the resource length so a
+        # seeking player can retry (mirrors the clip-audio endpoint).
+        user, _ws, clip = await _user_with_clip("video-str-416@example.com")
+        video = await _insert_video(user, clip)
+        headers = {**_auth_headers(user, settings), "Range": "bytes=999999-"}
+        resp = await client.get(_stream_url(str(video.id)), headers=headers)
+        assert resp.status_code == 416
+        assert resp.headers["content-range"] == f"bytes */{len(_MP4_BYTES)}"
+
     async def test_multi_range_returns_206_multipart(self, client, settings, local_storage) -> None:
         user, _ws, clip = await _user_with_clip("video-str-multi@example.com")
         video = await _insert_video(user, clip)
