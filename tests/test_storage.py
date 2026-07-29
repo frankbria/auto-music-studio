@@ -107,6 +107,44 @@ class TestLocalStorage:
         # Stored under the exact convention path.
         assert (tmp_path / "user123" / "ws456" / "clips" / "clip789.mp3").exists()
 
+    def test_size_returns_byte_length(self, tmp_path: Path):
+        backend = self._backend(tmp_path)
+        backend.upload(SAMPLE_KEY, b"twelve bytes")
+        assert backend.size(SAMPLE_KEY) == 12
+
+    def test_size_missing_raises(self, tmp_path: Path):
+        backend = self._backend(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            backend.size("does/not/exist.mp3")
+
+    def test_open_range_yields_inclusive_slice(self, tmp_path: Path):
+        backend = self._backend(tmp_path)
+        backend.upload(SAMPLE_KEY, b"0123456789")
+        assert b"".join(backend.open_range(SAMPLE_KEY, 2, 5)) == b"2345"
+
+    def test_open_range_full_object(self, tmp_path: Path):
+        backend = self._backend(tmp_path)
+        backend.upload(SAMPLE_KEY, b"0123456789")
+        assert b"".join(backend.open_range(SAMPLE_KEY, 0, 9)) == b"0123456789"
+
+    def test_open_range_chunks_large_object(self, tmp_path: Path, monkeypatch):
+        from acemusic import storage
+
+        monkeypatch.setattr(storage, "_STREAM_CHUNK_SIZE", 1024)
+        backend = self._backend(tmp_path)
+        blob = bytes(range(256)) * 40  # 10 KiB, larger than the shrunk chunk
+        backend.upload(SAMPLE_KEY, blob)
+        chunks = list(backend.open_range(SAMPLE_KEY, 0, len(blob) - 1))
+        assert b"".join(chunks) == blob
+        # Streams a chunk at a time rather than the whole object in one buffer.
+        assert all(len(c) <= 1024 for c in chunks)
+        assert len(chunks) > 1
+
+    def test_open_range_missing_raises(self, tmp_path: Path):
+        backend = self._backend(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            list(backend.open_range("does/not/exist.mp3", 0, 3))
+
 
 # ---------------------------------------------------------------------------
 # S3Storage (boto3 mocked)
@@ -187,6 +225,46 @@ class TestS3Storage:
         with pytest.raises(RuntimeError, match="network down"):
             backend.download(SAMPLE_KEY)
 
+    def test_size_returns_content_length(self):
+        backend, client, _ = self._backend_and_client()
+        client.head_object.return_value = {"ContentLength": 4096}
+        assert backend.size(SAMPLE_KEY) == 4096
+        client.head_object.assert_called_once_with(Bucket="my-bucket", Key=SAMPLE_KEY)
+
+    def test_size_missing_key_raises_file_not_found(self):
+        backend, client, _ = self._backend_and_client()
+        err = Exception("not found")
+        # HeadObject signals a miss with a bare 404 code (no NoSuchKey body).
+        err.response = {"Error": {"Code": "404"}}  # type: ignore[attr-defined]
+        client.head_object.side_effect = err
+        with pytest.raises(FileNotFoundError):
+            backend.size(SAMPLE_KEY)
+
+    def test_size_other_error_propagates(self):
+        backend, client, _ = self._backend_and_client()
+        err = Exception("access denied")
+        err.response = {"Error": {"Code": "AccessDenied"}}  # type: ignore[attr-defined]
+        client.head_object.side_effect = err
+        with pytest.raises(Exception, match="access denied"):
+            backend.size(SAMPLE_KEY)
+
+    def test_open_range_requests_byte_range_and_streams_chunks(self):
+        backend, client, _ = self._backend_and_client()
+        body = MagicMock()
+        body.iter_chunks.return_value = iter([b"23", b"45"])
+        client.get_object.return_value = {"Body": body}
+        assert b"".join(backend.open_range(SAMPLE_KEY, 2, 5)) == b"2345"
+        client.get_object.assert_called_once_with(Bucket="my-bucket", Key=SAMPLE_KEY, Range="bytes=2-5")
+        body.close.assert_called_once()
+
+    def test_open_range_missing_key_raises_file_not_found(self):
+        backend, client, _ = self._backend_and_client()
+        err = Exception("not found")
+        err.response = {"Error": {"Code": "NoSuchKey"}}  # type: ignore[attr-defined]
+        client.get_object.side_effect = err
+        with pytest.raises(FileNotFoundError):
+            list(backend.open_range(SAMPLE_KEY, 0, 3))
+
     def test_delete_calls_delete_object(self):
         backend, client, _ = self._backend_and_client()
         backend.delete(SAMPLE_KEY)
@@ -226,6 +304,52 @@ class TestS3Storage:
         with patch.object(storage, "boto3", None):
             with pytest.raises(storage.StorageError, match="boto3"):
                 storage.S3Storage(bucket="my-bucket")
+
+
+# ---------------------------------------------------------------------------
+# StorageBackend base-class defaults (subclasses overriding only the originals)
+# ---------------------------------------------------------------------------
+
+
+class TestStorageBackendDefaults:
+    """size()/open_range() are concrete on the base so existing subclasses that
+    implement only upload/download/delete/get_url keep instantiating and get a
+    correct (buffered) fallback — regression guard for the streaming addition."""
+
+    def _minimal_backend(self):
+        from acemusic.storage import StorageBackend
+
+        class Minimal(StorageBackend):
+            def __init__(self) -> None:
+                self._store: dict[str, bytes] = {}
+
+            def upload(self, path: str, data: bytes) -> None:
+                self._store[path] = data
+
+            def download(self, path: str) -> bytes:
+                if path not in self._store:
+                    raise FileNotFoundError(path)
+                return self._store[path]
+
+            def delete(self, path: str) -> None:
+                self._store.pop(path, None)
+
+            def get_url(self, path: str) -> str:
+                return path
+
+        return Minimal()
+
+    def test_subclass_without_size_or_open_range_instantiates(self):
+        # Would raise TypeError if the methods were still abstract.
+        backend = self._minimal_backend()
+        backend.upload(SAMPLE_KEY, b"0123456789")
+        assert backend.size(SAMPLE_KEY) == 10
+        assert b"".join(backend.open_range(SAMPLE_KEY, 2, 5)) == b"2345"
+
+    def test_default_size_missing_raises(self):
+        backend = self._minimal_backend()
+        with pytest.raises(FileNotFoundError):
+            backend.size("missing")
 
 
 # ---------------------------------------------------------------------------

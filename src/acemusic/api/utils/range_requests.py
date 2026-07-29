@@ -9,9 +9,16 @@ US-14.2 adds :func:`parse_range_header_multi` (comma-separated ranges) and
 the streaming endpoint, leaving the proven single-range path above untouched.
 """
 
+import asyncio
 import re
+import secrets
+from typing import TYPE_CHECKING
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Response, status
+from fastapi.responses import StreamingResponse
+
+if TYPE_CHECKING:
+    from acemusic.storage import StorageBackend
 
 # One range-spec in the bytes unit: "bytes=<start?>-<end?>".
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
@@ -168,3 +175,57 @@ def build_multipart_ranges_response(
         parts.append(content[start : end + 1])
     parts.append(f"\r\n--{boundary}--\r\n".encode("ascii"))
     return b"".join(parts), f"multipart/byteranges; boundary={boundary}"
+
+
+async def stream_stored_object(
+    storage: "StorageBackend",
+    path: str,
+    total: int,
+    media_type: str,
+    headers: dict[str, str],
+    range_header: str | None,
+) -> Response:
+    """Serve a stored object with Range support, streaming from ``storage``.
+
+    Single-range (206) and full-body (200) responses stream a chunk at a time via
+    :meth:`StorageBackend.open_range`, so a large object never buffers whole.
+    Multi-range (``multipart/byteranges``) is rare and size-bounded
+    (:data:`MAX_MULTIRANGE_SPECS` + a total-bytes cap), so it still buffers via
+    :meth:`StorageBackend.download`.
+
+    ``total`` is the object's byte length (from :meth:`StorageBackend.size`); the
+    caller resolves it first so existence is checked — and a 404 returned —
+    before any streaming headers are sent. ``headers`` are applied to every
+    branch; this adds ``Content-Length`` (and ``Content-Range`` for 206).
+    """
+    if range_header is not None:
+        ranges = parse_range_header_multi(range_header, total)  # may raise 416
+        if ranges is not None and len(ranges) == 1:
+            start, end = ranges[0]
+            part_headers = {
+                **headers,
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Content-Length": str(end - start + 1),
+            }
+            return StreamingResponse(
+                storage.open_range(path, start, end),
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=media_type,
+                headers=part_headers,
+            )
+        if ranges is not None:
+            # Multipart needs the whole object assembled; keep it off the loop.
+            data = await asyncio.to_thread(storage.download, path)
+            boundary = secrets.token_hex(16)
+            body, multipart_type = build_multipart_ranges_response(data, ranges, media_type, boundary)
+            return Response(
+                content=body,
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=multipart_type,
+                headers=headers,
+            )
+
+    # No (usable) Range: stream the full body rather than buffering it.
+    full_headers = {**headers, "Content-Length": str(total)}
+    body_iter = storage.open_range(path, 0, total - 1) if total > 0 else iter(())
+    return StreamingResponse(body_iter, media_type=media_type, headers=full_headers)
