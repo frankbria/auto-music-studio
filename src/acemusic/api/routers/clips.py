@@ -22,14 +22,13 @@ Access and filter rules live in :mod:`acemusic.api.services.clips`.
 import asyncio
 import logging
 import math
-import secrets
 from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from acemusic.storage import get_storage_backend
+from acemusic.storage import StorageBackend, get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_existing_user
 from ..models import Clip, VisibilityState
@@ -37,14 +36,34 @@ from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
 from ..utils.media_types import get_audio_content_type
-from ..utils.range_requests import (
-    build_multipart_ranges_response,
-    parse_range_header,
-    parse_range_header_multi,
-)
+from ..utils.range_requests import stream_stored_object
 from ..utils.rate_limit import enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
+
+
+async def _download_clip_audio(storage: StorageBackend, clip: Clip) -> bytes:
+    """Download a clip's stored audio, mapping a missing object to a 404.
+
+    The document exists but its object is gone — a data-integrity problem worth
+    logging, surfaced to the client as a plain 404. Storage I/O is synchronous,
+    so keep it off the event loop.
+    """
+    try:
+        return await asyncio.to_thread(storage.download, clip.file_path)
+    except FileNotFoundError:
+        logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
+
+
+async def _clip_audio_size(storage: StorageBackend, clip: Clip) -> int:
+    """Return a clip audio object's byte length, mapping a missing object to 404."""
+    try:
+        return await asyncio.to_thread(storage.size, clip.file_path)
+    except FileNotFoundError:
+        logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
+
 
 # Titles are stored verbatim and re-served on every list; cap them so one PATCH
 # cannot bloat the document (mirrors the users router's field caps).
@@ -407,20 +426,12 @@ async def get_clip_audio(
     clip = await get_clip_for_audio_access(clip_id, current.user_id)
 
     storage = get_storage_backend()
-    try:
-        # download() does file/network I/O via the sync backend; keep it off
-        # the event loop.
-        audio = await asyncio.to_thread(storage.download, clip.file_path)
-    except FileNotFoundError:
-        # The clip document exists but its object is gone — a data integrity
-        # problem worth logging, surfaced to the client as a plain 404.
-        logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
-
     native_format = clip_service.native_format(clip)
-    serve_format = native_format
-    converted = False
+
+    # Conversion needs the whole object (a re-encode has a different byte layout),
+    # so Range doesn't apply — download, convert, and serve buffered.
     if format is not None and format != native_format:
+        audio = await _download_clip_audio(storage, clip)
         try:
             audio = await asyncio.to_thread(convert_audio_format, audio, native_format, format)
         except Exception as exc:
@@ -429,29 +440,19 @@ async def get_clip_audio(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not convert audio to {format}.",
             ) from exc
-        serve_format = format
-        converted = True
+        return Response(content=audio, media_type=get_audio_content_type(format))
 
-    # Byte ranges address the stored representation; conversion produces a
-    # different byte layout, so Range (and the Accept-Ranges advertisement)
-    # only applies to unconverted responses.
-    headers = {} if converted else {"Accept-Ranges": "bytes"}
-    media_type = get_audio_content_type(serve_format)
-
-    range_header = request.headers.get("range")
-    if range_header is not None and not converted:
-        byte_range = parse_range_header(range_header, len(audio))
-        if byte_range is not None:
-            start, end = byte_range
-            headers["Content-Range"] = f"bytes {start}-{end}/{len(audio)}"
-            return Response(
-                content=audio[start : end + 1],
-                status_code=status.HTTP_206_PARTIAL_CONTENT,
-                media_type=media_type,
-                headers=headers,
-            )
-
-    return Response(content=audio, media_type=media_type, headers=headers)
+    # Unconverted: stream the stored representation with Range support so a large
+    # object is never buffered whole.
+    total = await _clip_audio_size(storage, clip)
+    return await stream_stored_object(
+        storage,
+        clip.file_path,
+        total,
+        get_audio_content_type(native_format),
+        {"Accept-Ranges": "bytes"},
+        request.headers.get("range"),
+    )
 
 
 @stream_router.get(
@@ -498,16 +499,16 @@ async def stream_clip_audio(
     clip = await get_clip_for_streaming(clip_id, current.user_id if current else None)
 
     storage = get_storage_backend()
-    try:
-        audio = await asyncio.to_thread(storage.download, clip.file_path)
-    except FileNotFoundError:
-        logger.warning("Clip %s exists but its audio object %r is missing", clip.id, clip.file_path)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.")
-
     native_format = clip_service.native_format(clip)
-    serve_format = native_format
-    converted = False
+    # Access-controlled: a shorter max-age bounds how long a shared cache keeps
+    # serving a clip after it is made private again (the origin check can't reach
+    # cached copies). Private clips stay client-only and uncached.
+    cache_control = "public, max-age=300" if clip.is_public else "private, no-store"
+
+    # Conversion needs the whole object and produces a different byte layout, so
+    # Range (and Accept-Ranges) doesn't apply — download, convert, serve buffered.
     if format is not None and format != native_format:
+        audio = await _download_clip_audio(storage, clip)
         try:
             audio = await asyncio.to_thread(convert_audio_format, audio, native_format, format)
         except Exception as exc:
@@ -516,41 +517,17 @@ async def stream_clip_audio(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not convert audio to {format}.",
             ) from exc
-        serve_format = format
-        converted = True
+        return Response(
+            content=audio, media_type=get_audio_content_type(format), headers={"Cache-Control": cache_control}
+        )
 
-    media_type = get_audio_content_type(serve_format)
-    # Public clips are immutable once shared, so shared caches may hold them;
-    # private clips stay client-only and uncached.
-    cache_control = "public, max-age=3600" if clip.is_public else "private, no-store"
-
-    # Conversion changes the byte layout, so Range (and Accept-Ranges) only
-    # applies to the unconverted stored representation — mirrors /audio.
-    if converted:
-        return Response(content=audio, media_type=media_type, headers={"Cache-Control": cache_control})
-
-    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
-    range_header = request.headers.get("range")
-    if range_header is not None:
-        ranges = parse_range_header_multi(range_header, len(audio))  # raises 416 if all unsatisfiable
-        if ranges is not None and len(ranges) == 1:
-            start, end = ranges[0]
-            headers["Content-Range"] = f"bytes {start}-{end}/{len(audio)}"
-            return Response(
-                content=audio[start : end + 1],
-                status_code=status.HTTP_206_PARTIAL_CONTENT,
-                media_type=media_type,
-                headers=headers,
-            )
-        if ranges is not None:
-            # secrets.token_hex gives a boundary that won't appear in the audio.
-            boundary = secrets.token_hex(16)
-            body, multipart_type = build_multipart_ranges_response(audio, ranges, media_type, boundary)
-            return Response(
-                content=body,
-                status_code=status.HTTP_206_PARTIAL_CONTENT,
-                media_type=multipart_type,
-                headers=headers,
-            )
-
-    return Response(content=audio, media_type=media_type, headers=headers)
+    # Unconverted: stream the stored representation with Range support.
+    total = await _clip_audio_size(storage, clip)
+    return await stream_stored_object(
+        storage,
+        clip.file_path,
+        total,
+        get_audio_content_type(native_format),
+        {"Accept-Ranges": "bytes", "Cache-Control": cache_control},
+        request.headers.get("range"),
+    )

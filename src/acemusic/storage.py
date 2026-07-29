@@ -15,9 +15,15 @@ from __future__ import annotations
 
 import mimetypes
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
 
 from .config import load_config
+
+# Chunk size for range streaming (:meth:`StorageBackend.open_range`). 1 MiB keeps
+# a large media transfer off a single whole-object buffer without a syscall per
+# byte. Module-level so tests can shrink it to exercise multi-chunk streaming.
+_STREAM_CHUNK_SIZE = 1 << 20
 
 # S3 error codes that mean "this object does not exist"; normalised to
 # FileNotFoundError so callers handle a miss identically across backends.
@@ -72,6 +78,27 @@ class StorageBackend(ABC):
     def download(self, path: str) -> bytes:
         """Return the bytes stored at ``path``; raise if it does not exist."""
 
+    def size(self, path: str) -> int:
+        """Return the byte length of ``path``; raise ``FileNotFoundError`` if missing.
+
+        Lets a caller serve a Range request (Content-Range, 416 checks) without
+        first downloading the whole object. Concrete (not abstract) so existing
+        subclasses keep working: the default buffers via :meth:`download`;
+        backends that can stat cheaply (local, S3) override it.
+        """
+        return len(self.download(path))
+
+    def open_range(self, path: str, start: int, end: int) -> Iterator[bytes]:
+        """Yield the inclusive byte range ``[start, end]`` of ``path`` in chunks.
+
+        Overriding backends stream a chunk at a time so a large object is never
+        buffered whole; this default slices a full :meth:`download` (fine for
+        small objects and test fakes). ``start``/``end`` must be valid
+        (``0 <= start <= end < size``); callers resolve them against
+        :meth:`size` first. Raises ``FileNotFoundError`` if the object is missing.
+        """
+        yield self.download(path)[start : end + 1]
+
     @abstractmethod
     def delete(self, path: str) -> None:
         """Remove ``path``. Missing objects are not an error (idempotent)."""
@@ -107,6 +134,22 @@ class LocalStorage(StorageBackend):
 
     def download(self, path: str) -> bytes:
         return self._full_path(path).read_bytes()
+
+    def size(self, path: str) -> int:
+        # stat() raises FileNotFoundError for a missing file — exactly our contract.
+        return self._full_path(path).stat().st_size
+
+    def open_range(self, path: str, start: int, end: int) -> Iterator[bytes]:
+        target = self._full_path(path)
+        with target.open("rb") as fh:  # raises FileNotFoundError if missing
+            fh.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = fh.read(min(_STREAM_CHUNK_SIZE, remaining))
+                if not chunk:  # object shorter than requested end — stop cleanly
+                    break
+                remaining -= len(chunk)
+                yield chunk
 
     def delete(self, path: str) -> None:
         self._full_path(path).unlink(missing_ok=True)
@@ -162,6 +205,29 @@ class S3Storage(StorageBackend):
                 raise FileNotFoundError(path) from exc
             raise
         return response["Body"].read()
+
+    def size(self, path: str) -> int:
+        try:
+            response = self.client.head_object(Bucket=self.bucket, Key=self._key(path))
+        except Exception as exc:  # noqa: BLE001 - inspected and re-raised below
+            # HeadObject returns no body, so a miss surfaces as a bare "404".
+            if _s3_error_code(exc) in _S3_NOT_FOUND_CODES:
+                raise FileNotFoundError(path) from exc
+            raise
+        return response["ContentLength"]
+
+    def open_range(self, path: str, start: int, end: int) -> Iterator[bytes]:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=self._key(path), Range=f"bytes={start}-{end}")
+        except Exception as exc:  # noqa: BLE001 - inspected and re-raised below
+            if _s3_error_code(exc) in _S3_NOT_FOUND_CODES:
+                raise FileNotFoundError(path) from exc
+            raise
+        body = response["Body"]
+        try:
+            yield from body.iter_chunks(chunk_size=_STREAM_CHUNK_SIZE)
+        finally:
+            body.close()
 
     def delete(self, path: str) -> None:
         # The S3 DeleteObject API is already idempotent for missing keys.
