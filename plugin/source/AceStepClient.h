@@ -38,28 +38,37 @@ struct ProbeResult
     @param baseUrl       e.g. "http://localhost:8001"; a trailing slash is fine
     @param apiKey        sent as `Authorization: Bearer …`; omitted when empty
     @param shouldCancel  polled around the blocking steps; may be null
-    @param timeoutMs     applies to the connect *and* to each read (see
-                         defaultProbeTimeoutMs)
+    @param timeoutMs     what exactly this bounds is platform-dependent — see
+                         defaultProbeTimeoutMs
 */
 ProbeResult probeAceStepServer (const juce::String& baseUrl,
                                 const juce::String& apiKey,
                                 std::function<bool()> shouldCancel = nullptr,
                                 int timeoutMs = 2000);
 
-/** Timeout for a probe, applied to the connect and to each socket read.
+/** Timeout for a probe.
 
     Sized against plugin teardown. juce::ThreadPool gives in-flight work ~5s before
     abandoning it (see BackgroundTaskQueue), and a probe running on a worker cannot
-    interrupt its own blocking socket call. A stalled server costs one connect
-    timeout plus one read timeout, so 2s keeps the normal worst case (~4s) inside
-    that budget where 3s (~6s) would have overrun it.
+    interrupt its own blocking call, so this has to leave room.
 
-    **Not a hard bound.** JUCE's read path polls with this timeout but then calls
-    `recv(..., MSG_WAITALL)`, which blocks until the requested bytes arrive. A server
-    that sends a partial body and then neither sends nor closes can still block a
-    worker indefinitely. Bounding that needs a watchdog thread to call
-    `WebInputStream::cancel()`; US-23.3 has to solve it properly for long-running
-    generation requests, so it is tracked rather than half-solved here. */
+    **What it bounds differs by platform**, which is worth knowing before tuning it:
+    - Linux/BSD (JUCE's own socket implementation, JUCE_USE_CURL=0): a *connect*
+      timeout, re-applied as the poll timeout before each read. A stalled server
+      therefore costs up to 2x this value.
+    - macOS: becomes NSURLRequest.timeoutInterval — an inactivity timeout across the
+      whole request, not just the connect.
+    - Windows: WinHTTP connect/send/receive timeouts.
+
+    So the honest worst case is ~2x on Linux (~4s at 2s, inside the ~5s budget; 3s
+    would have overrun it) and ~1x elsewhere.
+
+    **Not a hard bound on Linux.** The read path polls with this timeout but then
+    calls `recv(..., MSG_WAITALL)`, which blocks until the requested bytes arrive. A
+    server that sends a partial body and then neither sends nor closes can still
+    block a worker indefinitely. Bounding that needs a watchdog thread calling
+    `WebInputStream::cancel()`; US-23.3 has to build that anyway for long-running
+    generation requests, so it is tracked (#317) rather than half-solved here. */
 constexpr int defaultProbeTimeoutMs = 2000;
 
 /** Splits the model names out of a `/v1/stats` body. Exposed for testing the

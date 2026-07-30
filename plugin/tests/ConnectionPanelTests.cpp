@@ -21,6 +21,10 @@ public:
     {
     }
 
+    /** Stub response delay used to make an in-flight probe observable. Deliberately
+        well below defaultProbeTimeoutMs — see the note at its first use. */
+    static constexpr int kInFlightDelayMs = 700;
+
     bool pumpUntil (std::function<bool()> predicate, int timeoutMs = 10000)
     {
         auto* mm = juce::MessageManager::getInstance();
@@ -143,7 +147,11 @@ public:
 
             panel.getUrlEditor().setText (server.getBaseUrl(), juce::sendNotification);
             // Hold the response so there is a real in-flight window to observe.
-            server.setResponseDelayMs (1500);
+            // Must stay well under defaultProbeTimeoutMs: on macOS that timeout is an
+            // inactivity timeout across the WHOLE request, so a delay close to it
+            // makes the probe fail instead of merely being slow. 700ms is ~70 pump
+            // iterations, which is ample to observe.
+            server.setResponseDelayMs (kInFlightDelayMs);
 
             panel.getTestButton().triggerClick();
 
@@ -259,8 +267,10 @@ public:
                 auto& panel = editor.getConnectionPanel();
                 panel.getUrlEditor().setText (server.getBaseUrl(), juce::sendNotification);
 
-                // Hold the response so the probe really is in flight when the editor goes.
-                server.setResponseDelayMs (1200);
+                // Hold the response so the probe really is in flight when the editor
+                // goes. See kInFlightDelayMs for why this stays well under the probe
+                // timeout.
+                server.setResponseDelayMs (kInFlightDelayMs);
                 panel.getTestButton().triggerClick();
 
                 expect (pumpUntil ([&] { return processor.getConnectionManager().isBusy(); }, 2000),

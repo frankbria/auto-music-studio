@@ -1,9 +1,18 @@
 # AceMusic Studio — VST3 plugin
 
-JUCE-based plugin that brings ACE-Step generation into a DAW. This is the
-Stage 23 foundation (US-23.1): it builds, loads, shows a placeholder UI, and
-provides the off-audio-thread work queue that the connection, generation, and
-results panels will use.
+JUCE-based plugin that brings ACE-Step generation into a DAW.
+
+Stage 23 progress:
+
+| Story | State |
+| --- | --- |
+| US-23.1 — JUCE project, cross-platform build, off-audio-thread work queue | done |
+| US-23.2 — Connection panel: server URL, API key, status, model list | done |
+| US-23.3 — Generation panel | not started |
+| US-23.4 — Results panel and clip insertion | not started |
+| US-23.5 — Local cache and file management | not started |
+
+The Generation and Results panels are still outlined placeholders in the UI.
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -79,7 +88,8 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
    `%COMMONPROGRAMFILES%\VST3` on Windows).
 2. Reaper → Options → Preferences → Plug-ins → VST → *Re-scan*.
 3. Add it to a track with audio on it, open the UI, confirm the three panels
-   render and the audio is unchanged.
+   render (Connection is live; Generation and Results are placeholders) and the
+   audio is unchanged.
 
 ## Connecting to ACE-Step
 
@@ -134,15 +144,25 @@ Linux dependencies above and to the CI workflow.
 **All server traffic goes through `BackgroundTaskQueue`.** `processBlock` never
 allocates, locks, or touches the network.
 
-A probe running on a worker cannot interrupt its own blocking socket call, so its
-timeout (2s, applied to the connect and to each read) is sized against the ~5s
-`juce::ThreadPool` allows in-flight work during teardown: a stalled server costs
-one connect timeout plus one read timeout, ~4s, which fits.
+A probe running on a worker cannot interrupt its own blocking call, so its 2s
+timeout is sized against the ~5s `juce::ThreadPool` allows in-flight work during
+teardown.
 
-That is not a hard bound, and the README shouldn't pretend otherwise. JUCE's
-read path polls with the timeout but then calls `recv(…, MSG_WAITALL)`, which
+**What that timeout bounds is not the same on every platform**, which matters if
+you ever tune it:
+
+| Platform | `withConnectionTimeout` means | Stalled-server worst case |
+| --- | --- | --- |
+| Linux/BSD (JUCE sockets, `JUCE_USE_CURL=0`) | connect timeout, re-applied as the poll timeout before each read | ~2x (≈4s) |
+| macOS | `NSURLRequest.timeoutInterval` — inactivity across the whole request | ~1x (≈2s) |
+| Windows | WinHTTP connect/send/receive timeouts | ~1x (≈2s) |
+
+Even 4s fits the teardown budget; 3s (≈6s on Linux) would not have.
+
+It is still not a hard bound on Linux, and this file shouldn't pretend otherwise.
+The read path polls with the timeout but then calls `recv(…, MSG_WAITALL)`, which
 blocks until the requested bytes arrive — a server that sends a partial body and
-then neither sends nor closes can still block a worker indefinitely, and closing
-the plugin would abandon that thread. Bounding it properly needs a watchdog
-calling `WebInputStream::cancel()`, which US-23.3 has to build anyway for
-long-running generation requests.
+then neither sends nor closes can block a worker indefinitely, and closing the
+plugin would abandon that thread. Bounding it properly needs a watchdog calling
+`WebInputStream::cancel()`, which US-23.3 has to build anyway for long-running
+generation requests (tracked on #317).
