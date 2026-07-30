@@ -134,7 +134,15 @@ Linux dependencies above and to the CI workflow.
 **All server traffic goes through `BackgroundTaskQueue`.** `processBlock` never
 allocates, locks, or touches the network.
 
-A probe cannot be interrupted mid-connect from the thread it runs on, so its
-connection timeout (3s) is deliberately set below the ~5s that
-`juce::ThreadPool` allows in-flight work during teardown. The worst case is a
-bounded delay when closing the plugin, not an abandoned thread.
+A probe running on a worker cannot interrupt its own blocking socket call, so its
+timeout (2s, applied to the connect and to each read) is sized against the ~5s
+`juce::ThreadPool` allows in-flight work during teardown: a stalled server costs
+one connect timeout plus one read timeout, ~4s, which fits.
+
+That is not a hard bound, and the README shouldn't pretend otherwise. JUCE's
+read path polls with the timeout but then calls `recv(…, MSG_WAITALL)`, which
+blocks until the requested bytes arrive — a server that sends a partial body and
+then neither sends nor closes can still block a worker indefinitely, and closing
+the plugin would abandon that thread. Bounding it properly needs a watchdog
+calling `WebInputStream::cancel()`, which US-23.3 has to build anyway for
+long-running generation requests.

@@ -51,10 +51,14 @@ ProbeResult probeAceStepServer (const juce::String& baseUrl,
     }
 
     const juce::URL url (trimmed.trimCharactersAtEnd ("/") + "/v1/stats");
+    const auto scheme = url.getScheme().toLowerCase();
 
-    if (! url.isWellFormed() || url.getScheme().isEmpty())
+    // Check the scheme explicitly rather than just "non-empty": a typo'd ftp:// or
+    // file:// would otherwise get as far as the socket and come back as a vague
+    // connection error.
+    if (! url.isWellFormed() || (scheme != "http" && scheme != "https"))
     {
-        result.errorMessage = "Server URL is not a valid http(s) address";
+        result.errorMessage = "Server URL must start with http:// or https://";
         return result;
     }
 

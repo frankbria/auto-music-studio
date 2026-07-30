@@ -174,6 +174,40 @@ public:
             expectEquals (harness.manager().getSettings().modelId, juce::String ("ace-step-mini"));
         }
 
+        beginTest ("a status broadcast does not disturb the model the user picked");
+        {
+            // refreshFromManager runs on every broadcast; re-asserting the selection
+            // each time would yank an open dropdown around.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            Harness harness;
+            auto& panel = harness.panel();
+
+            panel.getUrlEditor().setText (server.getBaseUrl(), juce::sendNotification);
+            panel.getTestButton().triggerClick();
+            expect (pumpUntil ([&] { return panel.getModelSelector().getNumItems() == 2; }));
+
+            panel.getModelSelector().setSelectedId (2, juce::sendNotificationSync);
+            const auto chosen = panel.getModelSelector().getSelectedId();
+            expectEquals (chosen, 2);
+
+            // Re-probe: same server, same models, so the selection must survive.
+            // Wait on the server's request count, not on isBusy() — against a stub
+            // that answers in ~1ms the busy window can open and close inside a single
+            // pump slice, which would make this a race.
+            const auto requestsBefore = server.getRequestCount();
+            panel.getTestButton().triggerClick();
+
+            expect (pumpUntil ([&] { return server.getRequestCount() > requestsBefore; }, 5000),
+                    "re-probe never reached the server");
+            expect (pumpUntil ([&] { return ! harness.manager().isBusy(); }), "re-probe never finished");
+
+            expectEquals (panel.getModelSelector().getSelectedId(), 2,
+                          "a re-probe reset the user's model choice");
+            expectEquals (harness.manager().getSettings().modelId, juce::String ("ace-step-mini"));
+        }
+
         beginTest ("closing and reopening the window shows the live status, not a blank panel");
         {
             // This is why connection state lives on the processor: the editor is

@@ -200,12 +200,13 @@ void ConnectionPanel::refreshFromManager()
             modelSelector.addItem (models[i], i + 1);
     }
 
+    // Only touch the selection when it's actually wrong — reassigning it on every
+    // status broadcast would make an open dropdown jump under the user's cursor.
     const auto index = models.indexOf (settings.modelId);
+    const auto wantedId = index >= 0 ? index + 1 : 0;
 
-    if (index >= 0)
-        modelSelector.setSelectedId (index + 1, juce::dontSendNotification);
-    else
-        modelSelector.setSelectedId (0, juce::dontSendNotification);
+    if (modelSelector.getSelectedId() != wantedId)
+        modelSelector.setSelectedId (wantedId, juce::dontSendNotification);
 }
 
 void ConnectionPanel::commitSettingsFromEditors()

@@ -147,6 +147,18 @@ public:
 
             const auto bare = probeAceStepServer ("localhost:8001", "");
             expect (! bare.ok, "accepted a URL with no scheme");
+            expect (bare.errorMessage.contains ("http://"), bare.errorMessage);
+
+            // A typo'd scheme must be rejected up front, not turned into a vague
+            // connection error after a pointless socket attempt.
+            for (const auto* bad : { "ftp://localhost:8001", "file:///etc/passwd", "ws://localhost:8001" })
+            {
+                const auto rejected = probeAceStepServer (bad, "");
+                expect (! rejected.ok, juce::String ("accepted ") + bad);
+                expectEquals (rejected.errorMessage,
+                              juce::String ("Server URL must start with http:// or https://"),
+                              juce::String ("wrong rejection reason for ") + bad);
+            }
         }
 
         beginTest ("returns cancelled, not an error, when asked to stop");
