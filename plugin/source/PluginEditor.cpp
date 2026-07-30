@@ -35,8 +35,11 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (resultsPanel);
 
     setResizable (true, true);
-    setResizeLimits (480, 360, 1600, 1200);
-    setSize (720, 520);
+    // Three real panels need the room: the 520 default from US-23.1 left Results
+    // squeezed to a single line once it had waveforms in it. The minimum is raised
+    // for the same reason — below this the clip rows have nowhere to draw.
+    setResizeLimits (560, 620, 1600, 1400);
+    setSize (760, 720);
 }
 
 PluginEditor::~PluginEditor() = default;
