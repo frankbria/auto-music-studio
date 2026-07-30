@@ -40,6 +40,7 @@ set(ACEMUSIC_SOURCES
     source/ConnectionPanel.cpp
     source/ConnectionSettings.cpp
     source/GenerationManager.cpp
+    source/GenerationPanel.cpp
     source/GenerationRequest.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp)
@@ -103,6 +104,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/ConnectionSettingsTests.cpp
     tests/GenerationClientTests.cpp
     tests/GenerationManagerTests.cpp
+    tests/GenerationPanelTests.cpp
     tests/GenerationRequestTests.cpp
     tests/PluginProcessorTests.cpp)
 

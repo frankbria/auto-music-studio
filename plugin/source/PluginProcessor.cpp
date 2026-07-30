@@ -14,7 +14,8 @@ PluginProcessor::PluginProcessor (std::unique_ptr<juce::PropertiesFile> properti
                                 .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       properties (std::move (propertiesToUse)),
-      connectionManager (backgroundQueue, properties.get())
+      connectionManager (backgroundQueue, properties.get()),
+      generationManager (backgroundQueue, connectionManager)
 {
     if (probeOnLoad)
     {

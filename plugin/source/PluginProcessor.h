@@ -2,6 +2,7 @@
 
 #include "BackgroundTaskQueue.h"
 #include "ConnectionManager.h"
+#include "GenerationManager.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -74,6 +75,10 @@ public:
         the editor so it survives the plugin window being closed. */
     ConnectionManager& getConnectionManager() noexcept        { return connectionManager; }
 
+    /** The current generation, for the same reason: a job runs for minutes and must
+        outlive the plugin window. */
+    GenerationManager& getGenerationManager() noexcept        { return generationManager; }
+
 private:
     // Declaration order is load-bearing: members are destroyed in reverse, so the
     // queue (declared first) is torn down last — after connectionManager is gone. A
@@ -82,6 +87,7 @@ private:
 
     std::unique_ptr<juce::PropertiesFile> properties;
     ConnectionManager connectionManager;
+    GenerationManager generationManager;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
