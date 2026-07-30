@@ -109,7 +109,8 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/GenerationManagerTests.cpp
     tests/GenerationPanelTests.cpp
     tests/GenerationRequestTests.cpp
-    tests/PluginProcessorTests.cpp)
+    tests/PluginProcessorTests.cpp
+    tests/ResultsPanelTests.cpp)
 
 target_include_directories(AceMusicPluginTests PRIVATE source tests)
 

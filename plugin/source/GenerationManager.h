@@ -72,6 +72,15 @@ public:
 
     static juce::String describe (State) noexcept;
 
+    /** Test seam. Publishes `files` as if a generation had just produced them, so a
+        test about the *results* UI does not have to drive a whole submit/poll/download
+        cycle first. Message thread only; broadcasts like a real completion.
+
+        Named unmistakably: nothing in the plugin calls this. US-23.5 will need a real
+        way to restore clips from the cache, and that should be its own API with its
+        own semantics rather than this quietly becoming production behaviour. */
+    void setClipsForTesting (const juce::Array<juce::File>& files);
+
     /** Where clips are written. Provisional — US-23.5 owns cache management and makes
         this configurable; until then it sits beside the settings file so the plugin
         keeps everything in one place. */

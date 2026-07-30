@@ -104,6 +104,17 @@ void GenerationManager::start (const GenerationRequest& request)
     queue.enqueue ([context] { runGeneration (context); });
 }
 
+void GenerationManager::setClipsForTesting (const juce::Array<juce::File>& files)
+{
+    clips = files;
+    state = files.isEmpty() ? State::idle : State::complete;
+    statusMessage = files.isEmpty()
+                        ? describe (State::idle)
+                        : juce::String (files.size())
+                              + (files.size() == 1 ? " clip ready" : " clips ready");
+    sendChangeMessage();
+}
+
 void GenerationManager::cancel()
 {
     if (! isBusy())
