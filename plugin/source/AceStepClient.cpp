@@ -440,6 +440,9 @@ juce::String downloadAudio (const juce::String& audioUrl,
     if (const auto statusError = describeStatus (stream.getStatusCode(), key); statusError.isNotEmpty())
         return statusError;
 
+    // Known up front when the server sends Content-Length; -1 when it does not.
+    const auto expectedBytes = stream.getTotalLength();
+
     destination.getParentDirectory().createDirectory();
 
     // Write to a temporary and move on success, so a cancelled or failed download
@@ -481,6 +484,16 @@ juce::String downloadAudio (const juce::String& audioUrl,
     {
         temp.deleteFile();
         return "The server returned an empty audio file";
+    }
+
+    // A dropped connection mid-transfer just ends the read loop, which would
+    // otherwise move a truncated file into place and call it a clip.
+    if (expectedBytes > 0 && temp.getSize() < expectedBytes)
+    {
+        const auto got = temp.getSize();
+        temp.deleteFile();
+        return "Download was cut short (" + juce::String (got) + " of "
+             + juce::String (expectedBytes) + " bytes)";
     }
 
     destination.deleteFile();
