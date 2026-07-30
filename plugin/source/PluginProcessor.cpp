@@ -27,14 +27,16 @@ PluginProcessor::PluginProcessor (std::unique_ptr<juce::PropertiesFile> properti
 
 PluginProcessor::~PluginProcessor() = default;
 
-void PluginProcessor::prepareToPlay (double, int)
+void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Nothing to allocate yet — generation happens off the audio thread and
-    // lands as clips in the host, not as a live signal path.
+    // The clip preview is the only thing in this plugin that produces audio, and it
+    // allocates everything it needs here rather than in the callback.
+    clipPlayer.prepare (sampleRate, samplesPerBlock);
 }
 
 void PluginProcessor::releaseResources()
 {
+    clipPlayer.releaseResources();
 }
 
 bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -59,8 +61,12 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
         buffer.clear (channel, 0, buffer.getNumSamples());
 
-    // No allocation, no locks, no network here — ever. Server calls go through
-    // getBackgroundQueue().
+    // Preview playback is mixed on top of the passthrough. It allocates nothing and
+    // never blocks — it try-locks and skips the block if a clip is mid-load.
+    clipPlayer.addTo (buffer);
+
+    // No allocation, no blocking locks, no network here — ever. Server calls go
+    // through getBackgroundQueue().
 }
 
 juce::AudioProcessorEditor* PluginProcessor::createEditor()

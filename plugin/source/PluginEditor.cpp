@@ -16,7 +16,8 @@ namespace colours
 PluginEditor::PluginEditor (PluginProcessor& p)
     : juce::AudioProcessorEditor (&p),
       connectionPanel (p.getConnectionManager()),
-      generationPanel (p.getGenerationManager(), p.getConnectionManager())
+      generationPanel (p.getGenerationManager(), p.getConnectionManager()),
+      resultsPanel (p.getGenerationManager(), p.getClipPlayer(), p)
 {
     titleLabel.setText (p.getName(), juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (20.0f, juce::Font::bold));
@@ -59,34 +60,11 @@ void PluginEditor::resized()
     connectionPanel.setBounds (area.removeFromTop (132));
     area.removeFromTop (12);
 
-    // Generation needs the room now that it has real controls; Results is still a
-    // placeholder until US-23.4.
-    generationPanel.setBounds (area.removeFromTop (juce::jmax (240, area.getHeight() * 2 / 3)));
+    // Both panels have real content now, so split the remaining space rather than
+    // starving Results.
+    generationPanel.setBounds (area.removeFromTop (juce::jmax (230, area.getHeight() * 55 / 100)));
     area.removeFromTop (12);
     resultsPanel.setBounds (area);
-}
-
-//==============================================================================
-PluginEditor::PlaceholderPanel::PlaceholderPanel (juce::String panelTitle)
-    : title (std::move (panelTitle))
-{
-}
-
-void PluginEditor::PlaceholderPanel::paint (juce::Graphics& g)
-{
-    auto bounds = getLocalBounds().toFloat();
-
-    g.setColour (colours::panelFill);
-    g.fillRoundedRectangle (bounds, 6.0f);
-
-    g.setColour (colours::panelEdge);
-    g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.0f);
-
-    g.setColour (colours::textDim);
-    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText (title.toUpperCase(),
-                getLocalBounds().reduced (12, 8).removeFromTop (18),
-                juce::Justification::centredLeft);
 }
 
 } // namespace acemusic

@@ -36,6 +36,7 @@ set(ACEMUSIC_JUCE_DEFS
 set(ACEMUSIC_SOURCES
     source/AceStepClient.cpp
     source/BackgroundTaskQueue.cpp
+    source/ClipPlayer.cpp
     source/ConnectionManager.cpp
     source/ConnectionPanel.cpp
     source/ConnectionSettings.cpp
@@ -43,7 +44,8 @@ set(ACEMUSIC_SOURCES
     source/GenerationPanel.cpp
     source/GenerationRequest.cpp
     source/PluginProcessor.cpp
-    source/PluginEditor.cpp)
+    source/PluginEditor.cpp
+    source/ResultsPanel.cpp)
 
 # ---------------------------------------------------------------------------
 # Plugin
@@ -99,6 +101,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/TestMain.cpp
     tests/AceStepClientTests.cpp
     tests/BackgroundTaskQueueTests.cpp
+    tests/ClipPlayerTests.cpp
     tests/ConnectionManagerTests.cpp
     tests/ConnectionPanelTests.cpp
     tests/ConnectionSettingsTests.cpp

@@ -135,6 +135,16 @@ public:
     }
 
 private:
+    /** Content-Length from a header block, or 0 when absent. */
+    static int contentLengthOf (const juce::String& headers)
+    {
+        for (const auto& line : juce::StringArray::fromLines (headers))
+            if (line.startsWithIgnoreCase ("Content-Length:"))
+                return line.fromFirstOccurrenceOf (":", false, false).trim().getIntValue();
+
+        return 0;
+    }
+
     void run() override
     {
         while (! threadShouldExit())
@@ -148,15 +158,41 @@ private:
             if (connection == nullptr)
                 continue;   // listener closed, or a transient accept failure
 
-            // Wait for the request bytes before reading. A non-blocking read straight
-            // after accept returns 0 on macOS/Windows, where the request has not
-            // necessarily landed yet — which silently left lastRequest empty and made
-            // the header assertions fail while the response still went out fine.
-            char buffer[8192] = {};
-            int bytesRead = 0;
+            // Read until the whole request is in hand.
+            //
+            // A single read is not enough: it can return before the request has fully
+            // arrived (nothing at all straight after accept on macOS/Windows), and a
+            // POST's headers and body routinely land in separate segments off
+            // loopback — which left the body empty on macOS while the response still
+            // went out fine, so every body assertion failed and nothing else did.
+            juce::String whole;
 
-            if (connection->waitUntilReady (true, 3000) == 1)
-                bytesRead = connection->read (buffer, sizeof (buffer) - 1, false);
+            for (;;)
+            {
+                if (connection->waitUntilReady (true, 3000) != 1)
+                    break;
+
+                char chunk[8192] = {};
+                const auto got = connection->read (chunk, sizeof (chunk) - 1, false);
+
+                if (got <= 0)
+                    break;
+
+                whole += juce::String::fromUTF8 (chunk, got);
+
+                const auto headerEnd = whole.indexOf ("\r\n\r\n");
+
+                if (headerEnd < 0)
+                    continue;   // still mid-headers
+
+                const auto expectedBody = contentLengthOf (whole.substring (0, headerEnd));
+                const auto bodySoFar = whole.substring (headerEnd + 4);
+
+                if ((int) bodySoFar.getNumBytesAsUTF8() >= expectedBody)
+                    break;
+            }
+
+            const auto bytesRead = (int) whole.getNumBytesAsUTF8();
 
             juce::String body, status;
             {
@@ -164,7 +200,6 @@ private:
 
                 if (bytesRead > 0)
                 {
-                    const auto whole = juce::String::fromUTF8 (buffer, bytesRead);
                     lastRequest = whole.upToFirstOccurrenceOf ("\r\n\r\n", false, false);
                     lastBody    = whole.fromFirstOccurrenceOf ("\r\n\r\n", false, false);
 

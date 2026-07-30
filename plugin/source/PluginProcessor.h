@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BackgroundTaskQueue.h"
+#include "ClipPlayer.h"
 #include "ConnectionManager.h"
 #include "GenerationManager.h"
 
@@ -79,6 +80,10 @@ public:
         outlive the plugin window. */
     GenerationManager& getGenerationManager() noexcept        { return generationManager; }
 
+    /** Previews a generated clip through the host's output. Lives here because
+        processBlock is what mixes it. */
+    ClipPlayer& getClipPlayer() noexcept                      { return clipPlayer; }
+
 private:
     // Declaration order is load-bearing: members are destroyed in reverse, so the
     // queue (declared first) is torn down last — after connectionManager is gone. A
@@ -88,6 +93,7 @@ private:
     std::unique_ptr<juce::PropertiesFile> properties;
     ConnectionManager connectionManager;
     GenerationManager generationManager;
+    ClipPlayer clipPlayer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };
