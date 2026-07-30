@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include <atomic>
 #include <functional>
 
 namespace acemusic
@@ -15,11 +16,24 @@ namespace acemusic
     class at all — it allocates and takes locks. Enqueue from the message thread
     (UI callbacks, timers) and marshal results back with callOnMessageThread().
 
-    On destruction, running work is interrupted and waited on for at most
-    shutdownTimeoutMs. A task that can block for longer than that — an HTTP
-    request, say — is responsible for being cancellable by its owner
-    (juce::WebInputStream::cancel), otherwise closing the plugin in a DAW will
-    stall for the full duration of the request.
+    ## Shutdown
+
+    The destructor sets isStopping() and then lets ~juce::ThreadPool() interrupt and
+    wait for in-flight work: removeAllJobs (true, 5000) followed by stopThreads(),
+    which allows each worker a further 500ms. A task that ignores the stop request
+    is abandoned still running after that — measured at 5502ms for one worker, with
+    the task unfinished — which in a DAW means teardown blocks for five and a half
+    seconds and leaves a thread behind.
+
+    So any task that can run longer than a few hundred milliseconds — every HTTP
+    request — MUST cooperate: poll isStopping() around its slow steps and cancel its
+    I/O (juce::WebInputStream::cancel) when it goes true. A cooperating task lets
+    teardown return in single-digit milliseconds, which the test suite covers; the
+    5502ms figure above came from a throwaway probe, not a committed test, because
+    the abandoned thread it leaves behind has no business running in CI.
+
+    The queue outlives all of its jobs, so calling isStopping() from inside a task
+    is always safe.
 */
 class BackgroundTaskQueue
 {
@@ -28,7 +42,7 @@ public:
                            request/response traffic against a local server. */
     explicit BackgroundTaskQueue (int numThreads = 1);
 
-    /** Waits up to shutdownTimeoutMs for running work, then abandons the rest. */
+    /** Signals in-flight work to stop, then waits for it. See "Shutdown" above. */
     ~BackgroundTaskQueue();
 
     /** Queues `task` to run on a worker thread. Safe to call from any
@@ -43,6 +57,12 @@ public:
         juce::WeakReference. */
     static void callOnMessageThread (std::function<void()> callback);
 
+    /** True once the queue has started shutting down.
+
+        Long-running tasks must poll this and return early — that is the only
+        thing keeping plugin teardown from blocking on a slow request. */
+    bool isStopping() const noexcept                          { return stopping.load(); }
+
     /** Blocks until the queue is empty or the timeout elapses.
         @returns true if the queue drained. For tests and shutdown only. */
     bool waitForAll (int timeoutMs);
@@ -50,10 +70,12 @@ public:
     /** Jobs queued or running right now. */
     int getNumPending() const;
 
-    /** How long the destructor waits for in-flight work before abandoning it. */
-    static constexpr int shutdownTimeoutMs = 2000;
-
 private:
+    // Declared before `pool` so it is destroyed *after* it: members tear down in
+    // reverse order, so a job still winding up inside ~ThreadPool() can safely
+    // read this flag.
+    std::atomic<bool> stopping { false };
+
     juce::ThreadPool pool;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BackgroundTaskQueue)

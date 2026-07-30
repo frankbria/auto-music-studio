@@ -14,9 +14,11 @@ BackgroundTaskQueue::BackgroundTaskQueue (int numThreads)
 
 BackgroundTaskQueue::~BackgroundTaskQueue()
 {
-    // Interrupt rather than wait indefinitely: a request against a hung server
-    // must never stall the DAW closing the plugin.
-    pool.removeAllJobs (true, shutdownTimeoutMs);
+    // Tell cooperating tasks to bail out. ~ThreadPool() then does the interrupting
+    // and waiting itself (removeAllJobs (true, 5000) followed by stopThreads()),
+    // so calling removeAllJobs here as well would only add another timeout to the
+    // worst case without changing the outcome.
+    stopping = true;
 }
 
 void BackgroundTaskQueue::enqueue (std::function<void()> task)

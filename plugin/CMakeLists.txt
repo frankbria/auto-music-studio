@@ -102,6 +102,8 @@ target_compile_definitions(AceMusicPluginTests PRIVATE
     # callOnMessageThread deliveries. Test target only.
     JUCE_MODAL_LOOPS_PERMITTED=1)
 
+# No juce_recommended_lto_flags here, unlike the plugin: LTO roughly doubles the
+# link time and the test binary is never shipped.
 target_link_libraries(AceMusicPluginTests PRIVATE
     juce::juce_audio_utils
     juce::juce_recommended_config_flags

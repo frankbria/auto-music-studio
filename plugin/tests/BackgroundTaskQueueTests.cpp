@@ -82,6 +82,61 @@ public:
             expect (queue.waitForAll (5000), "queue did not drain after release");
         }
 
+        beginTest ("a cooperating task sees isStopping and lets teardown finish promptly");
+        {
+            // This is the guarantee the header promises, and the only thing keeping
+            // a DAW from freezing on teardown while a request is in flight.
+            struct Shared
+            {
+                std::atomic<bool> sawStopRequest { false };
+                std::atomic<bool> finished { false };
+                std::atomic<int>  pollCount { 0 };
+            };
+
+            auto shared = std::make_shared<Shared>();
+            juce::uint32 teardownMs = 0;
+
+            {
+                BackgroundTaskQueue queue;
+
+                queue.enqueue ([shared, &queue]
+                {
+                    // Stands in for a long HTTP request that checks for cancellation
+                    // between steps. Would run for 10s if nothing interrupted it.
+                    for (int i = 0; i < 1000; ++i)
+                    {
+                        if (queue.isStopping())
+                        {
+                            shared->sawStopRequest = true;
+                            break;
+                        }
+
+                        ++shared->pollCount;
+                        juce::Thread::sleep (10);
+                    }
+
+                    shared->finished = true;
+                });
+
+                // Let the worker get into its loop before we tear down.
+                while (shared->pollCount.load() < 2)
+                    juce::Thread::sleep (5);
+
+                const auto start = juce::Time::getMillisecondCounter();
+                // queue goes out of scope here — destructor runs
+                (void) start;
+                teardownMs = start;
+            }
+
+            teardownMs = juce::Time::getMillisecondCounter() - teardownMs;
+
+            expect (shared->sawStopRequest.load(), "the task never observed isStopping()");
+            expect (shared->finished.load(), "the task did not finish before teardown returned");
+            expect (teardownMs < 1000,
+                    "teardown took " + juce::String ((int) teardownMs)
+                        + "ms — a cooperating task should let it return almost immediately");
+        }
+
         beginTest ("callOnMessageThread delivers on the message thread");
         {
             // Shared state, not stack references: if the callback is late it
