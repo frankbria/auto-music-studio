@@ -1,0 +1,145 @@
+name: Plugin
+
+# The VST3 plugin is a separate C++ build from the Python backend, so it gets its
+# own workflow and only runs when plugin code (or this file) changes.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "plugin/**"
+      - ".github/workflows/plugin.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - ".github/workflows/plugin.yml"
+
+concurrency:
+  group: plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGINVAL_VERSION: v1.0.3
+  # Acceptance criterion for US-23.1 (#315): installed VST3 under 25MB.
+  MAX_VST3_KB: 25600
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: "Linux (GCC)"
+            pluginval_asset: pluginval_Linux.zip
+            pluginval_bin: pluginval-dist/pluginval
+          - os: macos-latest
+            name: "macOS (clang)"
+            pluginval_asset: pluginval_macOS.zip
+            pluginval_bin: pluginval-dist/pluginval.app/Contents/MacOS/pluginval
+          - os: windows-latest
+            name: "Windows (MSVC)"
+            pluginval_asset: pluginval_Windows.zip
+            pluginval_bin: pluginval-dist/pluginval.exe
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # JUCE's Linux requirements minus curl and webkit — the plugin is built
+          # with JUCE_USE_CURL=0 and JUCE_WEB_BROWSER=0. xvfb runs the editor
+          # tests headlessly.
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev \
+            libgl1-mesa-dev xvfb
+
+      # The JUCE shallow clone is the slowest part of a cold configure.
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: plugin/build/_deps
+          key: juce-${{ runner.os }}-${{ hashFiles('plugin/CMakeLists.txt') }}
+
+      - name: Set headless prefix
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "XVFB=xvfb-run -a" >> "$GITHUB_ENV"
+          else
+            echo "XVFB=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure
+        working-directory: plugin
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3
+        working-directory: plugin
+        run: cmake --build build --config Release --target AceMusicPlugin_VST3 --parallel
+
+      - name: Build AU
+        if: runner.os == 'macOS'
+        working-directory: plugin
+        run: cmake --build build --config Release --target AceMusicPlugin_AU --parallel
+
+      - name: Build unit tests
+        working-directory: plugin
+        run: cmake --build build --config Release --target AceMusicPluginTests --parallel
+
+      - name: Unit tests
+        working-directory: plugin
+        run: $XVFB ctest --test-dir build -C Release --output-on-failure
+
+      - name: Locate the VST3
+        id: artefacts
+        working-directory: plugin
+        run: |
+          vst3=$(find build -maxdepth 6 -name "*.vst3" | head -1)
+          if [ -z "$vst3" ]; then
+            echo "::error::No VST3 was produced"
+            exit 1
+          fi
+          echo "vst3=$vst3" >> "$GITHUB_OUTPUT"
+          echo "Found VST3: $vst3"
+
+      - name: Check VST3 size
+        working-directory: plugin
+        run: |
+          size_kb=$(du -sk "${{ steps.artefacts.outputs.vst3 }}" | cut -f1)
+          echo "VST3 installed size: ${size_kb}KB (limit ${MAX_VST3_KB}KB)"
+          if [ "$size_kb" -gt "$MAX_VST3_KB" ]; then
+            echo "::error::VST3 is ${size_kb}KB, over the ${MAX_VST3_KB}KB limit"
+            exit 1
+          fi
+
+      - name: Install pluginval
+        run: |
+          curl -sSL -o pluginval.zip \
+            "https://github.com/Tracktion/pluginval/releases/download/${PLUGINVAL_VERSION}/${{ matrix.pluginval_asset }}"
+          unzip -q pluginval.zip -d pluginval-dist
+          chmod +x "${{ matrix.pluginval_bin }}" || true
+
+      - name: pluginval (strictness 10)
+        working-directory: plugin
+        run: |
+          $XVFB "$GITHUB_WORKSPACE/${{ matrix.pluginval_bin }}" \
+            --strictness-level 10 \
+            --validate "${{ steps.artefacts.outputs.vst3 }}"
+
+      - name: Upload VST3
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acemusic-vst3-${{ runner.os }}
+          path: plugin/build/AceMusicPlugin_artefacts/**/VST3/
+          if-no-files-found: warn
