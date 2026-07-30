@@ -92,12 +92,16 @@ public:
     /** Re-reads the cache from disk. */
     void refreshCache();
 
+    /** Applies whatever is typed in the cache path box. */
+    void commitCachePath();
+
     /** Past generations, newest first, as last read. */
     const juce::Array<ClipCache::Entry>& getCacheEntries() const noexcept { return cacheEntries; }
 
     juce::ListBox& getHistoryList() noexcept                  { return historyList; }
     juce::TextButton& getDeleteButton() noexcept              { return deleteButton; }
     juce::TextButton& getClearCacheButton() noexcept          { return clearCacheButton; }
+    juce::TextEditor& getCachePathEditor() noexcept           { return cachePathEditor; }
     juce::Label& getCacheSizeLabel() noexcept                 { return cacheSizeLabel; }
     ClipCache& getCache() noexcept                            { return cache; }
 
@@ -143,6 +147,8 @@ private:
     juce::TextButton deleteButton { "Delete" };
     juce::TextButton clearCacheButton { "Clear cache" };
     juce::Label      cacheSizeLabel;
+    juce::Label      cachePathLabel;
+    juce::TextEditor cachePathEditor;
     juce::Array<ClipCache::Entry> cacheEntries;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ResultsPanel)

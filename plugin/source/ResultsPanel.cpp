@@ -177,6 +177,23 @@ ResultsPanel::ResultsPanel (GenerationManager& generationToUse,
     };
     addAndMakeVisible (clearCacheButton);
 
+    cachePathLabel.setText ("Cache", juce::dontSendNotification);
+    cachePathLabel.setFont (juce::FontOptions (11.0f));
+    cachePathLabel.setColour (juce::Label::textColourId, resultColours::textDim);
+    addAndMakeVisible (cachePathLabel);
+
+    cachePathEditor.setColour (juce::TextEditor::backgroundColourId, resultColours::rowFill);
+    cachePathEditor.setColour (juce::TextEditor::textColourId, resultColours::text);
+    cachePathEditor.setColour (juce::TextEditor::outlineColourId, resultColours::edge);
+    cachePathEditor.setFont (juce::FontOptions (11.0f));
+    cachePathEditor.setTextToShowWhenEmpty ("default", resultColours::textDim);
+    // Committing on focus loss or Enter, not on every keystroke — otherwise a
+    // half-typed path would be saved and the browser would flicker through
+    // nonexistent directories.
+    cachePathEditor.onReturnKey = [this] { commitCachePath(); };
+    cachePathEditor.onFocusLost = [this] { commitCachePath(); };
+    addAndMakeVisible (cachePathEditor);
+
     cacheSizeLabel.setFont (juce::FontOptions (11.0f));
     cacheSizeLabel.setColour (juce::Label::textColourId, resultColours::textDim);
     cacheSizeLabel.setJustificationType (juce::Justification::centredRight);
@@ -263,9 +280,25 @@ void ResultsPanel::HistoryModel::listBoxItemDoubleClicked (int row, const juce::
         owner.player.toggle (entry.clips.getFirst());
 }
 
+void ResultsPanel::commitCachePath()
+{
+    const auto typed = cachePathEditor.getText().trim();
+    const auto wanted = typed.isEmpty() ? juce::File() : juce::File (typed);
+
+    if (wanted.getFullPathName() == cache.getDirectory().getFullPathName())
+        return;
+
+    cache.setDirectory (wanted);
+    refreshCache();
+}
+
 void ResultsPanel::refreshCache()
 {
     cacheEntries = cache.listEntries();
+
+    if (! cachePathEditor.hasKeyboardFocus (true))
+        cachePathEditor.setText (cache.getDirectory().getFullPathName(), false);
+
     historyList.updateContent();
     historyList.repaint();
 
@@ -418,6 +451,11 @@ void ResultsPanel::resized()
         auto browserHeader = browser.removeFromTop (16);
         historyTitle.setBounds (browserHeader.removeFromLeft (140));
         cacheSizeLabel.setBounds (browserHeader);
+
+        auto pathRow = browser.removeFromTop (20);
+        cachePathLabel.setBounds (pathRow.removeFromLeft (44));
+        cachePathEditor.setBounds (pathRow.reduced (0, 1));
+        browser.removeFromTop (4);
 
         auto browserFooter = browser.removeFromBottom (22);
         deleteButton.setBounds (browserFooter.removeFromLeft (80).reduced (0, 1));

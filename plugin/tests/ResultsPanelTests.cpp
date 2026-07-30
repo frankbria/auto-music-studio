@@ -87,12 +87,40 @@ public:
     struct Harness
     {
         Harness()
-            : processor (nullptr, false),
+            : settingsDir (makeTempDir()),
+              processor (makeSettings (settingsDir), false),
               editor (processor)
         {
             editor.setSize (720, 700);
             processor.prepareToPlay (44100.0, 512);
         }
+
+        ~Harness()  { settingsDir.deleteRecursively(); }
+
+        static juce::File makeTempDir()
+        {
+            auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                           .getChildFile ("acemusic-panel-"
+                                          + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)));
+            dir.createDirectory();
+            return dir;
+        }
+
+        /** A real settings file in a throwaway directory: the cache path is a
+            *persisted* setting, so a null store cannot exercise it — and the user's
+            real config must never be touched by a test. */
+        static std::unique_ptr<juce::PropertiesFile> makeSettings (const juce::File& dir)
+        {
+            juce::PropertiesFile::Options options;
+            options.applicationName = "PanelTest";
+            options.filenameSuffix  = ".settings";
+            options.storageFormat   = juce::PropertiesFile::storeAsXML;
+
+            return std::make_unique<juce::PropertiesFile> (dir.getChildFile ("PanelTest.settings"),
+                                                           options);
+        }
+
+        juce::File settingsDir;
 
         ResultsPanel& panel()          { return editor.getResultsPanel(); }
         GenerationManager& generation() { return processor.getGenerationManager(); }
@@ -378,6 +406,44 @@ public:
             expect (! harness.processor.getClipPlayer().isPlaying(),
                     "kept playing a clip that was just deleted");
             expect (! run.isDirectory());
+        }
+
+        beginTest ("AC: a custom cache path typed into the panel is honoured");
+        {
+            Harness harness;
+
+            auto custom = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getChildFile ("acemusic-custom-"
+                                             + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)));
+            custom.createDirectory();
+
+            // A run that only exists in the custom location.
+            ScopedClips clips;
+            auto run = custom.getChildFile ("20260730-150000-custom");
+            run.createDirectory();
+            clips.files[0].copyFileTo (run.getChildFile ("clip-1.wav"));
+            expect (ClipCache::writeMetadata (run, "only in the custom path", "m", 7.0));
+
+            harness.panel().getCachePathEditor().setText (custom.getFullPathName(), false);
+            harness.panel().commitCachePath();
+
+            expectEquals (harness.panel().getCache().getDirectory().getFullPathName(),
+                          custom.getFullPathName());
+
+            auto found = false;
+            for (const auto& entry : harness.panel().getCacheEntries())
+                if (entry.prompt == "only in the custom path")
+                    found = true;
+
+            expect (found, "the browser did not read the custom cache path");
+
+            // Blank resets to the default rather than pointing at the filesystem root.
+            harness.panel().getCachePathEditor().setText ("", false);
+            harness.panel().commitCachePath();
+            expectEquals (harness.panel().getCache().getDirectory().getFullPathName(),
+                          ClipCache::getDefaultDirectory().getFullPathName());
+
+            custom.deleteRecursively();
         }
 
         beginTest ("delete does nothing with no selection");
