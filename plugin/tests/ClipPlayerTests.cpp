@@ -265,7 +265,7 @@ public:
             expect (true, "survived an oversized block");
         }
 
-        beginTest ("playing survives prepareToPlay being called again");
+        beginTest ("playing survives prepareToPlay being called again, in both directions");
         {
             ScopedWav wav;
 
@@ -276,19 +276,30 @@ public:
             expect (processor.getClipPlayer().load (wav.file));
             processor.getClipPlayer().play();
 
-            // Hosts re-prepare on sample-rate or block-size changes.
+            // Hosts re-prepare on sample-rate or block-size changes. Shrinking first.
             processor.prepareToPlay (48000.0, 256);
+            expect (renderPeak (processor, 4, 256) > 0.1f, "went silent after shrinking the block");
 
-            juce::AudioBuffer<float> buffer (2, 256);
+            // And then GROWING, which is the direction that matters: the scratch
+            // buffer has to actually grow, or every block gets clamped to the old
+            // smaller size and the preview plays fast with gaps.
+            processor.prepareToPlay (44100.0, 1024);
+
+            juce::AudioBuffer<float> buffer (2, 1024);
             juce::MidiBuffer midi;
+            float tailPeak = 0.0f;
 
             for (int i = 0; i < 4; ++i)
             {
                 buffer.clear();
                 processor.processBlock (buffer, midi);
+                // The second half is what a stale, too-small scratch buffer would
+                // leave silent.
+                tailPeak = juce::jmax (tailPeak, buffer.getMagnitude (0, 512, 512));
             }
 
-            expect (true, "survived a re-prepare while playing");
+            expect (tailPeak > 0.1f,
+                    "the back half of a grown block was silent — the scratch buffer did not grow");
         }
     }
 };

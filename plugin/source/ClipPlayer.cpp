@@ -6,11 +6,17 @@ namespace acemusic
 ClipPlayer::ClipPlayer()
 {
     formats.registerBasicFormats();
+    readAheadThread.startThread (juce::Thread::Priority::normal);
 }
 
 ClipPlayer::~ClipPlayer()
 {
     transport.setSource (nullptr);
+
+    // The buffering source points at the reader, so it goes first.
+    bufferedSource.reset();
+    readerSource.reset();
+    readAheadThread.stopThread (2000);
 }
 
 void ClipPlayer::prepare (double sampleRate, int blockSize)
@@ -19,6 +25,9 @@ void ClipPlayer::prepare (double sampleRate, int blockSize)
     preparedBlockSize  = juce::jmax (1, blockSize);
 
     // Everything the audio thread touches is sized here, on the message thread.
+    // avoidReallocating only skips the *reallocation* when the existing block is
+    // already big enough (juce_AudioSampleBuffer.h:434) — it still grows, and `size`
+    // is updated either way, so a host re-preparing with a larger block is fine.
     scratch.setSize (2, preparedBlockSize, false, true, true);
     transport.prepareToPlay (preparedBlockSize, preparedSampleRate);
 
@@ -41,10 +50,17 @@ bool ClipPlayer::load (const juce::File& file)
     if (reader == nullptr)
         return false;
 
-    auto newSource = std::make_unique<juce::AudioFormatReaderSource> (reader.release(), true);
+    auto newReader = std::make_unique<juce::AudioFormatReaderSource> (reader.release(), true);
+
+    // Read-ahead so the audio thread never waits on the disk. AudioFormatReaderSource
+    // reads lazily block by block; on its own that would put file I/O in the host's
+    // callback — fine on a warm local SSD, not fine on a network home directory or
+    // with antivirus in the path.
+    auto newBuffered = std::make_unique<juce::BufferingAudioSource> (newReader.get(), readAheadThread,
+                                                                     false, 48000, 2);
 
     if (prepared)
-        newSource->prepareToPlay (preparedBlockSize, preparedSampleRate);
+        newBuffered->prepareToPlay (preparedBlockSize, preparedSampleRate);
 
     {
         // The audio thread only tryEnter()s this, so holding it briefly here costs a
@@ -52,8 +68,13 @@ bool ClipPlayer::load (const juce::File& file)
         const juce::SpinLock::ScopedLockType lock (sourceLock);
 
         transport.setSource (nullptr);
-        readerSource = std::move (newSource);
-        transport.setSource (readerSource.get(),
+
+        // Same ordering on teardown: the buffering source points at the old reader.
+        bufferedSource.reset();
+        readerSource = std::move (newReader);
+        bufferedSource = std::move (newBuffered);
+
+        transport.setSource (bufferedSource.get(),
                              0, nullptr,
                              readerSource->getAudioFormatReader()->sampleRate);
         transport.setPosition (0.0);
@@ -67,7 +88,7 @@ void ClipPlayer::play()
 {
     const juce::SpinLock::ScopedLockType lock (sourceLock);
 
-    if (readerSource == nullptr)
+    if (bufferedSource == nullptr)
         return;
 
     // Restart from the top if the previous play ran to the end.
@@ -129,7 +150,7 @@ void ClipPlayer::addTo (juce::AudioBuffer<float>& buffer)
     // skip this block instead of waiting on it.
     const juce::SpinLock::ScopedTryLockType lock (sourceLock);
 
-    if (! lock.isLocked() || readerSource == nullptr)
+    if (! lock.isLocked() || bufferedSource == nullptr)
         return;
 
     const auto numSamples = buffer.getNumSamples();

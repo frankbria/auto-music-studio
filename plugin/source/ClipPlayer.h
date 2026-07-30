@@ -15,8 +15,13 @@ namespace acemusic
 
     That makes this the first part of the plugin that touches the audio thread, so:
 
-    - load() reads the file on the **message** thread and prepares the source there.
-    - processBlock only ever pulls from an already-prepared source into an
+    - load() opens the file on the **message** thread and prepares the source there.
+    - The reader is wrapped in a juce::BufferingAudioSource, so the actual disk reads
+      happen on a background thread. Without it the audio callback would be doing
+      file I/O block by block — fine on a warm local SSD, not fine on a network home
+      directory or with antivirus in the path, which is exactly the class of stall
+      the rest of this design exists to avoid.
+    - processBlock only ever pulls from an already-buffered source into an
       already-allocated buffer.
     - Swapping the loaded clip takes a juce::SpinLock, and the audio side uses
       **tryEnter**: if a load is mid-swap the block is skipped rather than blocked.
@@ -65,7 +70,12 @@ public:
 private:
     juce::AudioFormatManager formats;
     juce::AudioTransportSource transport;
+
+    /** Feeds the buffering source; owned here so it is torn down with the player. */
+    juce::TimeSliceThread readAheadThread { "AceMusic clip read-ahead" };
+
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    std::unique_ptr<juce::BufferingAudioSource> bufferedSource;
 
     /** Guards the reader swap. The audio side only ever tryEnter()s it.
         Mutable so the const accessors can take it too. */
