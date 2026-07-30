@@ -283,6 +283,113 @@ public:
                     "invented a playhead position with no host transport: " + text);
         }
 
+        beginTest ("AC: the browser lists past generations with their metadata");
+        {
+            // A fresh plugin with a cache already on disk — i.e. what the user sees
+            // after closing and reopening, which session history alone cannot do.
+            ScopedClips clips;
+            auto cacheDir = ClipCache::getDefaultDirectory();
+            auto run = cacheDir.getChildFile ("20260730-120000-run1");
+            run.createDirectory();
+
+            for (int i = 0; i < clips.files.size(); ++i)
+                clips.files[i].copyFileTo (run.getChildFile ("clip-" + juce::String (i + 1) + ".wav"));
+
+            expect (ClipCache::writeMetadata (run, "cached prompt", "ace-step-1.5", 42.0));
+
+            Harness harness;
+            harness.panel().refreshCache();
+
+            const auto& entries = harness.panel().getCacheEntries();
+            expect (entries.size() >= 1, "the browser found nothing on disk");
+
+            const ClipCache::Entry* found = nullptr;
+            for (const auto& entry : entries)
+                if (entry.prompt == "cached prompt")
+                    found = &entry;
+
+            expect (found != nullptr, "the cached generation was not listed");
+            expectWithinAbsoluteError (found->durationSeconds, 42.0, 0.001);
+            expectEquals (found->clips.size(), 2);
+
+            expect (harness.panel().getCacheSizeLabel().getText().isNotEmpty(),
+                    "no cache size reported");
+
+            run.deleteRecursively();
+        }
+
+        beginTest ("AC: deleting from the browser removes it from disk and the list");
+        {
+            ScopedClips clips;
+            auto cacheDir = ClipCache::getDefaultDirectory();
+            auto run = cacheDir.getChildFile ("20260730-130000-doomed");
+            run.createDirectory();
+            clips.files[0].copyFileTo (run.getChildFile ("clip-1.wav"));
+            expect (ClipCache::writeMetadata (run, "delete me", "m", 5.0));
+
+            Harness harness;
+            harness.panel().refreshCache();
+
+            int row = -1;
+            const auto& entries = harness.panel().getCacheEntries();
+            for (int i = 0; i < entries.size(); ++i)
+                if (entries.getReference (i).prompt == "delete me")
+                    row = i;
+
+            expect (row >= 0, "could not find the run to delete");
+
+            harness.panel().getHistoryList().selectRow (row);
+            expect (harness.panel().deleteSelectedEntry(), "delete reported failure");
+
+            expect (! run.isDirectory(), "the run is still on disk");
+
+            for (const auto& entry : harness.panel().getCacheEntries())
+                expect (entry.prompt != "delete me", "still listed after deletion");
+        }
+
+        beginTest ("deleting the generation that is playing stops it first");
+        {
+            // Deleting the file underneath a playing clip is a bad time.
+            ScopedClips clips;
+            auto cacheDir = ClipCache::getDefaultDirectory();
+            auto run = cacheDir.getChildFile ("20260730-140000-playing");
+            run.createDirectory();
+            auto cached = run.getChildFile ("clip-1.wav");
+            clips.files[0].copyFileTo (cached);
+            expect (ClipCache::writeMetadata (run, "playing one", "m", 5.0));
+
+            Harness harness;
+            harness.panel().refreshCache();
+
+            expect (harness.processor.getClipPlayer().load (cached));
+            harness.processor.getClipPlayer().play();
+            expect (harness.processor.getClipPlayer().isPlaying());
+
+            int row = -1;
+            const auto& entries = harness.panel().getCacheEntries();
+            for (int i = 0; i < entries.size(); ++i)
+                if (entries.getReference (i).prompt == "playing one")
+                    row = i;
+
+            expect (row >= 0);
+            harness.panel().getHistoryList().selectRow (row);
+            expect (harness.panel().deleteSelectedEntry());
+
+            expect (! harness.processor.getClipPlayer().isPlaying(),
+                    "kept playing a clip that was just deleted");
+            expect (! run.isDirectory());
+        }
+
+        beginTest ("delete does nothing with no selection");
+        {
+            Harness harness;
+            harness.panel().refreshCache();
+            harness.panel().getHistoryList().deselectAllRows();
+
+            expect (! harness.panel().deleteSelectedEntry(),
+                    "claimed to delete something with nothing selected");
+        }
+
         beginTest ("closing the window while a clip plays does not stop it or crash");
         {
             // Playback lives on the processor, so it survives the editor.

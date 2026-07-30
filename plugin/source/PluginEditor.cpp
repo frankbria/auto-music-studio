@@ -17,7 +17,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     : juce::AudioProcessorEditor (&p),
       connectionPanel (p.getConnectionManager()),
       generationPanel (p.getGenerationManager(), p.getConnectionManager()),
-      resultsPanel (p.getGenerationManager(), p.getClipPlayer(), p)
+      resultsPanel (p.getGenerationManager(), p.getClipPlayer(), p, p.getSettings())
 {
     titleLabel.setText (p.getName(), juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (20.0f, juce::Font::bold));

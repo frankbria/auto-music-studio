@@ -1,3 +1,4 @@
+#include "ClipCache.h"
 #include "PluginEditor.h"
 #include "StubAceStepServer.h"
 
@@ -51,7 +52,7 @@ public:
 
     struct ScopedClipCleanup
     {
-        ~ScopedClipCleanup()  { GenerationManager::getClipDirectory().deleteRecursively(); }
+        ~ScopedClipCleanup()  { ClipCache::getDefaultDirectory().deleteRecursively(); }
     };
 
     /** Points the harness at `server` and waits for a green connection. */

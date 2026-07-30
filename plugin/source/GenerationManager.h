@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AceStepClient.h"
+#include "ClipCache.h"
 #include "BackgroundTaskQueue.h"
 #include "ConnectionManager.h"
 #include "GenerationRequest.h"
@@ -42,7 +43,10 @@ public:
         cancelled
     };
 
-    GenerationManager (BackgroundTaskQueue& queue, ConnectionManager& connection);
+    /** @param settings  used to resolve the configured cache path; null uses the default */
+    GenerationManager (BackgroundTaskQueue& queue,
+                       ConnectionManager& connection,
+                       juce::PropertiesFile* settings = nullptr);
     ~GenerationManager() override;
 
     /** Starts a generation. Returns immediately; watch for change messages.
@@ -81,10 +85,8 @@ public:
         own semantics rather than this quietly becoming production behaviour. */
     void setClipsForTesting (const juce::Array<juce::File>& files);
 
-    /** Where clips are written. Provisional — US-23.5 owns cache management and makes
-        this configurable; until then it sits beside the settings file so the plugin
-        keeps everything in one place. */
-    static juce::File getClipDirectory();
+    /** Where clips are written: the configured cache path, or ClipCache's default. */
+    juce::File getClipDirectory() const;
 
     /** How long between polls of /query_result. */
     static constexpr int pollIntervalMs = 2000;
@@ -107,6 +109,7 @@ private:
         juce::String serverUrl;
         juce::String apiKey;
         int runId = 0;
+        juce::File clipDirectory;
         std::shared_ptr<RunControl> control;
         juce::WeakReference<GenerationManager> owner;
         BackgroundTaskQueue* queue = nullptr;
@@ -118,6 +121,7 @@ private:
 
     BackgroundTaskQueue& queue;
     ConnectionManager& connection;
+    ClipCache cache;
 
     State state = State::idle;
     juce::String statusMessage { "Idle" };

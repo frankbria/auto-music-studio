@@ -1,3 +1,4 @@
+#include "ClipCache.h"
 #include "GenerationManager.h"
 #include "StubAceStepServer.h"
 
@@ -73,7 +74,7 @@ public:
     /** Cleans up whatever the manager wrote under its clip directory. */
     struct ScopedClipCleanup
     {
-        ~ScopedClipCleanup()  { GenerationManager::getClipDirectory().deleteRecursively(); }
+        ~ScopedClipCleanup()  { ClipCache::getDefaultDirectory().deleteRecursively(); }
     };
 
     void runTest() override

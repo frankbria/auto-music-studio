@@ -3,9 +3,12 @@
 namespace acemusic
 {
 
-GenerationManager::GenerationManager (BackgroundTaskQueue& queueToUse, ConnectionManager& connectionToUse)
+GenerationManager::GenerationManager (BackgroundTaskQueue& queueToUse,
+                                      ConnectionManager& connectionToUse,
+                                      juce::PropertiesFile* settings)
     : queue (queueToUse),
-      connection (connectionToUse)
+      connection (connectionToUse),
+      cache (settings)
 {
 }
 
@@ -36,10 +39,9 @@ juce::String GenerationManager::describe (State state) noexcept
     return "Unknown";
 }
 
-juce::File GenerationManager::getClipDirectory()
+juce::File GenerationManager::getClipDirectory() const
 {
-    const auto properties = ConnectionSettings::createPropertiesFile();
-    return properties->getFile().getParentDirectory().getChildFile ("clips");
+    return cache.getDirectory();
 }
 
 bool GenerationManager::isBusy() const noexcept
@@ -89,6 +91,8 @@ void GenerationManager::start (const GenerationRequest& request)
     context.serverUrl      = connection.getSettings().serverUrl;
     context.apiKey         = connection.getSettings().apiKey;
     context.runId          = currentRun;
+    // Resolved here, on the message thread, so the worker never reads settings.
+    context.clipDirectory  = getClipDirectory();
     context.control        = std::make_shared<RunControl>();
     context.owner          = this;
     context.queue          = &queue;
@@ -258,7 +262,11 @@ void GenerationManager::runGeneration (RunContext context)
 
     applyState (context, State::downloading, {});
 
-    const auto directory = getClipDirectory().getChildFile ("run-" + juce::String (context.runId));
+    // A timestamped name keeps runs unique across plugin restarts, where the run
+    // counter starts over and would otherwise overwrite an earlier generation.
+    const auto directory = context.clipDirectory.getChildFile (
+        juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S")
+            + "-run" + juce::String (context.runId));
     directory.createDirectory();
 
     juce::Array<juce::File> downloaded;
@@ -290,6 +298,13 @@ void GenerationManager::runGeneration (RunContext context)
         applyState (context, State::cancelled, {});
         return;
     }
+
+    // Record what this was, so the cache browser can describe it later. The audio
+    // files carry none of it.
+    ClipCache::writeMetadata (directory,
+                              context.request.prompt,
+                              context.request.model,
+                              (double) context.request.durationSeconds);
 
     applyClips (context, downloaded);
     applyState (context, State::complete,

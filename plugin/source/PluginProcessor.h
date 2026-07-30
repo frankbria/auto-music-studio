@@ -84,6 +84,9 @@ public:
         processBlock is what mixes it. */
     ClipPlayer& getClipPlayer() noexcept                      { return clipPlayer; }
 
+    /** The plugin config file, or null when running without one. */
+    juce::PropertiesFile* getSettings() noexcept              { return properties.get(); }
+
 private:
     // Declaration order is load-bearing: members are destroyed in reverse, so the
     // queue (declared first) is torn down last — after connectionManager is gone. A
