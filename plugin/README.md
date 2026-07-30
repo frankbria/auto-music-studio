@@ -81,6 +81,47 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
 3. Add it to a track with audio on it, open the UI, confirm the three panels
    render and the audio is unchanged.
 
+## Connecting to ACE-Step
+
+The plugin expects an ACE-Step server; the default is `http://localhost:8001`.
+Set the URL (and an API key, if your server needs one) in the plugin's
+**Connection** panel and press *Test Connection*. The indicator reads:
+
+| Colour | Meaning |
+| --- | --- |
+| Grey | Not tried yet, or the server was changed since the last attempt |
+| Amber | Probe in flight |
+| Green | Server answered and reported at least one model |
+| Red | Unreachable, rejected the API key, or returned nothing usable |
+
+The probe is `GET /v1/stats` — ACE-Step has no `/health` endpoint. The model
+dropdown is filled from `data.models[].name` in that response. A successful
+connection auto-selects the first model if the saved one is no longer offered.
+
+The plugin auto-connects once when the host loads it. That never blocks the DAW:
+it queues the probe and updates the indicator when the result arrives.
+
+### Settings file
+
+Connection settings persist across DAW sessions in a plain config file, so they
+follow you into new projects:
+
+| Platform | Path |
+| --- | --- |
+| Linux | `~/.config/AutoMusicStudio/AceMusicStudio.settings` |
+| macOS | `~/Library/Application Support/AutoMusicStudio/AceMusicStudio.settings` |
+| Windows | `%APPDATA%\AutoMusicStudio\AceMusicStudio.settings` |
+
+> **The API key is stored in that file in plaintext.** On Linux and macOS the
+> file is chmod `0600` (owner read/write only); on Windows it inherits the
+> per-user AppData ACL. This is the same posture as `~/.aws/credentials` or
+> `~/.npmrc` — JUCE has no keychain abstraction, and a per-platform secure store
+> is out of scope here. Delete the file to clear a stored key.
+
+Settings live in this file rather than the plugin's project state on purpose:
+project state would only come back inside the same DAW project, and the
+requirement is to survive *sessions*.
+
 ## Networking
 
 The plugin is built with `JUCE_USE_CURL=0`. It talks to a *local* ACE-Step
@@ -92,3 +133,8 @@ Linux dependencies above and to the CI workflow.
 
 **All server traffic goes through `BackgroundTaskQueue`.** `processBlock` never
 allocates, locks, or touches the network.
+
+A probe cannot be interrupted mid-connect from the thread it runs on, so its
+connection timeout (3s) is deliberately set below the ~5s that
+`juce::ThreadPool` allows in-flight work during teardown. The worst case is a
+bounded delay when closing the plugin, not an abandoned thread.

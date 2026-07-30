@@ -34,7 +34,11 @@ set(ACEMUSIC_JUCE_DEFS
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 set(ACEMUSIC_SOURCES
+    source/AceStepClient.cpp
     source/BackgroundTaskQueue.cpp
+    source/ConnectionManager.cpp
+    source/ConnectionPanel.cpp
+    source/ConnectionSettings.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp)
 
@@ -70,6 +74,7 @@ target_compile_definitions(AceMusicPlugin PUBLIC
 target_link_libraries(AceMusicPlugin
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_data_structures
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -89,10 +94,14 @@ juce_add_console_app(AceMusicPluginTests PRODUCT_NAME "AceMusicPluginTests")
 target_sources(AceMusicPluginTests PRIVATE
     ${ACEMUSIC_SOURCES}
     tests/TestMain.cpp
+    tests/AceStepClientTests.cpp
     tests/BackgroundTaskQueueTests.cpp
+    tests/ConnectionManagerTests.cpp
+    tests/ConnectionPanelTests.cpp
+    tests/ConnectionSettingsTests.cpp
     tests/PluginProcessorTests.cpp)
 
-target_include_directories(AceMusicPluginTests PRIVATE source)
+target_include_directories(AceMusicPluginTests PRIVATE source tests)
 
 target_compile_definitions(AceMusicPluginTests PRIVATE
     ${ACEMUSIC_JUCE_DEFS}
@@ -106,6 +115,7 @@ target_compile_definitions(AceMusicPluginTests PRIVATE
 # link time and the test binary is never shipped.
 target_link_libraries(AceMusicPluginTests PRIVATE
     juce::juce_audio_utils
+    juce::juce_data_structures
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 

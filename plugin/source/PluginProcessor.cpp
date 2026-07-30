@@ -5,10 +5,23 @@ namespace acemusic
 {
 
 PluginProcessor::PluginProcessor()
+    : PluginProcessor (ConnectionSettings::createPropertiesFile(), true)
+{
+}
+
+PluginProcessor::PluginProcessor (std::unique_ptr<juce::PropertiesFile> propertiesToUse, bool probeOnLoad)
     : juce::AudioProcessor (BusesProperties()
                                 .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+      properties (std::move (propertiesToUse)),
+      connectionManager (backgroundQueue, properties.get())
 {
+    if (probeOnLoad)
+    {
+        // Auto-connect on load. This only enqueues — the host is never blocked, and
+        // the indicator updates when the probe comes back.
+        connectionManager.autoConnect();
+    }
 }
 
 PluginProcessor::~PluginProcessor() = default;
