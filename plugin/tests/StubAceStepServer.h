@@ -65,6 +65,17 @@ public:
     void setResponseBody (const juce::String& body)      { const juce::ScopedLock sl (lock); responseBody = body; }
     void setStatusLine (const juce::String& line)        { const juce::ScopedLock sl (lock); statusLine = line; }
 
+    /** Serve `body` for `pathFragment` but advertise `claimedLength` in
+        Content-Length, so the client sees a transfer that ends early. */
+    void setTruncatedResponse (const juce::String& pathFragment,
+                               const juce::String& body,
+                               int claimedLength)
+    {
+        const juce::ScopedLock sl (lock);
+        routes.set (pathFragment, body);
+        overstatedLength = claimedLength;
+    }
+
     /** Makes the server sit on its response until releaseResponse() is called, so a
         test can observe a probe while it is genuinely in flight.
 
@@ -169,7 +180,9 @@ private:
                     {
                         const auto fragment = route.name.toString();
 
-                        if (lastPath.contains (fragment))
+                        // Skip an exact match: it was already counted above, and
+                        // counting it twice makes getRequestCountFor() lie.
+                        if (fragment != lastPath && lastPath.contains (fragment))
                         {
                             pathCounts.set (fragment, pathCounts[fragment] + 1);
                             pathBodies.set (fragment, lastBody);
@@ -197,9 +210,13 @@ private:
             while (holding.load() && ! threadShouldExit())
                 releaseEvent.wait (50);
 
+            const auto overstated = overstatedLength.load();
+            const auto declaredLength = overstated > 0 ? overstated
+                                                       : (int) body.getNumBytesAsUTF8();
+
             const auto response = status + "\r\n"
                                 + "Content-Type: application/json\r\n"
-                                + "Content-Length: " + juce::String (body.getNumBytesAsUTF8()) + "\r\n"
+                                + "Content-Length: " + juce::String (declaredLength) + "\r\n"
                                 + "Connection: close\r\n\r\n"
                                 + body;
 
@@ -220,6 +237,7 @@ private:
     int port = 0;
     std::atomic<int> requestCount { 0 };
     std::atomic<bool> holding { false };
+    std::atomic<int> overstatedLength { 0 };
     juce::WaitableEvent releaseEvent { true };   // manual reset
 
     mutable juce::CriticalSection lock;

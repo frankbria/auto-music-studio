@@ -125,7 +125,17 @@ void GenerationManager::applyState (const RunContext& context, State newState, c
     {
         auto* self = owner.get();
 
-        // Gone, or superseded by a newer run.
+        // The null check is load-bearing and covered: a run outliving its manager is
+        // a real, tested case.
+        //
+        // The run-id check is defence in depth and is NOT currently reachable, so it
+        // is deliberately untested rather than covered by a test that only looks like
+        // it exercises it. currentRun only advances in start(), start() refuses while
+        // isBusy(), and isBusy() stays true until this very callback delivers the
+        // worker's terminal state — after which that worker posts nothing more. A
+        // stale post therefore cannot coexist with a newer run today. It becomes
+        // reachable the moment start() is allowed to pre-empt a running job, which is
+        // exactly when losing this would be expensive.
         if (self == nullptr || runId != self->currentRun)
             return;
 
@@ -144,6 +154,7 @@ void GenerationManager::applyClips (const RunContext& context, const juce::Array
     {
         auto* self = owner.get();
 
+        // Same reasoning as applyState: null check covered, run-id check defensive.
         if (self == nullptr || runId != self->currentRun)
             return;
 

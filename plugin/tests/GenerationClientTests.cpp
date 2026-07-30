@@ -48,6 +48,61 @@ public:
             expectEquals ((int) sent.getProperty ("batch_size", juce::var()), 2);
         }
 
+        beginTest ("a POST carries BOTH the API key and the content type");
+        {
+            // withExtraHeaders appends rather than replaces (verified in JUCE's linux,
+            // windows and mac implementations), so setting Content-Type after the
+            // Authorization header keeps both. A cross-family review flagged the
+            // opposite as critical; it was wrong, but it was right that nothing
+            // covered it — every other test here runs without a key.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/release_task", R"({"data":{"task_id":"t"},"code":200})");
+
+            const auto result = submitGeneration (server.getBaseUrl(), "post-key", "{}");
+            expect (result.ok, result.errorMessage);
+
+            const auto request = server.getLastRequest();
+            expect (request.contains ("Authorization: Bearer post-key"),
+                    "the API key was lost on a POST:\n" + request);
+            expect (request.containsIgnoreCase ("Content-Type: application/json"),
+                    "the content type was lost on a POST:\n" + request);
+        }
+
+        beginTest ("a poll carries the API key too");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/query_result", R"({"data":[{"status":0}],"code":200})");
+
+            const auto status = queryTask (server.getBaseUrl(), "poll-key", "t");
+            expect (status.ok, status.errorMessage);
+            expect (server.getLastRequest().contains ("Authorization: Bearer poll-key"),
+                    "the API key was lost on a poll");
+        }
+
+        beginTest ("a download cut short is rejected, not saved as a clip");
+        {
+            // The server promises more than it sends; the read loop just ends, which
+            // would otherwise move a truncated file into place and call it audio.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setTruncatedResponse ("/v1/audio", "RIFF short", 999999);
+
+            const auto destination = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                         .getChildFile ("acemusic-truncated-"
+                                                        + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)))
+                                         .getChildFile ("clip.wav");
+
+            const auto error = downloadAudio (server.getBaseUrl() + "/v1/audio?path=clip.wav", "", destination);
+
+            expect (error.isNotEmpty(), "a truncated download was reported as success");
+            expect (error.containsIgnoreCase ("cut short"), error);
+            expect (! destination.existsAsFile(), "left a truncated file that looks like a clip");
+
+            destination.getParentDirectory().deleteRecursively();
+        }
+
         beginTest ("submit accepts either task_id or id");
         {
             test::StubAceStepServer server;
