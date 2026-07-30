@@ -65,8 +65,27 @@ public:
     void setResponseBody (const juce::String& body)      { const juce::ScopedLock sl (lock); responseBody = body; }
     void setStatusLine (const juce::String& line)        { const juce::ScopedLock sl (lock); statusLine = line; }
 
-    /** Holds the response back, so a test can observe a probe while it is in flight. */
-    void setResponseDelayMs (int ms)                     { responseDelayMs = ms; }
+    /** Makes the server sit on its response until releaseResponse() is called, so a
+        test can observe a probe while it is genuinely in flight.
+
+        Deliberately a signal rather than a sleep. The client-side cost of a stalled
+        response is platform-dependent: measured on macOS CI, a probe takes roughly
+        the stall plus ~800ms, against a 2s timeout (a 200ms stall came back in
+        1031ms; 700ms and 1500ms both hit the timeout and failed). Gating on a signal
+        keeps the in-flight window bounded by what the test does, not by a duration
+        that has to be tuned per platform. */
+    void holdResponse()
+    {
+        releaseEvent.reset();
+        holding = true;
+    }
+
+    /** Lets a held response go. Safe to call even if nothing is held. */
+    void releaseResponse()
+    {
+        holding = false;
+        releaseEvent.signal();
+    }
 
     /** The request line + headers of the most recent request. */
     juce::String getLastRequest() const                  { const juce::ScopedLock sl (lock); return lastRequest; }
@@ -109,12 +128,10 @@ private:
 
             ++requestCount;
 
-            if (const auto delay = responseDelayMs.load(); delay > 0)
-            {
-                // Sliced so stopping the server doesn't have to wait out the delay.
-                for (int waited = 0; waited < delay && ! threadShouldExit(); waited += 20)
-                    juce::Thread::sleep (juce::jmin (20, delay - waited));
-            }
+            // Sliced wait so stopping the server never blocks on a test that forgot
+            // to release.
+            while (holding.load() && ! threadShouldExit())
+                releaseEvent.wait (50);
 
             const auto response = status + "\r\n"
                                 + "Content-Type: application/json\r\n"
@@ -127,8 +144,10 @@ private:
             // Let the client drain before closing. On Windows, closesocket() with the
             // default linger can discard unsent data, which would hand the plugin a
             // truncated body. waitUntilReady returns as soon as the peer closes its
-            // end (readable EOF), so this normally costs microseconds.
-            connection->waitUntilReady (true, 500);
+            // end (readable EOF), so on loopback this normally costs microseconds —
+            // the cap only matters for a client that waits for EOF despite the
+            // Content-Length we send.
+            connection->waitUntilReady (true, 150);
             connection->close();
         }
     }
@@ -136,7 +155,8 @@ private:
     juce::StreamingSocket listener;
     int port = 0;
     std::atomic<int> requestCount { 0 };
-    std::atomic<int> responseDelayMs { 0 };
+    std::atomic<bool> holding { false };
+    juce::WaitableEvent releaseEvent { true };   // manual reset
 
     mutable juce::CriticalSection lock;
     juce::String lastRequest;

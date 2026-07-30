@@ -21,10 +21,6 @@ public:
     {
     }
 
-    /** Stub response delay used to make an in-flight probe observable. Deliberately
-        well below defaultProbeTimeoutMs — see the note at its first use. */
-    static constexpr int kInFlightDelayMs = 700;
-
     bool pumpUntil (std::function<bool()> predicate, int timeoutMs = 10000)
     {
         auto* mm = juce::MessageManager::getInstance();
@@ -146,17 +142,15 @@ public:
             auto& panel = harness.panel();
 
             panel.getUrlEditor().setText (server.getBaseUrl(), juce::sendNotification);
-            // Hold the response so there is a real in-flight window to observe.
-            // Must stay well under defaultProbeTimeoutMs: on macOS that timeout is an
-            // inactivity timeout across the WHOLE request, so a delay close to it
-            // makes the probe fail instead of merely being slow. 700ms is ~70 pump
-            // iterations, which is ample to observe.
-            server.setResponseDelayMs (kInFlightDelayMs);
+            // Gate the response so the probe stays in flight until we say otherwise.
+            server.holdResponse();
 
             panel.getTestButton().triggerClick();
 
-            expect (pumpUntil ([&] { return ! panel.getTestButton().isEnabled(); }, 1000),
+            expect (pumpUntil ([&] { return ! panel.getTestButton().isEnabled(); }),
                     "button was never disabled while a probe was in flight");
+
+            server.releaseResponse();
 
             expect (pumpUntil ([&] { return panel.getTestButton().isEnabled(); }),
                     "button was never re-enabled");
@@ -267,16 +261,18 @@ public:
                 auto& panel = editor.getConnectionPanel();
                 panel.getUrlEditor().setText (server.getBaseUrl(), juce::sendNotification);
 
-                // Hold the response so the probe really is in flight when the editor
-                // goes. See kInFlightDelayMs for why this stays well under the probe
-                // timeout.
-                server.setResponseDelayMs (kInFlightDelayMs);
+                // Gate the response so the probe is definitely still in flight when
+                // the editor goes away.
+                server.holdResponse();
                 panel.getTestButton().triggerClick();
 
-                expect (pumpUntil ([&] { return processor.getConnectionManager().isBusy(); }, 2000),
+                expect (pumpUntil ([&] { return processor.getConnectionManager().isBusy(); }),
                         "the probe never started");
                 // editor dies with the probe in flight; the manager outlives it
             }
+
+            // Only now let the server answer, so the result arrives with no editor.
+            server.releaseResponse();
 
             expect (pumpUntil ([&] { return processor.getConnectionManager().getStatus() != Status::Connecting; }),
                     "probe never settled after the editor closed");
