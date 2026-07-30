@@ -48,9 +48,14 @@ public:
 
     void stop()
     {
+        // Order matters: the accept loop polls for readability with a short timeout
+        // rather than blocking in waitForNextConnection(), because close() does NOT
+        // reliably unblock a blocked accept on macOS or Windows. Relying on it made
+        // every teardown burn the full stopThread timeout there and left threads
+        // running into the next test.
         signalThreadShouldExit();
+        stopThread (3000);
         listener.close();
-        stopThread (2000);
     }
 
     int getPort() const noexcept                   { return port; }
@@ -72,13 +77,24 @@ private:
     {
         while (! threadShouldExit())
         {
+            // Poll instead of blocking in accept — see stop() for why.
+            if (listener.waitUntilReady (true, 100) != 1)
+                continue;   // 0 = nothing pending, -1 = closed or error
+
             std::unique_ptr<juce::StreamingSocket> connection (listener.waitForNextConnection());
 
             if (connection == nullptr)
                 continue;   // listener closed, or a transient accept failure
 
+            // Wait for the request bytes before reading. A non-blocking read straight
+            // after accept returns 0 on macOS/Windows, where the request has not
+            // necessarily landed yet — which silently left lastRequest empty and made
+            // the header assertions fail while the response still went out fine.
             char buffer[8192] = {};
-            const auto bytesRead = connection->read (buffer, sizeof (buffer) - 1, false);
+            int bytesRead = 0;
+
+            if (connection->waitUntilReady (true, 3000) == 1)
+                bytesRead = connection->read (buffer, sizeof (buffer) - 1, false);
 
             juce::String body, status;
             {
@@ -107,6 +123,12 @@ private:
                                 + body;
 
             connection->write (response.toRawUTF8(), (int) response.getNumBytesAsUTF8());
+
+            // Let the client drain before closing. On Windows, closesocket() with the
+            // default linger can discard unsent data, which would hand the plugin a
+            // truncated body. waitUntilReady returns as soon as the peer closes its
+            // end (readable EOF), so this normally costs microseconds.
+            connection->waitUntilReady (true, 500);
             connection->close();
         }
     }

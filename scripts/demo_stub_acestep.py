@@ -1,5 +1,7 @@
 """Minimal stand-in for an ACE-Step server: just the /v1/stats probe endpoint."""
-import json, sys
+
+import json
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PAYLOAD = {
