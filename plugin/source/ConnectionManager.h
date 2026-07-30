@@ -70,7 +70,13 @@ public:
     bool isBusy() const noexcept                              { return status == Status::Connecting; }
 
 private:
-    void applyResult (const ProbeResult&);
+    void applyResult (const ProbeResult&, int fromGeneration);
+
+    /** Bumped whenever the server identity changes. A probe carries the value it
+        started with, so a result from a server the user has since navigated away
+        from can be discarded instead of lighting the indicator green with the old
+        server's models. */
+    int serverGeneration = 0;
 
     BackgroundTaskQueue& queue;
     juce::PropertiesFile* properties = nullptr;

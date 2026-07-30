@@ -21,7 +21,10 @@ PAYLOAD = {
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        print(f"{self.command} {self.path} auth={self.headers.get('Authorization')!r}", flush=True)
+        # Report only whether a key was sent, never its value — this script gets
+        # pointed at real configs.
+        auth = "present" if self.headers.get("Authorization") else "absent"
+        print(f"{self.command} {self.path} auth={auth}", flush=True)
         if self.path != "/v1/stats":
             self.send_error(404)
             return

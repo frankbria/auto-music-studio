@@ -50,6 +50,22 @@ ProbeResult probeAceStepServer (const juce::String& baseUrl,
         return result;
     }
 
+    // The key is pasted into a text field, so a trailing newline is a routine
+    // accident — trim it rather than punishing the user with a 401. A control
+    // character *inside* the key is not an accident we can safely fix: interpolating
+    // it into the header would let it terminate the line and forge another, so fail
+    // closed with something diagnosable instead of silently mangling the key.
+    const auto key = apiKey.trim();
+
+    for (const auto c : key)
+    {
+        if (c < ' ' || c == 127)
+        {
+            result.errorMessage = "API key contains invalid characters";
+            return result;
+        }
+    }
+
     const juce::URL url (trimmed.trimCharactersAtEnd ("/") + "/v1/stats");
     const auto scheme = url.getScheme().toLowerCase();
 
@@ -71,8 +87,8 @@ ProbeResult probeAceStepServer (const juce::String& baseUrl,
     juce::WebInputStream stream (url, false);
     stream.withConnectionTimeout (timeoutMs);
 
-    if (apiKey.isNotEmpty())
-        stream.withExtraHeaders ("Authorization: Bearer " + apiKey);
+    if (key.isNotEmpty())
+        stream.withExtraHeaders ("Authorization: Bearer " + key);
 
     if (! stream.connect (nullptr))
     {

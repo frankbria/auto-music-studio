@@ -40,8 +40,14 @@ struct ConnectionSettings
         on Linux, the platform equivalent elsewhere. */
     static std::unique_ptr<juce::PropertiesFile> createPropertiesFile();
 
-    /** Makes `file` owner-read/write only. No-op on Windows, where the per-user
-        AppData ACL already restricts it. */
+    /** Makes `file` owner-read/write only (0600) and its parent directory
+        owner-only (0700). No-op on Windows, where the per-user AppData ACL already
+        restricts both.
+
+        The directory matters as much as the file: juce::PropertiesFile writes
+        through the process umask, so the file exists briefly as 0644 before it can
+        be chmod'ed — and a rewrite reopens that window every time. A 0700 parent
+        denies traversal for the whole window, which is how ssh protects ~/.ssh. */
     static void restrictPermissions (const juce::File& file);
 };
 

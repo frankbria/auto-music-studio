@@ -41,8 +41,16 @@ void ConnectionSettings::writeTo (juce::PropertiesFile& properties) const
     properties.setValue (keys::serverUrl, serverUrl.trim());
     properties.setValue (keys::apiKey, apiKey);
     properties.setValue (keys::modelId, modelId);
+
+    // Lock the directory down *before* the write, not just the file after it. JUCE
+    // writes through the process umask, so the file is briefly 0644 no matter what we
+    // do afterwards, and a rewrite reopens that window on every save — including the
+    // saves triggered by merely picking a model.
+    restrictPermissions (properties.getFile());
+
     properties.saveIfNeeded();
 
+    // Again, because the write may have recreated the file with umask bits.
     restrictPermissions (properties.getFile());
 }
 
@@ -70,6 +78,14 @@ std::unique_ptr<juce::PropertiesFile> ConnectionSettings::createPropertiesFile()
 void ConnectionSettings::restrictPermissions (const juce::File& file)
 {
    #if JUCE_LINUX || JUCE_MAC || JUCE_BSD
+    const auto directory = file.getParentDirectory();
+
+    if (! directory.isDirectory())
+        directory.createDirectory();
+
+    if (directory.isDirectory())
+        ::chmod (directory.getFullPathName().toRawUTF8(), S_IRWXU);
+
     if (file.existsAsFile())
         ::chmod (file.getFullPathName().toRawUTF8(), S_IRUSR | S_IWUSR);
    #else

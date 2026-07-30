@@ -73,6 +73,38 @@ public:
                     "sent an Authorization header despite having no key");
         }
 
+        beginTest ("a control character inside the API key is rejected, not smuggled");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            // Interpolating this raw would terminate the Authorization line and add a
+            // second header. Fail closed rather than silently mangle it.
+            const auto result = probeAceStepServer (server.getBaseUrl(),
+                                                    "good\r\nX-Injected: evil");
+
+            expect (! result.ok, "accepted a key containing CRLF");
+            expectEquals (result.errorMessage, juce::String ("API key contains invalid characters"));
+            expectEquals (server.getRequestCount(), 0, "sent a request despite the bad key");
+        }
+
+        beginTest ("a pasted key with surrounding whitespace still works");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            // Copy-pasting a key routinely picks up a trailing newline. That is an
+            // accident worth fixing silently, not an error worth surfacing.
+            const auto result = probeAceStepServer (server.getBaseUrl(), "  secret-key\n");
+
+            expect (result.ok, result.errorMessage);
+
+            const auto request = server.getLastRequest();
+            expect (request.contains ("Authorization: Bearer secret-key"),
+                    "the trimmed key was not sent verbatim");
+            expect (! request.contains ("Bearer  secret-key"), "sent the untrimmed key");
+        }
+
         beginTest ("tolerates a trailing slash on the base URL");
         {
             test::StubAceStepServer server;

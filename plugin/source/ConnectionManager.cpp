@@ -50,6 +50,10 @@ void ConnectionManager::setSettings (const ConnectionSettings& newSettings)
 
     if (serverChanged)
     {
+        // Invalidate any probe already in flight: its result describes the server we
+        // just navigated away from.
+        ++serverGeneration;
+
         // A green light for the server we are no longer pointing at would be a lie,
         // and the old model list belongs to that server too.
         status = Status::Disconnected;
@@ -89,19 +93,20 @@ void ConnectionManager::testConnection()
 
     juce::WeakReference<ConnectionManager> weakSelf (this);
     auto* queuePtr = &queue;
+    const auto generation = serverGeneration;
 
-    queue.enqueue ([weakSelf, queuePtr, urlToProbe, keyToUse]
+    queue.enqueue ([weakSelf, queuePtr, urlToProbe, keyToUse, generation]
     {
         const auto result = probeAceStepServer (urlToProbe,
                                                 keyToUse,
                                                 [queuePtr] { return queuePtr->isStopping(); },
                                                 defaultProbeTimeoutMs);
 
-        BackgroundTaskQueue::callOnMessageThread ([weakSelf, result]
+        BackgroundTaskQueue::callOnMessageThread ([weakSelf, result, generation]
         {
             // Gone while the probe was in flight — nothing to update.
             if (auto* self = weakSelf.get())
-                self->applyResult (result);
+                self->applyResult (result, generation);
         });
     });
 }
@@ -112,8 +117,15 @@ void ConnectionManager::autoConnect()
         testConnection();
 }
 
-void ConnectionManager::applyResult (const ProbeResult& result)
+void ConnectionManager::applyResult (const ProbeResult& result, int fromGeneration)
 {
+    if (fromGeneration != serverGeneration)
+    {
+        // The user pointed us somewhere else while this was in flight. Applying it
+        // would show the previous server's models under the new URL.
+        return;
+    }
+
     if (result.cancelled)
     {
         // Teardown asked the probe to stop; leaving an error on screen would be

@@ -131,6 +131,18 @@ public:
             expectEquals ((int) mode, 0600,
                           "settings file mode is " + juce::String::toHexString ((int) mode)
                               + " — the API key is readable by others");
+
+            // The directory matters more than the file: JUCE writes through the
+            // process umask, so the file is briefly 0644 on every save no matter what
+            // we chmod afterwards. A 0700 parent closes that window.
+            struct stat dirInfo {};
+            expect (::stat (store.file.getParentDirectory().getFullPathName().toRawUTF8(), &dirInfo) == 0,
+                    "could not stat the settings directory");
+
+            const auto dirMode = dirInfo.st_mode & 0777;
+            expectEquals ((int) dirMode, 0700,
+                          "settings directory mode is " + juce::String::toHexString ((int) dirMode)
+                              + " — others can traverse into it while the file is being rewritten");
         }
        #endif
 

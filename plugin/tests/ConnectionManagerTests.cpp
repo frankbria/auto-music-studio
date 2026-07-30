@@ -228,6 +228,47 @@ public:
             expectEquals (manager.getModels().size(), 0, "kept the previous server's model list");
         }
 
+        beginTest ("a probe that lands after the server changed is discarded");
+        {
+            // The dangerous ordering: probe A is in flight, the user edits the URL,
+            // then A's result arrives. Applying it would light the indicator green
+            // with server A's models under server B's URL.
+            test::StubAceStepServer serverA;
+            expect (serverA.start() != 0);
+
+            BackgroundTaskQueue queue;
+            ConnectionManager manager (queue, nullptr);
+
+            ConnectionSettings settings;
+            settings.serverUrl = serverA.getBaseUrl();
+            manager.setSettings (settings);
+
+            // Hold A's answer so it is definitely still in flight.
+            serverA.holdResponse();
+            manager.testConnection();
+            expect (pumpUntil ([&] { return manager.isBusy(); }), "probe never started");
+
+            // User points somewhere else mid-probe.
+            settings.serverUrl = "http://127.0.0.1:1";
+            manager.setSettings (settings);
+            expect (manager.getStatus() == Status::Disconnected);
+
+            // Now let A answer. Its result belongs to a server we left.
+            serverA.releaseResponse();
+            expect (pumpUntil ([&] { return queue.getNumPending() == 0; }), "queue did not drain");
+
+            // Pump so any queued continuation actually runs.
+            auto* mm = juce::MessageManager::getInstance();
+            for (int i = 0; i < 25; ++i)
+                mm->runDispatchLoopUntil (10);
+
+            expect (manager.getStatus() == Status::Disconnected,
+                    "a stale probe result was applied — status is \""
+                        + manager.getStatusMessage() + "\"");
+            expectEquals (manager.getModels().size(), 0,
+                          "a stale probe populated the model list for the wrong server");
+        }
+
         beginTest ("choosing a model does not disturb the connection status");
         {
             test::StubAceStepServer server;
