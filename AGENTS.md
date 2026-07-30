@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–22 complete on `main`; Stage 23 in progress (VST3 plugin core — US-23.1 JUCE setup done). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stages 15–16): Next.js Nova scaffold, app shell, OAuth login, sidebar nav, global playbar, profile settings, creation flow (simple/advanced/sounds), model selector, workspace panel, clip cards, audio input modals.
+**Current progress:** Stages 1–22 complete on `main`; Stage 23 in progress (VST3 plugin core — US-23.1 JUCE setup and US-23.2 connection panel done). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stages 15–16): Next.js Nova scaffold, app shell, OAuth login, sidebar nav, global playbar, profile settings, creation flow (simple/advanced/sounds), model selector, workspace panel, clip cards, audio input modals.
 
 ## Commands
 
@@ -147,8 +147,10 @@ tests/
 web/                # Next.js frontend (Layer 3) — Stages 15–16 complete; Stage 17 in progress (US-17.1)
 plugin/             # JUCE VST3/AU plugin (Layer 4) — Stage 23; see plugin/README.md
   CMakeLists.txt    # JUCE 8.0.9 via FetchContent; VST3 + Standalone (+ AU on macOS)
-  source/           # PluginProcessor, PluginEditor, BackgroundTaskQueue
-  tests/            # juce::UnitTest suites (category "acemusic") + ctest runner
+  source/           # PluginProcessor, PluginEditor, BackgroundTaskQueue,
+                    #   AceStepClient, ConnectionManager/Settings/Panel
+  tests/            # juce::UnitTest suites (category "acemusic") + ctest runner;
+                    #   StubAceStepServer.h is a real loopback HTTP server, not a mock
 docs/               # Demo docs, spec evidence, and story artifacts
 ```
 
@@ -165,7 +167,7 @@ docs/               # Demo docs, spec evidence, and story artifacts
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/v1/stats` | GET | Server stats (models, jobs, avg time) |
+| `/v1/stats` | GET | Server stats (models, jobs, avg time). Doubles as the availability probe — there is **no** `/health`. Used by `compute_status`, and by the VST3 plugin's connection panel |
 | `/release_task` | POST | Submit generation job → returns `task_id` |
 | `/query_result` | POST | Poll status (body: `{"task_id_list": [id]}`) |
 | `/v1/audio?path=...` | GET | Download generated audio |
@@ -247,6 +249,15 @@ Package manager: `uv` with `hatchling` build backend
 - `plugin/` is a JUCE C++ plugin, not Python — it has its own CMake build, its own
   `juce::UnitTest` suites, and its own CI workflow. `black`/`ruff`/`pytest` don't touch it.
   Build steps are in `plugin/README.md`
+- Plugin tests need a display: run `xvfb-run -a ctest --test-dir build -C Release` on a
+  headless box. They talk to a real loopback HTTP server (`tests/StubAceStepServer.h`),
+  never a mock — a mocked client would pass even with JUCE's curl-free
+  `WebInputStream` broken
+- Plugin user-facing strings must stay **ASCII**. A non-ASCII literal renders as
+  mojibake in the plugin UI, and a test comparing it to another literal written the
+  same way will not notice (see `isAsciiOnly` in `ConnectionManagerTests.cpp`)
+- The plugin stores connection settings in `~/.config/AutoMusicStudio/` (Linux). It
+  holds an optional API key in plaintext, chmod 0600
 - `web/` is the Next.js app (Stages 15–16 complete, Stage 17 in progress); run with `cd web && npm install && npm run dev`
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
