@@ -263,10 +263,17 @@ void GenerationManager::runGeneration (RunContext context)
     applyState (context, State::downloading, {});
 
     // A timestamped name keeps runs unique across plugin restarts, where the run
-    // counter starts over and would otherwise overwrite an earlier generation.
-    const auto directory = context.clipDirectory.getChildFile (
-        juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S")
-            + "-run" + juce::String (context.runId));
+    // counter starts over and would otherwise overwrite an earlier generation. The
+    // timestamp is only second-resolution though, so a restart inside the same second
+    // could still collide — take the next free suffix rather than overwrite.
+    const auto baseName = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S")
+                              + "-run" + juce::String (context.runId);
+
+    auto directory = context.clipDirectory.getChildFile (baseName);
+
+    for (int attempt = 2; directory.exists() && attempt < 100; ++attempt)
+        directory = context.clipDirectory.getChildFile (baseName + "-" + juce::String (attempt));
+
     directory.createDirectory();
 
     juce::Array<juce::File> downloaded;

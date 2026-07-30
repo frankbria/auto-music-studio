@@ -333,6 +333,9 @@ public:
 
         beginTest ("run directories this plugin created are recognised");
         {
+            // Including the collision-suffixed shape a same-second restart produces.
+            expect (ClipCache::looksLikeARunDirectory (juce::File ("/tmp/20260730-112604-run1-2")));
+
             expect (ClipCache::looksLikeARunDirectory (juce::File ("/tmp/20260730-112604-run1")));
             expect (ClipCache::looksLikeARunDirectory (juce::File ("/tmp/run-1")),
                     "the pre-timestamp shape from US-23.3 is no longer recognised");

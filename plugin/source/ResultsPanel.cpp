@@ -288,6 +288,20 @@ void ResultsPanel::commitCachePath()
     if (wanted.getFullPathName() == cache.getDirectory().getFullPathName())
         return;
 
+    // Don't persist a path we already know is unusable — a typo would otherwise be
+    // saved and come back on every restart. Show why and put the old path back.
+    if (wanted != juce::File())
+    {
+        if (wanted.existsAsFile()
+            || (! wanted.isDirectory() && wanted.createDirectory().failed()))
+        {
+            cacheSizeLabel.setText ("Cannot use that folder - keeping the previous one",
+                                    juce::dontSendNotification);
+            cachePathEditor.setText (cache.getDirectory().getFullPathName(), false);
+            return;
+        }
+    }
+
     cache.setDirectory (wanted);
     refreshCache();
 }
