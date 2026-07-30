@@ -9,7 +9,7 @@ AI-powered music generation platform built on **ACE-Step-1.5** (fork: `github.co
 3. **Layer 3 — Web UI** (Stages 15–21): Next.js frontend
 4. **Layer 4 — Advanced Integrations** (Stages 22–28): VST3 plugin, music video, voice models, credits, moderation
 
-**Current progress:** Stages 1–16 complete on `main`; Stage 17 in progress (US-17.1 Song Detail Page). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stages 15–16): Next.js Nova scaffold, app shell, OAuth login, sidebar nav, global playbar, profile settings, creation flow (simple/advanced/sounds), model selector, workspace panel, clip cards, audio input modals.
+**Current progress:** Stages 1–22 complete on `main`; Stage 23 in progress (VST3 plugin core — US-23.1 JUCE setup done). Layer 1 CLI (Stages 1–7): generation, workspace management, audio processing, DAW export. Layer 2 API (Stages 8–14): FastAPI with OAuth2 auth, async jobs, clip streaming, workspace/clip/preset CRUD, credits, compute routing (RunPod), mastering pipeline (Dolby/LANDR/Bakuage), cover art, SoundCloud distribution, release management, DAW export endpoint, playback queue, range-request streaming, similar-clips discovery. Layer 3 Web UI (Stages 15–16): Next.js Nova scaffold, app shell, OAuth login, sidebar nav, global playbar, profile settings, creation flow (simple/advanced/sounds), model selector, workspace panel, clip cards, audio input modals.
 
 ## Commands
 
@@ -38,6 +38,12 @@ uv run black .
 
 # Smoke test
 uv run python -c "import acemusic"
+
+# VST3 plugin (Layer 4, Stage 23) — C++/CMake, independent of the Python build
+cd plugin && cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target AceMusicPlugin_VST3 --parallel     # also: _Standalone, _AU (macOS)
+cmake --build build --target AceMusicPluginTests --parallel
+ctest --test-dir build -C Release --output-on-failure           # prefix with xvfb-run -a if headless
 
 # CLI usage
 uv run acemusic --help
@@ -139,7 +145,10 @@ tests/
   features/         # pytest-bdd feature files (not yet populated)
 
 web/                # Next.js frontend (Layer 3) — Stages 15–16 complete; Stage 17 in progress (US-17.1)
-plugin/             # JUCE VST3 plugin (placeholder, Layer 4)
+plugin/             # JUCE VST3/AU plugin (Layer 4) — Stage 23; see plugin/README.md
+  CMakeLists.txt    # JUCE 8.0.9 via FetchContent; VST3 + Standalone (+ AU on macOS)
+  source/           # PluginProcessor, PluginEditor, BackgroundTaskQueue
+  tests/            # juce::UnitTest suites (category "acemusic") + ctest runner
 docs/               # Demo docs, spec evidence, and story artifacts
 ```
 
@@ -206,10 +215,16 @@ Configured in `.pre-commit-config.yaml`:
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`):
+`.github/workflows/ci.yml` — Python:
 - Triggers on push (all branches) and PR to `main`
 - Matrix: Python 3.11, 3.12
 - Steps: `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov`
+
+`.github/workflows/plugin.yml` — VST3 plugin (C++):
+- Path-filtered to `plugin/**`, so Python-only changes don't trigger a 3-OS C++ build
+- Matrix: ubuntu-latest (GCC), macos-latest (clang), windows-latest (MSVC)
+- Steps: cmake configure → build VST3 (+ AU on macOS) → `ctest` → VST3 size gate
+  (<25MB) → pluginval strictness 10
 
 ## Key References
 
@@ -229,7 +244,9 @@ Package manager: `uv` with `hatchling` build backend
 
 ## Agent Notes
 
-- The `plugin/` directory is a placeholder — don't expect working code there yet
+- `plugin/` is a JUCE C++ plugin, not Python — it has its own CMake build, its own
+  `juce::UnitTest` suites, and its own CI workflow. `black`/`ruff`/`pytest` don't touch it.
+  Build steps are in `plugin/README.md`
 - `web/` is the Next.js app (Stages 15–16 complete, Stage 17 in progress); run with `cd web && npm install && npm run dev`
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
