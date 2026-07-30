@@ -487,6 +487,46 @@ public:
             expectEquals (harness.panel().getCacheEntries().size(), 0);
         }
 
+        beginTest ("the ordinary flow works: click a row, click Delete");
+        {
+            // The previous tests called deleteSelectedEntry() directly, so they
+            // covered the function but never the button a user actually presses —
+            // which was greyed out, because nothing enabled it on selection.
+            Harness harness;
+
+            ScopedClips clips;
+            auto run = harness.cacheDirectory().getChildFile ("20260730-170000-run12");
+            run.createDirectory();
+            clips.files[0].copyFileTo (run.getChildFile ("clip-1.wav"));
+            expect (ClipCache::writeMetadata (run, "click me", "m", 5.0));
+
+            harness.panel().refreshCache();
+            expect (harness.panel().getCacheEntries().size() >= 1);
+
+            // Nothing selected yet.
+            expect (! harness.panel().getDeleteButton().isEnabled(),
+                    "Delete was live with no selection");
+
+            int row = -1;
+            const auto& entries = harness.panel().getCacheEntries();
+            for (int i = 0; i < entries.size(); ++i)
+                if (entries.getReference (i).prompt == "click me")
+                    row = i;
+
+            expect (row >= 0);
+            harness.panel().getHistoryList().selectRow (row);
+
+            expect (pumpUntil ([&] { return harness.panel().getDeleteButton().isEnabled(); }, 3000),
+                    "selecting a row left Delete greyed out");
+
+            harness.panel().getDeleteButton().triggerClick();
+
+            expect (pumpUntil ([&] { return ! run.isDirectory(); }, 3000),
+                    "the Delete button did not remove the run");
+            expect (! harness.panel().getDeleteButton().isEnabled(),
+                    "Delete stayed live after the selection was removed");
+        }
+
         beginTest ("delete does nothing with no selection");
         {
             Harness harness;

@@ -271,7 +271,7 @@ public:
         {
             ScopedClipCleanup cleanup;
 
-            Harness harness;
+            Harness harness { std::move (cleanup.properties) };
             test::StubAceStepServer server;
             expect (server.start() != 0);
             expect (connect (harness, server), "never connected");
@@ -310,7 +310,7 @@ public:
             test::StubAceStepServer server;
             expect (server.start() != 0);
 
-            PluginProcessor processor (nullptr, false);
+            PluginProcessor processor (std::move (cleanup.properties), false);
 
             {
                 PluginEditor first (processor);

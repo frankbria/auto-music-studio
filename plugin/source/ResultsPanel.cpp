@@ -276,6 +276,11 @@ void ResultsPanel::HistoryModel::paintListBoxItem (int row, juce::Graphics& g,
                 juce::Justification::centredLeft, true);
 }
 
+void ResultsPanel::HistoryModel::selectedRowsChanged (int)
+{
+    owner.deleteButton.setEnabled (owner.historyList.getSelectedRow() >= 0);
+}
+
 void ResultsPanel::HistoryModel::listBoxItemDoubleClicked (int row, const juce::MouseEvent&)
 {
     if (! juce::isPositiveAndBelow (row, owner.cacheEntries.size()))

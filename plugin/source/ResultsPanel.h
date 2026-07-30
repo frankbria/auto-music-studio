@@ -123,6 +123,11 @@ private:
         void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;
         void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
 
+        /** Without this, clicking a row left Delete greyed out — the button was only
+            ever updated by refreshCache(), so the ordinary flow (generate, click a
+            row, click Delete) did not work. */
+        void selectedRowsChanged (int lastRowSelected) override;
+
     private:
         ResultsPanel& owner;
     };
