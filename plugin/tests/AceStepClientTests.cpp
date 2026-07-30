@@ -157,6 +157,15 @@ public:
             const auto withKey = probeAceStepServer (server.getBaseUrl(), "wrong-key");
             expect (! withKey.ok);
             expectEquals (withKey.errorMessage, juce::String ("API key rejected by the server"));
+
+            // A whitespace-only key trims away to nothing, so no header is sent and
+            // there is nothing for the server to have rejected.
+            const auto blankKey = probeAceStepServer (server.getBaseUrl(), "   ");
+            expect (! blankKey.ok);
+            expectEquals (blankKey.errorMessage, juce::String ("Server requires an API key"),
+                          "a whitespace-only key reported the wrong reason");
+            expect (! server.getLastRequest().contains ("Authorization"),
+                    "sent an Authorization header for a whitespace-only key");
         }
 
         beginTest ("a 2xx with no models is an error, not a false green");

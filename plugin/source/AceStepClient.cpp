@@ -109,7 +109,9 @@ ProbeResult probeAceStepServer (const juce::String& baseUrl,
 
     if (status == 401 || status == 403)
     {
-        result.errorMessage = apiKey.isEmpty() ? "Server requires an API key"
+        // `key`, not `apiKey`: a whitespace-only value sends no header at all, so
+        // "rejected" would be wrong — nothing was offered to reject.
+        result.errorMessage = key.isEmpty() ? "Server requires an API key"
                                                : "API key rejected by the server";
         return result;
     }
