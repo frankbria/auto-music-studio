@@ -189,22 +189,38 @@ public:
 
         beginTest ("runs come back newest first");
         {
+            // Five runs, not two. Directory iteration order is not specified, so with
+            // only a pair a broken sort can come out right by luck — a mutation pass
+            // proved exactly that. Five makes an accidental pass a 1-in-120 shot, and
+            // the assertion is the real invariant (non-increasing by creation time)
+            // rather than one hardcoded position.
             ScopedCache scoped;
 
-            auto older = scoped.makeRun ("a-older", 1, "older", 10.0);
-            juce::Thread::sleep (20);
-            auto newer = scoped.makeRun ("b-newer", 1, "newer", 10.0);
+            juce::StringArray expectedNewestFirst;
+
+            for (int i = 0; i < 5; ++i)
+            {
+                const auto prompt = "run " + juce::String (i);
+                scoped.makeRun ("dir-" + juce::String (i), 1, prompt, 10.0);
+                expectedNewestFirst.insert (0, prompt);   // newest ends up first
+                juce::Thread::sleep (25);
+            }
 
             const auto entries = scoped.cache->listEntries();
-            expectEquals (entries.size(), 2);
+            expectEquals (entries.size(), 5);
 
-            // Alphabetically "a-older" sorts first, so this only passes if the sort
-            // is genuinely by creation time.
-            expectEquals (entries.getReference (0).prompt, juce::String ("newer"),
-                          "entries were not newest-first");
-            expectEquals (entries.getReference (1).prompt, juce::String ("older"));
+            for (int i = 1; i < entries.size(); ++i)
+            {
+                expect (entries.getReference (i - 1).created >= entries.getReference (i).created,
+                        "entries are not ordered newest-first at index " + juce::String (i));
+            }
 
-            juce::ignoreUnused (older, newer);
+            juce::StringArray actual;
+            for (const auto& entry : entries)
+                actual.add (entry.prompt);
+
+            expectEquals (actual.joinIntoString (", "), expectedNewestFirst.joinIntoString (", "),
+                          "the order does not match creation order reversed");
         }
 
         beginTest ("AC: the reported size matches what is actually on disk");
