@@ -7,6 +7,9 @@
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   - DOCKERHUB_USERNAME  Docker Hub account name (e.g. frankbria)
 #   - DOCKERHUB_TOKEN     Docker Hub access token with read/write scope
+#
+# When those secrets are absent the job logs a warning and skips rather than failing, so
+# unrelated pushes to docker/ do not report a red build on main.
 name: Docker Publish
 
 on:
@@ -25,13 +28,27 @@ jobs:
     # Only ever publish from main — a manual workflow_dispatch on a feature branch must
     # not overwrite the public `latest` tag.
     if: github.ref == 'refs/heads/main'
+    env:
+      # ponytail: exposed as job env so the steps below can test for it — the `secrets`
+      # context is not available in `if:` conditions, but `env` is.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Without credentials the publish cannot work, and every push touching docker/ or
+      # this file (e.g. a Dependabot action bump) turns main red. Warn and skip instead.
+      - name: Warn when Docker Hub credentials are missing
+        if: env.DOCKERHUB_USERNAME == ''
+        run: |
+          echo "::warning title=Docker publish skipped::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set. Add them under Settings → Secrets and variables → Actions to publish frankbria/ace-step."
+
       - uses: actions/checkout@v7
+        if: env.DOCKERHUB_USERNAME != ''
 
       - name: Set up Docker Buildx
+        if: env.DOCKERHUB_USERNAME != ''
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
         uses: docker/login-action@v4.4.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -40,6 +57,7 @@ jobs:
       # Derive tags: `latest` for main plus the git SHA for traceability.
       - name: Derive image tags
         id: meta
+        if: env.DOCKERHUB_USERNAME != ''
         uses: docker/metadata-action@v6
         with:
           images: frankbria/ace-step
@@ -48,6 +66,7 @@ jobs:
             type=sha,format=long
 
       - name: Build and push
+        if: env.DOCKERHUB_USERNAME != ''
         uses: docker/build-push-action@v7.3.0
         with:
           context: docker
