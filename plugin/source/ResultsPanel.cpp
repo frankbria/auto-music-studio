@@ -137,10 +137,12 @@ void ResultsPanel::ClipRow::mouseUp (const juce::MouseEvent&)
 //==============================================================================
 ResultsPanel::ResultsPanel (GenerationManager& generationToUse,
                             ClipPlayer& playerToUse,
-                            juce::AudioProcessor& processorToUse)
+                            juce::AudioProcessor& processorToUse,
+                            juce::PropertiesFile* settings)
     : generation (generationToUse),
       player (playerToUse),
-      processor (processorToUse)
+      processor (processorToUse),
+      cache (settings)
 {
     titleLabel.setText ("RESULTS", juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
@@ -156,8 +158,58 @@ ResultsPanel::ResultsPanel (GenerationManager& generationToUse,
     playheadLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (playheadLabel);
 
+    historyTitle.setText ("PAST GENERATIONS", juce::dontSendNotification);
+    historyTitle.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    historyTitle.setColour (juce::Label::textColourId, resultColours::textDim);
+    addAndMakeVisible (historyTitle);
+
+    historyList.setColour (juce::ListBox::backgroundColourId, resultColours::rowFill);
+    historyList.setRowHeight (34);
+    addAndMakeVisible (historyList);
+
+    deleteButton.onClick = [this] { deleteSelectedEntry(); };
+    addAndMakeVisible (deleteButton);
+
+    clearCacheButton.onClick = [this]
+    {
+        // Stop first, for the same reason deleteSelectedEntry does: deleting the file
+        // underneath a playing clip is a bad time. On Windows the open handle makes
+        // the delete fail, so Clear cache would silently remove fewer runs than it
+        // listed; elsewhere the clip plays on from an unlinked file until the
+        // read-ahead drains and then cuts off.
+        if (player.getCurrentFile().isAChildOf (cache.getDirectory()))
+            player.stop();
+
+        cache.clearAll();
+        refreshCache();
+    };
+    addAndMakeVisible (clearCacheButton);
+
+    cachePathLabel.setText ("Cache", juce::dontSendNotification);
+    cachePathLabel.setFont (juce::FontOptions (11.0f));
+    cachePathLabel.setColour (juce::Label::textColourId, resultColours::textDim);
+    addAndMakeVisible (cachePathLabel);
+
+    cachePathEditor.setColour (juce::TextEditor::backgroundColourId, resultColours::rowFill);
+    cachePathEditor.setColour (juce::TextEditor::textColourId, resultColours::text);
+    cachePathEditor.setColour (juce::TextEditor::outlineColourId, resultColours::edge);
+    cachePathEditor.setFont (juce::FontOptions (11.0f));
+    cachePathEditor.setTextToShowWhenEmpty ("default", resultColours::textDim);
+    // Committing on focus loss or Enter, not on every keystroke — otherwise a
+    // half-typed path would be saved and the browser would flicker through
+    // nonexistent directories.
+    cachePathEditor.onReturnKey = [this] { commitCachePath(); };
+    cachePathEditor.onFocusLost = [this] { commitCachePath(); };
+    addAndMakeVisible (cachePathEditor);
+
+    cacheSizeLabel.setFont (juce::FontOptions (11.0f));
+    cacheSizeLabel.setColour (juce::Label::textColourId, resultColours::textDim);
+    cacheSizeLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (cacheSizeLabel);
+
     generation.addChangeListener (this);
     rebuildRows();
+    refreshCache();
 
     // Drives the host playhead readout only.
     startTimerHz (10);
@@ -171,7 +223,149 @@ ResultsPanel::~ResultsPanel()
 
 void ResultsPanel::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    const auto clipsBefore = generation.getClips().size();
     rebuildRows();
+
+    // A finished generation adds a run to the cache, so the browser is stale.
+    if (clipsBefore > 0 && generation.getState() == GenerationManager::State::complete)
+        refreshCache();
+}
+
+//==============================================================================
+int ResultsPanel::HistoryModel::getNumRows()
+{
+    return owner.cacheEntries.size();
+}
+
+void ResultsPanel::HistoryModel::paintListBoxItem (int row, juce::Graphics& g,
+                                                   int width, int height, bool selected)
+{
+    if (! juce::isPositiveAndBelow (row, owner.cacheEntries.size()))
+        return;
+
+    const auto& entry = owner.cacheEntries.getReference (row);
+
+    if (selected)
+    {
+        g.setColour (resultColours::edge);
+        g.fillRect (0, 0, width, height);
+    }
+
+    // A run whose sidecar is missing still lists, so say so rather than leaving a
+    // blank line the user cannot interpret.
+    const auto prompt = entry.prompt.isNotEmpty() ? entry.prompt
+                                                  : juce::String ("(no description recorded)");
+
+    g.setColour (entry.prompt.isNotEmpty() ? resultColours::text : resultColours::textDim);
+    g.setFont (juce::FontOptions (12.0f));
+    g.drawText (prompt, 6, 2, width - 12, height / 2, juce::Justification::centredLeft, true);
+
+    juce::StringArray details;
+    details.add (entry.created.formatted ("%d %b %H:%M"));
+
+    if (entry.durationSeconds > 0.0)
+        details.add (juce::String ((int) entry.durationSeconds) + "s");
+
+    details.add (juce::String (entry.clips.size())
+                     + (entry.clips.size() == 1 ? " clip" : " clips"));
+    details.add (juce::File::descriptionOfSizeInBytes (entry.sizeInBytes));
+
+    g.setColour (resultColours::textDim);
+    g.setFont (juce::FontOptions (10.5f));
+    g.drawText (details.joinIntoString ("  -  "), 6, height / 2, width - 12, height / 2,
+                juce::Justification::centredLeft, true);
+}
+
+void ResultsPanel::HistoryModel::selectedRowsChanged (int)
+{
+    owner.deleteButton.setEnabled (owner.historyList.getSelectedRow() >= 0);
+}
+
+void ResultsPanel::HistoryModel::listBoxItemDoubleClicked (int row, const juce::MouseEvent&)
+{
+    if (! juce::isPositiveAndBelow (row, owner.cacheEntries.size()))
+        return;
+
+    // Double-click previews the first clip of a past generation.
+    const auto& entry = owner.cacheEntries.getReference (row);
+
+    if (! entry.clips.isEmpty())
+        owner.player.toggle (entry.clips.getFirst());
+}
+
+void ResultsPanel::commitCachePath()
+{
+    const auto typed = cachePathEditor.getText().trim();
+    const auto wanted = typed.isEmpty() ? juce::File() : juce::File (typed);
+
+    if (wanted.getFullPathName() == cache.getDirectory().getFullPathName())
+        return;
+
+    // Don't persist a path we already know is unusable — a typo would otherwise be
+    // saved and come back on every restart. Show why and put the old path back.
+    if (wanted != juce::File())
+    {
+        if (wanted.existsAsFile()
+            || (! wanted.isDirectory() && wanted.createDirectory().failed()))
+        {
+            cacheSizeLabel.setText ("Cannot use that folder - keeping the previous one",
+                                    juce::dontSendNotification);
+            cachePathEditor.setText (cache.getDirectory().getFullPathName(), false);
+            return;
+        }
+    }
+
+    cache.setDirectory (wanted);
+    refreshCache();
+}
+
+void ResultsPanel::refreshCache()
+{
+    cacheEntries = cache.listEntries();
+
+    if (! cachePathEditor.hasKeyboardFocus (true))
+        cachePathEditor.setText (cache.getDirectory().getFullPathName(), false);
+
+    historyList.updateContent();
+    historyList.repaint();
+
+    juce::String reason;
+
+    if (cache.hasProblem (reason))
+    {
+        cacheSizeLabel.setText (reason, juce::dontSendNotification);
+    }
+    else
+    {
+        cacheSizeLabel.setText (juce::String (cacheEntries.size())
+                                    + (cacheEntries.size() == 1 ? " generation - " : " generations - ")
+                                    + cache.getTotalSizeDescription(),
+                                juce::dontSendNotification);
+    }
+
+    deleteButton.setEnabled (historyList.getSelectedRow() >= 0);
+    clearCacheButton.setEnabled (! cacheEntries.isEmpty());
+}
+
+bool ResultsPanel::deleteSelectedEntry()
+{
+    const auto row = historyList.getSelectedRow();
+
+    if (! juce::isPositiveAndBelow (row, cacheEntries.size()))
+        return false;
+
+    // Stop first: deleting the file underneath a playing clip is a bad time.
+    const auto& entry = cacheEntries.getReference (row);
+
+    if (entry.clips.contains (player.getCurrentFile()))
+        player.stop();
+
+    const auto deleted = cache.deleteEntry (entry);
+    refreshCache();
+    historyList.deselectAllRows();
+    deleteButton.setEnabled (false);
+
+    return deleted;
 }
 
 void ResultsPanel::timerCallback()
@@ -273,15 +467,59 @@ void ResultsPanel::resized()
 
     auto footer = area.removeFromBottom (18);
     statusLabel.setBounds (footer);
-    area.removeFromBottom (4);
+    area.removeFromBottom (6);
+
+    // Clip rows are a fixed height, so give them exactly what they need and let the
+    // browser have the rest — splitting down the middle squeezed the history list to
+    // a row and a half while leaving empty space above it.
+    constexpr auto rowHeight = 44;
+    constexpr auto rowGap = 4;
+    const auto rowsNeeded = clipRows.size() * (rowHeight + rowGap);
+
+    // Never let the browser collapse: it is the point of this panel once there is a
+    // cache, and an empty results area is not worth a hidden history.
+    const auto browserHeight = juce::jmax (juce::jmin (area.getHeight(), 130),
+                                           area.getHeight() - rowsNeeded);
+
+    auto browser = area.removeFromBottom (juce::jlimit (0, area.getHeight(), browserHeight));
+
+    if (browser.getHeight() > 40)
+    {
+        auto browserHeader = browser.removeFromTop (16);
+        historyTitle.setBounds (browserHeader.removeFromLeft (140));
+        cacheSizeLabel.setBounds (browserHeader);
+
+        auto pathRow = browser.removeFromTop (20);
+        cachePathLabel.setBounds (pathRow.removeFromLeft (44));
+        cachePathEditor.setBounds (pathRow.reduced (0, 1));
+        browser.removeFromTop (4);
+
+        auto browserFooter = browser.removeFromBottom (22);
+        deleteButton.setBounds (browserFooter.removeFromLeft (80).reduced (0, 1));
+        browserFooter.removeFromLeft (6);
+        clearCacheButton.setBounds (browserFooter.removeFromLeft (100).reduced (0, 1));
+
+        browser.removeFromBottom (4);
+        historyList.setBounds (browser);
+    }
+    else
+    {
+        historyTitle.setBounds ({});
+        cacheSizeLabel.setBounds ({});
+        deleteButton.setBounds ({});
+        clearCacheButton.setBounds ({});
+        historyList.setBounds ({});
+    }
+
+    area.removeFromBottom (6);
 
     for (auto* row : clipRows)
     {
         if (area.getHeight() <= 0)
             break;
 
-        row->setBounds (area.removeFromTop (juce::jmin (44, area.getHeight())));
-        area.removeFromTop (4);
+        row->setBounds (area.removeFromTop (juce::jmin (rowHeight, area.getHeight())));
+        area.removeFromTop (rowGap);
     }
 }
 

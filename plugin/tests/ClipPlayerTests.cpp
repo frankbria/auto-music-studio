@@ -226,8 +226,24 @@ public:
                 }
             });
 
+            // Wait for the loader to actually get going before hammering
+            // processBlock. Without this the 400 iterations can finish before the
+            // thread is even scheduled — which is what happened on macOS CI, where
+            // the test then failed for having exercised nothing rather than for
+            // finding a race.
+            const auto waitStart = juce::Time::getMillisecondCounter();
+
+            while (loads.load() == 0
+                   && (juce::uint32) (juce::Time::getMillisecondCounter() - waitStart) < 5000)
+            {
+                juce::Thread::sleep (5);
+            }
+
+            expect (loads.load() > 0, "the loader never started");
+
             juce::AudioBuffer<float> buffer (2, 512);
             juce::MidiBuffer midi;
+            const auto loadsBeforeBlocks = loads.load();
 
             for (int i = 0; i < 400; ++i)
             {
@@ -235,10 +251,23 @@ public:
                 processor.processBlock (buffer, midi);
             }
 
+            // And keep going until loads have genuinely overlapped the callback, so
+            // the swap-under-playback path is the thing being tested.
+            const auto overlapStart = juce::Time::getMillisecondCounter();
+
+            while (loads.load() <= loadsBeforeBlocks
+                   && (juce::uint32) (juce::Time::getMillisecondCounter() - overlapStart) < 5000)
+            {
+                buffer.clear();
+                processor.processBlock (buffer, midi);
+                juce::Thread::sleep (1);
+            }
+
             stop = true;
             loader.join();
 
-            expect (loads.load() > 0, "the loader never ran");
+            expect (loads.load() > loadsBeforeBlocks,
+                    "no clip swap overlapped the audio callback");
             expect (true, "survived concurrent loads during playback");
         }
 

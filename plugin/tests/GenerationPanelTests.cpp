@@ -1,3 +1,4 @@
+#include "ClipCache.h"
 #include "PluginEditor.h"
 #include "StubAceStepServer.h"
 
@@ -34,8 +35,8 @@ public:
 
     struct Harness
     {
-        Harness()
-            : processor (nullptr, false),
+        explicit Harness (std::unique_ptr<juce::PropertiesFile> settings = nullptr)
+            : processor (std::move (settings), false),
               editor (processor)
         {
             editor.setSize (720, 640);
@@ -49,9 +50,37 @@ public:
         PluginEditor editor;
     };
 
+    /** Throwaway settings pointing the clip cache somewhere disposable — never the
+        user's real cache, which these tests used to delete recursively. */
     struct ScopedClipCleanup
     {
-        ~ScopedClipCleanup()  { GenerationManager::getClipDirectory().deleteRecursively(); }
+        ScopedClipCleanup()
+        {
+            root = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("acemusic-panelclips-"
+                                      + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)));
+            root.createDirectory();
+
+            juce::PropertiesFile::Options options;
+            options.applicationName = "PanelGenTest";
+            options.filenameSuffix  = ".settings";
+            options.storageFormat   = juce::PropertiesFile::storeAsXML;
+
+            properties = std::make_unique<juce::PropertiesFile> (root.getChildFile ("PanelGenTest.settings"),
+                                                                  options);
+            properties->setValue (ClipCache::cachePathKey,
+                                  root.getChildFile ("clips").getFullPathName());
+            properties->saveIfNeeded();
+        }
+
+        ~ScopedClipCleanup()
+        {
+            properties.reset();
+            root.deleteRecursively();
+        }
+
+        juce::File root;
+        std::unique_ptr<juce::PropertiesFile> properties;
     };
 
     /** Points the harness at `server` and waits for a green connection. */
@@ -242,7 +271,7 @@ public:
         {
             ScopedClipCleanup cleanup;
 
-            Harness harness;
+            Harness harness { std::move (cleanup.properties) };
             test::StubAceStepServer server;
             expect (server.start() != 0);
             expect (connect (harness, server), "never connected");
@@ -281,7 +310,7 @@ public:
             test::StubAceStepServer server;
             expect (server.start() != 0);
 
-            PluginProcessor processor (nullptr, false);
+            PluginProcessor processor (std::move (cleanup.properties), false);
 
             {
                 PluginEditor first (processor);

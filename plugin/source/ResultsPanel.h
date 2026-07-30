@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClipCache.h"
 #include "ClipPlayer.h"
 #include "GenerationManager.h"
 
@@ -24,7 +25,9 @@ class ResultsPanel final : public juce::Component,
                            private juce::Timer
 {
 public:
-    ResultsPanel (GenerationManager&, ClipPlayer&, juce::AudioProcessor&);
+    /** @param settings  resolves the configured cache path; null uses the default */
+    ResultsPanel (GenerationManager&, ClipPlayer&, juce::AudioProcessor&,
+                  juce::PropertiesFile* settings = nullptr);
     ~ResultsPanel() override;
 
     void paint (juce::Graphics&) override;
@@ -83,14 +86,56 @@ public:
     /** Every clip this session has produced, newest generation last. */
     const juce::Array<juce::File>& getHistory() const noexcept { return history; }
 
+    //==============================================================================
+    // Cache browser (US-23.5).
+
+    /** Re-reads the cache from disk. */
+    void refreshCache();
+
+    /** Applies whatever is typed in the cache path box. */
+    void commitCachePath();
+
+    /** Past generations, newest first, as last read. */
+    const juce::Array<ClipCache::Entry>& getCacheEntries() const noexcept { return cacheEntries; }
+
+    juce::ListBox& getHistoryList() noexcept                  { return historyList; }
+    juce::TextButton& getDeleteButton() noexcept              { return deleteButton; }
+    juce::TextButton& getClearCacheButton() noexcept          { return clearCacheButton; }
+    juce::TextEditor& getCachePathEditor() noexcept           { return cachePathEditor; }
+    juce::Label& getCacheSizeLabel() noexcept                 { return cacheSizeLabel; }
+    ClipCache& getCache() noexcept                            { return cache; }
+
+    /** Deletes the selected past generation. @returns false if nothing was selected. */
+    bool deleteSelectedEntry();
+
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void rebuildRows();
 
+    /** Rows of past generations: prompt, when, how long, how big. */
+    class HistoryModel final : public juce::ListBoxModel
+    {
+    public:
+        explicit HistoryModel (ResultsPanel& ownerToUse) : owner (ownerToUse) {}
+
+        int getNumRows() override;
+        void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;
+        void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
+
+        /** Without this, clicking a row left Delete greyed out — the button was only
+            ever updated by refreshCache(), so the ordinary flow (generate, click a
+            row, click Delete) did not work. */
+        void selectedRowsChanged (int lastRowSelected) override;
+
+    private:
+        ResultsPanel& owner;
+    };
+
     GenerationManager& generation;
     ClipPlayer& player;
     juce::AudioProcessor& processor;
+    ClipCache cache;
 
     juce::AudioThumbnailCache thumbnailCache { 8 };
 
@@ -100,6 +145,16 @@ private:
     juce::OwnedArray<ClipRow> clipRows;
 
     juce::Array<juce::File> history;
+
+    juce::Label      historyTitle;
+    HistoryModel     historyModel { *this };
+    juce::ListBox    historyList { "cache", &historyModel };
+    juce::TextButton deleteButton { "Delete" };
+    juce::TextButton clearCacheButton { "Clear cache" };
+    juce::Label      cacheSizeLabel;
+    juce::Label      cachePathLabel;
+    juce::TextEditor cachePathEditor;
+    juce::Array<ClipCache::Entry> cacheEntries;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ResultsPanel)
 };
