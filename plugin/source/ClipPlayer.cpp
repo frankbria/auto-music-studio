@@ -144,15 +144,14 @@ void ClipPlayer::addTo (juce::AudioBuffer<float>& buffer)
     juce::AudioSourceChannelInfo info (&scratch, 0, usable);
     transport.getNextAudioBlock (info);
 
+    // No mono upmix needed here: prepare() always sizes the scratch buffer to two
+    // channels, and AudioFormatReaderSource duplicates a mono file across them. A
+    // mutation pass proved an explicit upmix branch was unreachable, so it is gone
+    // rather than sitting there looking load-bearing.
     const auto channelsToMix = juce::jmin (buffer.getNumChannels(), scratch.getNumChannels());
 
     for (int channel = 0; channel < channelsToMix; ++channel)
         buffer.addFrom (channel, 0, scratch, channel, 0, usable);
-
-    // A mono clip in a stereo host would otherwise only appear on the left.
-    if (buffer.getNumChannels() > 1 && scratch.getNumChannels() == 1)
-        for (int channel = 1; channel < buffer.getNumChannels(); ++channel)
-            buffer.addFrom (channel, 0, scratch, 0, 0, usable);
 }
 
 } // namespace acemusic
