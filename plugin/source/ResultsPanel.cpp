@@ -172,6 +172,14 @@ ResultsPanel::ResultsPanel (GenerationManager& generationToUse,
 
     clearCacheButton.onClick = [this]
     {
+        // Stop first, for the same reason deleteSelectedEntry does: deleting the file
+        // underneath a playing clip is a bad time. On Windows the open handle makes
+        // the delete fail, so Clear cache would silently remove fewer runs than it
+        // listed; elsewhere the clip plays on from an unlinked file until the
+        // read-ahead drains and then cuts off.
+        if (player.getCurrentFile().isAChildOf (cache.getDirectory()))
+            player.stop();
+
         cache.clearAll();
         refreshCache();
     };

@@ -458,6 +458,35 @@ public:
             custom.deleteRecursively();
         }
 
+        beginTest ("Clear cache stops a clip that is playing from inside it");
+        {
+            // Same hazard as deleting one run, and it was missing here: on Windows the
+            // open handle makes the delete fail outright, elsewhere the clip plays on
+            // from an unlinked file until the read-ahead drains.
+            Harness harness;
+
+            ScopedClips clips;
+            auto run = harness.cacheDirectory().getChildFile ("20260730-160000-run11");
+            run.createDirectory();
+            auto cached = run.getChildFile ("clip-1.wav");
+            clips.files[0].copyFileTo (cached);
+            expect (ClipCache::writeMetadata (run, "playing during clear", "m", 5.0));
+
+            harness.panel().refreshCache();
+            expect (harness.panel().getCacheEntries().size() >= 1);
+
+            expect (harness.processor.getClipPlayer().load (cached));
+            harness.processor.getClipPlayer().play();
+            expect (harness.processor.getClipPlayer().isPlaying());
+
+            harness.panel().getClearCacheButton().triggerClick();
+            expect (pumpUntil ([&] { return ! harness.processor.getClipPlayer().isPlaying(); }),
+                    "Clear cache deleted the clip out from under the player");
+
+            expect (! run.isDirectory(), "Clear cache did not remove the run");
+            expectEquals (harness.panel().getCacheEntries().size(), 0);
+        }
+
         beginTest ("delete does nothing with no selection");
         {
             Harness harness;
