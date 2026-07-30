@@ -13,6 +13,31 @@ namespace
         juce::String error;     ///< non-empty means "reject without touching the network"
     };
 
+    /** Trims a pasted key and rejects one that could forge a header line.
+
+        A trailing newline off a copy-paste is a routine accident worth fixing
+        quietly. A control character *inside* the key is not: interpolating it into
+        the Authorization header would terminate the line and forge another, so fail
+        closed with something diagnosable rather than silently mangling it.
+
+        @param error  set to the reason when the key is unusable
+        @returns      the sanitised key */
+    juce::String sanitiseKey (const juce::String& apiKey, juce::String& error)
+    {
+        const auto key = apiKey.trim();
+
+        for (const auto c : key)
+        {
+            if (c < ' ' || c == 127)
+            {
+                error = "API key contains invalid characters";
+                return {};
+            }
+        }
+
+        return key;
+    }
+
     Endpoint prepareEndpoint (const juce::String& baseUrl,
                               const juce::String& apiKey,
                               const juce::String& path)
@@ -26,21 +51,10 @@ namespace
             return endpoint;
         }
 
-        // The key is pasted into a text field, so a trailing newline is a routine
-        // accident — trim it rather than punishing the user with a 401. A control
-        // character *inside* the key is not an accident we can safely fix:
-        // interpolating it into the header would let it terminate the line and forge
-        // another, so fail closed with something diagnosable instead.
-        endpoint.key = apiKey.trim();
+        endpoint.key = sanitiseKey (apiKey, endpoint.error);
 
-        for (const auto c : endpoint.key)
-        {
-            if (c < ' ' || c == 127)
-            {
-                endpoint.error = "API key contains invalid characters";
-                return endpoint;
-            }
-        }
+        if (endpoint.error.isNotEmpty())
+            return endpoint;
 
         endpoint.url = juce::URL (trimmed.trimCharactersAtEnd ("/") + path);
         const auto scheme = endpoint.url.getScheme().toLowerCase();
@@ -420,24 +434,30 @@ juce::String downloadAudio (const juce::String& audioUrl,
     if (stopRequested())
         return {};
 
-    const juce::URL url (audioUrl.trim());
-    const auto scheme = url.getScheme().toLowerCase();
+    // The audio URL is already absolute, so prepareEndpoint's base-plus-path shape
+    // does not fit — but the key still goes through the same sanitiser, and the
+    // stream through the same configure(), rather than being hand-rolled a fourth time.
+    Endpoint endpoint;
+    endpoint.url = juce::URL (audioUrl.trim());
 
-    if (! url.isWellFormed() || (scheme != "http" && scheme != "https"))
+    const auto scheme = endpoint.url.getScheme().toLowerCase();
+
+    if (! endpoint.url.isWellFormed() || (scheme != "http" && scheme != "https"))
         return "Audio URL is not a valid http(s) address";
 
-    const auto key = apiKey.trim();
+    endpoint.key = sanitiseKey (apiKey, endpoint.error);
 
-    juce::WebInputStream stream (url, false);
-    stream.withConnectionTimeout (timeoutMs);
+    if (endpoint.error.isNotEmpty())
+        return endpoint.error;
 
-    if (key.isNotEmpty())
-        stream.withExtraHeaders ("Authorization: Bearer " + key);
+    juce::WebInputStream stream (endpoint.url, false);
+    configure (stream, endpoint, timeoutMs);
 
     if (! stream.connect (nullptr))
         return stopRequested() ? juce::String() : juce::String ("Could not reach the audio URL");
 
-    if (const auto statusError = describeStatus (stream.getStatusCode(), key); statusError.isNotEmpty())
+    if (const auto statusError = describeStatus (stream.getStatusCode(), endpoint.key);
+        statusError.isNotEmpty())
         return statusError;
 
     // Known up front when the server sends Content-Length; -1 when it does not.
