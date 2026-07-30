@@ -116,9 +116,21 @@ public:
             options.filenameSuffix  = ".settings";
             options.storageFormat   = juce::PropertiesFile::storeAsXML;
 
-            return std::make_unique<juce::PropertiesFile> (dir.getChildFile ("PanelTest.settings"),
-                                                           options);
+            auto settings = std::make_unique<juce::PropertiesFile> (dir.getChildFile ("PanelTest.settings"),
+                                                                     options);
+
+            // Point the clip cache at this throwaway directory. These tests used to
+            // write into ClipCache::getDefaultDirectory() — the user's real cache.
+            auto cacheDir = dir.getChildFile ("clips");
+            cacheDir.createDirectory();
+            settings->setValue (ClipCache::cachePathKey, cacheDir.getFullPathName());
+            settings->saveIfNeeded();
+
+            return settings;
         }
+
+        /** Where this harness's cache lives. */
+        juce::File cacheDirectory() const  { return settingsDir.getChildFile ("clips"); }
 
         juce::File settingsDir;
 
@@ -315,9 +327,10 @@ public:
         {
             // A fresh plugin with a cache already on disk — i.e. what the user sees
             // after closing and reopening, which session history alone cannot do.
+            Harness harness;
+
             ScopedClips clips;
-            auto cacheDir = ClipCache::getDefaultDirectory();
-            auto run = cacheDir.getChildFile ("20260730-120000-run1");
+            auto run = harness.cacheDirectory().getChildFile ("20260730-120000-run1");
             run.createDirectory();
 
             for (int i = 0; i < clips.files.size(); ++i)
@@ -325,7 +338,6 @@ public:
 
             expect (ClipCache::writeMetadata (run, "cached prompt", "ace-step-1.5", 42.0));
 
-            Harness harness;
             harness.panel().refreshCache();
 
             const auto& entries = harness.panel().getCacheEntries();
@@ -348,14 +360,14 @@ public:
 
         beginTest ("AC: deleting from the browser removes it from disk and the list");
         {
+            Harness harness;
+
             ScopedClips clips;
-            auto cacheDir = ClipCache::getDefaultDirectory();
-            auto run = cacheDir.getChildFile ("20260730-130000-doomed");
+            auto run = harness.cacheDirectory().getChildFile ("20260730-130000-run7");
             run.createDirectory();
             clips.files[0].copyFileTo (run.getChildFile ("clip-1.wav"));
             expect (ClipCache::writeMetadata (run, "delete me", "m", 5.0));
 
-            Harness harness;
             harness.panel().refreshCache();
 
             int row = -1;
@@ -378,15 +390,15 @@ public:
         beginTest ("deleting the generation that is playing stops it first");
         {
             // Deleting the file underneath a playing clip is a bad time.
+            Harness harness;
+
             ScopedClips clips;
-            auto cacheDir = ClipCache::getDefaultDirectory();
-            auto run = cacheDir.getChildFile ("20260730-140000-playing");
+            auto run = harness.cacheDirectory().getChildFile ("20260730-140000-run8");
             run.createDirectory();
             auto cached = run.getChildFile ("clip-1.wav");
             clips.files[0].copyFileTo (cached);
             expect (ClipCache::writeMetadata (run, "playing one", "m", 5.0));
 
-            Harness harness;
             harness.panel().refreshCache();
 
             expect (harness.processor.getClipPlayer().load (cached));
@@ -419,7 +431,7 @@ public:
 
             // A run that only exists in the custom location.
             ScopedClips clips;
-            auto run = custom.getChildFile ("20260730-150000-custom");
+            auto run = custom.getChildFile ("20260730-150000-run9");
             run.createDirectory();
             clips.files[0].copyFileTo (run.getChildFile ("clip-1.wav"));
             expect (ClipCache::writeMetadata (run, "only in the custom path", "m", 7.0));

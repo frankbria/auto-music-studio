@@ -100,10 +100,28 @@ bool ClipCache::hasProblem (juce::String& reason) const
     return false;
 }
 
+bool ClipCache::looksLikeARunDirectory (const juce::File& directory)
+{
+    const auto name = directory.getFileName();
+
+    // Current shape: 20260730-112604-run1
+    if (name.matchesWildcard ("????????-??????-run*", false)
+        && name.substring (0, 8).containsOnly ("0123456789")
+        && name.substring (9, 15).containsOnly ("0123456789"))
+    {
+        return true;
+    }
+
+    // US-23.3/23.4 shape, before run directories were timestamped: run-1
+    return name.startsWith ("run-") && name.fromFirstOccurrenceOf ("-", false, false)
+                                            .containsOnly ("0123456789");
+}
+
 ClipCache::Entry ClipCache::readEntry (const juce::File& runDirectory)
 {
     Entry entry;
     entry.directory = runDirectory;
+    entry.createdByPlugin = looksLikeARunDirectory (runDirectory);
 
     if (! runDirectory.isDirectory())
         return entry;
@@ -210,9 +228,16 @@ bool ClipCache::deleteEntry (const Entry& entry)
     if (! entry.directory.isDirectory())
         return false;
 
-    // Refuse to delete anything that is not actually inside the cache — a stale entry
-    // held across a path change must not turn into an arbitrary recursive delete.
+    // Inside the configured cache — stops a stale entry held across a path change
+    // from becoming an arbitrary recursive delete.
     if (! entry.directory.isAChildOf (getDirectory()))
+        return false;
+
+    // AND recognisably ours. Containment alone is not protection, because the cache
+    // root is a path the user types: aim it at ~/Music and every album folder is a
+    // child of it. Only directories named the way this plugin names its runs get
+    // deleted; anything else lists read-only.
+    if (! entry.createdByPlugin)
         return false;
 
     return entry.directory.deleteRecursively();

@@ -43,12 +43,22 @@ public:
             root.deleteRecursively();
         }
 
-        /** Writes a run directory with `numClips` real (tiny) wav files. */
-        juce::File makeRun (const juce::String& name, int numClips = 2,
+        /** Writes a run directory with `numClips` real (tiny) wav files.
+
+            The directory is named the way the plugin names its runs, because deletion
+            is gated on that shape — a fixture using arbitrary names would be testing
+            something the plugin never produces. `label` is kept only to make the test
+            body readable. */
+        juce::File makeRun (const juce::String& label, int numClips = 2,
                             const juce::String& prompt = {},
                             double duration = 30.0)
         {
-            auto run = cacheDir.getChildFile (name);
+            juce::ignoreUnused (label);
+
+            auto run = cacheDir.getChildFile (juce::String ("20260730-1200")
+                                                  + juce::String (runCounter).paddedLeft ('0', 2)
+                                                  + "-run" + juce::String (runCounter));
+            ++runCounter;
             run.createDirectory();
 
             for (int i = 0; i < numClips; ++i)
@@ -82,6 +92,7 @@ public:
         }
 
         juce::File root, cacheDir;
+        int runCounter = 1;
         std::unique_ptr<juce::PropertiesFile> properties;
         std::unique_ptr<ClipCache> cache;
     };
@@ -180,7 +191,7 @@ public:
         beginTest ("a directory with no audio is not listed as a generation");
         {
             ScopedCache scoped;
-            scoped.cacheDir.getChildFile ("empty-dir").createDirectory();
+            scoped.cacheDir.getChildFile ("20260730-120099-run99").createDirectory();
             scoped.makeRun ("real-run", 1, "something", 10.0);
 
             const auto entries = scoped.cache->listEntries();
@@ -285,6 +296,50 @@ public:
             expect (! scoped.cache->deleteEntry (forged), "deleted a directory outside the cache");
             expect (outside.isDirectory(), "the outside directory was removed");
             expect (outside.getChildFile ("precious.txt").existsAsFile(), "the file was destroyed");
+        }
+
+        beginTest ("pointing the cache at a folder of the user's own audio cannot delete it");
+        {
+            // The scenario that matters: the cache root is a path the user types. Aim
+            // it at a music library and every album folder is a child of it, so
+            // containment alone would have let 'Clear cache' recursively delete them.
+            ScopedCache scoped;
+
+            auto library = scoped.root.getChildFile ("Music");
+            library.createDirectory();
+
+            auto album = library.getChildFile ("Some Album");
+            album.createDirectory();
+            ScopedCache::writeWav (album.getChildFile ("track-1.wav"));
+            album.getChildFile ("cover.jpg").replaceWithText ("not really a jpg");
+
+            scoped.cache->setDirectory (library);
+
+            // It lists — browsing an arbitrary folder read-only is harmless.
+            const auto entries = scoped.cache->listEntries();
+            expectEquals (entries.size(), 1);
+            expect (! entries.getReference (0).createdByPlugin,
+                    "someone else's folder was marked as ours");
+
+            // But it must not be deletable.
+            expect (! scoped.cache->deleteEntry (entries.getReference (0)),
+                    "deleted a folder this plugin did not create");
+            expect (album.isDirectory(), "the user's album was removed");
+            expect (album.getChildFile ("track-1.wav").existsAsFile(), "the user's audio was destroyed");
+
+            expectEquals (scoped.cache->clearAll(), 0, "Clear cache removed the user's own folders");
+            expect (album.isDirectory(), "Clear cache destroyed the user's album");
+        }
+
+        beginTest ("run directories this plugin created are recognised");
+        {
+            expect (ClipCache::looksLikeARunDirectory (juce::File ("/tmp/20260730-112604-run1")));
+            expect (ClipCache::looksLikeARunDirectory (juce::File ("/tmp/run-1")),
+                    "the pre-timestamp shape from US-23.3 is no longer recognised");
+
+            expect (! ClipCache::looksLikeARunDirectory (juce::File ("/tmp/Some Album")));
+            expect (! ClipCache::looksLikeARunDirectory (juce::File ("/tmp/run-nope")));
+            expect (! ClipCache::looksLikeARunDirectory (juce::File ("/tmp/notadate-112604-run1")));
         }
 
         beginTest ("clearing removes every run");

@@ -39,6 +39,14 @@ public:
             than showing it with a blank prompt. */
         bool hasMetadata = false;
 
+        /** True only when this directory looks like one *this plugin* created.
+
+            Deletion is gated on it. The cache root is a path the user types, so
+            pointing it at, say, ~/Music would otherwise let "Clear cache"
+            recursively delete their music folders — every one of them is a child of
+            the configured directory, so containment alone is no protection. */
+        bool createdByPlugin = false;
+
         bool isValid() const                                  { return ! clips.isEmpty(); }
     };
 
@@ -75,8 +83,14 @@ public:
     /** Human-readable total, e.g. "12.4 MB". */
     juce::String getTotalSizeDescription() const;
 
-    /** Deletes one run and everything in it. @returns false if it could not be removed. */
+    /** Deletes one run and everything in it.
+
+        Refuses anything that is not inside the configured directory *and* does not
+        look like a directory this plugin created. @returns false if not removed. */
     bool deleteEntry (const Entry&);
+
+    /** True when `directory`'s name matches the shape this plugin gives its runs. */
+    static bool looksLikeARunDirectory (const juce::File& directory);
 
     /** Deletes every run. @returns the number removed. */
     int clearAll();
