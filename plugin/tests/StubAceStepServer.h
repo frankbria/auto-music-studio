@@ -65,6 +65,17 @@ public:
     void setResponseBody (const juce::String& body)      { const juce::ScopedLock sl (lock); responseBody = body; }
     void setStatusLine (const juce::String& line)        { const juce::ScopedLock sl (lock); statusLine = line; }
 
+    /** Serve `body` for `pathFragment` but advertise `claimedLength` in
+        Content-Length, so the client sees a transfer that ends early. */
+    void setTruncatedResponse (const juce::String& pathFragment,
+                               const juce::String& body,
+                               int claimedLength)
+    {
+        const juce::ScopedLock sl (lock);
+        routes.set (pathFragment, body);
+        overstatedLength = claimedLength;
+    }
+
     /** Makes the server sit on its response until releaseResponse() is called, so a
         test can observe a probe while it is genuinely in flight.
 
@@ -91,7 +102,49 @@ public:
     juce::String getLastRequest() const                  { const juce::ScopedLock sl (lock); return lastRequest; }
     int getRequestCount() const noexcept                 { return requestCount.load(); }
 
+    /** Body of the most recent request, i.e. everything after the blank line. */
+    juce::String getLastBody() const                     { const juce::ScopedLock sl (lock); return lastBody; }
+
+    /** Path of the most recent request, e.g. "/release_task". */
+    juce::String getLastPath() const                     { const juce::ScopedLock sl (lock); return lastPath; }
+
+    /** Serve `body` for requests whose path contains `pathFragment`, overriding the
+        default response. Lets one stub stand in for the whole submit/poll/download
+        sequence. */
+    void setResponseFor (const juce::String& pathFragment, const juce::String& body)
+    {
+        const juce::ScopedLock sl (lock);
+        routes.set (pathFragment, body);
+    }
+
+    /** Number of requests seen for paths containing `pathFragment`. */
+    int getRequestCountFor (const juce::String& pathFragment) const
+    {
+        const juce::ScopedLock sl (lock);
+        return pathCounts[pathFragment];
+    }
+
+    /** Body of the last request to a path containing `pathFragment`.
+
+        Per-path, because getLastBody() is whatever arrived most recently — during a
+        generation that is a poll, not the submit a test wants to assert on. */
+    juce::String getBodyFor (const juce::String& pathFragment) const
+    {
+        const juce::ScopedLock sl (lock);
+        return pathBodies[pathFragment];
+    }
+
 private:
+    /** Content-Length from a header block, or 0 when absent. */
+    static int contentLengthOf (const juce::String& headers)
+    {
+        for (const auto& line : juce::StringArray::fromLines (headers))
+            if (line.startsWithIgnoreCase ("Content-Length:"))
+                return line.fromFirstOccurrenceOf (":", false, false).trim().getIntValue();
+
+        return 0;
+    }
+
     void run() override
     {
         while (! threadShouldExit())
@@ -105,25 +158,84 @@ private:
             if (connection == nullptr)
                 continue;   // listener closed, or a transient accept failure
 
-            // Wait for the request bytes before reading. A non-blocking read straight
-            // after accept returns 0 on macOS/Windows, where the request has not
-            // necessarily landed yet — which silently left lastRequest empty and made
-            // the header assertions fail while the response still went out fine.
-            char buffer[8192] = {};
-            int bytesRead = 0;
+            // Read until the whole request is in hand.
+            //
+            // A single read is not enough: it can return before the request has fully
+            // arrived (nothing at all straight after accept on macOS/Windows), and a
+            // POST's headers and body routinely land in separate segments off
+            // loopback — which left the body empty on macOS while the response still
+            // went out fine, so every body assertion failed and nothing else did.
+            juce::String whole;
 
-            if (connection->waitUntilReady (true, 3000) == 1)
-                bytesRead = connection->read (buffer, sizeof (buffer) - 1, false);
+            for (;;)
+            {
+                if (connection->waitUntilReady (true, 3000) != 1)
+                    break;
+
+                char chunk[8192] = {};
+                const auto got = connection->read (chunk, sizeof (chunk) - 1, false);
+
+                if (got <= 0)
+                    break;
+
+                whole += juce::String::fromUTF8 (chunk, got);
+
+                const auto headerEnd = whole.indexOf ("\r\n\r\n");
+
+                if (headerEnd < 0)
+                    continue;   // still mid-headers
+
+                const auto expectedBody = contentLengthOf (whole.substring (0, headerEnd));
+                const auto bodySoFar = whole.substring (headerEnd + 4);
+
+                if ((int) bodySoFar.getNumBytesAsUTF8() >= expectedBody)
+                    break;
+            }
+
+            const auto bytesRead = (int) whole.getNumBytesAsUTF8();
 
             juce::String body, status;
             {
                 const juce::ScopedLock sl (lock);
 
                 if (bytesRead > 0)
-                    lastRequest = juce::String::fromUTF8 (buffer, bytesRead);
+                {
+                    lastRequest = whole.upToFirstOccurrenceOf ("\r\n\r\n", false, false);
+                    lastBody    = whole.fromFirstOccurrenceOf ("\r\n\r\n", false, false);
+
+                    // "POST /release_task HTTP/1.1" -> "/release_task"
+                    const auto requestLine = whole.upToFirstOccurrenceOf ("\r\n", false, false);
+                    lastPath = requestLine.fromFirstOccurrenceOf (" ", false, false)
+                                          .upToFirstOccurrenceOf (" ", false, false);
+
+                    pathCounts.set (lastPath, pathCounts[lastPath] + 1);
+                    pathBodies.set (lastPath, lastBody);
+
+                    for (auto& route : routes)
+                    {
+                        const auto fragment = route.name.toString();
+
+                        // Skip an exact match: it was already counted above, and
+                        // counting it twice makes getRequestCountFor() lie.
+                        if (fragment != lastPath && lastPath.contains (fragment))
+                        {
+                            pathCounts.set (fragment, pathCounts[fragment] + 1);
+                            pathBodies.set (fragment, lastBody);
+                        }
+                    }
+                }
 
                 body = responseBody;
                 status = statusLine;
+
+                for (auto& route : routes)
+                {
+                    if (lastPath.contains (route.name.toString()))
+                    {
+                        body = route.value.toString();
+                        break;
+                    }
+                }
             }
 
             ++requestCount;
@@ -133,9 +245,13 @@ private:
             while (holding.load() && ! threadShouldExit())
                 releaseEvent.wait (50);
 
+            const auto overstated = overstatedLength.load();
+            const auto declaredLength = overstated > 0 ? overstated
+                                                       : (int) body.getNumBytesAsUTF8();
+
             const auto response = status + "\r\n"
                                 + "Content-Type: application/json\r\n"
-                                + "Content-Length: " + juce::String (body.getNumBytesAsUTF8()) + "\r\n"
+                                + "Content-Length: " + juce::String (declaredLength) + "\r\n"
                                 + "Connection: close\r\n\r\n"
                                 + body;
 
@@ -156,10 +272,14 @@ private:
     int port = 0;
     std::atomic<int> requestCount { 0 };
     std::atomic<bool> holding { false };
+    std::atomic<int> overstatedLength { 0 };
     juce::WaitableEvent releaseEvent { true };   // manual reset
 
     mutable juce::CriticalSection lock;
-    juce::String lastRequest;
+    juce::String lastRequest, lastBody, lastPath;
+    juce::NamedValueSet routes;
+    mutable juce::HashMap<juce::String, int> pathCounts;
+    mutable juce::HashMap<juce::String, juce::String> pathBodies;
     juce::String statusLine  { "HTTP/1.1 200 OK" };
     juce::String responseBody { R"({"data":{"models":[{"name":"ace-step-1.5"},{"name":"ace-step-mini"}],"jobs":{"running":0}},"code":200,"error":null})" };
 

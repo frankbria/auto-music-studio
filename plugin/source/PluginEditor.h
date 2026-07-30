@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConnectionPanel.h"
+#include "GenerationPanel.h"
 #include "PluginProcessor.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -9,8 +10,8 @@ namespace acemusic
 {
 
 /**
-    Plugin UI: name, version, the live Connection panel (US-23.2), and the two panels
-    still to come — Generation (US-23.3) and Results (US-23.4).
+    Plugin UI: name, version, the live Connection (US-23.2) and Generation (US-23.3)
+    panels, and the Results placeholder still to come (US-23.4).
 */
 class PluginEditor final : public juce::AudioProcessorEditor
 {
@@ -39,12 +40,13 @@ private:
     juce::Label versionLabel;
 
     ConnectionPanel  connectionPanel;
-    PlaceholderPanel generationPanel { "Generation" };
+    GenerationPanel  generationPanel;
     PlaceholderPanel resultsPanel    { "Results" };
 
 public:
     /** Test seam — lets a test drive the real widgets rather than re-deriving them. */
     ConnectionPanel& getConnectionPanel() noexcept            { return connectionPanel; }
+    GenerationPanel& getGenerationPanel() noexcept            { return generationPanel; }
 
 private:
 

@@ -15,7 +15,8 @@ namespace colours
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
     : juce::AudioProcessorEditor (&p),
-      connectionPanel (p.getConnectionManager())
+      connectionPanel (p.getConnectionManager()),
+      generationPanel (p.getGenerationManager(), p.getConnectionManager())
 {
     titleLabel.setText (p.getName(), juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (20.0f, juce::Font::bold));
@@ -58,7 +59,9 @@ void PluginEditor::resized()
     connectionPanel.setBounds (area.removeFromTop (132));
     area.removeFromTop (12);
 
-    generationPanel.setBounds (area.removeFromTop (area.getHeight() / 2));
+    // Generation needs the room now that it has real controls; Results is still a
+    // placeholder until US-23.4.
+    generationPanel.setBounds (area.removeFromTop (juce::jmax (240, area.getHeight() * 2 / 3)));
     area.removeFromTop (12);
     resultsPanel.setBounds (area);
 }
