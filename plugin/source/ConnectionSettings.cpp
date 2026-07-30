@@ -51,8 +51,18 @@ std::unique_ptr<juce::PropertiesFile> ConnectionSettings::createPropertiesFile()
     juce::PropertiesFile::Options options;
     options.applicationName     = "AceMusicStudio";
     options.filenameSuffix      = ".settings";
-    options.folderName          = "AutoMusicStudio";
     options.osxLibrarySubFolder = "Application Support";
+
+   #if JUCE_LINUX || JUCE_BSD
+    // JUCE resolves folderName under $HOME on Linux, so a bare "AutoMusicStudio"
+    // would drop a visible directory straight into the user's home. Nest it under
+    // .config instead — getChildFile resolves the separator.
+    options.folderName = ".config/AutoMusicStudio";
+   #else
+    // macOS: ~/Library/Application Support/AutoMusicStudio
+    // Windows: %APPDATA%\AutoMusicStudio
+    options.folderName = "AutoMusicStudio";
+   #endif
 
     return std::make_unique<juce::PropertiesFile> (options);
 }

@@ -60,9 +60,47 @@ public:
         return true;
     }
 
+    /** True if every character is plain ASCII. A non-ASCII literal in a status
+        message renders as mojibake in the plugin UI — comparing the message against
+        another literal written the same way would never notice. */
+    static bool isAsciiOnly (const juce::String& text)
+    {
+        for (auto c : text)
+            if (c < 32 || c > 126)
+                return false;
+
+        return true;
+    }
+
     void runTest() override
     {
         using Status = ConnectionManager::Status;
+
+        beginTest ("every status message is pure ASCII, so the UI can render it");
+        {
+            for (auto status : { Status::Disconnected, Status::Connecting,
+                                 Status::Connected, Status::Error })
+            {
+                const auto text = ConnectionManager::describe (status);
+                expect (isAsciiOnly (text), "non-ASCII in status text: " + text);
+            }
+
+            // The Connected message is built at runtime, so check the real thing too.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            BackgroundTaskQueue queue;
+            ConnectionManager manager (queue, nullptr);
+
+            ConnectionSettings settings;
+            settings.serverUrl = server.getBaseUrl();
+            manager.setSettings (settings);
+            manager.testConnection();
+
+            expect (pumpUntil ([&] { return manager.getStatus() == Status::Connected; }));
+            expect (isAsciiOnly (manager.getStatusMessage()),
+                    "non-ASCII in the connected message: " + manager.getStatusMessage());
+        }
 
         beginTest ("starts disconnected with the default localhost URL");
         {

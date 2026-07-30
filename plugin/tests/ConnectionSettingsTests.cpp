@@ -139,11 +139,22 @@ public:
             const auto properties = ConnectionSettings::createPropertiesFile();
             expect (properties != nullptr);
 
-            const auto path = properties->getFile().getFullPathName();
+            const auto file = properties->getFile();
+            const auto path = file.getFullPathName();
+
             expect (path.contains ("AutoMusicStudio"),
                     "config path does not include the vendor folder: " + path);
             expect (path.contains ("AceMusicStudio"),
                     "config path does not include the app name: " + path);
+
+           #if JUCE_LINUX || JUCE_BSD
+            // JUCE resolves folderName under $HOME on Linux, so a bare folder name
+            // would litter the user's home directory with a visible dir.
+            expectEquals (file.getFullPathName(),
+                          juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                              .getChildFile (".config/AutoMusicStudio/AceMusicStudio.settings")
+                              .getFullPathName());
+           #endif
         }
     }
 };

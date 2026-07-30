@@ -21,10 +21,13 @@ ConnectionManager::~ConnectionManager()
 
 juce::String ConnectionManager::describe (Status status)
 {
+    // ASCII only. A non-ASCII literal here renders as mojibake in the plugin UI —
+    // JUCE draws it through the platform font stack, and the source charset is not
+    // guaranteed across MSVC/clang/GCC. See isAsciiOnly() in the tests.
     switch (status)
     {
         case Status::Disconnected:  return "Not connected";
-        case Status::Connecting:    return "Connecting…";
+        case Status::Connecting:    return "Connecting...";
         case Status::Connected:     return "Connected";
         case Status::Error:         return "Error";
     }
@@ -126,7 +129,7 @@ void ConnectionManager::applyResult (const ProbeResult& result)
         status = Status::Connected;
         models = result.models;
 
-        statusMessage = "Connected — " + juce::String (models.size())
+        statusMessage = "Connected - " + juce::String (models.size())
                       + (models.size() == 1 ? " model available" : " models available");
 
         // Drop a selection the new server doesn't offer, and pick a default when
