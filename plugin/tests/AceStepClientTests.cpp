@@ -161,6 +161,33 @@ public:
             }
         }
 
+        beginTest ("DIAGNOSTIC: probe against a server that delays its response");
+        {
+            // Temporary. macOS CI fails exactly the two tests that stall the stub,
+            // reporting "Server unreachable"; this isolates whether a delayed
+            // response breaks the probe itself, with no UI in the way.
+            for (const int delayMs : { 0, 200, 700, 1500 })
+            {
+                test::StubAceStepServer server;
+                expect (server.start() != 0);
+                server.setResponseDelayMs (delayMs);
+
+                const auto start = juce::Time::getMillisecondCounter();
+                const auto result = probeAceStepServer (server.getBaseUrl(), "");
+                const auto elapsed = (int) (juce::Time::getMillisecondCounter() - start);
+
+                logMessage ("  delay=" + juce::String (delayMs) + "ms"
+                            + " ok=" + juce::String (result.ok ? "yes" : "no")
+                            + " cancelled=" + juce::String (result.cancelled ? "yes" : "no")
+                            + " models=" + juce::String (result.models.size())
+                            + " elapsed=" + juce::String (elapsed) + "ms"
+                            + " requestsSeen=" + juce::String (server.getRequestCount())
+                            + " err=\"" + result.errorMessage + "\"");
+            }
+
+            expect (true);
+        }
+
         beginTest ("returns cancelled, not an error, when asked to stop");
         {
             test::StubAceStepServer server;
