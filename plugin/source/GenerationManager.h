@@ -1,0 +1,127 @@
+#pragma once
+
+#include "AceStepClient.h"
+#include "BackgroundTaskQueue.h"
+#include "ConnectionManager.h"
+#include "GenerationRequest.h"
+
+#include <atomic>
+#include <memory>
+
+namespace acemusic
+{
+
+/**
+    Drives one generation from submit to downloaded clips.
+
+    ACE-Step generation is submit → poll → download, and the job runs for minutes, so
+    the whole sequence is a single background task that polls. It lives on the
+    processor for the same reason ConnectionManager does: the editor is destroyed
+    whenever the plugin window closes, and a generation has to survive that.
+
+    Same lock-free discipline as ConnectionManager — the worker gets a snapshot, every
+    state change is applied on the message thread behind a juce::WeakReference, and a
+    run counter discards results from a run the user has already replaced or cancelled.
+
+    Cancellation is at poll granularity: the loop checks between polls rather than
+    interrupting a request mid-flight. That is enough because no single request here is
+    long — the *job* is long, the requests are not.
+*/
+class GenerationManager final : public juce::ChangeBroadcaster
+{
+public:
+    enum class State
+    {
+        idle,
+        submitting,     ///< POST /release_task in flight
+        queued,         ///< accepted; server reports it as not yet running
+        running,        ///< server is generating
+        downloading,    ///< fetching the finished clips
+        complete,
+        failed,
+        cancelled
+    };
+
+    GenerationManager (BackgroundTaskQueue& queue, ConnectionManager& connection);
+    ~GenerationManager() override;
+
+    /** Starts a generation. Returns immediately; watch for change messages.
+        Ignored if one is already in flight, or if the request is invalid — check
+        canStart() first for the reason. */
+    void start (const GenerationRequest& request);
+
+    /** Asks the current run to stop at its next poll. */
+    void cancel();
+
+    /** Why a generation cannot be started right now, or empty if it can. */
+    juce::String findStartProblem (const GenerationRequest& request) const;
+
+    bool canStart (const GenerationRequest& request) const  { return findStartProblem (request).isEmpty(); }
+
+    //==============================================================================
+    State getState() const noexcept                         { return state; }
+    juce::String getStatusMessage() const                   { return statusMessage; }
+
+    /** Downloaded clips, in the order the server listed them. */
+    const juce::Array<juce::File>& getClips() const noexcept { return clips; }
+
+    /** Seconds since the current run started; 0 when idle. */
+    int getElapsedSeconds() const;
+
+    bool isBusy() const noexcept;
+
+    static juce::String describe (State) noexcept;
+
+    /** Where clips are written. Provisional — US-23.5 owns cache management and makes
+        this configurable; until then it sits beside the settings file so the plugin
+        keeps everything in one place. */
+    static juce::File getClipDirectory();
+
+    /** How long between polls of /query_result. */
+    static constexpr int pollIntervalMs = 2000;
+
+private:
+    /** The stop flag for one run.
+
+        Held by shared_ptr so the worker owns a share of it: superseding or destroying
+        the manager can set it without the worker ever dereferencing the manager. This
+        is the whole reason the worker touches no member state directly. */
+    struct RunControl
+    {
+        std::atomic<bool> stopped { false };
+    };
+
+    /** Everything one run needs, captured by value on the message thread. */
+    struct RunContext
+    {
+        GenerationRequest request;
+        juce::String serverUrl;
+        juce::String apiKey;
+        int runId = 0;
+        std::shared_ptr<RunControl> control;
+        juce::WeakReference<GenerationManager> owner;
+        BackgroundTaskQueue* queue = nullptr;
+    };
+
+    static void runGeneration (RunContext);
+    static void applyState (const RunContext&, State, const juce::String& message);
+    static void applyClips (const RunContext&, const juce::Array<juce::File>&);
+
+    BackgroundTaskQueue& queue;
+    ConnectionManager& connection;
+
+    State state = State::idle;
+    juce::String statusMessage { "Idle" };
+    juce::Array<juce::File> clips;
+
+    int currentRun = 0;
+    juce::uint32 startedAtMs = 0;
+
+    /** Stop flag for the run currently in flight, if any. */
+    std::shared_ptr<RunControl> activeControl;
+
+    JUCE_DECLARE_WEAK_REFERENCEABLE (GenerationManager)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GenerationManager)
+};
+
+} // namespace acemusic

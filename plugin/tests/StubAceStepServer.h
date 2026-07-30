@@ -91,6 +91,38 @@ public:
     juce::String getLastRequest() const                  { const juce::ScopedLock sl (lock); return lastRequest; }
     int getRequestCount() const noexcept                 { return requestCount.load(); }
 
+    /** Body of the most recent request, i.e. everything after the blank line. */
+    juce::String getLastBody() const                     { const juce::ScopedLock sl (lock); return lastBody; }
+
+    /** Path of the most recent request, e.g. "/release_task". */
+    juce::String getLastPath() const                     { const juce::ScopedLock sl (lock); return lastPath; }
+
+    /** Serve `body` for requests whose path contains `pathFragment`, overriding the
+        default response. Lets one stub stand in for the whole submit/poll/download
+        sequence. */
+    void setResponseFor (const juce::String& pathFragment, const juce::String& body)
+    {
+        const juce::ScopedLock sl (lock);
+        routes.set (pathFragment, body);
+    }
+
+    /** Number of requests seen for paths containing `pathFragment`. */
+    int getRequestCountFor (const juce::String& pathFragment) const
+    {
+        const juce::ScopedLock sl (lock);
+        return pathCounts[pathFragment];
+    }
+
+    /** Body of the last request to a path containing `pathFragment`.
+
+        Per-path, because getLastBody() is whatever arrived most recently — during a
+        generation that is a poll, not the submit a test wants to assert on. */
+    juce::String getBodyFor (const juce::String& pathFragment) const
+    {
+        const juce::ScopedLock sl (lock);
+        return pathBodies[pathFragment];
+    }
+
 private:
     void run() override
     {
@@ -120,10 +152,42 @@ private:
                 const juce::ScopedLock sl (lock);
 
                 if (bytesRead > 0)
-                    lastRequest = juce::String::fromUTF8 (buffer, bytesRead);
+                {
+                    const auto whole = juce::String::fromUTF8 (buffer, bytesRead);
+                    lastRequest = whole.upToFirstOccurrenceOf ("\r\n\r\n", false, false);
+                    lastBody    = whole.fromFirstOccurrenceOf ("\r\n\r\n", false, false);
+
+                    // "POST /release_task HTTP/1.1" -> "/release_task"
+                    const auto requestLine = whole.upToFirstOccurrenceOf ("\r\n", false, false);
+                    lastPath = requestLine.fromFirstOccurrenceOf (" ", false, false)
+                                          .upToFirstOccurrenceOf (" ", false, false);
+
+                    pathCounts.set (lastPath, pathCounts[lastPath] + 1);
+                    pathBodies.set (lastPath, lastBody);
+
+                    for (auto& route : routes)
+                    {
+                        const auto fragment = route.name.toString();
+
+                        if (lastPath.contains (fragment))
+                        {
+                            pathCounts.set (fragment, pathCounts[fragment] + 1);
+                            pathBodies.set (fragment, lastBody);
+                        }
+                    }
+                }
 
                 body = responseBody;
                 status = statusLine;
+
+                for (auto& route : routes)
+                {
+                    if (lastPath.contains (route.name.toString()))
+                    {
+                        body = route.value.toString();
+                        break;
+                    }
+                }
             }
 
             ++requestCount;
@@ -159,7 +223,10 @@ private:
     juce::WaitableEvent releaseEvent { true };   // manual reset
 
     mutable juce::CriticalSection lock;
-    juce::String lastRequest;
+    juce::String lastRequest, lastBody, lastPath;
+    juce::NamedValueSet routes;
+    mutable juce::HashMap<juce::String, int> pathCounts;
+    mutable juce::HashMap<juce::String, juce::String> pathBodies;
     juce::String statusLine  { "HTTP/1.1 200 OK" };
     juce::String responseBody { R"({"data":{"models":[{"name":"ace-step-1.5"},{"name":"ace-step-mini"}],"jobs":{"running":0}},"code":200,"error":null})" };
 

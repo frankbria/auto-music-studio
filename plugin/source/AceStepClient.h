@@ -75,4 +75,66 @@ constexpr int defaultProbeTimeoutMs = 2000;
     envelope handling without a server. */
 juce::StringArray parseModelNames (const juce::String& responseBody);
 
+//==============================================================================
+/** Outcome of submitting a generation task. */
+struct SubmitResult
+{
+    bool ok = false;
+    juce::String taskId;
+    juce::String errorMessage;
+    bool cancelled = false;
+};
+
+/** Where a submitted task has got to. */
+struct TaskStatus
+{
+    enum class State
+    {
+        pending,    ///< queued or running (the server reports 0 for both)
+        completed,
+        failed
+    };
+
+    bool ok = false;                ///< the *query* succeeded; see state for the task
+    State state = State::pending;
+    juce::StringArray audioUrls;    ///< absolute URLs, only when completed
+    juce::String errorMessage;      ///< query failure, or the task's own error
+    bool cancelled = false;
+};
+
+/** Submits a generation task.
+
+    `POST /release_task`; the task id comes back as `data.task_id` (or `data.id`).
+    Blocking — call from a BackgroundTaskQueue worker only. */
+SubmitResult submitGeneration (const juce::String& baseUrl,
+                               const juce::String& apiKey,
+                               const juce::String& payloadJson,
+                               std::function<bool()> shouldCancel = nullptr,
+                               int timeoutMs = defaultProbeTimeoutMs);
+
+/** Polls one task.
+
+    `POST /query_result` with `{"task_id_list":[id]}`. The server reports status as
+    an integer (0 queued/running, 1 succeeded, 2 failed) and hands back `result` as a
+    **JSON string** containing `[{"file": "/v1/audio?path=..."}]`, which is why this
+    returns parsed URLs rather than the raw body. Blocking. */
+TaskStatus queryTask (const juce::String& baseUrl,
+                      const juce::String& apiKey,
+                      const juce::String& taskId,
+                      std::function<bool()> shouldCancel = nullptr,
+                      int timeoutMs = defaultProbeTimeoutMs);
+
+/** Downloads one generated clip to `destination`.
+
+    @returns an error message, or empty on success. Blocking. */
+juce::String downloadAudio (const juce::String& audioUrl,
+                            const juce::String& apiKey,
+                            const juce::File& destination,
+                            std::function<bool()> shouldCancel = nullptr,
+                            int timeoutMs = 30000);
+
+/** Parses a `/query_result` body. Exposed so the envelope handling — including the
+    JSON-string `result` field — can be tested without a server. */
+TaskStatus parseTaskStatus (const juce::String& responseBody, const juce::String& baseUrl);
+
 } // namespace acemusic
