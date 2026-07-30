@@ -43,6 +43,7 @@ public:
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
 
         const juce::File& getFile() const noexcept            { return file; }
         juce::TextButton& getPlayButton() noexcept            { return playButton; }
@@ -64,6 +65,10 @@ public:
         juce::TextButton playButton { "Play" };
         juce::Label nameLabel;
         int clipIndex = 0;
+
+        /** mouseDrag fires continuously while the button is held, so without this a
+            gesture would try to start a new OS drag on every mouse move. */
+        bool dragStarted = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipRow)
     };

@@ -112,14 +112,26 @@ void ResultsPanel::ClipRow::resized()
     playButton.setBounds (bounds.removeFromLeft (70).reduced (2));
 }
 
-void ResultsPanel::ClipRow::mouseDrag (const juce::MouseEvent&)
+void ResultsPanel::ClipRow::mouseDrag (const juce::MouseEvent& event)
 {
+    // One OS drag per gesture. mouseDrag fires on every movement while the button is
+    // held, and a small threshold keeps a shaky click from becoming a drag.
+    if (dragStarted || event.getDistanceFromDragStart() < 6)
+        return;
+
     if (! file.existsAsFile())
         return;
+
+    dragStarted = true;
 
     // The only way a VST3 plugin can get audio onto the host's timeline: hand the
     // file to the OS drag service and let the user drop it where they want it.
     juce::DragAndDropContainer::performExternalDragDropOfFiles (getDragPayload(), false, this);
+}
+
+void ResultsPanel::ClipRow::mouseUp (const juce::MouseEvent&)
+{
+    dragStarted = false;
 }
 
 //==============================================================================
