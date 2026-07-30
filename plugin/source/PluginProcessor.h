@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BackgroundTaskQueue.h"
+#include "ConnectionManager.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -22,7 +23,16 @@ namespace acemusic
 class PluginProcessor final : public juce::AudioProcessor
 {
 public:
+    /** Production: reads/writes the user's real config file and probes on load. */
     PluginProcessor();
+
+    /** Test seam. Lets a test point the settings at a throwaway file instead of the
+        user's real config, and skip the load-time probe so constructing a processor
+        never touches the network.
+        @param propertiesToUse  settings store; may be null for "don't persist"
+        @param probeOnLoad      whether to auto-connect, as the real plugin does */
+    PluginProcessor (std::unique_ptr<juce::PropertiesFile> propertiesToUse, bool probeOnLoad);
+
     ~PluginProcessor() override;
 
     //==============================================================================
@@ -57,11 +67,21 @@ public:
     void setStateInformation (const void*, int) override;
 
     /** Work queue for anything that must not run on the audio thread — every
-        server call in US-23.2 onwards goes through here. */
+        server call goes through here. */
     BackgroundTaskQueue& getBackgroundQueue() noexcept        { return backgroundQueue; }
 
+    /** Server settings, connection status, and model list. Lives here rather than on
+        the editor so it survives the plugin window being closed. */
+    ConnectionManager& getConnectionManager() noexcept        { return connectionManager; }
+
 private:
+    // Declaration order is load-bearing: members are destroyed in reverse, so the
+    // queue (declared first) is torn down last — after connectionManager is gone. A
+    // probe still in flight then finds a cleared WeakReference and does nothing.
     BackgroundTaskQueue backgroundQueue;
+
+    std::unique_ptr<juce::PropertiesFile> properties;
+    ConnectionManager connectionManager;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

@@ -14,7 +14,8 @@ namespace colours
 
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
-    : juce::AudioProcessorEditor (&p)
+    : juce::AudioProcessorEditor (&p),
+      connectionPanel (p.getConnectionManager())
 {
     titleLabel.setText (p.getName(), juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (20.0f, juce::Font::bold));
@@ -54,7 +55,7 @@ void PluginEditor::resized()
     area.removeFromTop (12);
 
     // Connection is a fixed-height strip; Generation and Results split the rest.
-    connectionPanel.setBounds (area.removeFromTop (96));
+    connectionPanel.setBounds (area.removeFromTop (132));
     area.removeFromTop (12);
 
     generationPanel.setBounds (area.removeFromTop (area.getHeight() / 2));

@@ -2,6 +2,16 @@
 
 #include <atomic>
 
+namespace
+{
+    /** A processor that never touches the user's real config and never probes on
+        construction — these tests are about audio and layout, not the network. */
+    std::unique_ptr<acemusic::PluginProcessor> makeOfflineProcessor()
+    {
+        return std::make_unique<acemusic::PluginProcessor> (nullptr, false);
+    }
+}
+
 namespace acemusic
 {
 
@@ -17,7 +27,8 @@ public:
     {
         beginTest ("identifies itself");
         {
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
             expectEquals (processor.getName(), juce::String ("AceMusic Studio"));
             expect (PluginProcessor::getPluginVersion().isNotEmpty(), "version is empty");
             expect (PluginProcessor::getPluginVersion() != "0.0.0",
@@ -27,7 +38,8 @@ public:
 
         beginTest ("is an effect, not a synth or MIDI processor");
         {
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
             expect (! processor.acceptsMidi());
             expect (! processor.producesMidi());
             expect (! processor.isMidiEffect());
@@ -36,7 +48,8 @@ public:
 
         beginTest ("supports mono and stereo, rejects mismatched layouts");
         {
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
 
             using ChannelSet = juce::AudioChannelSet;
 
@@ -55,7 +68,8 @@ public:
             constexpr int numChannels = 2;
             constexpr int numSamples  = 512;
 
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
             processor.setPlayConfigDetails (numChannels, numChannels, 48000.0, numSamples);
             processor.prepareToPlay (48000.0, numSamples);
 
@@ -95,7 +109,8 @@ public:
             // silenced rather than passed on as garbage.
             constexpr int numSamples = 128;
 
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
 
             expect (processor.setBusesLayout ({ { juce::AudioChannelSet::disabled() },
                                                { juce::AudioChannelSet::stereo() } }),
@@ -121,7 +136,8 @@ public:
 
         beginTest ("state round-trips without state to store");
         {
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
 
             juce::MemoryBlock state;
             processor.getStateInformation (state);
@@ -135,7 +151,8 @@ public:
 
         beginTest ("exposes a background queue that runs work off the caller's thread");
         {
-            PluginProcessor processor;
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
             std::atomic<bool> ran { false };
 
             processor.getBackgroundQueue().enqueue ([&] { ran = true; });

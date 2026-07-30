@@ -1,9 +1,18 @@
 # AceMusic Studio — VST3 plugin
 
-JUCE-based plugin that brings ACE-Step generation into a DAW. This is the
-Stage 23 foundation (US-23.1): it builds, loads, shows a placeholder UI, and
-provides the off-audio-thread work queue that the connection, generation, and
-results panels will use.
+JUCE-based plugin that brings ACE-Step generation into a DAW.
+
+Stage 23 progress:
+
+| Story | State |
+| --- | --- |
+| US-23.1 — JUCE project, cross-platform build, off-audio-thread work queue | done |
+| US-23.2 — Connection panel: server URL, API key, status, model list | done |
+| US-23.3 — Generation panel | not started |
+| US-23.4 — Results panel and clip insertion | not started |
+| US-23.5 — Local cache and file management | not started |
+
+The Generation and Results panels are still outlined placeholders in the UI.
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -79,7 +88,49 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
    `%COMMONPROGRAMFILES%\VST3` on Windows).
 2. Reaper → Options → Preferences → Plug-ins → VST → *Re-scan*.
 3. Add it to a track with audio on it, open the UI, confirm the three panels
-   render and the audio is unchanged.
+   render (Connection is live; Generation and Results are placeholders) and the
+   audio is unchanged.
+
+## Connecting to ACE-Step
+
+The plugin expects an ACE-Step server; the default is `http://localhost:8001`.
+Set the URL (and an API key, if your server needs one) in the plugin's
+**Connection** panel and press *Test Connection*. The indicator reads:
+
+| Colour | Meaning |
+| --- | --- |
+| Grey | Not tried yet, or the server was changed since the last attempt |
+| Amber | Probe in flight |
+| Green | Server answered and reported at least one model |
+| Red | Unreachable, rejected the API key, or returned nothing usable |
+
+The probe is `GET /v1/stats` — ACE-Step has no `/health` endpoint. The model
+dropdown is filled from `data.models[].name` in that response. A successful
+connection auto-selects the first model if the saved one is no longer offered.
+
+The plugin auto-connects once when the host loads it. That never blocks the DAW:
+it queues the probe and updates the indicator when the result arrives.
+
+### Settings file
+
+Connection settings persist across DAW sessions in a plain config file, so they
+follow you into new projects:
+
+| Platform | Path |
+| --- | --- |
+| Linux | `~/.config/AutoMusicStudio/AceMusicStudio.settings` |
+| macOS | `~/Library/Application Support/AutoMusicStudio/AceMusicStudio.settings` |
+| Windows | `%APPDATA%\AutoMusicStudio\AceMusicStudio.settings` |
+
+> **The API key is stored in that file in plaintext.** On Linux and macOS the
+> file is chmod `0600` (owner read/write only); on Windows it inherits the
+> per-user AppData ACL. This is the same posture as `~/.aws/credentials` or
+> `~/.npmrc` — JUCE has no keychain abstraction, and a per-platform secure store
+> is out of scope here. Delete the file to clear a stored key.
+
+Settings live in this file rather than the plugin's project state on purpose:
+project state would only come back inside the same DAW project, and the
+requirement is to survive *sessions*.
 
 ## Networking
 
@@ -92,3 +143,26 @@ Linux dependencies above and to the CI workflow.
 
 **All server traffic goes through `BackgroundTaskQueue`.** `processBlock` never
 allocates, locks, or touches the network.
+
+A probe running on a worker cannot interrupt its own blocking call, so its 2s
+timeout is sized against the ~5s `juce::ThreadPool` allows in-flight work during
+teardown.
+
+**What that timeout bounds is not the same on every platform**, which matters if
+you ever tune it:
+
+| Platform | `withConnectionTimeout` means | Stalled-server worst case |
+| --- | --- | --- |
+| Linux/BSD (JUCE sockets, `JUCE_USE_CURL=0`) | connect timeout, re-applied as the poll timeout before each read | ~2x (≈4s) |
+| macOS | `NSURLRequest.timeoutInterval` — inactivity across the whole request | ~1x (≈2s) |
+| Windows | WinHTTP connect/send/receive timeouts | ~1x (≈2s) |
+
+Even 4s fits the teardown budget; 3s (≈6s on Linux) would not have.
+
+It is still not a hard bound on Linux, and this file shouldn't pretend otherwise.
+The read path polls with the timeout but then calls `recv(…, MSG_WAITALL)`, which
+blocks until the requested bytes arrive — a server that sends a partial body and
+then neither sends nor closes can block a worker indefinitely, and closing the
+plugin would abandon that thread. Bounding it properly needs a watchdog calling
+`WebInputStream::cancel()`, which US-23.3 has to build anyway for long-running
+generation requests (tracked on #317).
