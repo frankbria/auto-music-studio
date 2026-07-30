@@ -442,9 +442,19 @@ void ResultsPanel::resized()
     statusLabel.setBounds (footer);
     area.removeFromBottom (6);
 
-    // Cache browser occupies the lower half; the current generation's rows keep the
-    // top so the newest result is what you see first.
-    auto browser = area.removeFromBottom (juce::jmax (0, area.getHeight() / 2));
+    // Clip rows are a fixed height, so give them exactly what they need and let the
+    // browser have the rest — splitting down the middle squeezed the history list to
+    // a row and a half while leaving empty space above it.
+    constexpr auto rowHeight = 44;
+    constexpr auto rowGap = 4;
+    const auto rowsNeeded = clipRows.size() * (rowHeight + rowGap);
+
+    // Never let the browser collapse: it is the point of this panel once there is a
+    // cache, and an empty results area is not worth a hidden history.
+    const auto browserHeight = juce::jmax (juce::jmin (area.getHeight(), 130),
+                                           area.getHeight() - rowsNeeded);
+
+    auto browser = area.removeFromBottom (juce::jlimit (0, area.getHeight(), browserHeight));
 
     if (browser.getHeight() > 40)
     {
@@ -481,8 +491,8 @@ void ResultsPanel::resized()
         if (area.getHeight() <= 0)
             break;
 
-        row->setBounds (area.removeFromTop (juce::jmin (44, area.getHeight())));
-        area.removeFromTop (4);
+        row->setBounds (area.removeFromTop (juce::jmin (rowHeight, area.getHeight())));
+        area.removeFromTop (rowGap);
     }
 }
 

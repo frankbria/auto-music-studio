@@ -38,8 +38,11 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     // Three real panels need the room: the 520 default from US-23.1 left Results
     // squeezed to a single line once it had waveforms in it. The minimum is raised
     // for the same reason — below this the clip rows have nowhere to draw.
-    setResizeLimits (560, 620, 1600, 1400);
-    setSize (760, 720);
+    // Results now carries clip rows AND the cache browser, so it needs roughly twice
+    // the height it did in US-23.4. Raised again rather than letting either half be
+    // a sliver.
+    setResizeLimits (560, 700, 1600, 1600);
+    setSize (780, 860);
 }
 
 PluginEditor::~PluginEditor() = default;

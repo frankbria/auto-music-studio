@@ -35,9 +35,9 @@ public:
         ConnectionManager pointed at it. */
     struct Harness
     {
-        Harness()
+        explicit Harness (juce::PropertiesFile* settings = nullptr)
             : manager (queue, nullptr),
-              generation (queue, manager)
+              generation (queue, manager, settings)
         {
         }
 
@@ -71,10 +71,41 @@ public:
         GenerationManager generation;
     };
 
-    /** Cleans up whatever the manager wrote under its clip directory. */
+    /** A settings file pointing the clip cache at a throwaway directory.
+
+        Emphatically NOT the default cache location: these tests used to delete
+        ClipCache::getDefaultDirectory() recursively, which is the user's real cache —
+        running the suite would destroy a developer's actual generations. A demo
+        caught it. */
     struct ScopedClipCleanup
     {
-        ~ScopedClipCleanup()  { ClipCache::getDefaultDirectory().deleteRecursively(); }
+        ScopedClipCleanup()
+        {
+            root = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                       .getChildFile ("acemusic-genclips-"
+                                      + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)));
+            root.createDirectory();
+
+            juce::PropertiesFile::Options options;
+            options.applicationName = "GenTest";
+            options.filenameSuffix  = ".settings";
+            options.storageFormat   = juce::PropertiesFile::storeAsXML;
+
+            properties = std::make_unique<juce::PropertiesFile> (root.getChildFile ("GenTest.settings"),
+                                                                  options);
+            properties->setValue (ClipCache::cachePathKey,
+                                  root.getChildFile ("clips").getFullPathName());
+            properties->saveIfNeeded();
+        }
+
+        ~ScopedClipCleanup()
+        {
+            properties.reset();
+            root.deleteRecursively();
+        }
+
+        juce::File root;
+        std::unique_ptr<juce::PropertiesFile> properties;
     };
 
     void runTest() override
@@ -121,7 +152,7 @@ public:
         {
             ScopedClipCleanup cleanup;
 
-            Harness harness;
+            Harness harness { cleanup.properties.get() };
             expect (harness.server.start() != 0);
             if (! harness.connect (*this, [this] (auto p) { return pumpUntil (p); }))
                 return;
@@ -186,7 +217,7 @@ public:
         {
             ScopedClipCleanup cleanup;
 
-            Harness harness;
+            Harness harness { cleanup.properties.get() };
             expect (harness.server.start() != 0);
             if (! harness.connect (*this, [this] (auto p) { return pumpUntil (p); }))
                 return;
