@@ -3,6 +3,7 @@
 #include <juce_events/juce_events.h>
 
 #include <atomic>
+#include <memory>
 #include <thread>
 
 namespace acemusic
@@ -83,35 +84,45 @@ public:
 
         beginTest ("callOnMessageThread delivers on the message thread");
         {
-            BackgroundTaskQueue queue;
-            std::atomic<bool> delivered { false };
-            std::atomic<bool> onMessageThread { false };
-            std::atomic<bool> workerWasMessageThread { true };
+            // Shared state, not stack references: if the callback is late it
+            // still fires after this scope exits, and must not touch dead locals.
+            struct Observed
+            {
+                std::atomic<bool> delivered { false };
+                std::atomic<bool> onMessageThread { false };
+                std::atomic<bool> workerWasMessageThread { true };
+            };
 
+            auto observed = std::make_shared<Observed>();
             auto* mm = juce::MessageManager::getInstance();
 
-            queue.enqueue ([&]
             {
-                // A background worker is, by definition, not the message thread.
-                workerWasMessageThread = mm->isThisTheMessageThread();
+                BackgroundTaskQueue queue;
 
-                BackgroundTaskQueue::callOnMessageThread ([&]
+                queue.enqueue ([observed, mm]
                 {
-                    onMessageThread = mm->isThisTheMessageThread();
-                    delivered = true;
-                });
-            });
+                    // A background worker is, by definition, not the message thread.
+                    observed->workerWasMessageThread = mm->isThisTheMessageThread();
 
-            expect (queue.waitForAll (5000), "queue did not drain");
+                    BackgroundTaskQueue::callOnMessageThread ([observed, mm]
+                    {
+                        observed->onMessageThread = mm->isThisTheMessageThread();
+                        observed->delivered = true;
+                    });
+                });
+
+                expect (queue.waitForAll (5000), "queue did not drain");
+            }
 
             // Pump the message loop until the async callback lands.
-            const auto deadline = juce::Time::getMillisecondCounter() + 5000;
-            while (! delivered.load() && juce::Time::getMillisecondCounter() < deadline)
+            const auto start = juce::Time::getMillisecondCounter();
+            while (! observed->delivered.load()
+                   && (juce::uint32) (juce::Time::getMillisecondCounter() - start) < 5000)
                 mm->runDispatchLoopUntil (10);
 
-            expect (delivered.load(), "callback was never delivered");
-            expect (! workerWasMessageThread.load(), "the worker ran on the message thread");
-            expect (onMessageThread.load(), "callback did not run on the message thread");
+            expect (observed->delivered.load(), "callback was never delivered");
+            expect (! observed->workerWasMessageThread.load(), "the worker ran on the message thread");
+            expect (observed->onMessageThread.load(), "callback did not run on the message thread");
         }
     }
 };

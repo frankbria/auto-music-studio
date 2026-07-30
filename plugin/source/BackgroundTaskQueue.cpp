@@ -39,11 +39,14 @@ bool BackgroundTaskQueue::waitForAll (int timeoutMs)
 {
     // ponytail: poll rather than add a condition variable — the only callers are
     // tests and shutdown, neither of which is latency-sensitive.
-    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) juce::jmax (0, timeoutMs);
+    const auto start = juce::Time::getMillisecondCounter();
+    const auto limit = (juce::uint32) juce::jmax (0, timeoutMs);
 
     while (pool.getNumJobs() > 0)
     {
-        if (juce::Time::getMillisecondCounter() >= deadline)
+        // Unsigned subtraction, so this stays correct across the counter's
+        // ~49-day wrap.
+        if ((juce::uint32) (juce::Time::getMillisecondCounter() - start) >= limit)
             return false;
 
         juce::Thread::sleep (5);

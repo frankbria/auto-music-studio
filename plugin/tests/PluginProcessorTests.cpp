@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include <atomic>
+
 namespace acemusic
 {
 
