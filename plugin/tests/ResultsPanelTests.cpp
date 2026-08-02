@@ -609,6 +609,64 @@ public:
                         + " samples, expected " + juce::String (expected));
         }
 
+        beginTest ("AC (amended, see #318): each clip is tagged with the bar to drop it at");
+        {
+            // VST3 cannot place audio on the host timeline, so the reachable form of
+            // "insert at the selection start" is reporting where the selection starts.
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;   // bar 5
+            playHead.loopEndPpq = 48.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 120);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+
+            expect (pumpUntil ([&] { return row->getNameLabel().getText().contains ("bar 5"); }, 5000),
+                    "the row does not say where to drop it: " + row->getNameLabel().getText());
+
+            // Moving the selection moves the tag.
+            playHead.loopStartPpq = 32.0;   // bar 9
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return row->getNameLabel().getText().contains ("bar 9"); }, 5000),
+                    "the tag stayed at the old bar: " + row->getNameLabel().getText());
+
+            // And clearing the loop range clears the tag rather than stranding it.
+            playHead.loopStartPpq = 0.0;
+            playHead.loopEndPpq = 0.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return ! row->getNameLabel().getText().contains ("bar"); }, 5000),
+                    "a stale drop target survived the selection going away: "
+                        + row->getNameLabel().getText());
+        }
+
+        beginTest ("with no selection the clip row is captioned exactly as in Stage 23");
+        {
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 120);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+            expect (! pumpUntil ([&] { return row->getNameLabel().getText() != "Clip 1"; }, 1500),
+                    "the caption gained something with no selection and no tempo match: "
+                        + row->getNameLabel().getText());
+        }
+
         beginTest ("tempo-matched copies do not show up as extra clips in the cache browser");
         {
             // The cache browser lists *.wav in a run directory. A tempo match written

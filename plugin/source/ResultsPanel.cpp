@@ -73,7 +73,7 @@ void ResultsPanel::ClipRow::ensureTempoMatch (double hostBpm, double clipBpm,
         if (dragFile != file)
         {
             dragFile = file;
-            nameLabel.setText ("Clip " + juce::String (clipIndex + 1), juce::dontSendNotification);
+            updateNameLabel();
         }
 
         matchedToBpm = 0.0;
@@ -108,14 +108,34 @@ void ResultsPanel::ClipRow::ensureTempoMatch (double hostBpm, double clipBpm,
                 row->matchInFlight = false;
                 row->dragFile = matched;
                 row->matchedToBpm = matched != row->file ? hostBpm : 0.0;
-
-                if (matched != row->file)
-                    row->nameLabel.setText ("Clip " + juce::String (row->clipIndex + 1)
-                                                + "  ->  " + juce::String (juce::roundToInt (hostBpm)) + " BPM",
-                                            juce::dontSendNotification);
+                row->updateNameLabel();
             }
         });
     });
+}
+
+void ResultsPanel::ClipRow::setTargetBar (double bar, bool present)
+{
+    if (present == hasTargetBar && (! present || juce::approximatelyEqual (bar, targetBar)))
+        return;
+
+    hasTargetBar = present;
+    targetBar = bar;
+    updateNameLabel();
+}
+
+void ResultsPanel::ClipRow::updateNameLabel()
+{
+    juce::String text { "Clip " + juce::String (clipIndex + 1) };
+
+    if (dragFile != file)
+        text << "  ->  " << juce::String (juce::roundToInt (matchedToBpm)) << " BPM";
+
+    if (hasTargetBar)
+        text << "  @ bar " << HostSync::formatBar (targetBar);
+
+    if (nameLabel.getText() != text)
+        nameLabel.setText (text, juce::dontSendNotification);
 }
 
 void ResultsPanel::ClipRow::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -464,8 +484,15 @@ void ResultsPanel::updateTempoMatches()
     const auto hostBpm = host.hasBpm() ? (double) juce::roundToInt (host.bpm) : 0.0;
     const auto clipBpm = (double) generation.getRequestedBpm();
 
+    // Where a drop should land: the start of the host's loop range. The plugin cannot
+    // put it there itself (VST3 has no arrangement write), so it says where.
+    const auto selection = HostSync::describeSelection (host);
+
     for (auto* row : clipRows)
+    {
         row->ensureTempoMatch (hostBpm, clipBpm, queue);
+        row->setTargetBar (selection.startBar, selection.present && selection.hasBars);
+    }
 }
 
 void ResultsPanel::rebuildRows()

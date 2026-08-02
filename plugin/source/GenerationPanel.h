@@ -53,10 +53,14 @@ public:
     juce::TextButton&   getCancelButton() noexcept        { return cancelButton; }
     juce::Label&        getStatusLabel() noexcept         { return statusLabel; }
     juce::Label&        getSyncLabel() noexcept           { return syncLabel; }
+    juce::Label&        getSelectionLabel() noexcept      { return selectionLabel; }
+    juce::ProgressBar&  getProgressBar() noexcept         { return progressBar; }
 
     /** True while the BPM field is following the host rather than the user. */
     bool isBpmSynced() const noexcept                     { return bpmSynced; }
-    juce::ProgressBar&  getProgressBar() noexcept         { return progressBar; }
+
+    /** True while the duration field is following the host's loop range. */
+    bool isDurationSynced() const noexcept                { return durationSynced; }
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -67,8 +71,15 @@ private:
         @returns true if the field changed. */
     bool applyHostTempo();
 
+    /** Copies the host's loop-range length into the duration field when that field is
+        still following it. @returns true if the field changed. */
+    bool applyHostSelection();
+
     /** What the sync indicator should read right now. */
     juce::String getSyncStatusText() const;
+
+    /** What the selection readout should read right now. */
+    juce::String getSelectionText() const;
 
     GenerationManager& generation;
     ConnectionManager& connection;
@@ -78,6 +89,10 @@ private:
         "Auto" placeholder sets it true again, which is how sync is resumed — the
         panel already treats an empty field as "let something else choose". */
     bool bpmSynced = true;
+
+    /** Same rule as bpmSynced, for the duration field and the host's loop range. False
+        once the user types their own duration; clearing the field resumes tracking. */
+    bool durationSynced = true;
 
     juce::Label      titleLabel;
 
@@ -108,6 +123,7 @@ private:
     juce::TextButton cancelButton { "Cancel" };
     juce::Label      statusLabel;
     juce::Label      syncLabel;
+    juce::Label      selectionLabel;
 
     /** The server reports no percentage, so this runs in indeterminate mode while a
         job is in flight. See the progress note in the README. */
