@@ -26,6 +26,12 @@ public:
         if (timeInSeconds >= 0.0)
             info.setTimeInSeconds (timeInSeconds);
 
+        if (loopEndPpq > loopStartPpq)
+            info.setLoopPoints (LoopPoints { loopStartPpq, loopEndPpq });
+
+        if (timeSigNumerator > 0 && timeSigDenominator > 0)
+            info.setTimeSignature (TimeSignature { timeSigNumerator, timeSigDenominator });
+
         return info;
     }
 
@@ -36,6 +42,15 @@ public:
 
     /** < 0 means "the host publishes no position". */
     double timeInSeconds = 0.0;
+
+    /** The loop / cycle range in quarter notes. Equal values mean "no loop range",
+        which is what a host with no cycle locators set reports. */
+    double loopStartPpq = 0.0;
+    double loopEndPpq = 0.0;
+
+    /** 0/0 means "the host publishes no time signature". */
+    int timeSigNumerator = 0;
+    int timeSigDenominator = 0;
 };
 
 } // namespace acemusic::test

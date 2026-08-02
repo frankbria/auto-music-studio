@@ -482,6 +482,235 @@ public:
                         + panel.getSyncLabel().getText());
         }
 
+        //======================================================================
+        // US-24.2 — selection-aware generation.
+
+        beginTest ("AC: selecting bars 5-13 auto-sets the duration to 16 seconds");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;   // bar 5
+            playHead.loopEndPpq = 48.0;     // bar 13
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("16"),
+                          "the duration did not follow the selection");
+            expect (panel.isDurationSynced());
+
+            // And it reaches the request, so the generation is actually that long.
+            panel.getPromptEditor().setText ("fits the gap", true);
+            expectEquals (panel.buildRequest().durationSeconds, 16);
+        }
+
+        beginTest ("AC: the selection is displayed in the generation panel");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+
+            const auto text = editor.getGenerationPanel().getSelectionLabel().getText();
+
+            expect (text.contains ("5"), "no start bar in: " + text);
+            expect (text.contains ("13"), "no end bar in: " + text);
+            expect (text.contains ("16.0s"), "no length in: " + text);
+        }
+
+        beginTest ("a moved selection re-drives the duration");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("16"));
+
+            // The musician drags the loop range out to 16 bars.
+            playHead.loopEndPpq = 80.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return panel.getDurationEditor().getText() == "32"; }, 5000),
+                    "duration stayed at " + panel.getDurationEditor().getText());
+        }
+
+        beginTest ("AC: a manual duration override survives the host, and clearing resumes");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getDurationEditor().setText ("45", true);
+            expect (pumpUntil ([&] { return ! panel.isDurationSynced(); }, 5000),
+                    "typing a duration did not stop the tracking");
+
+            playHead.loopEndPpq = 80.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (! pumpUntil ([&] { return panel.getDurationEditor().getText() != "45"; }, 1500),
+                    "the host overwrote a manually entered duration");
+
+            // Clearing hands it back, exactly as the BPM field does.
+            panel.getDurationEditor().setText ("", true);
+            expect (pumpUntil ([&] { return panel.getDurationEditor().getText() == "32"; }, 5000),
+                    "clearing did not resume selection tracking");
+        }
+
+        beginTest ("AC: with no selection the panel behaves exactly as it did in Stage 23");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            // No cycle locators set: loopStartPpq == loopEndPpq == 0.
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // The Stage-23 default, untouched.
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
+            panel.getPromptEditor().setText ("no selection here", true);
+            expectEquals (panel.buildRequest().durationSeconds, 60);
+
+            expect (panel.getSelectionLabel().getText().containsIgnoreCase ("none"),
+                    "did not report the absent selection: "
+                        + panel.getSelectionLabel().getText());
+
+            // And it stays 60 across several ticks rather than drifting to 0.
+            expect (! pumpUntil ([&] { return panel.getDurationEditor().getText() != "60"; }, 1500),
+                    "the duration moved with no selection to move it");
+        }
+
+        beginTest ("a selection with no host tempo sets no duration and says why");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 0.0;              // host publishes no tempo
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // Without a tempo the length in seconds is unknowable — 0 would be a lie.
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
+
+            const auto text = panel.getSelectionLabel().getText();
+            expect (! text.contains ("0.0s"), "reported a fabricated length: " + text);
+            expect (text.containsIgnoreCase ("no host tempo"), "did not explain: " + text);
+        }
+
+        beginTest ("clearing a field and hitting Generate immediately uses the host value");
+        {
+            // The 2Hz timer is not the only path that has to be right: a user who clears
+            // the duration to resume sync and clicks Generate straight away must get the
+            // selection's length, not the 60 second fallback an empty field means.
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;     // 16 seconds
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("something", true);
+
+            panel.getDurationEditor().setText ("45", true);
+            expect (pumpUntil ([&] { return ! panel.isDurationSynced(); }, 5000));
+
+            // Clear it, then read the request with no timer tick in between.
+            panel.getDurationEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().durationSeconds, 16,
+                          "an immediate Generate after clearing fell back to the default");
+
+            // Same for BPM: clearing must restore the host tempo, not leave it on Auto.
+            panel.getBpmEditor().setText ("100", true);
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000));
+            panel.getBpmEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().bpm, 120,
+                          "an immediate Generate after clearing BPM fell back to Auto");
+        }
+
+        beginTest ("the sync and selection readouts fit the space they are given");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            // The minimum the editor allows, so this is the worst case a user can make.
+            editor.setSize (560, 700);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto fits = [this] (juce::Label& label, const char* what)
+            {
+                const auto needed = juce::GlyphArrangement::getStringWidth (label.getFont(),
+                                                                           label.getText());
+                expect ((float) label.getWidth() >= needed,
+                        juce::String (what) + " is clipped: \"" + label.getText() + "\" needs "
+                            + juce::String (needed, 0) + "px, has "
+                            + juce::String (label.getWidth()) + "px");
+            };
+
+            fits (panel.getSyncLabel(), "the sync indicator");
+            fits (panel.getSelectionLabel(), "the selection readout");
+        }
+
         beginTest ("applying a request with its own BPM takes the field off sync");
         {
             PluginProcessor processor (nullptr, false);

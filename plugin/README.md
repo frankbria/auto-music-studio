@@ -12,6 +12,7 @@ Progress:
 | US-23.4 — Results panel and clip insertion | done |
 | US-23.5 — Local cache and file management | done |
 | US-24.1 — DAW tempo sync and tempo-matched insertion | done |
+| US-24.2 — Selection-aware generation | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -92,6 +93,9 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
    indicator says `Sync: host 120 BPM`; change the project tempo and watch it
    follow. This is the one part of US-24.1 that no unit test can cover, because
    it needs a real host publishing a real tempo.
+5. Set the cycle locators over bars 5–13 and confirm the panel reads
+   `Selection: bars 5-13, 16.0s` with **Duration** at 16. Same reason: it needs a
+   real host publishing a real loop range.
 
 ## Connecting to ACE-Step
 
@@ -157,6 +161,36 @@ JUCE is [ARA](https://www.celemony.com/en/service1/about-celemony/technologies),
 a separately licensed SDK that a handful of hosts implement. There is no way to
 read the project key through VST3, AU or Standalone, so the **Key** field is
 always manual. The indicator deliberately never claims otherwise.
+
+### Selection
+
+The plugin follows the host's **loop / cycle range** and sizes generation to it. Set
+the cycle locators over bars 5–13 in a 120 BPM 4/4 project and the panel reads
+`Selection: bars 5-13, 16.0s`, with the **Duration** field set to 16.
+
+Duration follows the same rule as BPM: it tracks the host until you type your own
+value, and clearing the field hands it back.
+
+**It is the loop range, not an arbitrary time selection.** VST3 has no API for the
+latter — `AudioPlayHead::PositionInfo::getLoopPoints()` is what exists, and JUCE fills
+it from `Vst::ProcessContext::kCycleValid`. In Reaper the loop range is linked to the
+time selection by default (Options → Loop points linked to time selection); in Cubase
+and Logic these are the cycle markers. In a DAW where the two are not linked, moving
+the time selection alone will not move the plugin's.
+
+With no loop range set, the panel reads `Selection: none` and Duration keeps its
+default of 60 — the Stage-23 behaviour, unchanged.
+
+A loop range with no host tempo behind it shows the bars but no length, rather than
+claiming `0.0s`.
+
+### Where to drop it
+
+The results panel tags each clip with the bar a drop should line up with —
+`Clip 1  ->  120 BPM  @ bar 5`. The plugin cannot place the audio there itself: VST3
+gives it no way to write the host's arrangement. This is the same resolution agreed on
+[#318](https://github.com/frankbria/auto-music-studio/issues/318) for the playhead
+readout — the plugin reports the position, and the drop stays yours.
 
 ### Tempo-matched insertion
 

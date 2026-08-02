@@ -52,6 +52,7 @@ public:
 
         const juce::File& getFile() const noexcept            { return file; }
         juce::TextButton& getPlayButton() noexcept            { return playButton; }
+        juce::Label& getNameLabel() noexcept                  { return nameLabel; }
 
         /** What a drop actually hands the host: the clip itself, or a tempo-matched
             copy of it once one has been built. */
@@ -62,6 +63,14 @@ public:
             agreeing, drops the match and goes back to handing over the original.
             Cheap and idempotent — the panel calls this on every timer tick. */
         void ensureTempoMatch (double hostBpm, double clipBpm, BackgroundTaskQueue&);
+
+        /** Tags the row with the bar a drop should be aligned to — the start of the
+            host's loop range. `present` false clears it.
+
+            VST3 cannot place audio on the host timeline (see the class note), so
+            reporting where it *should* go is the closest reachable thing, and the same
+            resolution #318 settled on for the playhead. */
+        void setTargetBar (double bar, bool present);
 
         /** True once the waveform has finished loading. */
         bool hasWaveform() const;
@@ -74,6 +83,10 @@ public:
         void changeListenerCallback (juce::ChangeBroadcaster*) override;
         void timerCallback() override;
 
+        /** Rebuilds the row caption from the tempo match and target bar. One writer, so
+            the two cannot overwrite each other's half of the text. */
+        void updateNameLabel();
+
         juce::File file;
 
         /** Equal to `file` until a tempo match has been built for the host's tempo. */
@@ -82,6 +95,10 @@ public:
         /** The host tempo `dragFile` was built for; 0 when it is just the original. */
         double matchedToBpm = 0.0;
         bool matchInFlight = false;
+
+        /** The bar a drop should line up with, when the host reports a loop range. */
+        double targetBar = 0.0;
+        bool hasTargetBar = false;
 
         ClipPlayer& player;
         juce::AudioThumbnail thumbnail;
