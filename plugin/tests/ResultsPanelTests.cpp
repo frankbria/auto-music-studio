@@ -1,5 +1,7 @@
+#include "FakePlayHead.h"
 #include "PluginEditor.h"
 #include "StubAceStepServer.h"
+#include "TimeStretch.h"
 
 #include <juce_events/juce_events.h>
 
@@ -564,6 +566,165 @@ public:
 
             processor.getClipPlayer().stop();
             expect (true, "survived the editor closing mid-playback");
+        }
+
+        //======================================================================
+        // US-24.1 — tempo matching on insertion.
+
+        beginTest ("AC: a 118 BPM clip is dropped into a 120 BPM project already stretched");
+        {
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 118);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+
+            expect (pumpUntil ([&] { return row->getDragFile() != row->getFile(); }, 20000),
+                    "the clip was never tempo-matched to the host");
+
+            const auto payload = row->getDragPayload();
+            expectEquals (payload.size(), 1);
+
+            const juce::File dropped { payload[0] };
+            expect (dropped.existsAsFile(), "the tempo-matched drop is not a real file");
+            expect (dropped != clips.files[0], "the drop was still the unstretched clip");
+            expect (dropped == TimeStretch::getMatchedFileFor (clips.files[0], 120.0),
+                    "unexpected match path: " + dropped.getFullPathName());
+
+            // And it really is shorter, in the ratio the tempo change implies.
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (dropped));
+            expect (reader != nullptr, "the tempo-matched drop is not readable audio");
+
+            const auto expected = (juce::int64) std::llround (44100.0 / TimeStretch::rateFor (118.0, 120.0));
+            expect (std::abs (reader->lengthInSamples - expected) <= 1,
+                    "dropped clip was " + juce::String (reader->lengthInSamples)
+                        + " samples, expected " + juce::String (expected));
+        }
+
+        beginTest ("tempo-matched copies do not show up as extra clips in the cache browser");
+        {
+            // The cache browser lists *.wav in a run directory. A tempo match written
+            // beside the clip would be counted as a third clip of a two-clip run, and
+            // would come back as one when the generation is reopened from the cache.
+            Harness harness;
+
+            const auto run = harness.cacheDirectory().getChildFile ("run-1");
+            run.createDirectory();
+
+            juce::Array<juce::File> clips;
+            clips.add (ScopedClips::write (run.getChildFile ("clip-1.wav"), 220.0));
+            clips.add (ScopedClips::write (run.getChildFile ("clip-2.wav"), 440.0));
+            ClipCache::writeMetadata (run, "a prompt", "a-model", 1.0);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips, 118);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+            expect (pumpUntil ([&] { return harness.panel().getClipRow (0)->getDragFile()
+                                             != harness.panel().getClipRow (0)->getFile(); }, 20000),
+                    "never tempo-matched, so this proves nothing");
+            expect (pumpUntil ([&] { return harness.panel().getClipRow (1)->getDragFile()
+                                             != harness.panel().getClipRow (1)->getFile(); }, 20000));
+
+            const auto entry = ClipCache::readEntry (run);
+            expectEquals (entry.clips.size(), 2,
+                          "the cache browser counted the tempo-matched copies as clips");
+
+            // It is still on disk and still accounted for, just not listed as a clip.
+            expect (TimeStretch::getMatchedFileFor (clips[0], 120.0).existsAsFile());
+            expect (entry.sizeInBytes > clips[0].getSize() + clips[1].getSize(),
+                    "the tempo matches were not counted in the run's size on disk");
+        }
+
+        beginTest ("a clip already at the host tempo is dropped untouched");
+        {
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 120);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+
+            // Give the panel several ticks to do the wrong thing.
+            expect (! pumpUntil ([&] { return row->getDragFile() != row->getFile(); }, 2000),
+                    "a clip already at tempo was stretched anyway");
+            expectEquals (row->getDragPayload()[0], clips.files[0].getFullPathName());
+            expect (! TimeStretch::getMatchedFileFor (clips.files[0], 120.0).existsAsFile(),
+                    "a pointless tempo match was written to disk");
+        }
+
+        beginTest ("an Auto-BPM generation or a silent host leaves the clip alone");
+        {
+            for (const auto scenario : { 0, 1 })
+            {
+                ScopedClips clips;
+                Harness harness;
+
+                test::FakePlayHead playHead;
+
+                // 0: the host has a tempo but the generation asked for Auto BPM, so the
+                //    clip's own tempo is unknown and guessing would be worse than nothing.
+                // 1: the generation asked for 118 but the host publishes no tempo.
+                playHead.reportsPosition = scenario == 0;
+                playHead.bpm = 120.0;
+                harness.processor.getHostSync().captureFrom (&playHead);
+
+                harness.generation().setClipsForTesting (clips.files, scenario == 0 ? -1 : 118);
+                expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+                auto* row = harness.panel().getClipRow (0);
+
+                expect (! pumpUntil ([&] { return row->getDragFile() != row->getFile(); }, 1500),
+                        "scenario " + juce::String (scenario) + ": stretched against an unknown tempo");
+                expectEquals (row->getDragPayload()[0], clips.files[0].getFullPathName());
+            }
+        }
+
+        beginTest ("a host tempo change re-matches the clip to the new tempo");
+        {
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 118);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+            expect (pumpUntil ([&] { return row->getDragFile() != row->getFile(); }, 20000),
+                    "never matched to 120");
+
+            playHead.bpm = 140.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return row->getDragFile()
+                                             == TimeStretch::getMatchedFileFor (clips.files[0], 140.0); },
+                               20000),
+                    "the drop stayed matched to the old tempo: " + row->getDragFile().getFullPathName());
+
+            // And going back to the clip's own tempo hands the original over again.
+            playHead.bpm = 118.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return row->getDragFile() == row->getFile(); }, 20000),
+                    "the original was not restored when the host matched the clip");
         }
     }
 };

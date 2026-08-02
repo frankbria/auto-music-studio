@@ -1,8 +1,10 @@
 #pragma once
 
+#include "BackgroundTaskQueue.h"
 #include "ClipCache.h"
 #include "ClipPlayer.h"
 #include "GenerationManager.h"
+#include "HostSync.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -26,7 +28,7 @@ class ResultsPanel final : public juce::Component,
 {
 public:
     /** @param settings  resolves the configured cache path; null uses the default */
-    ResultsPanel (GenerationManager&, ClipPlayer&, juce::AudioProcessor&,
+    ResultsPanel (GenerationManager&, ClipPlayer&, HostSync&, BackgroundTaskQueue&,
                   juce::PropertiesFile* settings = nullptr);
     ~ResultsPanel() override;
 
@@ -51,6 +53,16 @@ public:
         const juce::File& getFile() const noexcept            { return file; }
         juce::TextButton& getPlayButton() noexcept            { return playButton; }
 
+        /** What a drop actually hands the host: the clip itself, or a tempo-matched
+            copy of it once one has been built. */
+        const juce::File& getDragFile() const noexcept        { return dragFile; }
+
+        /** Builds (once, in the background) a copy of this clip at `hostBpm`, given it
+            was generated at `clipBpm`. Either tempo being unknown, or the two already
+            agreeing, drops the match and goes back to handing over the original.
+            Cheap and idempotent — the panel calls this on every timer tick. */
+        void ensureTempoMatch (double hostBpm, double clipBpm, BackgroundTaskQueue&);
+
         /** True once the waveform has finished loading. */
         bool hasWaveform() const;
 
@@ -63,6 +75,14 @@ public:
         void timerCallback() override;
 
         juce::File file;
+
+        /** Equal to `file` until a tempo match has been built for the host's tempo. */
+        juce::File dragFile;
+
+        /** The host tempo `dragFile` was built for; 0 when it is just the original. */
+        double matchedToBpm = 0.0;
+        bool matchInFlight = false;
+
         ClipPlayer& player;
         juce::AudioThumbnail thumbnail;
         juce::TextButton playButton { "Play" };
@@ -113,6 +133,9 @@ private:
     void timerCallback() override;
     void rebuildRows();
 
+    /** Keeps every row's drop file in step with the host tempo. */
+    void updateTempoMatches();
+
     /** Rows of past generations: prompt, when, how long, how big. */
     class HistoryModel final : public juce::ListBoxModel
     {
@@ -134,7 +157,8 @@ private:
 
     GenerationManager& generation;
     ClipPlayer& player;
-    juce::AudioProcessor& processor;
+    HostSync& hostSync;
+    BackgroundTaskQueue& queue;
     ClipCache cache;
 
     juce::AudioThumbnailCache thumbnailCache { 8 };

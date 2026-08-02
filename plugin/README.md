@@ -2,17 +2,16 @@
 
 JUCE-based plugin that brings ACE-Step generation into a DAW.
 
-Stage 23 progress:
+Progress:
 
 | Story | State |
 | --- | --- |
 | US-23.1 — JUCE project, cross-platform build, off-audio-thread work queue | done |
 | US-23.2 — Connection panel: server URL, API key, status, model list | done |
-| US-23.3 — Generation panel | not started |
-| US-23.4 — Results panel and clip insertion | not started |
-| US-23.5 — Local cache and file management | not started |
-
-The Generation and Results panels are still outlined placeholders in the UI.
+| US-23.3 — Generation panel | done |
+| US-23.4 — Results panel and clip insertion | done |
+| US-23.5 — Local cache and file management | done |
+| US-24.1 — DAW tempo sync and tempo-matched insertion | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -88,8 +87,11 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
    `%COMMONPROGRAMFILES%\VST3` on Windows).
 2. Reaper → Options → Preferences → Plug-ins → VST → *Re-scan*.
 3. Add it to a track with audio on it, open the UI, confirm the three panels
-   render (Connection is live; Generation and Results are placeholders) and the
-   audio is unchanged.
+   render and the audio is unchanged.
+4. Set the project tempo to 120 and confirm the **BPM** field reads 120 and the
+   indicator says `Sync: host 120 BPM`; change the project tempo and watch it
+   follow. This is the one part of US-24.1 that no unit test can cover, because
+   it needs a real host publishing a real tempo.
 
 ## Connecting to ACE-Step
 
@@ -131,6 +133,57 @@ follow you into new projects:
 Settings live in this file rather than the plugin's project state on purpose:
 project state would only come back inside the same DAW project, and the
 requirement is to survive *sessions*.
+
+## Host sync
+
+The plugin follows the DAW's tempo. Open it in a 120 BPM project and the **BPM**
+field reads 120; drag the project tempo and the field follows. The **Sync**
+indicator next to the parameter row says which of these is happening:
+
+| Indicator | Meaning |
+| --- | --- |
+| `Sync: host 120 BPM` | BPM is following the host |
+| `Sync: off (manual BPM)` | you typed a BPM; the host will not overwrite it |
+| `Sync: no host tempo` | the host publishes no tempo — BPM stays on *Auto* |
+
+**To take manual control**, type a BPM. **To hand it back**, clear the field —
+empty is the panel's existing "Auto" state, so there is no extra button.
+
+### Key is not synced, and cannot be
+
+`juce::AudioPlayHead::PositionInfo` carries tempo, time signature, PPQ and the
+transport flags — and **no key signature**. The only key-signature channel in
+JUCE is [ARA](https://www.celemony.com/en/service1/about-celemony/technologies),
+a separately licensed SDK that a handful of hosts implement. There is no way to
+read the project key through VST3, AU or Standalone, so the **Key** field is
+always manual. The indicator deliberately never claims otherwise.
+
+### Tempo-matched insertion
+
+If a clip was generated at a different BPM from the project, dragging it out
+hands the host a **tempo-matched copy** rather than the original — a 118 BPM clip
+dropped into a 120 BPM project arrives at 120.
+
+The stretch is WSOLA (waveform-similarity overlap-add), not a resample.
+Resampling would be less code, but it changes pitch with speed: 118→120 is a 1.7%
+rate change and therefore a 29-cent detune, and audio that lands out of tune with
+the project defeats the point of syncing to it in the first place.
+
+Matched copies are written to a `tempo-match/` directory inside the run's cache
+folder, built once per tempo on the background queue, and removed with the run.
+They live in a subdirectory rather than beside the clip because the cache browser
+lists `*.wav` per run non-recursively — as siblings they would be counted as
+extra clips of that generation.
+
+The clip's own tempo is the BPM that was **requested**, not one measured from the
+returned audio. A generation that left BPM on *Auto* has no known tempo, so
+nothing is stretched: guessing would be worse than leaving it alone. Detecting
+the tempo of a finished clip is a separate story.
+
+Everything reads the host transport through `HostSync`, which samples the play
+head once in `processBlock` and publishes it. `getPlayHead()` is an audio-thread
+API; calling it from a timer, as the results panel used to for its playhead
+readout, is a data race.
 
 ## Networking
 

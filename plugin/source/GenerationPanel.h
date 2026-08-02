@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GenerationManager.h"
+#include "HostSync.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -20,7 +21,10 @@ class GenerationPanel final : public juce::Component,
                               private juce::Timer
 {
 public:
-    GenerationPanel (GenerationManager&, ConnectionManager&);
+    /** @param hostSyncToUse  the host transport, or null for "there is no host" —
+                              which is what a test that does not care about tempo
+                              sync gets, and what the panel shows as no host tempo. */
+    GenerationPanel (GenerationManager&, ConnectionManager&, HostSync* hostSyncToUse = nullptr);
     ~GenerationPanel() override;
 
     void paint (juce::Graphics&) override;
@@ -48,6 +52,10 @@ public:
     juce::TextButton&   getGenerateButton() noexcept      { return generateButton; }
     juce::TextButton&   getCancelButton() noexcept        { return cancelButton; }
     juce::Label&        getStatusLabel() noexcept         { return statusLabel; }
+    juce::Label&        getSyncLabel() noexcept           { return syncLabel; }
+
+    /** True while the BPM field is following the host rather than the user. */
+    bool isBpmSynced() const noexcept                     { return bpmSynced; }
     juce::ProgressBar&  getProgressBar() noexcept         { return progressBar; }
 
 private:
@@ -55,8 +63,21 @@ private:
     void timerCallback() override;
     void refresh();
 
+    /** Copies the host tempo into the BPM field when the field is still following it.
+        @returns true if the field changed. */
+    bool applyHostTempo();
+
+    /** What the sync indicator should read right now. */
+    juce::String getSyncStatusText() const;
+
     GenerationManager& generation;
     ConnectionManager& connection;
+    HostSync* hostSync = nullptr;
+
+    /** False once the user has typed their own BPM. Clearing the field back to the
+        "Auto" placeholder sets it true again, which is how sync is resumed — the
+        panel already treats an empty field as "let something else choose". */
+    bool bpmSynced = true;
 
     juce::Label      titleLabel;
 
@@ -86,6 +107,7 @@ private:
     juce::TextButton generateButton { "Generate" };
     juce::TextButton cancelButton { "Cancel" };
     juce::Label      statusLabel;
+    juce::Label      syncLabel;
 
     /** The server reports no percentage, so this runs in indeterminate mode while a
         job is in flight. See the progress note in the README. */

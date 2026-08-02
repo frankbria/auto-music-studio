@@ -100,6 +100,7 @@ void GenerationManager::start (const GenerationRequest& request)
     activeControl = context.control;
 
     clips.clear();
+    requestedBpm = request.bpm;
     startedAtMs = juce::Time::getMillisecondCounter();
     state = State::submitting;
     statusMessage = describe (State::submitting);
@@ -108,9 +109,10 @@ void GenerationManager::start (const GenerationRequest& request)
     queue.enqueue ([context] { runGeneration (context); });
 }
 
-void GenerationManager::setClipsForTesting (const juce::Array<juce::File>& files)
+void GenerationManager::setClipsForTesting (const juce::Array<juce::File>& files, int bpm)
 {
     clips = files;
+    requestedBpm = bpm;
     state = files.isEmpty() ? State::idle : State::complete;
     statusMessage = files.isEmpty()
                         ? describe (State::idle)

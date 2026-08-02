@@ -46,9 +46,12 @@ namespace
 }
 
 //==============================================================================
-GenerationPanel::GenerationPanel (GenerationManager& generationToUse, ConnectionManager& connectionToUse)
+GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
+                                  ConnectionManager& connectionToUse,
+                                  HostSync* hostSyncToUse)
     : generation (generationToUse),
-      connection (connectionToUse)
+      connection (connectionToUse),
+      hostSync (hostSyncToUse)
 {
     titleLabel.setText ("GENERATION", juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
@@ -101,6 +104,15 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse, Connection
     addAndMakeVisible (bpmLabel);
     styleEditor (bpmEditor, autoPlaceholder);
     bpmEditor.setInputRestrictions (3, "0123456789");
+    // The one rule for host tempo sync: the field follows the host until the user
+    // types in it, and follows it again the moment they clear it. Sync writes with
+    // setText(..., false), which does not fire this, so the panel cannot cancel its
+    // own sync by obeying the host.
+    bpmEditor.onTextChange = [this]
+    {
+        bpmSynced = bpmEditor.getText().trim().isEmpty();
+        refresh();
+    };
     addAndMakeVisible (bpmEditor);
 
     styleCaption (keyLabel, "Key");
@@ -163,12 +175,22 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse, Connection
     progressBar.setColour (juce::ProgressBar::backgroundColourId, genColours::field);
     addChildComponent (progressBar);
 
+    syncLabel.setFont (juce::FontOptions (12.0f));
+    syncLabel.setColour (juce::Label::textColourId, genColours::textDim);
+    syncLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (syncLabel);
+
     generation.addChangeListener (this);
     connection.addChangeListener (this);
+
+    // Fill the BPM field before the first paint, so opening the plugin in a project
+    // that is already running shows the host tempo rather than a blank field that
+    // fills in half a second later.
+    applyHostTempo();
     refresh();
 
-    // Only to tick the elapsed-time readout; every real state change arrives as a
-    // change message.
+    // Ticks the elapsed-time readout and follows the host tempo. Everything else the
+    // panel shows arrives as a change message.
     startTimerHz (2);
 }
 
@@ -235,6 +257,7 @@ void GenerationPanel::resized()
     languageRow.removeFromLeft (12);
     instrumentalToggle.setBounds (languageRow.removeFromLeft (120));
     lyricsToggle.setBounds (languageRow.removeFromLeft (90));
+    syncLabel.setBounds (languageRow);
 
     area.removeFromBottom (8);
 
@@ -255,8 +278,50 @@ void GenerationPanel::changeListenerCallback (juce::ChangeBroadcaster*)
 
 void GenerationPanel::timerCallback()
 {
-    if (generation.isBusy())
-        refresh();
+    // Unconditional now, not just while busy: this is also what tracks a tempo change
+    // made in the DAW while the panel sits idle. refresh() is a handful of setters that
+    // no-op when nothing moved, so 2Hz costs nothing.
+    applyHostTempo();
+    refresh();
+}
+
+bool GenerationPanel::applyHostTempo()
+{
+    if (hostSync == nullptr || ! bpmSynced)
+        return false;
+
+    // Never rewrite the field out from under someone typing in it. TextEditor delivers
+    // onTextChange asynchronously (it posts a command message), so between the first
+    // keystroke and the callback that clears bpmSynced there is a window where this
+    // would otherwise overwrite what they just typed.
+    if (bpmEditor.hasKeyboardFocus (false))
+        return false;
+
+    const auto snapshot = hostSync->get();
+
+    if (! snapshot.hasBpm())
+        return false;
+
+    const auto wanted = juce::String (juce::roundToInt (snapshot.bpm));
+
+    if (bpmEditor.getText() == wanted)
+        return false;
+
+    bpmEditor.setText (wanted, false);
+    return true;
+}
+
+juce::String GenerationPanel::getSyncStatusText() const
+{
+    if (! bpmSynced)
+        return "Sync: off (manual BPM)";
+
+    const auto snapshot = hostSync != nullptr ? hostSync->get() : HostSync::Snapshot{};
+
+    if (! snapshot.hasBpm())
+        return "Sync: no host tempo";
+
+    return "Sync: host " + juce::String (juce::roundToInt (snapshot.bpm)) + " BPM";
 }
 
 GenerationRequest GenerationPanel::buildRequest() const
@@ -310,6 +375,9 @@ void GenerationPanel::applyRequest (const GenerationRequest& request)
 
     instrumentalToggle.setToggleState (request.instrumental, juce::dontSendNotification);
 
+    // An applied request carries the user's own BPM, so it takes the field off sync —
+    // except when it leaves BPM on Auto, which hands it back.
+    bpmSynced = request.bpm <= 0;
     bpmEditor.setText (request.bpm > 0 ? juce::String (request.bpm) : juce::String(), false);
 
     const auto keyIndex = GenerationRequest::musicalKeys().indexOf (request.key);
@@ -338,6 +406,11 @@ void GenerationPanel::refresh()
     cancelButton.setEnabled (busy);
 
     progressBar.setVisible (busy);
+
+    const auto syncText = getSyncStatusText();
+
+    if (syncLabel.getText() != syncText)
+        syncLabel.setText (syncText, juce::dontSendNotification);
 
     for (auto* control : std::initializer_list<juce::Component*> {
              &promptEditor, &lyricsEditor, &lyricsToggle, &languageSelector, &instrumentalToggle,
