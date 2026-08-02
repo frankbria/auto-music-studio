@@ -43,6 +43,7 @@ from .routers import (
     studio,
     users,
     videos,
+    voice_models,
     workspaces,
 )
 from .settings import ApiSettings
@@ -188,6 +189,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=API_V1_PREFIX)
     app.include_router(auth.router, prefix=API_V1_PREFIX)
     app.include_router(users.router, prefix=API_V1_PREFIX)
+    app.include_router(voice_models.router, prefix=API_V1_PREFIX)
     app.include_router(models.router, prefix=API_V1_PREFIX)
     app.include_router(generation.router, prefix=API_V1_PREFIX)
     app.include_router(jobs.router, prefix=API_V1_PREFIX)
