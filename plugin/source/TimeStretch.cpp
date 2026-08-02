@@ -1,4 +1,5 @@
 #include "TimeStretch.h"
+#include "AudioIo.h"
 
 #include <cmath>
 #include <vector>
@@ -223,47 +224,8 @@ bool processFile (const juce::File& source,
 
     const auto sampleRate = reader->sampleRate;
     const auto bitDepth = juce::jmax (16, (int) reader->bitsPerSample);
-    const auto numChannels = (unsigned int) stretched.getNumChannels();
 
-    // Written to a temporary first: a reader that finds a half-written file next to a
-    // clip would treat it as a finished tempo match and hand the host a truncated drop.
-    destination.getParentDirectory().createDirectory();
-
-    const auto partial = destination.getSiblingFile (destination.getFileName() + ".partial");
-    partial.deleteFile();
-
-    {
-        juce::WavAudioFormat wav;
-        std::unique_ptr<juce::OutputStream> stream (partial.createOutputStream());
-
-        if (stream == nullptr)
-            return false;
-
-        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
-                                                       .withSampleRate (sampleRate)
-                                                       .withNumChannels ((int) numChannels)
-                                                       .withBitsPerSample (bitDepth));
-
-        if (writer == nullptr)
-            return false;
-
-        if (! writer->writeFromAudioSampleBuffer (stretched, 0, stretched.getNumSamples()))
-        {
-            writer.reset();
-            partial.deleteFile();
-            return false;
-        }
-    }
-
-    destination.deleteFile();
-
-    if (! partial.moveFileTo (destination))
-    {
-        partial.deleteFile();
-        return false;
-    }
-
-    return true;
+    return AudioIo::writeWav (destination, stretched, sampleRate, bitDepth);
 }
 
 //==============================================================================

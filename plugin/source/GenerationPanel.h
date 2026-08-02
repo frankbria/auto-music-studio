@@ -2,6 +2,8 @@
 
 #include "GenerationManager.h"
 #include "HostSync.h"
+#include "MidiCapture.h"
+#include "SidechainCapture.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -24,7 +26,12 @@ public:
     /** @param hostSyncToUse  the host transport, or null for "there is no host" —
                               which is what a test that does not care about tempo
                               sync gets, and what the panel shows as no host tempo. */
-    GenerationPanel (GenerationManager&, ConnectionManager&, HostSync* hostSyncToUse = nullptr);
+    GenerationPanel (GenerationManager&,
+                     ConnectionManager&,
+                     HostSync* hostSyncToUse = nullptr,
+                     MidiCapture* midiCaptureToUse = nullptr,
+                     SidechainCapture* sidechainCaptureToUse = nullptr,
+                     bool hostOffersSidechain = false);
     ~GenerationPanel() override;
 
     void paint (juce::Graphics&) override;
@@ -54,6 +61,12 @@ public:
     juce::Label&        getStatusLabel() noexcept         { return statusLabel; }
     juce::Label&        getSyncLabel() noexcept           { return syncLabel; }
     juce::Label&        getSelectionLabel() noexcept      { return selectionLabel; }
+    juce::ToggleButton& getMidiRecordToggle() noexcept     { return midiRecordToggle; }
+    juce::ToggleButton& getSidechainRecordToggle() noexcept { return sidechainRecordToggle; }
+    juce::Label&        getCaptureLabel() noexcept         { return captureLabel; }
+
+    /** True when `mode` has the input it needs and can be chosen. */
+    bool isModeAvailable (GenerationRequest::Mode) const;
     juce::ProgressBar&  getProgressBar() noexcept         { return progressBar; }
 
     /** True while the BPM field is following the host rather than the user. */
@@ -84,9 +97,32 @@ private:
     /** What the selection readout should read right now. */
     juce::String getSelectionText() const;
 
+    /** What the capture indicator should read right now. */
+    juce::String getCaptureText() const;
+
+    /** Greys out the modes whose input has not been captured. */
+    void refreshModeAvailability();
+
+    /** Where the capture backing `mode` is written. Known before the write happens, so
+        buildRequest can name it and validation can pass. */
+    juce::File getCaptureFileFor (GenerationRequest::Mode) const;
+
+    /** Whether `mode`'s input has actually been captured. */
+    bool hasCaptureFor (GenerationRequest::Mode) const;
+
+    /** Writes the capture a non-text mode needs and points `request` at it.
+        @returns false when the mode's input is missing or could not be written. */
+    bool attachSourceAudio (GenerationRequest&) const;
+
     GenerationManager& generation;
     ConnectionManager& connection;
     HostSync* hostSync = nullptr;
+    MidiCapture* midiCapture = nullptr;
+    SidechainCapture* sidechainCapture = nullptr;
+
+    /** Whether the host actually gave the plugin a sidechain bus. Without one, Cover and
+        Repaint can never be satisfied and say so rather than sitting there enabled. */
+    bool hostOffersSidechain = false;
 
     /** False once the user has typed their own BPM. Clearing the field back to the
         "Auto" placeholder sets it true again, which is how sync is resumed — the
@@ -127,6 +163,10 @@ private:
     juce::Label      statusLabel;
     juce::Label      syncLabel;
     juce::Label      selectionLabel;
+
+    juce::ToggleButton midiRecordToggle { "Record MIDI" };
+    juce::ToggleButton sidechainRecordToggle { "Capture sidechain" };
+    juce::Label        captureLabel;
 
     /** The server reports no percentage, so this runs in indeterminate mode while a
         job is in flight. See the progress note in the README. */

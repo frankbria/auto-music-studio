@@ -13,6 +13,7 @@ Progress:
 | US-23.5 — Local cache and file management | done |
 | US-24.1 — DAW tempo sync and tempo-matched insertion | done |
 | US-24.2 — Selection-aware generation | done |
+| US-24.3 — MIDI input and sidechain audio | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -218,6 +219,59 @@ Everything reads the host transport through `HostSync`, which samples the play
 head once in `processBlock` and publishes it. `getPlayHead()` is an audio-thread
 API; calling it from a timer, as the results panel used to for its playhead
 readout, is a data race.
+
+## MIDI and sidechain input
+
+Two more ways to seed a generation, beyond typing a prompt.
+
+| Mode | Needs | Server task type |
+| --- | --- | --- |
+| Text to Music | nothing | *(server default)* |
+| Cover | a sidechain capture | `cover` |
+| Complete | a MIDI capture | `complete` |
+| Repaint | a sidechain capture (+ the loop range) | `repaint` |
+
+A mode is greyed out until its input has actually been captured, so the selector never
+offers something that cannot be submitted.
+
+### MIDI reaches the model as audio, not as MIDI
+
+**ACE-Step has no MIDI input.** Its task types are `text2music`, `cover`, `repaint`,
+`extract`, `lego`, `complete` and `mashup`, and `complete` — the one this feeds — takes
+`src_audio_path`. There is not a single reference to MIDI anywhere in the ACE-Step
+source.
+
+So *Record MIDI* captures what you play, and the plugin **renders it to a plain tone**
+which is submitted as the melodic reference. The rendering is a description of the
+performance — pitch and rhythm — not an attempt to sound good. What conditions the model
+is that audio, not your note data.
+
+Nothing is synthesised on the audio thread: `processBlock` only pushes note events into
+a lock-free FIFO, and the rendering happens on the message thread when you disarm.
+
+If a take overruns the event buffer, the indicator says how many events were dropped
+rather than reporting the take as clean.
+
+### Sidechain
+
+*Capture sidechain* records the plugin's sidechain input, for Cover and Repaint. The
+sidechain bus is **disabled by default**, so a host with no sidechain send is unaffected
+and existing sessions do not change shape; the toggle is unavailable until you route
+something to it.
+
+The capture buffer is allocated once, in `prepareToPlay`, and holds up to
+`SidechainCapture::maxSeconds`. When it fills, recording stops and the indicator says so
+— it does not wrap, because overwriting the start of a take would quietly hand the model
+the wrong reference.
+
+**Repaint's time range** comes from the host loop range (US-24.2), expressed as an
+offset into the take rather than into the project. The transport position when the take
+started is recorded for exactly this. If the loop range does not overlap the capture,
+the range is omitted and the server decides.
+
+Captures are written under `<cache>/captures/` and referenced by `src_audio_path`. That
+is a **server-side** path, which works because the plugin targets a local ACE-Step;
+a remote server would need an upload endpoint.
 
 ## Networking
 

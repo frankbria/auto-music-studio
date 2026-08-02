@@ -16,7 +16,8 @@ namespace colours
 PluginEditor::PluginEditor (PluginProcessor& p)
     : juce::AudioProcessorEditor (&p),
       connectionPanel (p.getConnectionManager()),
-      generationPanel (p.getGenerationManager(), p.getConnectionManager(), &p.getHostSync()),
+      generationPanel (p.getGenerationManager(), p.getConnectionManager(), &p.getHostSync(),
+                       &p.getMidiCapture(), &p.getSidechainCapture(), p.hasSidechainInput()),
       resultsPanel (p.getGenerationManager(), p.getClipPlayer(), p.getHostSync(),
                     p.getBackgroundQueue(), p.getSettings())
 {
@@ -42,8 +43,10 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     // Results now carries clip rows AND the cache browser, so it needs roughly twice
     // the height it did in US-23.4. Raised again rather than letting either half be
     // a sliver.
-    setResizeLimits (560, 700, 1600, 1600);
-    setSize (780, 860);
+    // Raised again for US-24.3: Generation gained a capture row and two host readouts,
+    // and below this the Results panel had no room left for a clip row at all.
+    setResizeLimits (560, 800, 1600, 1600);
+    setSize (780, 920);
 }
 
 PluginEditor::~PluginEditor() = default;
@@ -69,7 +72,9 @@ void PluginEditor::resized()
 
     // Both panels have real content now, so split the remaining space rather than
     // starving Results.
-    generationPanel.setBounds (area.removeFromTop (juce::jmax (230, area.getHeight() * 55 / 100)));
+    // Raised from 230: the capture row and the two host readouts are new since US-23.3,
+    // and below this the prompt box collapses to nothing.
+    generationPanel.setBounds (area.removeFromTop (juce::jmax (280, area.getHeight() * 55 / 100)));
     area.removeFromTop (12);
     resultsPanel.setBounds (area);
 }

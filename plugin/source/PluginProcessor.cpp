@@ -12,7 +12,11 @@ PluginProcessor::PluginProcessor()
 PluginProcessor::PluginProcessor (std::unique_ptr<juce::PropertiesFile> propertiesToUse, bool probeOnLoad)
     : juce::AudioProcessor (BusesProperties()
                                 .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                // Off by default: a host with no sidechain send must load
+                                // the plugin exactly as it did before US-24.3, and existing
+                                // sessions must not change shape underneath the user.
+                                .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       properties (std::move (propertiesToUse)),
       connectionManager (backgroundQueue, properties.get()),
       generationManager (backgroundQueue, connectionManager, properties.get())
@@ -32,6 +36,10 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     // The clip preview is the only thing in this plugin that produces audio, and it
     // allocates everything it needs here rather than in the callback.
     clipPlayer.prepare (sampleRate, samplesPerBlock);
+
+    // Both captures take all the memory they will ever use here, for the same reason.
+    midiCapture.prepare (sampleRate);
+    sidechainCapture.prepare (sampleRate, juce::jmax (1, getChannelCountOfBus (true, 1)));
 }
 
 void PluginProcessor::releaseResources()
@@ -49,10 +57,33 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     // Input may be disabled entirely (AU allows this); otherwise it must match.
     const auto& in = layouts.getMainInputChannelSet();
 
-    return in == out || in == juce::AudioChannelSet::disabled();
+    if (in != out && in != juce::AudioChannelSet::disabled())
+        return false;
+
+    // The sidechain is optional and independent of the main pair: absent, mono or
+    // stereo. pluginval fuzzes every combination of these, so all three are accepted
+    // rather than only the one the UI happens to use.
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto& sidechain = layouts.getChannelSet (true, 1);
+
+        if (sidechain != juce::AudioChannelSet::disabled()
+            && sidechain != juce::AudioChannelSet::mono()
+            && sidechain != juce::AudioChannelSet::stereo())
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
-void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+bool PluginProcessor::hasSidechainInput() const
+{
+    return getChannelCountOfBus (true, 1) > 0;
+}
+
+void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -60,6 +91,16 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     // position takes a snapshot from HostSync instead of calling getPlayHead() off
     // the audio thread, which is a data race.
     hostSync.captureFrom (getPlayHead());
+
+    // Both of these only record when armed, and neither allocates or blocks. The MIDI
+    // side pushes note events into a lock-free FIFO — nothing is synthesised here.
+    midiCapture.processBlock (midi, buffer.getNumSamples());
+
+    if (auto* sidechain = getBus (true, 1); sidechain != nullptr && sidechain->isEnabled())
+    {
+        const auto sidechainBuffer = sidechain->getBusBuffer (buffer);
+        sidechainCapture.processBlock (sidechainBuffer);
+    }
 
     // Passthrough. Any channel the host gave us as output but not as input has
     // undefined contents, so clear it.

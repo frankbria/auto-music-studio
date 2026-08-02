@@ -93,7 +93,7 @@ public:
               processor (makeSettings (settingsDir), false),
               editor (processor)
         {
-            editor.setSize (720, 700);
+            editor.setSize (720, 920);
             processor.prepareToPlay (44100.0, 512);
         }
 
@@ -550,7 +550,7 @@ public:
 
             {
                 PluginEditor editor (processor);
-                editor.setSize (720, 700);
+                editor.setSize (720, 920);
 
                 expect (pumpUntil ([&] { return editor.getResultsPanel().getNumClipRows() == 2; }));
                 editor.getResultsPanel().getClipRow (0)->getPlayButton().triggerClick();
