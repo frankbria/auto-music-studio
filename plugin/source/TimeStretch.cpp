@@ -54,23 +54,27 @@ namespace
                        int idealStart,
                        int templateStart)
     {
-        const int lastUsableStart = numSamples - frameSize;
+        // A candidate only needs room for the *correlation*, not for a whole frame.
+        // Slowing a clip down means the output is longer than the source, so the last
+        // frames legitimately start near the end and read a partial frame; requiring a
+        // full frame here would pin them in place and leave the output's tail unwritten.
+        const int lastCandidate = numSamples - correlationLength;
 
-        if (lastUsableStart <= 0)
+        if (lastCandidate <= 0)
             return 0;
 
         // Nothing to correlate against if the template runs off the end.
         if (templateStart < 0 || templateStart + correlationLength > numSamples)
-            return juce::jlimit (0, lastUsableStart, idealStart);
+            return juce::jlimit (0, lastCandidate, idealStart);
 
-        int best = juce::jlimit (0, lastUsableStart, idealStart);
+        int best = juce::jlimit (0, lastCandidate, idealStart);
         double bestScore = -1.0e30;
 
         for (int offset = -searchRadius; offset <= searchRadius; ++offset)
         {
             const int candidate = idealStart + offset;
 
-            if (candidate < 0 || candidate > lastUsableStart)
+            if (candidate < 0 || candidate > lastCandidate)
                 continue;
 
             double dot = 0.0;
@@ -149,7 +153,6 @@ juce::AudioBuffer<float> process (const juce::AudioBuffer<float>& source, double
     std::fill (leadingWindow.begin(), leadingWindow.begin() + synthesisHop, 1.0f);
 
     const float* const reference = source.getReadPointer (0);
-    const int lastUsableStart = numSamples - frameSize;
 
     int previousStart = 0;
 
@@ -169,6 +172,8 @@ juce::AudioBuffer<float> process (const juce::AudioBuffer<float>& source, double
 
         const float* const shape = (frame == 0 ? leadingWindow : window).data();
 
+        // Deliberately allowed to be shorter than a frame near the end of the input:
+        // that turns the last few milliseconds into a taper rather than a hard gap.
         const int length = juce::jmin (frameSize,
                                        numSamples - start,
                                        outputLength - outPos);
@@ -183,9 +188,6 @@ juce::AudioBuffer<float> process (const juce::AudioBuffer<float>& source, double
         }
 
         previousStart = start;
-
-        if (start >= lastUsableStart)
-            break;
     }
 
     return output;

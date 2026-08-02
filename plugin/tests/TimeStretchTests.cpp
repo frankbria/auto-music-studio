@@ -143,6 +143,50 @@ public:
                     "the overlap-add clipped");
         }
 
+        beginTest ("slowing a clip down does not leave a silent tail");
+        {
+            // Slowing down makes the output LONGER than the source, so the analysis
+            // reaches the end of the input before the output is full. If the loop stops
+            // there, the buffer keeps its zero-filled tail: the file has the right
+            // length, so it still lines up to the bar, but it ends in silence.
+            const auto source = makeSine (440.0, 4.0);
+
+            for (const auto& pair : { std::pair<double, double> { 120.0, 100.0 },
+                                      std::pair<double, double> { 120.0,  70.0 },
+                                      std::pair<double, double> { 128.0, 118.0 },
+                                      std::pair<double, double> { 120.0,  60.0 },
+                                      std::pair<double, double> { 200.0,  60.0 } })
+            {
+                const auto rate = TimeStretch::rateFor (pair.first, pair.second);
+                const auto stretched = TimeStretch::process (source, rate);
+                const auto label = juce::String (pair.first) + " to " + juce::String (pair.second);
+
+                expect (stretched.getNumSamples() > source.getNumSamples(),
+                        "slowing down did not lengthen the clip");
+
+                // Measure how much of the end is silent, in milliseconds.
+                int lastSounding = -1;
+
+                for (int i = stretched.getNumSamples() - 1; i >= 0; --i)
+                {
+                    if (std::abs (stretched.getSample (0, i)) > 1.0e-4f)
+                    {
+                        lastSounding = i;
+                        break;
+                    }
+                }
+
+                const auto silentMs = 1000.0 * (double) (stretched.getNumSamples() - 1 - lastSounding)
+                                          / sampleRate;
+
+                // One synthesis frame of taper at the end is inherent to overlap-add;
+                // a whole analysis frame of dead air is the bug.
+                expect (silentMs < 10.0,
+                        "stretching " + label + " left " + juce::String (silentMs, 1)
+                            + "ms of silence at the end");
+            }
+        }
+
         beginTest ("a rate of 1 hands back the samples untouched");
         {
             const auto source = makeSine (440.0, 1.0);

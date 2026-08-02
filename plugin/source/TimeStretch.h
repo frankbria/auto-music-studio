@@ -31,7 +31,12 @@ namespace TimeStretch
 
         The threshold is a quarter of a percent — below that the correction is under
         one sample per 400 and well inside the rounding of any BPM the panel can
-        express, so stretching would only add artefacts. */
+        express, so stretching would only add artefacts.
+
+        There is deliberately no upper or lower bound: the trailing-silence that a
+        large slowdown used to leave was a bug in the analysis loop, not a limit of the
+        method, and once fixed a 3.3x stretch measures the same clean tail as a 1.02x
+        one. See the "silent tail" test, which covers both. */
     bool isWorthStretching (double rate) noexcept;
 
     /** WSOLA-stretches `source`, returning a buffer of `source.getNumSamples() / rate`
@@ -47,8 +52,13 @@ namespace TimeStretch
                       double rate,
                       juce::AudioFormatManager& formats);
 
-    /** The path a `clip` tempo-matched to `targetBpm` is cached at, next to the clip
-        itself so it is removed with the rest of the run by the cache browser. */
+    /** Where a `clip` tempo-matched to `targetBpm` is cached: a `tempo-match/` child of
+        the clip's own run directory.
+
+        A child directory rather than a sibling file, because ClipCache::readEntry
+        lists `*.wav` per run non-recursively — as siblings these were counted as extra
+        clips of that generation. The cache's size accounting recurses and its delete is
+        recursive, so they are still measured and still removed with the run. */
     juce::File getMatchedFileFor (const juce::File& clip, double targetBpm);
 
     /** Produces (or reuses) a copy of `clip` at `targetBpm`, given that it was
