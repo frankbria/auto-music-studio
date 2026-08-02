@@ -972,6 +972,83 @@ public:
                     "the layer readout is wrong: " + panel.getLegoLabel().getText());
         }
 
+        beginTest ("AC: Lego is selectable from an empty stack, with nothing captured");
+        {
+            // Every Lego build starts here. Gating the mode behind a capture made it
+            // impossible to reach at all.
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            expect (panel.isModeAvailable (GenerationRequest::Mode::lego),
+                    "Lego was unavailable with an empty stack, so it can never be started");
+
+            const auto legoIndex = GenerationRequest::allModes()
+                                       .indexOf (GenerationRequest::Mode::lego);
+            expect (panel.getModeSelector().isItemEnabled (legoIndex + 1),
+                    "the Lego entry is greyed out in the dropdown");
+        }
+
+        beginTest ("AC: a finished Lego generation becomes the next layer, in production");
+        {
+            // The piece-wise tests all passed while nothing in the plugin ever called
+            // addLegoLayer, so the stack stayed empty and every layer was a first layer.
+            // This drives the real path: click Generate, let the run finish, check the
+            // stack grew and the next request has context.
+            ScopedClipCleanup cleanup;
+            const auto cleanupRoot = cleanup.root;
+
+            Harness harness { std::move (cleanup.properties) };
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            expect (connect (harness, server), "never connected");
+
+            auto& panel = harness.panel();
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a tight drum beat", true);
+
+            expect (pumpUntil ([&] { return panel.getGenerateButton().isEnabled(); }),
+                    "Generate never enabled for a first Lego layer");
+
+            const auto trackChosen = panel.getLegoTrackSelector().getText();
+            panel.getGenerateButton().triggerClick();
+            expect (pumpUntil ([&] { return harness.generation().isBusy(); }), "never started");
+
+            // The run finishes and publishes a clip, exactly as a real one would.
+            const auto produced = writeTone (cleanupRoot.getChildFile ("produced.wav"), 220.0);
+            harness.generation().setClipsForTesting ({ produced });
+
+            expect (pumpUntil ([&] { return panel.getLegoStack().getNumLayers() == 1; }, 5000),
+                    "the finished layer was never added to the stack");
+
+            expectEquals (panel.getLegoStack().getLayers()[0].track, trackChosen,
+                          "the layer recorded the wrong track");
+            expectEquals (panel.getLegoStack().getLayers()[0].prompt,
+                          juce::String ("a tight drum beat"));
+
+            // ...and it is only added once, however many change messages arrive.
+            harness.generation().sendChangeMessage();
+            harness.generation().sendChangeMessage();
+            expect (! pumpUntil ([&] { return panel.getLegoStack().getNumLayers() != 1; }, 1200),
+                    "the layer was added more than once");
+
+            // The next generation now has context, so it is a real lego task.
+            panel.getPromptEditor().setText ("a funky bass line", true);
+            const auto second = panel.buildRequest();
+            expect (second.sourceAudioPath.isNotEmpty(),
+                    "the second layer still has no context, so the stack is not being used");
+
+            const juce::var payload = second.toPayload();
+            expectEquals (payload.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"),
+                          "the second layer went out as text-to-music again");
+        }
+
         beginTest ("the Lego controls only appear in Lego mode");
         {
             PluginProcessor processor (nullptr, false);

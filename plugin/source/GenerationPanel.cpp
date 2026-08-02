@@ -251,6 +251,12 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
         if (request.mode == GenerationRequest::Mode::lego)
         {
             attachLegoContext (request);
+
+            // Captured now, not when the run finishes: by then the user may have moved
+            // the selector on to the next part they intend to add.
+            pendingLegoTrack = request.legoTrack;
+            pendingLegoPrompt = request.prompt;
+            legoRunPending = true;
         }
         else if (GenerationRequest::needsSourceAudio (request.mode) && ! attachSourceAudio (request))
         {
@@ -399,6 +405,9 @@ void GenerationPanel::resized()
 
 void GenerationPanel::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    // A finished Lego run becomes the next layer. Without this the stack never grows and
+    // every generation is treated as a first layer, with no context.
+    collectFinishedLegoLayer();
     refresh();
 }
 
@@ -506,6 +515,12 @@ juce::String GenerationPanel::getSelectionText() const
 
 bool GenerationPanel::isModeAvailable (GenerationRequest::Mode mode) const
 {
+    // Lego is always selectable. It needs a *track*, not a capture, and its first layer
+    // has nothing to build on by design — gating it behind a capture made the mode
+    // impossible to reach from an empty stack, which is where every build starts.
+    if (mode == GenerationRequest::Mode::lego)
+        return true;
+
     return ! GenerationRequest::needsSourceAudio (mode) || hasCaptureFor (mode);
 }
 
@@ -576,6 +591,13 @@ void GenerationPanel::attachLegoContext (GenerationRequest& request) const
 
 void GenerationPanel::addLegoLayer (const juce::File& clip)
 {
+    addLegoLayer (clip, legoTrackSelector.getText(), promptEditor.getText());
+}
+
+void GenerationPanel::addLegoLayer (const juce::File& clip,
+                                    const juce::String& track,
+                                    const juce::String& prompt)
+{
     if (legoRegenerateIndex >= 0)
     {
         legoStack.replaceLayer (legoRegenerateIndex, clip);
@@ -583,10 +605,33 @@ void GenerationPanel::addLegoLayer (const juce::File& clip)
     }
     else
     {
-        legoStack.addLayer (legoTrackSelector.getText(), promptEditor.getText(), clip);
+        legoStack.addLayer (track, prompt, clip);
     }
 
     refresh();
+}
+
+void GenerationPanel::collectFinishedLegoLayer()
+{
+    if (! legoRunPending || generation.getState() != GenerationManager::State::complete)
+        return;
+
+    const auto& clips = generation.getClips();
+
+    if (clips.isEmpty())
+        return;
+
+    // Cleared first: addLegoLayer calls refresh(), which lands back here, and without
+    // this the layer would be added on every refresh for as long as the run reads
+    // complete.
+    legoRunPending = false;
+
+    const auto track = pendingLegoTrack;
+    const auto prompt = pendingLegoPrompt;
+    pendingLegoTrack = {};
+    pendingLegoPrompt = {};
+
+    addLegoLayer (clips.getFirst(), track, prompt);
 }
 
 juce::String GenerationPanel::getLegoText() const

@@ -75,6 +75,10 @@ public:
         completes; exposed so a test does not have to drive a whole server round trip. */
     void addLegoLayer (const juce::File& clip);
 
+    /** As above, with the track and prompt the run was started with rather than whatever
+        the controls read now. */
+    void addLegoLayer (const juce::File& clip, const juce::String& track, const juce::String& prompt);
+
     /** True when `mode` has the input it needs and can be chosen. */
     bool isModeAvailable (GenerationRequest::Mode) const;
     juce::ProgressBar&  getProgressBar() noexcept         { return progressBar; }
@@ -112,6 +116,9 @@ private:
 
     /** What the Lego readout should read right now. */
     juce::String getLegoText() const;
+
+    /** Adds the clip of a just-finished Lego run to the stack. Idempotent. */
+    void collectFinishedLegoLayer();
 
     /** Writes the layers-so-far mix and points `request` at it. Does nothing for the
         first layer, which has no context. */
@@ -188,6 +195,12 @@ private:
 
     /** Which layer a Generate would replace, or < 0 to append a new one. */
     int legoRegenerateIndex = -1;
+
+    /** Set when a Lego generation is in flight, with the track and prompt it was started
+        with — the controls may have moved on by the time it lands. */
+    bool legoRunPending = false;
+    juce::String pendingLegoTrack;
+    juce::String pendingLegoPrompt;
 
     juce::Label      legoTrackLabel;
     juce::ComboBox   legoTrackSelector;
