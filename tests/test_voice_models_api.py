@@ -16,6 +16,7 @@ import httpx
 import numpy as np
 import pytest
 import soundfile as sf
+from beanie import PydanticObjectId
 from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
@@ -619,6 +620,31 @@ class TestTrainingWorker:
         assert len(written) == 3, f"expected 3 references on disk, found {written}"
         assert all(p.stat().st_size > 0 for p in written)
 
+    async def test_a_notification_failure_does_not_undo_a_successful_run(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        # The notification is recorded after the model is saved READY. If it raised
+        # from there it would land in the failure path and refund a run that
+        # actually worked -- undoing a real training run over a transient insert.
+        from acemusic.api.services import voice_models as vs
+
+        user = await _make_user("worker-notifyfail@example.com", credits=40.0)
+        model, job = await self._queued(client, settings, user)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("notification_events unavailable")
+
+        monkeypatch.setattr(vs, "notify_training_finished", boom)
+
+        result = await self._run(job, monkeypatch)
+
+        assert result["weights_path"], "a notification failure lost the training result"
+        fresh = await VoiceModel.get(model.id)
+        assert fresh.status is VoiceModelStatus.READY, "a notification failure marked the run failed"
+        assert fresh.is_usable
+        # And the charge stands, because the run succeeded.
+        assert (await User.get(user.id)).credits_balance == 30.0
+
     async def test_a_job_pointing_at_a_missing_model_fails_loudly(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
@@ -629,3 +655,167 @@ class TestTrainingWorker:
 
         with pytest.raises(Exception):
             await self._run(job, monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# US-25.2 — training progress and notifications
+# ---------------------------------------------------------------------------
+
+STATUS_URL = f"{API_V1_PREFIX}/voice-models/train"
+
+
+def test_a_percentage_is_never_fabricated() -> None:
+    # ACE-Step reports steps and epochs, not a fraction. Where no total is
+    # knowable the field must be null -- a progress bar that lies is worse than
+    # one that says "working".
+    from acemusic.api.models import Job as JobModel
+
+    # model_construct: a Beanie Document cannot be instantiated without init, and
+    # describe_progress is a pure function that never touches the database.
+    model = VoiceModel.model_construct(user_id=PydanticObjectId(), name="V", status=VoiceModelStatus.TRAINING)
+
+    job = JobModel.model_construct(progress="training", progress_detail={"step": 40, "eta_seconds": 12.0})
+    without_total = voice_service.describe_progress(job, model)
+    assert without_total["progress"] is None, "invented a percentage with no total to divide by"
+    assert without_total["step"] == 40
+    assert without_total["eta_seconds"] == 12.0
+
+    job = JobModel.model_construct(progress="training", progress_detail={"step": 40, "total_steps": 80})
+    with_total = voice_service.describe_progress(job, model)
+    assert with_total["progress"] == 50.0
+
+    # And a percentage can never exceed 100 or go negative, whatever the server says.
+    job = JobModel.model_construct(progress="training", progress_detail={"step": 999, "total_steps": 10})
+    assert voice_service.describe_progress(job, model)["progress"] == 100.0
+
+
+def test_terminal_states_report_themselves_plainly() -> None:
+    ready = VoiceModel.model_construct(user_id=PydanticObjectId(), name="V", status=VoiceModelStatus.READY)
+    assert voice_service.describe_progress(None, ready)["progress"] == 100.0
+    assert voice_service.describe_progress(None, ready)["phase"] == "complete"
+
+    failed = VoiceModel.model_construct(
+        user_id=PydanticObjectId(), name="V", status=VoiceModelStatus.FAILED, error="CUDA out of memory"
+    )
+    described = voice_service.describe_progress(None, failed)
+    assert described["phase"] == "failed"
+    # A failure has no percentage; 0 or 100 would both be misleading.
+    assert described["progress"] is None
+    assert described["error"] == "CUDA out of memory"
+
+
+class TestStatusAuthGate:
+    def test_status_without_a_token_is_401(self) -> None:
+        client = TestClient(create_app())
+        assert client.get(f"{STATUS_URL}/{PydanticObjectId()}/status").status_code == 401
+
+
+@pytest.mark.integration
+class TestTrainingStatus:
+    async def _queued(self, client, settings, user):
+        resp = await client.post(
+            TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
+        )
+        assert resp.status_code == 202, resp.text
+        return resp.json()
+
+    async def test_status_tracks_the_run_through_its_phases(self, client, settings, local_storage) -> None:
+        user = await _make_user("status@example.com")
+        body = await self._queued(client, settings, user)
+        job_id = body["job_id"]
+
+        first = await client.get(f"{STATUS_URL}/{job_id}/status", headers=_auth_headers(user, settings))
+        assert first.status_code == 200, first.text
+        assert first.json()["status"] == VoiceModelStatus.QUEUED.value
+
+        # The worker records the phase and ACE-Step's own counters as it goes.
+        job = await Job.get(job_id)
+        job.progress = "training"
+        job.progress_detail = {"step": 5, "total_steps": 10, "eta_seconds": 30.0, "epoch": 1, "loss": 0.4}
+        await job.save()
+        model = await VoiceModel.get(body["voice_model"]["id"])
+        model.status = VoiceModelStatus.TRAINING
+        await model.save()
+
+        during = await client.get(f"{STATUS_URL}/{job_id}/status", headers=_auth_headers(user, settings))
+        payload = during.json()
+        assert payload["phase"] == "training"
+        assert payload["progress"] == 50.0
+        assert payload["eta_seconds"] == 30.0
+        assert payload["epoch"] == 1
+
+        model.status = VoiceModelStatus.READY
+        model.weights_path = "somewhere/adapter"
+        await model.save()
+
+        done = await client.get(f"{STATUS_URL}/{job_id}/status", headers=_auth_headers(user, settings))
+        assert done.json()["phase"] == "complete"
+        assert done.json()["progress"] == 100.0
+
+    async def test_another_users_training_run_is_not_found(self, client, settings, local_storage) -> None:
+        owner = await _make_user("statusowner@example.com")
+        intruder = await _make_user("statusintruder@example.com")
+        body = await self._queued(client, settings, owner)
+
+        resp = await client.get(f"{STATUS_URL}/{body['job_id']}/status", headers=_auth_headers(intruder, settings))
+        # 404, not 403: another user's run should be indistinguishable from one
+        # that does not exist.
+        assert resp.status_code == 404
+
+    async def test_an_unknown_or_malformed_job_is_404(self, client, settings, local_storage) -> None:
+        user = await _make_user("statusmissing@example.com")
+        headers = _auth_headers(user, settings)
+
+        assert (await client.get(f"{STATUS_URL}/{PydanticObjectId()}/status", headers=headers)).status_code == 404
+        assert (await client.get(f"{STATUS_URL}/not-an-id/status", headers=headers)).status_code == 404
+
+
+@pytest.mark.integration
+class TestTrainingNotifications:
+    async def test_a_finished_run_records_an_in_app_notification(self, client, settings, local_storage) -> None:
+        from acemusic.api.models import NotificationEvent
+
+        user = await _make_user("notify@example.com")
+        resp = await client.post(
+            TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "My voice"}
+        )
+        model = await VoiceModel.get(resp.json()["voice_model"]["id"])
+
+        await voice_service.notify_training_finished(model, succeeded=True)
+
+        events = await NotificationEvent.find(NotificationEvent.user_id == user.id).to_list()
+        assert len(events) == 1
+        assert events[0].event_type == "voice_training_complete"
+        assert events[0].voice_model_id == model.id
+        assert events[0].payload["name"] == "My voice"
+        # Recorded, not delivered: there is no delivery worker yet.
+        assert events[0].delivered_at is None
+
+    async def test_a_failed_run_records_why(self, client, settings, local_storage) -> None:
+        from acemusic.api.models import NotificationEvent
+
+        user = await _make_user("notifyfail@example.com")
+        resp = await client.post(TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "V"})
+        model = await VoiceModel.get(resp.json()["voice_model"]["id"])
+        await voice_service.fail_training(model, "CUDA out of memory")
+        await voice_service.notify_training_finished(await VoiceModel.get(model.id), succeeded=False)
+
+        events = await NotificationEvent.find(NotificationEvent.user_id == user.id).to_list()
+        assert len(events) == 1
+        assert events[0].event_type == "voice_training_failed"
+        # "Training failed" with no cause is not actionable.
+        assert "CUDA" in events[0].payload["error"]
+
+    async def test_release_notifications_still_work_unchanged(self, client, settings) -> None:
+        # release_id became optional so voice models could share the model; the
+        # distribution path (US-21.x) must be untouched by that.
+        from acemusic.api.models import NotificationEvent
+
+        user = await _make_user("release-notify@example.com")
+        release_id = PydanticObjectId()
+        event = NotificationEvent(user_id=user.id, release_id=release_id, event_type="status_live", channel="in_app")
+        await event.insert()
+
+        stored = await NotificationEvent.get(event.id)
+        assert stored.release_id == release_id
+        assert stored.voice_model_id is None

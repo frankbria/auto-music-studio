@@ -1,8 +1,9 @@
 """Voice model endpoints (US-25.1 training, US-25.3 library), mounted under
 ``/api/v1/voice-models``.
 
-* ``POST   /voice-models/train`` → validate references, charge, queue training
-* ``GET    /voice-models``       → the caller's models, newest first
+* ``POST   /voice-models/train``                  → validate, charge, queue training
+* ``GET    /voice-models/train/{job_id}/status``  → phase, progress, ETA (US-25.2)
+* ``GET    /voice-models``                        → the caller's models, newest first
 
 Every read is owner-scoped: a voice model is private, and ownership is part of
 the query rather than a check afterwards, so there is no path that reads someone
@@ -98,6 +99,58 @@ async def train_voice_model(
         job_id=str(job.id),
         voice_model=VoiceModelResponse.from_model(model),
         credits_charged=credits_service.VOICE_TRAINING_COST,
+    )
+
+
+class TrainingStatusResponse(BaseModel):
+    """Where a training run has got to.
+
+    ``progress`` is **null** when no total is knowable rather than a fabricated
+    number: ACE-Step reports steps and epochs, not a fraction, and a progress bar
+    that lies is worse than one that says "working".
+    """
+
+    job_id: str
+    voice_model_id: str
+    status: VoiceModelStatus
+    phase: str
+    progress: float | None = None
+    eta_seconds: float | None = None
+    step: int | None = None
+    epoch: int | None = None
+    loss: float | None = None
+    error: str | None = None
+
+
+@router.get("/train/{job_id}/status", response_model=TrainingStatusResponse)
+async def get_training_status(
+    job_id: str,
+    current: CurrentUser = Depends(require_existing_user),
+) -> TrainingStatusResponse:
+    """Progress of a training run.
+
+    Resolved through the voice model's owner, so another user's run 404s rather
+    than leaking that it exists.
+    """
+    found = await voice_service.find_model_for_job(job_id, current.user_id)
+
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found.")
+
+    model, job = found
+    progress = voice_service.describe_progress(job, model)
+
+    return TrainingStatusResponse(
+        job_id=str(job.id),
+        voice_model_id=str(model.id),
+        status=model.status,
+        phase=progress["phase"],
+        progress=progress.get("progress"),
+        eta_seconds=progress.get("eta_seconds"),
+        step=progress.get("step"),
+        epoch=progress.get("epoch"),
+        loss=progress.get("loss"),
+        error=progress.get("error"),
     )
 
 

@@ -19,8 +19,14 @@ class NotificationEvent(Document):
     """A recorded status-change event awaiting (future) delivery."""
 
     user_id: PydanticObjectId
-    release_id: PydanticObjectId
-    event_type: str  # e.g. "status_live", "status_rejected"
+
+    # Exactly one of these identifies what the event is about. Two nullable keys
+    # rather than a generic subject: the release path (US-21.x) is shipped and
+    # working, and rewriting it to carry voice models is not what US-25.2 needs.
+    release_id: PydanticObjectId | None = None
+    voice_model_id: PydanticObjectId | None = None
+
+    event_type: str  # e.g. "status_live", "status_rejected", "voice_training_complete"
     channel: str
     payload: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)

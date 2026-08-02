@@ -19,7 +19,7 @@ from beanie import PydanticObjectId
 
 from acemusic.storage import StorageBackend, get_storage_backend
 
-from ..models import Job, User, VoiceModel, VoiceModelStatus
+from ..models import Job, NotificationEvent, User, VoiceModel, VoiceModelStatus
 from ..models.voice_model import (
     MAX_REFERENCE_BYTES,
     MAX_REFERENCE_FILES,
@@ -322,6 +322,96 @@ async def fail_training(model: VoiceModel, reason: str) -> VoiceModel:
         )
 
     return model
+
+
+#: Phases the worker reports, in order. Anything else is treated as unknown rather
+#: than silently mapped onto one of these.
+TRAINING_PHASES = ("preprocessing", "training", "finalizing")
+
+
+async def notify_training_finished(model: VoiceModel, *, succeeded: bool) -> NotificationEvent:
+    """Record the in-app notification for a finished training run.
+
+    Recorded, not delivered: ``delivered_at`` is left for the delivery worker the
+    platform does not have yet. Email is listed as optional in the story and there
+    is no mail path here, so none is claimed.
+    """
+    event = NotificationEvent(
+        user_id=model.user_id,
+        voice_model_id=model.id,
+        event_type="voice_training_complete" if succeeded else "voice_training_failed",
+        channel="in_app",
+        payload={
+            "voice_model_id": str(model.id),
+            "name": model.name,
+            # The reason matters more than the fact on a failure: "training failed"
+            # with no cause is not actionable.
+            **({} if succeeded else {"error": model.error or "Training failed"}),
+        },
+    )
+    await event.insert()
+    return event
+
+
+def describe_progress(job: Job | None, model: VoiceModel) -> dict:
+    """What the status endpoint reports for a training run.
+
+    The percentage is **derived, not invented**. ACE-Step reports steps and epochs,
+    not a fraction, so where no total is knowable this is ``None`` rather than a
+    number that looks authoritative and is not — a progress bar that lies is worse
+    than one that says "working".
+    """
+    detail = (job.progress_detail if job else None) or {}
+    phase = (job.progress if job else None) or None
+
+    if model.status is VoiceModelStatus.READY:
+        return {"phase": "complete", "progress": 100.0, "eta_seconds": 0.0, "status": model.status.value}
+
+    if model.status is VoiceModelStatus.FAILED:
+        return {
+            "phase": "failed",
+            "progress": None,
+            "eta_seconds": None,
+            "status": model.status.value,
+            "error": model.error,
+        }
+
+    step = detail.get("step")
+    total = detail.get("total_steps")
+    progress = None
+
+    if isinstance(step, (int, float)) and isinstance(total, (int, float)) and total > 0:
+        progress = round(min(100.0, max(0.0, 100.0 * float(step) / float(total))), 1)
+
+    return {
+        "phase": phase if phase in TRAINING_PHASES else (phase or "queued"),
+        "progress": progress,
+        "eta_seconds": detail.get("eta_seconds"),
+        "status": model.status.value,
+        "step": step,
+        "epoch": detail.get("epoch"),
+        "loss": detail.get("loss"),
+    }
+
+
+async def find_model_for_job(job_id: str, user_id: str) -> tuple[VoiceModel, Job] | None:
+    """The voice model and job for ``job_id``, only if ``user_id`` owns the model.
+
+    Ownership is resolved through the *model*, so another user's training run is
+    indistinguishable from one that does not exist.
+    """
+    try:
+        oid = PydanticObjectId(job_id)
+    except Exception:
+        return None
+
+    model = await VoiceModel.find_one(VoiceModel.job_id == oid, VoiceModel.user_id == PydanticObjectId(user_id))
+
+    if model is None:
+        return None
+
+    job = await Job.get(oid)
+    return (model, job) if job is not None else None
 
 
 async def list_voice_models(user_id: str) -> list[VoiceModel]:
