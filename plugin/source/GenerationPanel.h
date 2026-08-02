@@ -2,6 +2,7 @@
 
 #include "GenerationManager.h"
 #include "HostSync.h"
+#include "LegoStack.h"
 #include "MidiCapture.h"
 #include "SidechainCapture.h"
 
@@ -64,6 +65,15 @@ public:
     juce::ToggleButton& getMidiRecordToggle() noexcept     { return midiRecordToggle; }
     juce::ToggleButton& getSidechainRecordToggle() noexcept { return sidechainRecordToggle; }
     juce::Label&        getCaptureLabel() noexcept         { return captureLabel; }
+    juce::ComboBox&     getLegoTrackSelector() noexcept    { return legoTrackSelector; }
+    juce::Label&        getLegoLabel() noexcept            { return legoLabel; }
+
+    /** The layers built so far in Lego mode. */
+    LegoStack& getLegoStack() noexcept                    { return legoStack; }
+
+    /** Records a finished generation as the next layer. Called when a Lego generation
+        completes; exposed so a test does not have to drive a whole server round trip. */
+    void addLegoLayer (const juce::File& clip);
 
     /** True when `mode` has the input it needs and can be chosen. */
     bool isModeAvailable (GenerationRequest::Mode) const;
@@ -100,8 +110,18 @@ private:
     /** What the capture indicator should read right now. */
     juce::String getCaptureText() const;
 
+    /** What the Lego readout should read right now. */
+    juce::String getLegoText() const;
+
+    /** Writes the layers-so-far mix and points `request` at it. Does nothing for the
+        first layer, which has no context. */
+    void attachLegoContext (GenerationRequest&) const;
+
     /** Greys out the modes whose input has not been captured. */
     void refreshModeAvailability();
+
+    /** Where the layers-so-far mix is written for a Lego generation. */
+    juce::File getLegoContextFile() const;
 
     /** Where the capture backing `mode` is written. Known before the write happens, so
         buildRequest can name it and validation can pass. */
@@ -163,6 +183,15 @@ private:
     juce::Label      statusLabel;
     juce::Label      syncLabel;
     juce::Label      selectionLabel;
+
+    LegoStack legoStack;
+
+    /** Which layer a Generate would replace, or < 0 to append a new one. */
+    int legoRegenerateIndex = -1;
+
+    juce::Label      legoTrackLabel;
+    juce::ComboBox   legoTrackSelector;
+    juce::Label      legoLabel;
 
     juce::ToggleButton midiRecordToggle { "Record MIDI" };
     juce::ToggleButton sidechainRecordToggle { "Capture sidechain" };

@@ -26,10 +26,15 @@ struct GenerationRequest
         textToMusic,
         cover,      ///< restyle a reference: the sidechain capture
         complete,   ///< flesh out a sketch: the MIDI capture, rendered
-        repaint     ///< regenerate a time range of a reference
+        repaint,    ///< regenerate a time range of a reference
+        lego        ///< add one instrument track on top of the layers so far
     };
 
-    /** True when `mode` cannot be submitted without sourceAudioPath. */
+    /** True when `mode` cannot be submitted without sourceAudioPath.
+
+        Lego is the exception that matters: the *first* layer has nothing to build on, so
+        it is an ordinary text-to-music generation. Ask isValid()/findProblem() rather than
+        this alone — they know about the first layer. */
     static bool needsSourceAudio (Mode) noexcept;
 
     /** The server's `task_type` for `mode`, or empty for the server default. */
@@ -66,12 +71,19 @@ struct GenerationRequest
     /** Server-side path to the source audio, for every mode but Text to Music. */
     juce::String sourceAudioPath;
 
+    /** Lego only: which instrument track to generate. Drives the server `instruction`;
+        see LegoStack::trackNames() for the values ACE-Step recognises. */
+    juce::String legoTrack;
+
     /** Repaint only: the range of the source to regenerate, in seconds. A negative
         start means "not set", and the range is omitted so the server decides. */
     double repaintStartSeconds = -1.0;
     double repaintEndSeconds = -1.0;
 
     bool hasRepaintRange() const;
+
+    /** The server `instruction` naming the Lego track, or empty when none is set. */
+    juce::String instructionForTrack() const;
 
     /** Model name from the connection panel; empty = let the server decide. */
     juce::String model;

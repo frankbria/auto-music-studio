@@ -14,6 +14,7 @@ Progress:
 | US-24.1 — DAW tempo sync and tempo-matched insertion | done |
 | US-24.2 — Selection-aware generation | done |
 | US-24.3 — MIDI input and sidechain audio | done |
+| US-24.4 — Lego mode, layer by layer | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -272,6 +273,47 @@ the range is omitted and the server decides.
 Captures are written under `<cache>/captures/` and referenced by `src_audio_path`. That
 is a **server-side** path, which works because the plugin targets a local ACE-Step;
 a remote server would need an upload endpoint.
+
+## Lego mode — building a track a layer at a time
+
+Pick **Lego** as the mode and a **Layer** track, describe the part, and Generate. Each
+finished layer is added to the stack, and the next generation is handed the mix of the
+layers so far as its context — so a bass generated after drums is generated *against*
+those drums.
+
+`lego` is a real ACE-Step task type ("generate a specific instrument track in context").
+The server steers it off an `instruction` string naming the track, not off your prompt:
+
+```
+Generate the BASS track based on the audio context:
+```
+
+The track list is ACE-Step's own `TRACK_NAMES`, so a layer always names something the
+model was trained on: `drums, bass, guitar, keyboard, synth, strings, brass, woodwinds,
+percussion, fx, vocals, backing_vocals`. Your prompt still describes *what kind* of part
+you want ("a funky bass line") — the two work together.
+
+**The first layer is an ordinary text-to-music generation.** There is nothing to build on
+yet, so no `task_type` and no context are sent. Only from the second layer on is it a
+`lego` task.
+
+**Regenerating a layer excludes that layer from its own context**, so a replacement bass
+is generated against the drums it sits under rather than against the bass it is replacing.
+Layers can also be muted out of the context without being deleted.
+
+### One track per layer is your drop, not the plugin's
+
+The story asks for each layer to be placed on its own DAW track. **VST3 gives a plugin no
+way to create tracks or write the host's arrangement** — the same limit settled on
+[#318](https://github.com/frankbria/auto-music-studio/issues/318) and applied again in
+US-24.2. Each layer is a draggable clip; dropping each onto its own track takes a couple
+of seconds, and the plugin cannot do it for you.
+
+### The context is the plugin's layers, not the DAW's timeline
+
+A plugin cannot read other tracks in the host. The Lego context is the mixdown of the
+layers *this plugin* generated. To bring real DAW audio in, capture it on the sidechain
+(US-24.3) — the two compose.
 
 ## Networking
 

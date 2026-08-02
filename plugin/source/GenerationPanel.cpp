@@ -221,6 +221,23 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     sidechainRecordToggle.setEnabled (hostOffersSidechain);
     addAndMakeVisible (sidechainRecordToggle);
 
+    styleCaption (legoTrackLabel, "Layer");
+    addAndMakeVisible (legoTrackLabel);
+    styleCombo (legoTrackSelector);
+    {
+        const auto tracks = LegoStack::trackNames();
+
+        for (int i = 0; i < tracks.size(); ++i)
+            legoTrackSelector.addItem (tracks[i], i + 1);
+    }
+    legoTrackSelector.setSelectedId (1, juce::dontSendNotification);
+    legoTrackSelector.onChange = [this] { refresh(); };
+    addAndMakeVisible (legoTrackSelector);
+
+    legoLabel.setFont (juce::FontOptions (12.0f));
+    legoLabel.setColour (juce::Label::textColourId, genColours::textDim);
+    addAndMakeVisible (legoLabel);
+
     captureLabel.setFont (juce::FontOptions (12.0f));
     captureLabel.setColour (juce::Label::textColourId, genColours::textDim);
     addAndMakeVisible (captureLabel);
@@ -231,7 +248,11 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
 
         // Writing the capture is deferred to the click rather than done on every edit:
         // it touches the disk, and most edits never lead to a generation.
-        if (GenerationRequest::needsSourceAudio (request.mode) && ! attachSourceAudio (request))
+        if (request.mode == GenerationRequest::Mode::lego)
+        {
+            attachLegoContext (request);
+        }
+        else if (GenerationRequest::needsSourceAudio (request.mode) && ! attachSourceAudio (request))
         {
             refresh();
             return;
@@ -335,6 +356,14 @@ void GenerationPanel::resized()
     // The host readouts get a row to themselves. Sharing the language row left them a
     // few pixels wide at the editor's minimum size, which made both unreadable — and a
     // readout nobody can read is not a feature.
+    auto legoRow = area.removeFromBottom (22);
+    legoTrackLabel.setBounds (legoRow.removeFromLeft (46));
+    legoTrackSelector.setBounds (legoRow.removeFromLeft (130));
+    legoRow.removeFromLeft (8);
+    legoLabel.setBounds (legoRow);
+
+    area.removeFromBottom (4);
+
     auto captureRow = area.removeFromBottom (22);
     midiRecordToggle.setBounds (captureRow.removeFromLeft (110));
     sidechainRecordToggle.setBounds (captureRow.removeFromLeft (150));
@@ -519,6 +548,61 @@ juce::String GenerationPanel::getCaptureText() const
     return parts.isEmpty() ? juce::String ("No input captured") : parts.joinIntoString ("  |  ");
 }
 
+juce::File GenerationPanel::getLegoContextFile() const
+{
+    return generation.getClipDirectory().getChildFile ("captures").getChildFile ("lego-context.wav");
+}
+
+void GenerationPanel::attachLegoContext (GenerationRequest& request) const
+{
+    if (! legoStack.hasContext (legoRegenerateIndex))
+    {
+        // The first layer, or a regeneration of the only layer: nothing to build on, so
+        // the request goes out as plain text-to-music.
+        request.sourceAudioPath = {};
+        return;
+    }
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+
+    const auto file = getLegoContextFile();
+
+    if (legoStack.writeContext (file, formats, legoRegenerateIndex))
+        request.sourceAudioPath = file.getFullPathName();
+    else
+        request.sourceAudioPath = {};
+}
+
+void GenerationPanel::addLegoLayer (const juce::File& clip)
+{
+    if (legoRegenerateIndex >= 0)
+    {
+        legoStack.replaceLayer (legoRegenerateIndex, clip);
+        legoRegenerateIndex = -1;
+    }
+    else
+    {
+        legoStack.addLayer (legoTrackSelector.getText(), promptEditor.getText(), clip);
+    }
+
+    refresh();
+}
+
+juce::String GenerationPanel::getLegoText() const
+{
+    if (legoStack.getNumLayers() == 0)
+        return "Lego: no layers yet";
+
+    juce::StringArray names;
+
+    for (const auto& layer : legoStack.getLayers())
+        names.add (layer.enabled ? layer.track : "(" + layer.track + ")");
+
+    return "Lego: " + juce::String (legoStack.getNumLayers()) + " layers - "
+             + names.joinIntoString (", ");
+}
+
 juce::File GenerationPanel::getCaptureFileFor (GenerationRequest::Mode mode) const
 {
     const auto directory = generation.getClipDirectory().getChildFile ("captures");
@@ -653,8 +737,19 @@ GenerationRequest GenerationPanel::buildRequest() const
     // The capture is written at Generate time, but the path is known now — and has to
     // be, or findProblem() would report "needs a source audio file" and keep Generate
     // disabled forever for exactly the modes this story added.
-    if (GenerationRequest::needsSourceAudio (request.mode) && hasCaptureFor (request.mode))
+    if (request.mode == GenerationRequest::Mode::lego)
+    {
+        request.legoTrack = legoTrackSelector.getText();
+
+        // The context is written at Generate time, but naming it now is what lets
+        // findProblem() pass and the button enable — same reason as the captures.
+        if (legoStack.hasContext (legoRegenerateIndex))
+            request.sourceAudioPath = getLegoContextFile().getFullPathName();
+    }
+    else if (GenerationRequest::needsSourceAudio (request.mode) && hasCaptureFor (request.mode))
+    {
         request.sourceAudioPath = getCaptureFileFor (request.mode).getFullPathName();
+    }
 
     return request;
 }
@@ -723,6 +818,22 @@ void GenerationPanel::refresh()
 
     if (captureLabel.getText() != captureText)
         captureLabel.setText (captureText, juce::dontSendNotification);
+
+    const auto isLego = modeSelector.getSelectedId() - 1
+                          == GenerationRequest::allModes().indexOf (GenerationRequest::Mode::lego);
+
+    legoTrackLabel.setVisible (isLego);
+    legoTrackSelector.setVisible (isLego);
+    legoLabel.setVisible (isLego);
+    legoTrackSelector.setEnabled (! busy);
+
+    if (isLego)
+    {
+        const auto legoText = getLegoText();
+
+        if (legoLabel.getText() != legoText)
+            legoLabel.setText (legoText, juce::dontSendNotification);
+    }
 
     midiRecordToggle.setEnabled (! busy && midiCapture != nullptr);
     sidechainRecordToggle.setEnabled (! busy && hostOffersSidechain && sidechainCapture != nullptr);
