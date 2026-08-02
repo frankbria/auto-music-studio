@@ -205,11 +205,24 @@ async def process_voice_training_job(
 
     try:
         return await _train(
-            model, job, storage=storage, base_url=base_url, poll_interval=poll_interval, poll_timeout=poll_timeout
+            model,
+            job,
+            storage=storage,
+            base_url=base_url,
+            training_root=training_root,
+            poll_interval=poll_interval,
+            poll_timeout=poll_timeout,
         )
-    except BaseException as exc:
-        # BaseException, not Exception: a CancelledError during shutdown must also
-        # give the credits back rather than leaving the musician charged.
+    except asyncio.CancelledError:
+        # Deliberately NOT failed-and-refunded. JobProcessor re-raises this without
+        # marking the job, leaving it `processing` so startup requeues it as stale.
+        # Refunding here would either give the credits back for a run that then
+        # succeeds, or -- refunds not being idempotent -- refund the same charge
+        # twice when the retry also fails.
+        model.status = VoiceModelStatus.QUEUED
+        await model.save()
+        raise
+    except Exception as exc:
         reason = str(exc) or exc.__class__.__name__
         try:
             await voice_service.fail_training(model, reason)
