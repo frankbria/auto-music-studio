@@ -99,6 +99,7 @@ set(ACEMUSIC_SOURCES
     source/LegoStack.cpp
     source/MidiCapture.cpp
     source/PlatformClient.cpp
+    source/PlatformPanel.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/ResultsPanel.cpp
@@ -172,6 +173,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/LegoStackTests.cpp
     tests/HostSyncTests.cpp
     tests/PlatformClientTests.cpp
+    tests/PlatformPanelTests.cpp
     tests/PluginProcessorTests.cpp
     tests/ResultsPanelTests.cpp
     tests/TimeStretchTests.cpp)
