@@ -44,9 +44,11 @@ set(ACEMUSIC_SOURCES
     source/GenerationManager.cpp
     source/GenerationPanel.cpp
     source/GenerationRequest.cpp
+    source/HostSync.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
-    source/ResultsPanel.cpp)
+    source/ResultsPanel.cpp
+    source/TimeStretch.cpp)
 
 # ---------------------------------------------------------------------------
 # Plugin
@@ -111,8 +113,10 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/GenerationManagerTests.cpp
     tests/GenerationPanelTests.cpp
     tests/GenerationRequestTests.cpp
+    tests/HostSyncTests.cpp
     tests/PluginProcessorTests.cpp
-    tests/ResultsPanelTests.cpp)
+    tests/ResultsPanelTests.cpp
+    tests/TimeStretchTests.cpp)
 
 target_include_directories(AceMusicPluginTests PRIVATE source tests)
 

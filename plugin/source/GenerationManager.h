@@ -69,6 +69,14 @@ public:
     /** Downloaded clips, in the order the server listed them. */
     const juce::Array<juce::File>& getClips() const noexcept { return clips; }
 
+    /** The BPM the current clips were asked for, or < 0 when the request left BPM on
+        "Auto" and the server chose for itself.
+
+        This is the *requested* tempo, not one measured from the returned audio — which
+        is why tempo matching (US-24.1) does nothing for an Auto-BPM generation rather
+        than guessing. Detecting the tempo of a finished clip is its own story. */
+    int getRequestedBpm() const noexcept                     { return requestedBpm; }
+
     /** Seconds since the current run started; 0 when idle. */
     int getElapsedSeconds() const;
 
@@ -83,7 +91,7 @@ public:
         Named unmistakably: nothing in the plugin calls this. US-23.5 will need a real
         way to restore clips from the cache, and that should be its own API with its
         own semantics rather than this quietly becoming production behaviour. */
-    void setClipsForTesting (const juce::Array<juce::File>& files);
+    void setClipsForTesting (const juce::Array<juce::File>& files, int bpm = -1);
 
     /** Where clips are written: the configured cache path, or ClipCache's default. */
     juce::File getClipDirectory() const;
@@ -126,6 +134,9 @@ private:
     State state = State::idle;
     juce::String statusMessage { "Idle" };
     juce::Array<juce::File> clips;
+
+    /** Kept alongside `clips` so it always describes the clips currently published. */
+    int requestedBpm = -1;
 
     int currentRun = 0;
     juce::uint32 startedAtMs = 0;

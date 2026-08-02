@@ -1,4 +1,5 @@
 #include "ClipCache.h"
+#include "FakePlayHead.h"
 #include "PluginEditor.h"
 #include "StubAceStepServer.h"
 
@@ -346,6 +347,167 @@ public:
             processor.getGenerationManager().cancel();
             expect (pumpUntil ([&] { return ! processor.getGenerationManager().isBusy(); }, 30000),
                     "cancel never settled");
+        }
+
+        //======================================================================
+        // US-24.1 — host tempo sync.
+
+        beginTest ("AC: opening the plugin in a 120 BPM project auto-fills BPM with 120");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            // The host has already told the plugin its tempo by the time the window
+            // opens, which is the ordering a DAW actually produces.
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // Filled at construction, not half a second later on the first timer tick.
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("120"),
+                          "the BPM field did not pick up the host tempo on open");
+            expect (panel.isBpmSynced());
+            expect (panel.getSyncLabel().getText().contains ("120"),
+                    "the sync indicator did not name the host tempo: "
+                        + panel.getSyncLabel().getText());
+
+            // And it reaches the request, so a generation actually asks for 120.
+            panel.getPromptEditor().setText ("anything", true);
+            expectEquals (panel.buildRequest().bpm, 120);
+        }
+
+        beginTest ("AC: changing the DAW tempo updates the plugin's BPM field");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("120"));
+
+            // The musician drags the tempo in the DAW mid-session.
+            playHead.bpm = 90.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "90"; }, 5000),
+                    "the BPM field stayed at " + panel.getBpmEditor().getText()
+                        + " after the host moved to 90");
+            expect (panel.isBpmSynced(), "following the host cancelled its own sync");
+        }
+
+        beginTest ("AC: a manual BPM override disables auto-sync, with a visual indicator");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto syncedText = panel.getSyncLabel().getText();
+
+            // The user types their own tempo. TextEditor posts its change notification
+            // rather than calling it inline, so this settles on the message loop.
+            panel.getBpmEditor().setText ("100", true);
+
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000),
+                    "typing a BPM did not take the field off sync");
+            expect (panel.getSyncLabel().getText() != syncedText,
+                    "the indicator did not change when sync was turned off");
+            expect (panel.getSyncLabel().getText().containsIgnoreCase ("manual"),
+                    "the indicator does not say the BPM is manual: "
+                        + panel.getSyncLabel().getText());
+
+            // And the host must no longer be able to overwrite it.
+            playHead.bpm = 140.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (! pumpUntil ([&] { return panel.getBpmEditor().getText() != "100"; }, 1500),
+                    "the host overwrote a manually entered BPM");
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("100"));
+            expectEquals (panel.buildRequest().bpm, 100);
+        }
+
+        beginTest ("clearing the BPM field resumes host sync");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 128.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getBpmEditor().setText ("100", true);
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000),
+                    "typing a BPM did not take the field off sync");
+
+            // Back to the "Auto" placeholder — the panel's existing convention for
+            // "let something else decide", and the only way back to sync.
+            panel.getBpmEditor().setText ("", true);
+            expect (pumpUntil ([&] { return panel.isBpmSynced(); }, 5000),
+                    "clearing the field did not resume sync");
+
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "128"; }, 5000),
+                    "the host tempo did not come back after resyncing");
+        }
+
+        beginTest ("a host that reports no tempo leaves BPM on Auto and says so");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.reportsPosition = false;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // No invented default: an unknown host tempo stays Auto, which is what the
+            // server treats as "you choose".
+            expect (panel.getBpmEditor().getText().isEmpty(),
+                    "a tempo was invented for a silent host: " + panel.getBpmEditor().getText());
+            expect (panel.buildRequest().bpm < 0);
+            expect (panel.getSyncLabel().getText().containsIgnoreCase ("no host tempo"),
+                    "the indicator did not report the missing tempo: "
+                        + panel.getSyncLabel().getText());
+        }
+
+        beginTest ("applying a request with its own BPM takes the field off sync");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            GenerationRequest request;
+            request.prompt = "recalled preset";
+            request.bpm = 174;
+            panel.applyRequest (request);
+
+            expect (! panel.isBpmSynced(), "a recalled BPM was left on sync");
+            expect (! pumpUntil ([&] { return panel.getBpmEditor().getText() != "174"; }, 1500),
+                    "the host overwrote a recalled BPM");
+
+            // A request that left BPM on Auto hands the field back to the host.
+            request.bpm = -1;
+            panel.applyRequest (request);
+            expect (panel.isBpmSynced());
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "120"; }, 5000),
+                    "an Auto-BPM request did not resume host sync");
         }
     }
 };

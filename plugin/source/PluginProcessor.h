@@ -4,6 +4,7 @@
 #include "ClipPlayer.h"
 #include "ConnectionManager.h"
 #include "GenerationManager.h"
+#include "HostSync.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -84,6 +85,10 @@ public:
         processBlock is what mixes it. */
     ClipPlayer& getClipPlayer() noexcept                      { return clipPlayer; }
 
+    /** The host's tempo and transport position, sampled in processBlock. This is the
+        only place anything reads the play head — see HostSync for why. */
+    HostSync& getHostSync() noexcept                          { return hostSync; }
+
     /** The plugin config file, or null when running without one. */
     juce::PropertiesFile* getSettings() noexcept              { return properties.get(); }
 
@@ -97,6 +102,7 @@ private:
     ConnectionManager connectionManager;
     GenerationManager generationManager;
     ClipPlayer clipPlayer;
+    HostSync hostSync;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

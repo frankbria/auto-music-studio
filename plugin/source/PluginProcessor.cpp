@@ -56,6 +56,11 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 {
     juce::ScopedNoDenormals noDenormals;
 
+    // The one place the play head is read. Everything that wants the host tempo or
+    // position takes a snapshot from HostSync instead of calling getPlayHead() off
+    // the audio thread, which is a data race.
+    hostSync.captureFrom (getPlayHead());
+
     // Passthrough. Any channel the host gave us as output but not as input has
     // undefined contents, so clear it.
     for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
