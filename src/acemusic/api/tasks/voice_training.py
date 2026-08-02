@@ -226,6 +226,7 @@ async def process_voice_training_job(
         reason = str(exc) or exc.__class__.__name__
         try:
             await voice_service.fail_training(model, reason)
+            await voice_service.notify_training_finished(model, succeeded=False)
         except Exception:  # pragma: no cover - the refund must not mask the cause
             logger.exception("Failed to refund voice training for model %s", model.id)
         raise
@@ -373,6 +374,8 @@ async def _train(
     model.status = VoiceModelStatus.READY
     model.error = None
     await model.save()
+
+    await voice_service.notify_training_finished(model, succeeded=True)
 
     return {"voice_model_id": str(model.id), "weights_path": model.weights_path}
 
