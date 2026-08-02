@@ -124,5 +124,9 @@ export function useVoiceTraining(
     }
   }, [jobId, nonce])
 
-  return { state, refresh }
+  // Derived rather than reset in the effect. Clearing jobId has to stop showing
+  // the previous run immediately, and react-hooks/set-state-in-effect forbids the
+  // synchronous reset that would otherwise do it -- so the no-job case is computed
+  // instead of stored.
+  return { state: jobId ? state : { phase: "idle" }, refresh }
 }

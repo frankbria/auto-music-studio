@@ -375,7 +375,14 @@ async def _train(
     model.error = None
     await model.save()
 
-    await voice_service.notify_training_finished(model, succeeded=True)
+    # Best-effort, and deliberately after the model is saved READY. A transient
+    # notification_events insert failure raised from here would propagate into
+    # process_voice_training_job's failure path and turn a completed run into a
+    # failed, refunded one -- undoing a training run that actually worked.
+    try:
+        await voice_service.notify_training_finished(model, succeeded=True)
+    except Exception:
+        logger.exception("Voice model %s trained but its notification could not be recorded", model.id)
 
     return {"voice_model_id": str(model.id), "weights_path": model.weights_path}
 

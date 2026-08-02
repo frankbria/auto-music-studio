@@ -110,6 +110,22 @@ describe("useVoiceTraining", () => {
     expect(result.current.state).toMatchObject({ message: "Training job not found." })
   })
 
+  it("clearing the job stops showing the previous run", async () => {
+    // A view that reuses the hook while switching selections, or closes the
+    // training panel, must not keep the old run's progress on screen.
+    mockFetch.mockResolvedValue(status({ progress: 80 }))
+
+    const { result, rerender } = renderHook(
+      ({ jobId }: { jobId: string | null }) => useVoiceTraining(jobId),
+      { initialProps: { jobId: "job-1" as string | null } }
+    )
+
+    await waitFor(() => expect(result.current.state.phase).toBe("polling"))
+
+    rerender({ jobId: null })
+    expect(result.current.state.phase).toBe("idle")
+  })
+
   it("does nothing without a job", async () => {
     const { result } = renderHook(() => useVoiceTraining(null))
     expect(result.current.state.phase).toBe("idle")

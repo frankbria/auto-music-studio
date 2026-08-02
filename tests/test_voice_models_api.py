@@ -620,6 +620,31 @@ class TestTrainingWorker:
         assert len(written) == 3, f"expected 3 references on disk, found {written}"
         assert all(p.stat().st_size > 0 for p in written)
 
+    async def test_a_notification_failure_does_not_undo_a_successful_run(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        # The notification is recorded after the model is saved READY. If it raised
+        # from there it would land in the failure path and refund a run that
+        # actually worked -- undoing a real training run over a transient insert.
+        from acemusic.api.services import voice_models as vs
+
+        user = await _make_user("worker-notifyfail@example.com", credits=40.0)
+        model, job = await self._queued(client, settings, user)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("notification_events unavailable")
+
+        monkeypatch.setattr(vs, "notify_training_finished", boom)
+
+        result = await self._run(job, monkeypatch)
+
+        assert result["weights_path"], "a notification failure lost the training result"
+        fresh = await VoiceModel.get(model.id)
+        assert fresh.status is VoiceModelStatus.READY, "a notification failure marked the run failed"
+        assert fresh.is_usable
+        # And the charge stands, because the run succeeded.
+        assert (await User.get(user.id)).credits_balance == 30.0
+
     async def test_a_job_pointing_at_a_missing_model_fails_loudly(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
