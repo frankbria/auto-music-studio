@@ -111,6 +111,13 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     bpmEditor.onTextChange = [this]
     {
         bpmSynced = bpmEditor.getText().trim().isEmpty();
+
+        // Applied right here, not left to the next timer tick: a user who clears the
+        // field and hits Generate straight away must get the host's tempo, not the
+        // "Auto" an empty field would otherwise submit.
+        if (bpmSynced)
+            applyHostTempo();
+
         refresh();
     };
     addAndMakeVisible (bpmEditor);
@@ -138,6 +145,12 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
         // types, and clearing hands it back. Auto-applied writes use
         // setText(..., false), which does not land here.
         durationSynced = durationEditor.getText().trim().isEmpty();
+
+        // Same reason as the BPM field: an empty duration means 60, so leaving the
+        // selection length until the next tick would submit the wrong length.
+        if (durationSynced)
+            applyHostSelection();
+
         refresh();
     };
     addAndMakeVisible (durationEditor);
@@ -263,15 +276,21 @@ void GenerationPanel::resized()
 
     area.removeFromBottom (8);
 
+    // The host readouts get a row to themselves. Sharing the language row left them a
+    // few pixels wide at the editor's minimum size, which made both unreadable — and a
+    // readout nobody can read is not a feature.
+    auto readoutRow = area.removeFromBottom (16);
+    syncLabel.setBounds (readoutRow.removeFromRight (readoutRow.getWidth() / 2));
+    selectionLabel.setBounds (readoutRow);
+
+    area.removeFromBottom (4);
+
     auto languageRow = area.removeFromBottom (24);
     languageLabel.setBounds (languageRow.removeFromLeft (70));
     languageSelector.setBounds (languageRow.removeFromLeft (180));
     languageRow.removeFromLeft (12);
     instrumentalToggle.setBounds (languageRow.removeFromLeft (120));
     lyricsToggle.setBounds (languageRow.removeFromLeft (90));
-    // Sync indicator right-aligned, selection readout taking what is left beside it.
-    syncLabel.setBounds (languageRow.removeFromRight (juce::jmin (170, languageRow.getWidth() / 2)));
-    selectionLabel.setBounds (languageRow);
 
     area.removeFromBottom (8);
 
@@ -298,6 +317,11 @@ void GenerationPanel::timerCallback()
     applyHostTempo();
     applyHostSelection();
     refresh();
+}
+
+HostSync::Snapshot GenerationPanel::getHostSnapshot() const
+{
+    return hostSync != nullptr ? hostSync->get() : HostSync::Snapshot{};
 }
 
 bool GenerationPanel::applyHostTempo()
@@ -358,9 +382,7 @@ bool GenerationPanel::applyHostSelection()
 
 juce::String GenerationPanel::getSelectionText() const
 {
-    const auto selection = hostSync != nullptr
-                             ? HostSync::describeSelection (hostSync->get())
-                             : HostSync::Selection{};
+    const auto selection = HostSync::describeSelection (getHostSnapshot());
 
     if (! selection.present)
         return "Selection: none";
@@ -394,7 +416,7 @@ juce::String GenerationPanel::getSyncStatusText() const
     if (! bpmSynced)
         return "Sync: off (manual BPM)";
 
-    const auto snapshot = hostSync != nullptr ? hostSync->get() : HostSync::Snapshot{};
+    const auto snapshot = getHostSnapshot();
 
     if (! snapshot.hasBpm())
         return "Sync: no host tempo";
@@ -417,14 +439,36 @@ GenerationRequest GenerationPanel::buildRequest() const
 
     request.instrumental = instrumentalToggle.getToggleState();
 
+    // An empty field means "follow the host" while sync is on, and only falls back to
+    // Auto when there is no host tempo to follow. Resolved here rather than relying on
+    // the display having already been updated: TextEditor delivers onTextChange
+    // asynchronously, so a Generate between clearing the field and that callback would
+    // otherwise submit Auto instead of the tempo the indicator is promising.
     const auto bpmText = bpmEditor.getText().trim();
-    request.bpm = bpmText.isEmpty() ? -1 : bpmText.getIntValue();
+
+    if (bpmText.isNotEmpty())
+        request.bpm = bpmText.getIntValue();
+    else if (const auto host = getHostSnapshot(); host.hasBpm())
+        request.bpm = juce::roundToInt (host.bpm);
+    else
+        request.bpm = -1;
 
     if (keySelector.getSelectedId() > 1)
         request.key = keySelector.getText();
 
+    // Same rule, and the same reason, for the duration and the host's loop range.
     const auto durationText = durationEditor.getText().trim();
-    request.durationSeconds = durationText.isEmpty() ? 60 : durationText.getIntValue();
+
+    if (durationText.isNotEmpty())
+    {
+        request.durationSeconds = durationText.getIntValue();
+    }
+    else
+    {
+        const auto selection = HostSync::describeSelection (getHostSnapshot());
+        const auto fromSelection = selection.hasLength ? juce::roundToInt (selection.lengthSeconds) : 0;
+        request.durationSeconds = fromSelection > 0 ? fromSelection : 60;
+    }
 
     const auto seedText = seedEditor.getText().trim();
     request.seed = seedText.isEmpty() ? -1 : seedText.getLargeIntValue();

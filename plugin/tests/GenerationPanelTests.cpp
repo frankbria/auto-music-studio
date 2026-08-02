@@ -642,6 +642,75 @@ public:
             expect (text.containsIgnoreCase ("no host tempo"), "did not explain: " + text);
         }
 
+        beginTest ("clearing a field and hitting Generate immediately uses the host value");
+        {
+            // The 2Hz timer is not the only path that has to be right: a user who clears
+            // the duration to resume sync and clicks Generate straight away must get the
+            // selection's length, not the 60 second fallback an empty field means.
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;     // 16 seconds
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("something", true);
+
+            panel.getDurationEditor().setText ("45", true);
+            expect (pumpUntil ([&] { return ! panel.isDurationSynced(); }, 5000));
+
+            // Clear it, then read the request with no timer tick in between.
+            panel.getDurationEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().durationSeconds, 16,
+                          "an immediate Generate after clearing fell back to the default");
+
+            // Same for BPM: clearing must restore the host tempo, not leave it on Auto.
+            panel.getBpmEditor().setText ("100", true);
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000));
+            panel.getBpmEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().bpm, 120,
+                          "an immediate Generate after clearing BPM fell back to Auto");
+        }
+
+        beginTest ("the sync and selection readouts fit the space they are given");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            // The minimum the editor allows, so this is the worst case a user can make.
+            editor.setSize (560, 700);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto fits = [this] (juce::Label& label, const char* what)
+            {
+                const auto needed = juce::GlyphArrangement::getStringWidth (label.getFont(),
+                                                                           label.getText());
+                expect ((float) label.getWidth() >= needed,
+                        juce::String (what) + " is clipped: \"" + label.getText() + "\" needs "
+                            + juce::String (needed, 0) + "px, has "
+                            + juce::String (label.getWidth()) + "px");
+            };
+
+            fits (panel.getSyncLabel(), "the sync indicator");
+            fits (panel.getSelectionLabel(), "the selection readout");
+        }
+
         beginTest ("applying a request with its own BPM takes the field off sync");
         {
             PluginProcessor processor (nullptr, false);

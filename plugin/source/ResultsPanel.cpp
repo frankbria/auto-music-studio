@@ -129,10 +129,10 @@ void ResultsPanel::ClipRow::updateNameLabel()
     juce::String text { "Clip " + juce::String (clipIndex + 1) };
 
     if (dragFile != file)
-        text << "  ->  " << juce::String (juce::roundToInt (matchedToBpm)) << " BPM";
+        text << " | " << juce::String (juce::roundToInt (matchedToBpm)) << " BPM";
 
     if (hasTargetBar)
-        text << "  @ bar " << HostSync::formatBar (targetBar);
+        text << " | bar " << HostSync::formatBar (targetBar);
 
     if (nameLabel.getText() != text)
         nameLabel.setText (text, juce::dontSendNotification);
@@ -189,7 +189,12 @@ void ResultsPanel::ClipRow::paint (juce::Graphics& g)
 void ResultsPanel::ClipRow::resized()
 {
     auto bounds = getLocalBounds();
-    nameLabel.setBounds (bounds.removeFromLeft (52).reduced (2));
+
+    // 52px fitted "Clip 1" and nothing else. The caption now also carries the tempo
+    // match (US-24.1) and the drop-target bar (US-24.2), so it scales with the row and
+    // the waveform gets what is left.
+    const auto nameWidth = juce::jlimit (52, 200, bounds.getWidth() * 2 / 5);
+    nameLabel.setBounds (bounds.removeFromLeft (nameWidth).reduced (2));
     playButton.setBounds (bounds.removeFromLeft (70).reduced (2));
 }
 

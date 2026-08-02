@@ -649,6 +649,39 @@ public:
                         + row->getNameLabel().getText());
         }
 
+        beginTest ("the clip caption fits the space it is given");
+        {
+            // The caption carries a tempo tag (US-24.1) and a drop-target bar (US-24.2).
+            // Both are pointless if the label is too narrow to show them.
+            ScopedClips clips;
+            Harness harness;
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            harness.processor.getHostSync().captureFrom (&playHead);
+
+            harness.generation().setClipsForTesting (clips.files, 118);
+            expect (pumpUntil ([&] { return harness.panel().getNumClipRows() == 2; }));
+
+            auto* row = harness.panel().getClipRow (0);
+
+            // Wait for the fullest caption: tempo match AND drop target.
+            expect (pumpUntil ([&] { return row->getNameLabel().getText().contains ("BPM")
+                                             && row->getNameLabel().getText().contains ("bar"); }, 20000),
+                    "never reached the full caption: " + row->getNameLabel().getText());
+
+            auto& label = row->getNameLabel();
+            const auto needed = juce::GlyphArrangement::getStringWidth (label.getFont(), label.getText());
+
+            expect ((float) label.getWidth() >= needed,
+                    "the clip caption is clipped: \"" + label.getText() + "\" needs "
+                        + juce::String (needed, 0) + "px, has " + juce::String (label.getWidth()) + "px");
+        }
+
         beginTest ("with no selection the clip row is captioned exactly as in Stage 23");
         {
             ScopedClips clips;

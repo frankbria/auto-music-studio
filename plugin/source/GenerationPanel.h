@@ -67,6 +67,9 @@ private:
     void timerCallback() override;
     void refresh();
 
+    /** The host's transport, or an empty snapshot when there is no host. */
+    HostSync::Snapshot getHostSnapshot() const;
+
     /** Copies the host tempo into the BPM field when the field is still following it.
         @returns true if the field changed. */
     bool applyHostTempo();
