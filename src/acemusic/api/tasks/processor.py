@@ -48,7 +48,7 @@ from .iterative import ITERATIVE_JOB_HANDLERS
 from .mastering import MASTERING_JOB_HANDLERS
 from .studio import STUDIO_JOB_HANDLERS
 from .video import VIDEO_JOB_HANDLERS
-from .voice_training import VOICE_TRAINING_JOB_HANDLERS
+from .voice_training import TRAINING_ROOT as VOICE_TRAINING_ROOT, VOICE_TRAINING_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,7 @@ class JobProcessor:
         image_client_factory: Callable[[], ImageGenerationClient | None] | None = None,
         video_client_factory: Callable[[], VideoGenerationService | None] | None = None,
         storage_factory: Callable[[], StorageBackend] | None = None,
+        voice_training_root: str = VOICE_TRAINING_ROOT,
         handlers: dict[str, JobHandler] | None = None,
     ) -> None:
         self._concurrency = concurrency
@@ -148,6 +149,10 @@ class JobProcessor:
         self._stale_after = stale_after if stale_after is not None else poll_timeout + 300.0
         self._client_factory = client_factory or _default_client_factory
         self._storage_factory = storage_factory or get_storage_backend
+        # US-25.1: the local directory ACE-Step sees as its training root. The
+        # references are written here so ACE-Step can scan them; its endpoints take
+        # paths, not uploads.
+        self._voice_training_root = voice_training_root
         # Handler registry keyed by job_type: only registered types are claimed
         # (and re-queued when stale), so jobs another deployment owns are left
         # alone. ``handlers`` lets callers add or override entries.
@@ -383,6 +388,7 @@ class JobProcessor:
             job,
             storage=self._storage_factory(),
             base_url=self._client_factory().base_url,
+            training_root=self._voice_training_root,
         )
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:

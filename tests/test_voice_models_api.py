@@ -9,6 +9,7 @@ is only charged once every check that can reject the request has passed, so a ba
 upload never costs credits.
 """
 
+import asyncio
 import io
 
 import httpx
@@ -19,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Job, User, VoiceModel, VoiceModelStatus
+from acemusic.api.models import CreditTransaction, Job, User, VoiceModel, VoiceModelStatus
 from acemusic.api.services import credits as credits_service, users as user_service, voice_models as voice_service
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -213,6 +214,32 @@ class TestTraining:
 
         fresh = await User.get(user.id)
         assert fresh.credits_balance == 15.0
+
+    async def test_the_charge_lands_in_the_credit_ledger(self, client, settings, local_storage) -> None:
+        # /users/me/credits builds its history from CreditTransaction, so a balance
+        # that drops with no usage row is a support ticket waiting to happen.
+        user = await _make_user("ledger@example.com", credits=40.0)
+
+        resp = await client.post(
+            TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
+        )
+        assert resp.status_code == 202, resp.text
+
+        rows = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        charges = [r for r in rows if r.action_type == "voice_training"]
+        assert len(charges) == 1, f"expected one voice_training row, got {[r.action_type for r in rows]}"
+        assert charges[0].amount == -10.0
+        assert charges[0].balance_after == 30.0
+
+        # And a refund is recorded too, so the ledger reconciles to the balance.
+        model = await VoiceModel.get(resp.json()["voice_model"]["id"])
+        await voice_service.fail_training(model, "boom")
+
+        rows = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        refunds = [r for r in rows if r.action_type == "voice_training_refund"]
+        assert len(refunds) == 1
+        assert refunds[0].amount == 10.0
+        assert sum(r.amount for r in rows) == 0.0, "the ledger does not reconcile to a zero net"
 
     async def test_insufficient_credits_returns_402_and_charges_nothing(self, client, settings, local_storage) -> None:
         user = await _make_user("broke@example.com", credits=3.0)
@@ -543,6 +570,54 @@ class TestTrainingWorker:
         fresh = await VoiceModel.get(model.id)
         assert fresh.status is VoiceModelStatus.FAILED
         assert (await User.get(user.id)).credits_balance == 40.0
+
+    async def test_a_cancelled_run_is_requeued_rather_than_refunded(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        # JobProcessor re-raises CancelledError without failing the job, so it is
+        # requeued as stale. Refunding here would give the credits back for a run
+        # that then succeeds -- or refund twice, since refunds are not idempotent.
+        from acemusic.api.tasks import voice_training
+
+        user = await _make_user("worker-cancel@example.com", credits=40.0)
+        model, job = await self._queued(client, settings, user)
+        assert (await User.get(user.id)).credits_balance == 30.0
+
+        async def cancel(*args, **kwargs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(voice_training, "_materialise_references", cancel)
+
+        with pytest.raises(asyncio.CancelledError):
+            await voice_training.process_voice_training_job(
+                job,
+                storage=get_storage_backend(),
+                base_url="http://acestep.test",
+                poll_interval=0.0,
+                poll_timeout=1.0,
+            )
+
+        fresh = await VoiceModel.get(model.id)
+        assert fresh.status is VoiceModelStatus.QUEUED, "a cancelled run was marked failed"
+        assert (await User.get(user.id)).credits_balance == 30.0, "a requeued run was refunded"
+
+    async def test_the_references_are_written_where_acestep_scans(
+        self, client, settings, local_storage, monkeypatch, tmp_path
+    ) -> None:
+        # ACE-Step scans a directory on its own filesystem; the uploads live in the
+        # platform's storage backend. Without this copy every real job scans an
+        # empty directory and refunds.
+        from acemusic.api.tasks import voice_training
+
+        user = await _make_user("worker-materialise@example.com", credits=40.0)
+        model, job = await self._queued(client, settings, user)
+
+        root = tmp_path / "training-root"
+        await voice_training._materialise_references(model, get_storage_backend(), str(root))
+
+        written = sorted((root / str(model.id) / "refs").glob("*"))
+        assert len(written) == 3, f"expected 3 references on disk, found {written}"
+        assert all(p.stat().st_size > 0 for p in written)
 
     async def test_a_job_pointing_at_a_missing_model_fails_loudly(
         self, client, settings, local_storage, monkeypatch

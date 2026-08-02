@@ -23,6 +23,13 @@ module invented ``{"dataset": ..., "name": ...}`` payloads and expected a
 stub encoded the same guess. The real API takes ``tensor_dir`` and reports
 ``{"is_training": bool, "status": "Idle", "error": null}``.
 
+**The references have to be materialised before ACE-Step can see them.** Uploads
+live in the platform's storage backend, which may be S3; ACE-Step scans a
+*directory*. So the worker downloads each reference into the shared training
+directory first. Without that step every real job scans an empty directory,
+finds nothing, and refunds -- the live verification of this module missed it
+because the files had been copied there by hand.
+
 **ACE-Step reads its own filesystem.** These endpoints take *paths*, not uploads,
 and reject anything resolving outside the server's working directory
 (``acestep/training/path_safety.py``). So voice training requires the platform and
@@ -39,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -178,6 +186,7 @@ async def process_voice_training_job(
     *,
     storage: StorageBackend,
     base_url: str,
+    training_root: str = TRAINING_ROOT,
     poll_interval: float = POLL_INTERVAL_S,
     poll_timeout: float = POLL_TIMEOUT_S,
 ) -> dict[str, Any]:
@@ -209,12 +218,34 @@ async def process_voice_training_job(
         raise
 
 
+async def _materialise_references(model: VoiceModel, storage: StorageBackend, training_root: str) -> None:
+    """Copy the stored references into the directory ACE-Step will scan.
+
+    ``training_root`` is the *local* path that ACE-Step sees as ``TRAINING_ROOT``;
+    the platform writes here and ACE-Step reads the same bytes. A split deployment
+    needs it to be a shared volume, because ACE-Step's training endpoints take
+    paths rather than uploads.
+    """
+    local_dir = Path(training_root) / str(model.id) / "refs"
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    for index, key in enumerate(model.reference_paths):
+        data = await asyncio.to_thread(storage.download, key)
+        suffix = key.rsplit(".", 1)[-1] if "." in key else "wav"
+        await asyncio.to_thread((local_dir / f"ref-{index}.{suffix}").write_bytes, data)
+
+    logger.info(
+        "Materialised %d references for voice model %s into %s", len(model.reference_paths), model.id, local_dir
+    )
+
+
 async def _train(
     model: VoiceModel,
     job: Job,
     *,
     storage: StorageBackend,
     base_url: str,
+    training_root: str,
     poll_interval: float,
     poll_timeout: float,
 ) -> dict[str, Any]:
@@ -235,6 +266,10 @@ async def _train(
     async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=60.0) as client:
         # 1. Preprocess the references into a training dataset.
         await record("preprocessing")
+
+        # Materialise the references where ACE-Step can see them. They live in the
+        # platform's storage backend (possibly S3); ACE-Step scans a directory.
+        await _materialise_references(model, storage, training_root)
 
         # Scan first: preprocessing works on the server's current dataset, so
         # without this it either preprocesses someone else's samples or nothing.

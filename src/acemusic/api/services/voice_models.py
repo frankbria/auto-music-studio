@@ -250,6 +250,17 @@ async def create_training_job(
 
         model.job_id = job.id
         await model.save()
+
+        # The ledger, not just the balance: /users/me/credits builds its history
+        # from CreditTransaction, so without this the balance drops with no usage
+        # row to explain it -- unlike every other billed endpoint.
+        await credits_service.record_transaction(
+            user_id=uid,
+            amount=-cost,
+            action_type="voice_training",
+            job_id=str(job.id),
+            balance_after=deducted,
+        )
     except BaseException:
         # BaseException, not Exception: a shutdown CancelledError must also give
         # the credits back rather than leaving the musician charged for nothing.
@@ -300,6 +311,15 @@ async def fail_training(model: VoiceModel, reason: str) -> VoiceModel:
 
     if model.credits_charged > 0:
         await credits_service.refund_credits(model.user_id, model.credits_charged)
+
+        user = await User.get(model.user_id)
+        await credits_service.record_transaction(
+            user_id=model.user_id,
+            amount=model.credits_charged,
+            action_type="voice_training_refund",
+            job_id=str(model.job_id) if model.job_id else "",
+            balance_after=user.credits_balance if user is not None else 0.0,
+        )
 
     return model
 
