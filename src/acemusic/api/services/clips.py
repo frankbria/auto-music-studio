@@ -20,6 +20,7 @@ from beanie import PydanticObjectId
 from beanie.operators import In
 from fastapi import HTTPException, status
 
+from acemusic.constants import BPM_MAX, BPM_MIN
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
@@ -363,6 +364,21 @@ async def upload_clip(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="The uploaded file is empty.",
+        )
+
+    # Bounded like every other BPM input on the API (see generation.py, presets.py).
+    # Without this a direct caller can persist bpm=-120 onto a Clip, and it then shows
+    # up in every listing and in the plugin's browser.
+    if bpm is not None and not (BPM_MIN <= bpm <= BPM_MAX):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"bpm must be between {BPM_MIN} and {BPM_MAX}.",
+        )
+
+    if duration is not None and duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="duration must be greater than zero.",
         )
     if len(data) > CLIP_UPLOAD_MAX_BYTES:
         raise HTTPException(

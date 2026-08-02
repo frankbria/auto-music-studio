@@ -103,7 +103,7 @@ juce::String findUrlProblem (const juce::String& baseUrl)
         // Caught here rather than at the socket: on a Linux build without libcurl,
         // JUCE cannot do TLS at all, and the failure would otherwise surface as a
         // connection error the user has no way to act on.
-        return "This build cannot use https:// — it was built without libcurl. "
+        return "This build cannot use https:// - it was built without libcurl. "
                "Install libcurl4-openssl-dev and rebuild, or use an http:// platform URL.";
     }
 

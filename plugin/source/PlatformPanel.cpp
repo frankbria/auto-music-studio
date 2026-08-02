@@ -135,7 +135,7 @@ PlatformPanel::PlatformPanel (BackgroundTaskQueue& queueToUse,
         if (const auto& produced = generation.getClips(); ! produced.isEmpty())
             pushClip (produced.getLast());
         else
-            applyStatus ("Generate something first — there is nothing to push", true);
+            applyStatus ("Generate something first - there is nothing to push", true);
     };
     addAndMakeVisible (pushButton);
 
@@ -254,7 +254,7 @@ void PlatformPanel::refresh()
     {
         // The plugin is fully usable without any of this, and says so rather than
         // looking broken.
-        applyStatus ("Not connected — the plugin works fine without the platform", false);
+        applyStatus ("Not connected - the plugin works fine without the platform", false);
     }
     else if (! Platform::hasTlsSupport() && getUrl().startsWithIgnoreCase ("https:"))
     {
@@ -282,7 +282,7 @@ void PlatformPanel::connect()
     }
 
     busy = true;
-    applyStatus ("Connecting…", false);
+    applyStatus ("Connecting...", false);
     refresh();
 
     const auto url = getUrl();
@@ -330,7 +330,7 @@ void PlatformPanel::applyWorkspaces (const Platform::Result& result)
 
     if (workspaces.isEmpty())
     {
-        applyStatus ("Connected — no workspaces on the platform yet", false);
+        applyStatus ("Connected - no workspaces on the platform yet", false);
         refresh();
         return;
     }
@@ -348,7 +348,7 @@ void PlatformPanel::applyWorkspaces (const Platform::Result& result)
     }
 
     workspaceSelector.setSelectedId (selected, juce::dontSendNotification);
-    applyStatus ("Connected — " + juce::String (workspaces.size()) + " workspaces", false);
+    applyStatus ("Connected - " + juce::String (workspaces.size()) + " workspaces", false);
     refreshClips();
 }
 
@@ -427,7 +427,7 @@ void PlatformPanel::importSelectedClip()
                                  .getChildFile (clip.id + "." + extension);
 
     busy = true;
-    applyStatus ("Importing…", false);
+    applyStatus ("Importing...", false);
     refresh();
 
     const auto url = getUrl();
@@ -462,7 +462,7 @@ void PlatformPanel::importSelectedClip()
             // panel shows and what makes the clip draggable onto the timeline.
             panel->generation.setClipsForTesting ({ result.file }, clip.bpm);
             panel->applyStatus ("Imported " + result.file.getFileName()
-                                    + " — drag it from Results onto a track", false);
+                                    + " - drag it from Results onto a track", false);
             panel->refresh();
         });
     });
@@ -488,7 +488,7 @@ void PlatformPanel::pushClip (const juce::File& clip)
     }
 
     busy = true;
-    applyStatus ("Pushing " + clip.getFileName() + "…", false);
+    applyStatus ("Pushing " + clip.getFileName() + "...", false);
     refresh();
 
     const auto url = getUrl();

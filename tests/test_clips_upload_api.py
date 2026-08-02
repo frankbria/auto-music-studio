@@ -265,6 +265,41 @@ class TestUpload:
         )
         assert resp.status_code == 201, f"upload route shadowed: {resp.status_code} {resp.text}"
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("bpm", "-120"), ("bpm", "0"), ("bpm", "9999"), ("duration", "-1"), ("duration", "0")],
+    )
+    async def test_nonsensical_metadata_is_refused(
+        self, client, settings, local_storage, field: str, value: str
+    ) -> None:
+        # A direct caller could otherwise persist bpm=-120 onto the Clip, and it would
+        # then surface in every listing and in the plugin's browser.
+        user = await _make_user(f"bounds-{field}-{value}@example.com")
+        workspace = await _make_workspace(user)
+
+        resp = await client.post(
+            UPLOAD_URL,
+            headers=_auth_headers(user, settings),
+            files={"file": ("clip.wav", _wav(), "audio/wav")},
+            data={"workspace_id": str(workspace.id), field: value},
+        )
+
+        assert resp.status_code == 422, f"{field}={value} was accepted"
+        assert await Clip.find_all().count() == 0
+
+    async def test_metadata_at_the_bounds_is_accepted(self, client, settings, local_storage) -> None:
+        user = await _make_user("atbounds@example.com")
+        workspace = await _make_workspace(user)
+
+        resp = await client.post(
+            UPLOAD_URL,
+            headers=_auth_headers(user, settings),
+            files={"file": ("clip.wav", _wav(), "audio/wav")},
+            data={"workspace_id": str(workspace.id), "bpm": "60", "duration": "0.5"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["bpm"] == 60
+
     async def test_a_clip_with_no_metadata_still_uploads(self, client, settings, local_storage) -> None:
         # The plugin may know nothing but the audio; that must not be an error.
         user = await _make_user("bare@example.com")

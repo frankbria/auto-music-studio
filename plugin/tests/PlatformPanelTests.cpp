@@ -78,6 +78,50 @@ public:
 
     void runTest() override
     {
+        beginTest ("every status the panel can show stays ASCII");
+        {
+            // AGENTS.md: a non-ASCII literal renders as mojibake in the plugin UI, and a
+            // test comparing it against another literal written the same way will not
+            // notice. So the bytes are checked, not the text.
+            const auto isAsciiOnly = [] (const juce::String& text)
+            {
+                for (auto c : text)
+                    if (c < 32 || c > 126)
+                        return false;
+
+                return true;
+            };
+
+            ScopedSettings settings;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 401 Unauthorized");
+
+            PluginProcessor processor (std::move (settings.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+            auto& panel = editor.getPlatformPanel();
+
+            // Drive it through the states that produce user-facing text.
+            const auto check = [&] (const juce::String& what)
+            {
+                const auto text = panel.getStatusLabel().getText();
+                expect (isAsciiOnly (text), "non-ASCII in " + what + ": " + text);
+            };
+
+            check ("the unconfigured state");
+
+            panel.getUrlEditor().setText (server.getBaseUrl(), false);
+            panel.connect();
+            check ("the connecting state");
+
+            expect (pumpUntil ([&] { return panel.getStatusLabel().getText().containsIgnoreCase ("key"); }, 10000));
+            check ("a rejected key");
+
+            // And the no-TLS message, which is a literal rather than a runtime string.
+            expect (isAsciiOnly (Platform::findUrlProblem ("")), "non-ASCII in the empty-URL message");
+        }
+
         beginTest ("AC: with no platform configured the plugin is unaffected and says so");
         {
             ScopedSettings settings;
