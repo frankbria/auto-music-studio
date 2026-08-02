@@ -48,6 +48,7 @@ from .iterative import ITERATIVE_JOB_HANDLERS
 from .mastering import MASTERING_JOB_HANDLERS
 from .studio import STUDIO_JOB_HANDLERS
 from .video import VIDEO_JOB_HANDLERS
+from .voice_training import VOICE_TRAINING_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,10 @@ class JobProcessor:
         # so they get their own injecting wrapper.
         for job_type, mastering_handler in MASTERING_JOB_HANDLERS.items():
             self._handlers[job_type] = partial(self._run_mastering_handler, mastering_handler)
+        # Voice training (US-25.1) drives ACE-Step's LoRA endpoints directly, so it
+        # needs storage plus the local ACE-Step base URL rather than a client object.
+        for job_type, voice_handler in VOICE_TRAINING_JOB_HANDLERS.items():
+            self._handlers[job_type] = partial(self._run_voice_training_handler, voice_handler)
         # Artwork handlers (US-13.1) need storage plus the image client, so they
         # get their own injecting wrapper like mastering.
         for job_type, artwork_handler in ARTWORK_JOB_HANDLERS.items():
@@ -365,6 +370,20 @@ class JobProcessor:
                 "and ACEMUSIC_API_VIDEO_API_KEY to enable it."
             )
         return await video_handler(job, storage=self._storage_factory(), client=client)
+
+    async def _run_voice_training_handler(self, voice_handler: Any, job: Job) -> dict[str, Any]:
+        """Adapt a voice-training handler (US-25.1), injecting storage and the
+        ACE-Step base URL. Training runs against whatever ``local_url`` points at —
+        the same server generation already uses, so there is no second target to
+        configure."""
+        # The training endpoints live on the same ACE-Step server generation already
+        # uses, so the base URL comes from the existing client factory rather than a
+        # second setting that could drift out of step with it.
+        return await voice_handler(
+            job,
+            storage=self._storage_factory(),
+            base_url=self._client_factory().base_url,
+        )
 
     async def _handle_generate(self, job: Job) -> dict[str, Any]:
         """Run a generation job — locally via ACE-Step or remotely via RunPod.
