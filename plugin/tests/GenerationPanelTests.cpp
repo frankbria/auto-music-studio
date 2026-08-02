@@ -792,6 +792,99 @@ public:
             expect (! panel.isModeAvailable (Mode::complete), "Complete unlocked from sidechain audio");
         }
 
+        beginTest ("AC: choosing Complete or Repaint actually submits that mode, not text-to-music");
+        {
+            // The gate being right is not the same as the request being right. This
+            // drives the whole path: pick the mode, check what buildRequest() produces.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("a prompt", true);
+
+            const auto modes = GenerationRequest::allModes();
+
+            for (int i = 0; i < modes.size(); ++i)
+            {
+                panel.getModeSelector().setSelectedId (i + 1, juce::sendNotificationSync);
+                expect (panel.buildRequest().mode == modes[i],
+                        "selecting \"" + GenerationRequest::toString (modes[i])
+                            + "\" built a request for \""
+                            + GenerationRequest::toString (panel.buildRequest().mode) + "\"");
+            }
+        }
+
+        beginTest ("AC: Generate becomes available once a source mode has its capture");
+        {
+            // findProblem() rejects a source mode with no path, and the path is only
+            // written at click time — so without care Generate stays dead forever.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("restyle this", true);
+
+            // Cover, with nothing captured: the request is not submittable, and says why.
+            panel.getModeSelector().setSelectedId (2, juce::sendNotificationSync);
+            expect (! panel.buildRequest().isValid(), "Cover was submittable with no capture");
+
+            // Capture something.
+            processor.getSidechainCapture().setRecording (true);
+            {
+                juce::AudioBuffer<float> block (2, 512);
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int i = 0; i < 512; ++i)
+                        block.setSample (channel, i, 0.3f);
+
+                processor.getSidechainCapture().processBlock (block);
+            }
+            processor.getSidechainCapture().setRecording (false);
+
+            const auto request = panel.buildRequest();
+            expect (request.mode == GenerationRequest::Mode::cover);
+            expect (request.sourceAudioPath.isNotEmpty(),
+                    "the request names no source, so Generate can never enable");
+            expect (request.isValid(),
+                    "Cover stayed unsubmittable after a capture: " + request.findProblem());
+
+            // Same for Complete once MIDI exists.
+            processor.getMidiCapture().setRecording (true);
+            {
+                juce::MidiBuffer on;
+                on.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+                processor.getMidiCapture().processBlock (on, 512);
+                juce::MidiBuffer off;
+                off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                processor.getMidiCapture().processBlock (off, 512);
+            }
+            processor.getMidiCapture().setRecording (false);
+
+            panel.getModeSelector().setSelectedId (3, juce::sendNotificationSync);   // Complete
+            const auto complete = panel.buildRequest();
+            expect (complete.mode == GenerationRequest::Mode::complete);
+            expect (complete.isValid(), "Complete stayed unsubmittable: " + complete.findProblem());
+            expect (complete.sourceAudioPath.endsWith ("midi-sketch.wav"),
+                    "Complete pointed at the wrong capture: " + complete.sourceAudioPath);
+
+            // And the two modes must not share a file.
+            expect (complete.sourceAudioPath != request.sourceAudioPath,
+                    "Complete and Cover were pointed at the same capture file");
+        }
+
         beginTest ("the capture toggles arm the captures they name");
         {
             PluginProcessor processor (nullptr, false);

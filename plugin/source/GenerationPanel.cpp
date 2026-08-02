@@ -477,14 +477,7 @@ juce::String GenerationPanel::getSelectionText() const
 
 bool GenerationPanel::isModeAvailable (GenerationRequest::Mode mode) const
 {
-    if (! GenerationRequest::needsSourceAudio (mode))
-        return true;
-
-    if (mode == GenerationRequest::Mode::complete)
-        return midiCapture != nullptr && midiCapture->hasCapture();
-
-    // Cover and Repaint both want the sidechain.
-    return hostOffersSidechain && sidechainCapture != nullptr && sidechainCapture->hasCapture();
+    return ! GenerationRequest::needsSourceAudio (mode) || hasCaptureFor (mode);
 }
 
 void GenerationPanel::refreshModeAvailability()
@@ -526,33 +519,36 @@ juce::String GenerationPanel::getCaptureText() const
     return parts.isEmpty() ? juce::String ("No input captured") : parts.joinIntoString ("  |  ");
 }
 
-bool GenerationPanel::attachSourceAudio (GenerationRequest& request) const
+juce::File GenerationPanel::getCaptureFileFor (GenerationRequest::Mode mode) const
 {
     const auto directory = generation.getClipDirectory().getChildFile ("captures");
 
-    if (request.mode == GenerationRequest::Mode::complete)
-    {
-        if (midiCapture == nullptr || ! midiCapture->hasCapture())
-            return false;
+    return mode == GenerationRequest::Mode::complete
+             ? directory.getChildFile ("midi-sketch.wav")
+             : directory.getChildFile ("sidechain.wav");
+}
 
-        const auto file = directory.getChildFile ("midi-sketch.wav");
+bool GenerationPanel::hasCaptureFor (GenerationRequest::Mode mode) const
+{
+    if (mode == GenerationRequest::Mode::complete)
+        return midiCapture != nullptr && midiCapture->hasCapture();
 
-        if (! midiCapture->writeTo (file))
-            return false;
+    return hostOffersSidechain && sidechainCapture != nullptr && sidechainCapture->hasCapture();
+}
 
-        request.sourceAudioPath = file.getFullPathName();
-        return true;
-    }
-
-    if (sidechainCapture == nullptr || ! sidechainCapture->hasCapture())
+bool GenerationPanel::attachSourceAudio (GenerationRequest& request) const
+{
+    if (! hasCaptureFor (request.mode))
         return false;
 
-    const auto file = directory.getChildFile ("sidechain.wav");
+    const auto file = getCaptureFileFor (request.mode);
+    request.sourceAudioPath = file.getFullPathName();
+
+    if (request.mode == GenerationRequest::Mode::complete)
+        return midiCapture->writeTo (file);
 
     if (! sidechainCapture->writeTo (file))
         return false;
-
-    request.sourceAudioPath = file.getFullPathName();
 
     if (request.mode == GenerationRequest::Mode::repaint)
     {
@@ -647,8 +643,18 @@ GenerationRequest GenerationPanel::buildRequest() const
     const auto qualityIndex = juce::jlimit (0, qualities.size() - 1, qualitySelector.getSelectedId() - 1);
     request.quality = qualities[qualityIndex];
 
-    request.mode = modeSelector.getSelectedId() == 2 ? GenerationRequest::Mode::cover
-                                                     : GenerationRequest::Mode::textToMusic;
+    // Indexed off the same list the selector was built from. The previous
+    // "id == 2 ? cover : textToMusic" silently submitted Complete and Repaint as
+    // text-to-music once the list grew past two entries.
+    const auto modes = GenerationRequest::allModes();
+    const auto modeIndex = juce::jlimit (0, modes.size() - 1, modeSelector.getSelectedId() - 1);
+    request.mode = modes[modeIndex];
+
+    // The capture is written at Generate time, but the path is known now — and has to
+    // be, or findProblem() would report "needs a source audio file" and keep Generate
+    // disabled forever for exactly the modes this story added.
+    if (GenerationRequest::needsSourceAudio (request.mode) && hasCaptureFor (request.mode))
+        request.sourceAudioPath = getCaptureFileFor (request.mode).getFullPathName();
 
     return request;
 }

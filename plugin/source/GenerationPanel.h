@@ -103,6 +103,13 @@ private:
     /** Greys out the modes whose input has not been captured. */
     void refreshModeAvailability();
 
+    /** Where the capture backing `mode` is written. Known before the write happens, so
+        buildRequest can name it and validation can pass. */
+    juce::File getCaptureFileFor (GenerationRequest::Mode) const;
+
+    /** Whether `mode`'s input has actually been captured. */
+    bool hasCaptureFor (GenerationRequest::Mode) const;
+
     /** Writes the capture a non-text mode needs and points `request` at it.
         @returns false when the mode's input is missing or could not be written. */
     bool attachSourceAudio (GenerationRequest&) const;
