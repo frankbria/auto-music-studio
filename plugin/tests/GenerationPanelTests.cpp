@@ -84,6 +84,33 @@ public:
         std::unique_ptr<juce::PropertiesFile> properties;
     };
 
+    /** A one-second tone on disk, so a Lego layer is real readable audio. */
+    static juce::File writeTone (const juce::File& file, double frequency)
+    {
+        constexpr double sampleRate = 44100.0;
+        const int numSamples = (int) sampleRate;
+        juce::AudioBuffer<float> buffer (1, numSamples);
+
+        for (int i = 0; i < numSamples; ++i)
+            buffer.setSample (0, i, 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi
+                                                             * frequency * (double) i / sampleRate));
+
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+
+        if (stream != nullptr)
+        {
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                           .withSampleRate (sampleRate)
+                                                           .withNumChannels (1)
+                                                           .withBitsPerSample (16));
+            if (writer != nullptr)
+                writer->writeFromAudioSampleBuffer (buffer, 0, numSamples);
+        }
+
+        return file;
+    }
+
     /** Points the harness at `server` and waits for a green connection. */
     bool connect (Harness& harness, test::StubAceStepServer& server)
     {
@@ -122,8 +149,8 @@ public:
             expect (panel.getLanguageSelector().getNumItems() >= 51, "expected Auto + 50+ languages");
             expectEquals (panel.getQualitySelector().getNumItems(), 3);
             expectEquals (panel.getQualitySelector().getText(), juce::String ("Standard"));
-            // Text to Music, Cover, Complete, Repaint since US-24.3.
-            expectEquals (panel.getModeSelector().getNumItems(), 4);
+            // Text to Music, Cover, Complete, Repaint (US-24.3) and Lego (US-24.4).
+            expectEquals (panel.getModeSelector().getNumItems(), 5);
             expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
 
             // BPM and seed are blank, meaning Auto/Random.
@@ -883,6 +910,163 @@ public:
             // And the two modes must not share a file.
             expect (complete.sourceAudioPath != request.sourceAudioPath,
                     "Complete and Cover were pointed at the same capture file");
+        }
+
+        beginTest ("AC: Lego builds layers in order, each on top of the ones before");
+        {
+            ScopedClipCleanup cleanup;
+            const auto cleanupRoot = cleanup.root;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a tight drum beat", true);
+
+            // The track list is ACE-Step's.
+            expectEquals (panel.getLegoTrackSelector().getNumItems(), LegoStack::trackNames().size());
+
+            // First layer: nothing to build on, so no source and a plain text2music payload.
+            const auto first = panel.buildRequest();
+            expect (first.mode == GenerationRequest::Mode::lego);
+            expect (first.legoTrack.isNotEmpty(), "no track was chosen");
+            expect (first.sourceAudioPath.isEmpty(),
+                    "the first layer claimed a context it does not have");
+            expect (first.isValid(), first.findProblem());
+
+            // Record it as a layer. Real audio, so the context mix can actually be built.
+            const auto layerOne = writeTone (cleanupRoot.getChildFile ("layer1.wav"), 220.0);
+            const auto layerTwo = writeTone (cleanupRoot.getChildFile ("layer2.wav"), 330.0);
+
+            panel.addLegoLayer (layerOne);
+            expectEquals (panel.getLegoStack().getNumLayers(), 1);
+
+            // Second layer: now there is context, so it becomes a real lego task.
+            panel.getLegoTrackSelector().setSelectedId (2, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a funky bass line", true);
+
+            const auto second = panel.buildRequest();
+            expect (second.sourceAudioPath.isNotEmpty(),
+                    "the second layer has no context to build on");
+            expect (second.sourceAudioPath.endsWith ("lego-context.wav"));
+
+            const juce::var payload = second.toPayload();
+            expectEquals (payload.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"));
+            expect (payload.getDynamicObject()->getProperty ("instruction").toString()
+                        .contains (second.legoTrack.toUpperCase()),
+                    "the instruction does not name the chosen track");
+
+            panel.addLegoLayer (layerTwo);
+            expectEquals (panel.getLegoStack().getNumLayers(), 2);
+            expectEquals (panel.getLegoStack().getLayers()[0].track, juce::String ("drums"));
+            expectEquals (panel.getLegoStack().getLayers()[1].prompt,
+                          juce::String ("a funky bass line"));
+
+            expect (panel.getLegoLabel().getText().contains ("2 layers"),
+                    "the layer readout is wrong: " + panel.getLegoLabel().getText());
+        }
+
+        beginTest ("AC: Lego is selectable from an empty stack, with nothing captured");
+        {
+            // Every Lego build starts here. Gating the mode behind a capture made it
+            // impossible to reach at all.
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            expect (panel.isModeAvailable (GenerationRequest::Mode::lego),
+                    "Lego was unavailable with an empty stack, so it can never be started");
+
+            const auto legoIndex = GenerationRequest::allModes()
+                                       .indexOf (GenerationRequest::Mode::lego);
+            expect (panel.getModeSelector().isItemEnabled (legoIndex + 1),
+                    "the Lego entry is greyed out in the dropdown");
+        }
+
+        beginTest ("AC: a finished Lego generation becomes the next layer, in production");
+        {
+            // The piece-wise tests all passed while nothing in the plugin ever called
+            // addLegoLayer, so the stack stayed empty and every layer was a first layer.
+            // This drives the real path: click Generate, let the run finish, check the
+            // stack grew and the next request has context.
+            ScopedClipCleanup cleanup;
+            const auto cleanupRoot = cleanup.root;
+
+            Harness harness { std::move (cleanup.properties) };
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            expect (connect (harness, server), "never connected");
+
+            auto& panel = harness.panel();
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a tight drum beat", true);
+
+            expect (pumpUntil ([&] { return panel.getGenerateButton().isEnabled(); }),
+                    "Generate never enabled for a first Lego layer");
+
+            const auto trackChosen = panel.getLegoTrackSelector().getText();
+            panel.getGenerateButton().triggerClick();
+            expect (pumpUntil ([&] { return harness.generation().isBusy(); }), "never started");
+
+            // The run finishes and publishes a clip, exactly as a real one would.
+            const auto produced = writeTone (cleanupRoot.getChildFile ("produced.wav"), 220.0);
+            harness.generation().setClipsForTesting ({ produced });
+
+            expect (pumpUntil ([&] { return panel.getLegoStack().getNumLayers() == 1; }, 5000),
+                    "the finished layer was never added to the stack");
+
+            expectEquals (panel.getLegoStack().getLayers()[0].track, trackChosen,
+                          "the layer recorded the wrong track");
+            expectEquals (panel.getLegoStack().getLayers()[0].prompt,
+                          juce::String ("a tight drum beat"));
+
+            // ...and it is only added once, however many change messages arrive.
+            harness.generation().sendChangeMessage();
+            harness.generation().sendChangeMessage();
+            expect (! pumpUntil ([&] { return panel.getLegoStack().getNumLayers() != 1; }, 1200),
+                    "the layer was added more than once");
+
+            // The next generation now has context, so it is a real lego task.
+            panel.getPromptEditor().setText ("a funky bass line", true);
+            const auto second = panel.buildRequest();
+            expect (second.sourceAudioPath.isNotEmpty(),
+                    "the second layer still has no context, so the stack is not being used");
+
+            const juce::var payload = second.toPayload();
+            expectEquals (payload.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"),
+                          "the second layer went out as text-to-music again");
+        }
+
+        beginTest ("the Lego controls only appear in Lego mode");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getModeSelector().setSelectedId (1, juce::sendNotificationSync);   // Text to Music
+            expect (! panel.getLegoTrackSelector().isVisible(),
+                    "the Lego track selector is showing outside Lego mode");
+
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            expect (panel.getLegoTrackSelector().isVisible(),
+                    "the Lego track selector is hidden in Lego mode");
         }
 
         beginTest ("the capture toggles arm the captures they name");

@@ -46,6 +46,7 @@ set(ACEMUSIC_SOURCES
     source/GenerationPanel.cpp
     source/GenerationRequest.cpp
     source/HostSync.cpp
+    source/LegoStack.cpp
     source/MidiCapture.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
@@ -117,6 +118,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/GenerationManagerTests.cpp
     tests/GenerationPanelTests.cpp
     tests/GenerationRequestTests.cpp
+    tests/LegoStackTests.cpp
     tests/HostSyncTests.cpp
     tests/PluginProcessorTests.cpp
     tests/ResultsPanelTests.cpp

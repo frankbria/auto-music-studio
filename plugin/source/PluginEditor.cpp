@@ -45,8 +45,8 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     // a sliver.
     // Raised again for US-24.3: Generation gained a capture row and two host readouts,
     // and below this the Results panel had no room left for a clip row at all.
-    setResizeLimits (560, 800, 1600, 1600);
-    setSize (780, 920);
+    setResizeLimits (560, 830, 1600, 1600);
+    setSize (780, 950);
 }
 
 PluginEditor::~PluginEditor() = default;

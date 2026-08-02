@@ -37,6 +37,7 @@ juce::String GenerationRequest::toString (Mode mode) noexcept
         case Mode::cover:        return "Cover";
         case Mode::complete:     return "Complete";
         case Mode::repaint:      return "Repaint";
+        case Mode::lego:         return "Lego";
     }
 
     return "Text to Music";
@@ -76,6 +77,7 @@ juce::String GenerationRequest::taskTypeFor (Mode mode) noexcept
         case Mode::cover:    return "cover";
         case Mode::complete: return "complete";
         case Mode::repaint:  return "repaint";
+        case Mode::lego:     return "lego";
         // text2music is the server's default; the Python client omits it for exactly
         // this reason, so sending it would be a behaviour change rather than a no-op.
         case Mode::textToMusic: break;
@@ -86,7 +88,16 @@ juce::String GenerationRequest::taskTypeFor (Mode mode) noexcept
 
 juce::Array<GenerationRequest::Mode> GenerationRequest::allModes()
 {
-    return { Mode::textToMusic, Mode::cover, Mode::complete, Mode::repaint };
+    return { Mode::textToMusic, Mode::cover, Mode::complete, Mode::repaint, Mode::lego };
+}
+
+juce::String GenerationRequest::instructionForTrack() const
+{
+    if (legoTrack.trim().isEmpty())
+        return {};
+
+    // Mirrors ACE-Step's TASK_INSTRUCTIONS["lego"] template.
+    return "Generate the " + legoTrack.trim().toUpperCase() + " track based on the audio context:";
 }
 
 bool GenerationRequest::hasRepaintRange() const
@@ -116,8 +127,18 @@ juce::String GenerationRequest::findProblem() const
     if (durationSeconds <= 0)
         return "Duration must be greater than zero";
 
-    if (needsSourceAudio (mode) && sourceAudioPath.trim().isEmpty())
+    if (mode == Mode::lego)
+    {
+        if (legoTrack.trim().isEmpty())
+            return "Lego mode needs an instrument track to generate";
+
+        // No source is not an error here: the first layer has nothing to build on and is
+        // generated as ordinary text-to-music. Every later layer carries the mix so far.
+    }
+    else if (needsSourceAudio (mode) && sourceAudioPath.trim().isEmpty())
+    {
         return toString (mode) + " mode needs a source audio file";
+    }
 
     return {};
 }
@@ -155,14 +176,24 @@ juce::var GenerationRequest::toPayload() const
     if (model.isNotEmpty())
         payload->setProperty ("model", model);
 
-    if (const auto taskType = taskTypeFor (mode); taskType.isNotEmpty())
+    // The first Lego layer has no context, so it goes out as an ordinary text-to-music
+    // request: a `lego` task with no src_audio_path has nothing to build on.
+    const auto effectiveMode = (mode == Mode::lego && sourceAudioPath.trim().isEmpty())
+                                 ? Mode::textToMusic
+                                 : mode;
+
+    if (const auto taskType = taskTypeFor (effectiveMode); taskType.isNotEmpty())
     {
         payload->setProperty ("task_type", taskType);
         payload->setProperty ("src_audio_path", sourceAudioPath.trim());
 
+        // Which track to add. ACE-Step steers `lego` off this string, not off the caption.
+        if (effectiveMode == Mode::lego)
+            payload->setProperty ("instruction", instructionForTrack());
+
         // Repaint regenerates a range of the source rather than all of it. Omitted
         // unless both ends are set, matching the Python client's optional handling.
-        if (mode == Mode::repaint && hasRepaintRange())
+        if (effectiveMode == Mode::repaint && hasRepaintRange())
         {
             payload->setProperty ("repainting_start", repaintStartSeconds);
             payload->setProperty ("repainting_end", repaintEndSeconds);

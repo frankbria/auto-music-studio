@@ -268,6 +268,72 @@ public:
             request.repaintEndSeconds = 1.0;
             expect (! request.hasRepaintRange(), "a backwards range was accepted");
         }
+
+        //======================================================================
+        // US-24.4 — Lego layers.
+
+        beginTest ("AC: a Lego layer carries the track instruction the server steers off");
+        {
+            GenerationRequest request;
+            request.prompt = "a funky bass line";
+            request.mode = GenerationRequest::Mode::lego;
+            request.legoTrack = "bass";
+            request.sourceAudioPath = "/tmp/context.wav";
+
+            expect (request.isValid(), request.findProblem());
+
+            const juce::var payload = request.toPayload();
+            auto* object = payload.getDynamicObject();
+
+            expectEquals (object->getProperty ("task_type").toString(), juce::String ("lego"));
+            expectEquals (object->getProperty ("src_audio_path").toString(),
+                          juce::String ("/tmp/context.wav"));
+
+            // ACE-Step steers lego off the instruction, not the caption. Getting this
+            // wrong produces a layer for whatever track the model feels like.
+            expectEquals (object->getProperty ("instruction").toString(),
+                          juce::String ("Generate the BASS track based on the audio context:"));
+        }
+
+        beginTest ("Lego without a track is refused, since the instruction would be empty");
+        {
+            GenerationRequest request;
+            request.prompt = "something";
+            request.mode = GenerationRequest::Mode::lego;
+            request.sourceAudioPath = "/tmp/context.wav";
+
+            expect (! request.isValid(), "a Lego layer with no track was submittable");
+            expect (request.findProblem().containsIgnoreCase ("track"),
+                    "the problem does not mention the track: " + request.findProblem());
+        }
+
+        beginTest ("the first Lego layer is a plain text-to-music generation");
+        {
+            // Nothing to build on yet. A `lego` task with no context has no audio to add
+            // a track to, so it goes out as text2music instead.
+            GenerationRequest request;
+            request.prompt = "a tight drum beat";
+            request.mode = GenerationRequest::Mode::lego;
+            request.legoTrack = "drums";
+            // sourceAudioPath deliberately empty
+
+            expect (request.isValid(),
+                    "the first layer was refused for having no context: " + request.findProblem());
+
+            const juce::var payload = request.toPayload();
+            auto* object = payload.getDynamicObject();
+
+            expect (! object->hasProperty ("task_type"),
+                    "the first layer was sent as a lego task with nothing to build on");
+            expect (! object->hasProperty ("src_audio_path"));
+            expect (! object->hasProperty ("instruction"));
+
+            // And the second layer, once there is context, is a real lego task.
+            request.sourceAudioPath = "/tmp/context.wav";
+            const juce::var second = request.toPayload();
+            expectEquals (second.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"));
+        }
     }
 };
 
