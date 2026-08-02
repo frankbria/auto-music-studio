@@ -19,7 +19,8 @@ PluginEditor::PluginEditor (PluginProcessor& p)
       generationPanel (p.getGenerationManager(), p.getConnectionManager(), &p.getHostSync(),
                        &p.getMidiCapture(), &p.getSidechainCapture(), p.hasSidechainInput()),
       resultsPanel (p.getGenerationManager(), p.getClipPlayer(), p.getHostSync(),
-                    p.getBackgroundQueue(), p.getSettings())
+                    p.getBackgroundQueue(), p.getSettings()),
+      platformPanel (p.getBackgroundQueue(), p.getGenerationManager(), p.getSettings())
 {
     titleLabel.setText (p.getName(), juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (20.0f, juce::Font::bold));
@@ -35,6 +36,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (connectionPanel);
     addAndMakeVisible (generationPanel);
     addAndMakeVisible (resultsPanel);
+    addAndMakeVisible (platformPanel);
 
     setResizable (true, true);
     // Three real panels need the room: the 520 default from US-23.1 left Results
@@ -45,8 +47,10 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     // a sliver.
     // Raised again for US-24.3: Generation gained a capture row and two host readouts,
     // and below this the Results panel had no room left for a clip row at all.
-    setResizeLimits (560, 830, 1600, 1600);
-    setSize (780, 950);
+    // The platform panel (US-24.5) is the fourth section; below this the clip list
+    // and the results rows have nothing left to draw in.
+    setResizeLimits (560, 990, 1600, 1800);
+    setSize (820, 1080);
 }
 
 PluginEditor::~PluginEditor() = default;
@@ -74,8 +78,14 @@ void PluginEditor::resized()
     // starving Results.
     // Raised from 230: the capture row and the two host readouts are new since US-23.3,
     // and below this the prompt box collapses to nothing.
-    generationPanel.setBounds (area.removeFromTop (juce::jmax (280, area.getHeight() * 55 / 100)));
+    generationPanel.setBounds (area.removeFromTop (juce::jmax (280, area.getHeight() * 42 / 100)));
     area.removeFromTop (12);
+
+    // Optional and self-contained, so it takes a fixed strip rather than competing
+    // with Results for the slack.
+    platformPanel.setBounds (area.removeFromBottom (juce::jmin (168, area.getHeight() / 3)));
+    area.removeFromBottom (12);
+
     resultsPanel.setBounds (area);
 }
 

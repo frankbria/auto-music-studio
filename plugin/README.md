@@ -15,6 +15,7 @@ Progress:
 | US-24.2 — Selection-aware generation | done |
 | US-24.3 — MIDI input and sidechain audio | done |
 | US-24.4 — Lego mode, layer by layer | done |
+| US-24.5 — Platform integration and clip sync | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -314,6 +315,48 @@ of seconds, and the plugin cannot do it for you.
 A plugin cannot read other tracks in the host. The Lego context is the mixdown of the
 layers *this plugin* generated. To bring real DAW audio in, capture it on the sidechain
 (US-24.3) — the two compose.
+
+## Platform sync
+
+The **Platform** panel browses the musician's web-app workspaces and clips, imports one
+into the DAW, and pushes a locally generated clip back up.
+
+**Entirely optional.** With no platform configured the panel says so and the rest of the
+plugin is unchanged — generation against a local ACE-Step server never needs it. A
+platform outage cannot affect local generation either: the two clients share no state,
+and there is a test that generates locally while the platform is unreachable.
+
+Set the platform URL and API key, press **Connect**, pick a workspace, and the clip list
+fills. **Import** downloads the selected clip into the cache and shows it in Results,
+where it is draggable like any generated clip — the plugin cannot place audio on the
+timeline (see the US-23.4 note), so the drop stays yours. **Push** uploads the most
+recent generated clip with its metadata.
+
+The API key persists in the same settings file as the ACE-Step key, with the same
+plaintext caveat.
+
+### HTTPS needs libcurl on Linux
+
+Until US-24.5 the plugin only talked to `localhost` over plain HTTP, so it was built with
+`JUCE_USE_CURL=0`. The platform is a remote HTTPS host, and JUCE's socket fallback has no
+TLS.
+
+Only **Linux** needs curl for this — macOS goes through NSURLSession and Windows through
+WinHTTP, both of which do TLS natively. So rather than a hard requirement, curl is
+**detected** at configure time:
+
+```
+sudo apt-get install -y libcurl4-openssl-dev
+```
+
+Without it the plugin still builds and every local feature works; only the platform panel
+is unavailable, and it says exactly that rather than failing an `https://` request with a
+socket error you cannot act on.
+
+> A caveat if you are debugging this: `find_package(CURL)` reports success when only the
+> *runtime* `libcurl.so` is installed, pointing `CURL_INCLUDE_DIR` at a directory with no
+> `curl/` in it — and the build then fails on a missing `curl.h`. The CMake checks for the
+> header directly for that reason.
 
 ## Networking
 
