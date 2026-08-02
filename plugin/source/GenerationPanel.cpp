@@ -48,10 +48,16 @@ namespace
 //==============================================================================
 GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
                                   ConnectionManager& connectionToUse,
-                                  HostSync* hostSyncToUse)
+                                  HostSync* hostSyncToUse,
+                                  MidiCapture* midiCaptureToUse,
+                                  SidechainCapture* sidechainCaptureToUse,
+                                  bool hostOffersSidechainToUse)
     : generation (generationToUse),
       connection (connectionToUse),
-      hostSync (hostSyncToUse)
+      hostSync (hostSyncToUse),
+      midiCapture (midiCaptureToUse),
+      sidechainCapture (sidechainCaptureToUse),
+      hostOffersSidechain (hostOffersSidechainToUse)
 {
     titleLabel.setText ("GENERATION", juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
@@ -176,13 +182,63 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     styleCaption (modeLabel, "Mode");
     addAndMakeVisible (modeLabel);
     styleCombo (modeSelector);
-    modeSelector.addItem (GenerationRequest::toString (GenerationRequest::Mode::textToMusic), 1);
-    modeSelector.addItem (GenerationRequest::toString (GenerationRequest::Mode::cover), 2);
+    {
+        const auto modes = GenerationRequest::allModes();
+
+        for (int i = 0; i < modes.size(); ++i)
+            modeSelector.addItem (GenerationRequest::toString (modes[i]), i + 1);
+    }
     modeSelector.setSelectedId (1, juce::dontSendNotification);
     modeSelector.onChange = [this] { refresh(); };
     addAndMakeVisible (modeSelector);
 
-    generateButton.onClick = [this] { generation.start (buildRequest()); };
+    // Capture arming. Both are no-ops without the corresponding capture, which is what
+    // a test that does not care about them gets.
+    midiRecordToggle.setColour (juce::ToggleButton::textColourId, genColours::textDim);
+    midiRecordToggle.onClick = [this]
+    {
+        if (midiCapture != nullptr)
+            midiCapture->setRecording (midiRecordToggle.getToggleState());
+
+        refresh();
+    };
+    addAndMakeVisible (midiRecordToggle);
+
+    sidechainRecordToggle.setColour (juce::ToggleButton::textColourId, genColours::textDim);
+    sidechainRecordToggle.onClick = [this]
+    {
+        if (sidechainCapture != nullptr)
+        {
+            // The transport position is handed over so Repaint can express the host's
+            // loop range as an offset into this take rather than into the project.
+            const auto host = getHostSnapshot();
+            sidechainCapture->setRecording (sidechainRecordToggle.getToggleState(),
+                                            host.hasTime() ? host.timeInSeconds : -1.0);
+        }
+
+        refresh();
+    };
+    sidechainRecordToggle.setEnabled (hostOffersSidechain);
+    addAndMakeVisible (sidechainRecordToggle);
+
+    captureLabel.setFont (juce::FontOptions (12.0f));
+    captureLabel.setColour (juce::Label::textColourId, genColours::textDim);
+    addAndMakeVisible (captureLabel);
+
+    generateButton.onClick = [this]
+    {
+        auto request = buildRequest();
+
+        // Writing the capture is deferred to the click rather than done on every edit:
+        // it touches the disk, and most edits never lead to a generation.
+        if (GenerationRequest::needsSourceAudio (request.mode) && ! attachSourceAudio (request))
+        {
+            refresh();
+            return;
+        }
+
+        generation.start (request);
+    };
     addAndMakeVisible (generateButton);
 
     cancelButton.onClick = [this] { generation.cancel(); };
@@ -279,6 +335,14 @@ void GenerationPanel::resized()
     // The host readouts get a row to themselves. Sharing the language row left them a
     // few pixels wide at the editor's minimum size, which made both unreadable — and a
     // readout nobody can read is not a feature.
+    auto captureRow = area.removeFromBottom (22);
+    midiRecordToggle.setBounds (captureRow.removeFromLeft (110));
+    sidechainRecordToggle.setBounds (captureRow.removeFromLeft (150));
+    captureRow.removeFromLeft (8);
+    captureLabel.setBounds (captureRow);
+
+    area.removeFromBottom (4);
+
     auto readoutRow = area.removeFromBottom (16);
     syncLabel.setBounds (readoutRow.removeFromRight (readoutRow.getWidth() / 2));
     selectionLabel.setBounds (readoutRow);
@@ -411,6 +475,112 @@ juce::String GenerationPanel::getSelectionText() const
     return text;
 }
 
+bool GenerationPanel::isModeAvailable (GenerationRequest::Mode mode) const
+{
+    if (! GenerationRequest::needsSourceAudio (mode))
+        return true;
+
+    if (mode == GenerationRequest::Mode::complete)
+        return midiCapture != nullptr && midiCapture->hasCapture();
+
+    // Cover and Repaint both want the sidechain.
+    return hostOffersSidechain && sidechainCapture != nullptr && sidechainCapture->hasCapture();
+}
+
+void GenerationPanel::refreshModeAvailability()
+{
+    const auto modes = GenerationRequest::allModes();
+
+    for (int i = 0; i < modes.size(); ++i)
+        modeSelector.setItemEnabled (i + 1, isModeAvailable (modes[i]));
+}
+
+juce::String GenerationPanel::getCaptureText() const
+{
+    juce::StringArray parts;
+
+    if (midiCapture != nullptr)
+    {
+        if (midiCapture->isRecording())
+            parts.add ("MIDI: recording");
+        else if (midiCapture->hasCapture())
+            parts.add ("MIDI: " + juce::String ((int) midiCapture->getNotes().size()) + " notes");
+
+        if (midiCapture->getDroppedCount() > 0)
+            parts.add (juce::String (midiCapture->getDroppedCount()) + " MIDI events dropped");
+    }
+
+    if (! hostOffersSidechain)
+    {
+        parts.add ("no sidechain routed");
+    }
+    else if (sidechainCapture != nullptr)
+    {
+        if (sidechainCapture->isRecording())
+            parts.add ("Sidechain: recording");
+        else if (sidechainCapture->hasCapture())
+            parts.add ("Sidechain: " + juce::String (sidechainCapture->getLengthSeconds(), 1) + "s"
+                           + (sidechainCapture->isFull() ? " (buffer full)" : ""));
+    }
+
+    return parts.isEmpty() ? juce::String ("No input captured") : parts.joinIntoString ("  |  ");
+}
+
+bool GenerationPanel::attachSourceAudio (GenerationRequest& request) const
+{
+    const auto directory = generation.getClipDirectory().getChildFile ("captures");
+
+    if (request.mode == GenerationRequest::Mode::complete)
+    {
+        if (midiCapture == nullptr || ! midiCapture->hasCapture())
+            return false;
+
+        const auto file = directory.getChildFile ("midi-sketch.wav");
+
+        if (! midiCapture->writeTo (file))
+            return false;
+
+        request.sourceAudioPath = file.getFullPathName();
+        return true;
+    }
+
+    if (sidechainCapture == nullptr || ! sidechainCapture->hasCapture())
+        return false;
+
+    const auto file = directory.getChildFile ("sidechain.wav");
+
+    if (! sidechainCapture->writeTo (file))
+        return false;
+
+    request.sourceAudioPath = file.getFullPathName();
+
+    if (request.mode == GenerationRequest::Mode::repaint)
+    {
+        // The host's loop range, expressed as an offset into this take. Omitted unless
+        // it actually overlaps what was captured — a range outside the reference would
+        // be worse than letting the server choose.
+        const auto host = getHostSnapshot();
+        const auto selection = HostSync::describeSelection (host);
+        const auto takeStart = sidechainCapture->getTransportStartSeconds();
+
+        if (selection.hasLength && takeStart >= 0.0 && host.hasBpm())
+        {
+            const auto loopStartSeconds = host.loopStartPpq * 60.0 / host.bpm;
+            const auto start = loopStartSeconds - takeStart;
+            const auto end = start + selection.lengthSeconds;
+            const auto length = sidechainCapture->getLengthSeconds();
+
+            if (end > 0.0 && start < length)
+            {
+                request.repaintStartSeconds = juce::jmax (0.0, start);
+                request.repaintEndSeconds = juce::jmin (length, end);
+            }
+        }
+    }
+
+    return true;
+}
+
 juce::String GenerationPanel::getSyncStatusText() const
 {
     if (! bpmSynced)
@@ -540,6 +710,16 @@ void GenerationPanel::refresh()
 
     if (selectionLabel.getText() != selectionText)
         selectionLabel.setText (selectionText, juce::dontSendNotification);
+
+    refreshModeAvailability();
+
+    const auto captureText = getCaptureText();
+
+    if (captureLabel.getText() != captureText)
+        captureLabel.setText (captureText, juce::dontSendNotification);
+
+    midiRecordToggle.setEnabled (! busy && midiCapture != nullptr);
+    sidechainRecordToggle.setEnabled (! busy && hostOffersSidechain && sidechainCapture != nullptr);
 
     for (auto* control : std::initializer_list<juce::Component*> {
              &promptEditor, &lyricsEditor, &lyricsToggle, &languageSelector, &instrumentalToggle,

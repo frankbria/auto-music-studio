@@ -122,7 +122,8 @@ public:
             expect (panel.getLanguageSelector().getNumItems() >= 51, "expected Auto + 50+ languages");
             expectEquals (panel.getQualitySelector().getNumItems(), 3);
             expectEquals (panel.getQualitySelector().getText(), juce::String ("Standard"));
-            expectEquals (panel.getModeSelector().getNumItems(), 2);
+            // Text to Music, Cover, Complete, Repaint since US-24.3.
+            expectEquals (panel.getModeSelector().getNumItems(), 4);
             expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
 
             // BPM and seed are blank, meaning Auto/Random.
@@ -694,7 +695,7 @@ public:
 
             PluginEditor editor (processor);
             // The minimum the editor allows, so this is the worst case a user can make.
-            editor.setSize (560, 700);
+            editor.setSize (560, 800);
             auto& panel = editor.getGenerationPanel();
 
             const auto fits = [this] (juce::Label& label, const char* what)
@@ -709,6 +710,106 @@ public:
 
             fits (panel.getSyncLabel(), "the sync indicator");
             fits (panel.getSelectionLabel(), "the selection readout");
+        }
+
+        //======================================================================
+        // US-24.3 — captures and mode availability.
+
+        beginTest ("AC: modes are only offered once their input has been captured");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            using Mode = GenerationRequest::Mode;
+
+            // Text to Music needs nothing and is always available.
+            expect (panel.isModeAvailable (Mode::textToMusic));
+
+            // Nothing captured yet, and no sidechain routed in this processor.
+            expect (! panel.isModeAvailable (Mode::complete), "Complete offered with no MIDI");
+            expect (! panel.isModeAvailable (Mode::cover), "Cover offered with no sidechain");
+            expect (! panel.isModeAvailable (Mode::repaint), "Repaint offered with no sidechain");
+
+            // Play something in.
+            processor.getMidiCapture().setRecording (true);
+            {
+                juce::MidiBuffer on;
+                on.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+                processor.getMidiCapture().processBlock (on, 512);
+
+                juce::MidiBuffer off;
+                off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                processor.getMidiCapture().processBlock (off, 512);
+            }
+            processor.getMidiCapture().setRecording (false);
+
+            expect (panel.isModeAvailable (Mode::complete),
+                    "Complete stayed unavailable after MIDI was captured");
+
+            // Cover still is not: this processor has no sidechain bus enabled, and a
+            // mode that can never be satisfied must not look available.
+            expect (! panel.isModeAvailable (Mode::cover));
+
+            expect (pumpUntil ([&] { return panel.getCaptureLabel().getText().contains ("MIDI"); }, 5000),
+                    "the capture indicator does not mention the MIDI take: "
+                        + panel.getCaptureLabel().getText());
+        }
+
+        beginTest ("with a sidechain routed, Cover and Repaint unlock once it is captured");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+            expect (processor.hasSidechainInput());
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            using Mode = GenerationRequest::Mode;
+            expect (! panel.isModeAvailable (Mode::cover), "Cover offered before anything was captured");
+
+            processor.getSidechainCapture().setRecording (true);
+            {
+                juce::AudioBuffer<float> block (2, 512);
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int i = 0; i < 512; ++i)
+                        block.setSample (channel, i, 0.4f);
+
+                processor.getSidechainCapture().processBlock (block);
+            }
+            processor.getSidechainCapture().setRecording (false);
+
+            expect (panel.isModeAvailable (Mode::cover), "Cover stayed unavailable after a capture");
+            expect (panel.isModeAvailable (Mode::repaint), "Repaint stayed unavailable after a capture");
+            expect (! panel.isModeAvailable (Mode::complete), "Complete unlocked from sidechain audio");
+        }
+
+        beginTest ("the capture toggles arm the captures they name");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getMidiRecordToggle().setToggleState (true, juce::sendNotificationSync);
+            expect (processor.getMidiCapture().isRecording(), "the MIDI capture was not armed");
+
+            panel.getMidiRecordToggle().setToggleState (false, juce::sendNotificationSync);
+            expect (! processor.getMidiCapture().isRecording(), "the MIDI capture stayed armed");
+
+            // No sidechain routed here, so that toggle must not be offered at all.
+            expect (! panel.getSidechainRecordToggle().isEnabled(),
+                    "sidechain capture was offered with no sidechain bus");
         }
 
         beginTest ("applying a request with its own BPM takes the field off sync");

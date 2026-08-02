@@ -15,12 +15,25 @@ namespace acemusic
 */
 struct GenerationRequest
 {
-    /** Text-to-Music or Cover. Cover needs a source reference. */
+    /** How the generation is seeded.
+
+        Every mode but textToMusic needs a source audio file. That is a property of the
+        server, not a choice: ACE-Step's cover / complete / repaint task types all take
+        `src_audio_path`, and it has no MIDI input at all — a MIDI sketch reaches
+        `complete` as audio rendered by MidiCapture. */
     enum class Mode
     {
         textToMusic,
-        cover
+        cover,      ///< restyle a reference: the sidechain capture
+        complete,   ///< flesh out a sketch: the MIDI capture, rendered
+        repaint     ///< regenerate a time range of a reference
     };
+
+    /** True when `mode` cannot be submitted without sourceAudioPath. */
+    static bool needsSourceAudio (Mode) noexcept;
+
+    /** The server's `task_type` for `mode`, or empty for the server default. */
+    static juce::String taskTypeFor (Mode) noexcept;
 
     /** Maps to `inference_steps`. The values come from the documented ranges in
         `src/acemusic/client.py` ("Turbo: 8, Standard: 32–64"), not from guesswork. */
@@ -50,8 +63,15 @@ struct GenerationRequest
     Quality quality = Quality::standard;
     Mode mode = Mode::textToMusic;
 
-    /** Server-side path to the source audio, for Cover mode. */
+    /** Server-side path to the source audio, for every mode but Text to Music. */
     juce::String sourceAudioPath;
+
+    /** Repaint only: the range of the source to regenerate, in seconds. A negative
+        start means "not set", and the range is omitted so the server decides. */
+    double repaintStartSeconds = -1.0;
+    double repaintEndSeconds = -1.0;
+
+    bool hasRepaintRange() const;
 
     /** Model name from the connection panel; empty = let the server decide. */
     juce::String model;
@@ -66,6 +86,9 @@ struct GenerationRequest
 
     /** Every quality preset, in menu order. */
     static juce::Array<Quality> allQualities();
+
+    /** Every mode, in menu order. */
+    static juce::Array<Mode> allModes();
 
     /** Vocal languages offered by the panel. */
     static juce::StringArray vocalLanguages();

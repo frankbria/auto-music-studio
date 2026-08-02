@@ -35,6 +35,8 @@ juce::String GenerationRequest::toString (Mode mode) noexcept
     {
         case Mode::textToMusic:  return "Text to Music";
         case Mode::cover:        return "Cover";
+        case Mode::complete:     return "Complete";
+        case Mode::repaint:      return "Repaint";
     }
 
     return "Text to Music";
@@ -62,6 +64,36 @@ juce::StringArray GenerationRequest::vocalLanguages()
              "Urdu", "Vietnamese", "Welsh", "Yoruba", "Zulu" };
 }
 
+bool GenerationRequest::needsSourceAudio (Mode mode) noexcept
+{
+    return mode != Mode::textToMusic;
+}
+
+juce::String GenerationRequest::taskTypeFor (Mode mode) noexcept
+{
+    switch (mode)
+    {
+        case Mode::cover:    return "cover";
+        case Mode::complete: return "complete";
+        case Mode::repaint:  return "repaint";
+        // text2music is the server's default; the Python client omits it for exactly
+        // this reason, so sending it would be a behaviour change rather than a no-op.
+        case Mode::textToMusic: break;
+    }
+
+    return {};
+}
+
+juce::Array<GenerationRequest::Mode> GenerationRequest::allModes()
+{
+    return { Mode::textToMusic, Mode::cover, Mode::complete, Mode::repaint };
+}
+
+bool GenerationRequest::hasRepaintRange() const
+{
+    return repaintStartSeconds >= 0.0 && repaintEndSeconds > repaintStartSeconds;
+}
+
 juce::StringArray GenerationRequest::musicalKeys()
 {
     juce::StringArray keys { "Any" };
@@ -84,8 +116,8 @@ juce::String GenerationRequest::findProblem() const
     if (durationSeconds <= 0)
         return "Duration must be greater than zero";
 
-    if (mode == Mode::cover && sourceAudioPath.trim().isEmpty())
-        return "Cover mode needs a source audio file";
+    if (needsSourceAudio (mode) && sourceAudioPath.trim().isEmpty())
+        return toString (mode) + " mode needs a source audio file";
 
     return {};
 }
@@ -123,12 +155,18 @@ juce::var GenerationRequest::toPayload() const
     if (model.isNotEmpty())
         payload->setProperty ("model", model);
 
-    // text2music is the server's default; the Python client omits it for exactly
-    // this reason, so sending it would be a behaviour change rather than a no-op.
-    if (mode == Mode::cover)
+    if (const auto taskType = taskTypeFor (mode); taskType.isNotEmpty())
     {
-        payload->setProperty ("task_type", "cover");
+        payload->setProperty ("task_type", taskType);
         payload->setProperty ("src_audio_path", sourceAudioPath.trim());
+
+        // Repaint regenerates a range of the source rather than all of it. Omitted
+        // unless both ends are set, matching the Python client's optional handling.
+        if (mode == Mode::repaint && hasRepaintRange())
+        {
+            payload->setProperty ("repainting_start", repaintStartSeconds);
+            payload->setProperty ("repainting_end", repaintEndSeconds);
+        }
     }
 
     return juce::var (payload);

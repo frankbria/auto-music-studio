@@ -37,6 +37,7 @@ set(ACEMUSIC_SOURCES
     source/AceStepClient.cpp
     source/BackgroundTaskQueue.cpp
     source/ClipCache.cpp
+    source/AudioIo.cpp
     source/ClipPlayer.cpp
     source/ConnectionManager.cpp
     source/ConnectionPanel.cpp
@@ -45,9 +46,11 @@ set(ACEMUSIC_SOURCES
     source/GenerationPanel.cpp
     source/GenerationRequest.cpp
     source/HostSync.cpp
+    source/MidiCapture.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/ResultsPanel.cpp
+    source/SidechainCapture.cpp
     source/TimeStretch.cpp)
 
 # ---------------------------------------------------------------------------
@@ -64,7 +67,7 @@ juce_add_plugin(AceMusicPlugin
     PLUGIN_MANUFACTURER_CODE    Amst
     PLUGIN_CODE                 Aces
     IS_SYNTH                    FALSE
-    NEEDS_MIDI_INPUT            FALSE
+    NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
@@ -104,6 +107,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/TestMain.cpp
     tests/AceStepClientTests.cpp
     tests/BackgroundTaskQueueTests.cpp
+    tests/CaptureTests.cpp
     tests/ClipCacheTests.cpp
     tests/ClipPlayerTests.cpp
     tests/ConnectionManagerTests.cpp
