@@ -79,6 +79,36 @@ export async function fetchVoiceModels(token: string): Promise<VoiceModelSummary
   return parse<VoiceModelSummary[]>(res, "Could not load your voice models.")
 }
 
+/** Rename and/or re-describe a voice model. */
+export async function updateVoiceModel(
+  id: string,
+  token: string,
+  update: { name?: string; description?: string }
+): Promise<VoiceModelSummary> {
+  const res = await fetch(`/api/voice-models/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(update),
+  })
+  return parse<VoiceModelSummary>(res, "Could not update the voice model.")
+}
+
+/** Delete a voice model and free its stored weights. */
+export async function deleteVoiceModel(id: string, token: string): Promise<void> {
+  const res = await fetch(`/api/voice-models/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  })
+  // 204 has no body, so this cannot go through parse().
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new VoiceModelError(
+      typeof body?.detail === "string" ? body.detail : "Could not delete the voice model.",
+      res.status
+    )
+  }
+}
+
 /** True once a run has stopped moving — polling should stop here. */
 export function isSettled(status: VoiceTrainingStatus["status"]): boolean {
   return status === "ready" || status === "failed"
