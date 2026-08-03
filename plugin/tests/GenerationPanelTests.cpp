@@ -1,4 +1,5 @@
 #include "ClipCache.h"
+#include "FakePlayHead.h"
 #include "PluginEditor.h"
 #include "StubAceStepServer.h"
 
@@ -83,6 +84,33 @@ public:
         std::unique_ptr<juce::PropertiesFile> properties;
     };
 
+    /** A one-second tone on disk, so a Lego layer is real readable audio. */
+    static juce::File writeTone (const juce::File& file, double frequency)
+    {
+        constexpr double sampleRate = 44100.0;
+        const int numSamples = (int) sampleRate;
+        juce::AudioBuffer<float> buffer (1, numSamples);
+
+        for (int i = 0; i < numSamples; ++i)
+            buffer.setSample (0, i, 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi
+                                                             * frequency * (double) i / sampleRate));
+
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+
+        if (stream != nullptr)
+        {
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                           .withSampleRate (sampleRate)
+                                                           .withNumChannels (1)
+                                                           .withBitsPerSample (16));
+            if (writer != nullptr)
+                writer->writeFromAudioSampleBuffer (buffer, 0, numSamples);
+        }
+
+        return file;
+    }
+
     /** Points the harness at `server` and waits for a green connection. */
     bool connect (Harness& harness, test::StubAceStepServer& server)
     {
@@ -121,7 +149,8 @@ public:
             expect (panel.getLanguageSelector().getNumItems() >= 51, "expected Auto + 50+ languages");
             expectEquals (panel.getQualitySelector().getNumItems(), 3);
             expectEquals (panel.getQualitySelector().getText(), juce::String ("Standard"));
-            expectEquals (panel.getModeSelector().getNumItems(), 2);
+            // Text to Music, Cover, Complete, Repaint (US-24.3) and Lego (US-24.4).
+            expectEquals (panel.getModeSelector().getNumItems(), 5);
             expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
 
             // BPM and seed are blank, meaning Auto/Random.
@@ -346,6 +375,746 @@ public:
             processor.getGenerationManager().cancel();
             expect (pumpUntil ([&] { return ! processor.getGenerationManager().isBusy(); }, 30000),
                     "cancel never settled");
+        }
+
+        //======================================================================
+        // US-24.1 — host tempo sync.
+
+        beginTest ("AC: opening the plugin in a 120 BPM project auto-fills BPM with 120");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            // The host has already told the plugin its tempo by the time the window
+            // opens, which is the ordering a DAW actually produces.
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // Filled at construction, not half a second later on the first timer tick.
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("120"),
+                          "the BPM field did not pick up the host tempo on open");
+            expect (panel.isBpmSynced());
+            expect (panel.getSyncLabel().getText().contains ("120"),
+                    "the sync indicator did not name the host tempo: "
+                        + panel.getSyncLabel().getText());
+
+            // And it reaches the request, so a generation actually asks for 120.
+            panel.getPromptEditor().setText ("anything", true);
+            expectEquals (panel.buildRequest().bpm, 120);
+        }
+
+        beginTest ("AC: changing the DAW tempo updates the plugin's BPM field");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("120"));
+
+            // The musician drags the tempo in the DAW mid-session.
+            playHead.bpm = 90.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "90"; }, 5000),
+                    "the BPM field stayed at " + panel.getBpmEditor().getText()
+                        + " after the host moved to 90");
+            expect (panel.isBpmSynced(), "following the host cancelled its own sync");
+        }
+
+        beginTest ("AC: a manual BPM override disables auto-sync, with a visual indicator");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto syncedText = panel.getSyncLabel().getText();
+
+            // The user types their own tempo. TextEditor posts its change notification
+            // rather than calling it inline, so this settles on the message loop.
+            panel.getBpmEditor().setText ("100", true);
+
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000),
+                    "typing a BPM did not take the field off sync");
+            expect (panel.getSyncLabel().getText() != syncedText,
+                    "the indicator did not change when sync was turned off");
+            expect (panel.getSyncLabel().getText().containsIgnoreCase ("manual"),
+                    "the indicator does not say the BPM is manual: "
+                        + panel.getSyncLabel().getText());
+
+            // And the host must no longer be able to overwrite it.
+            playHead.bpm = 140.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (! pumpUntil ([&] { return panel.getBpmEditor().getText() != "100"; }, 1500),
+                    "the host overwrote a manually entered BPM");
+            expectEquals (panel.getBpmEditor().getText(), juce::String ("100"));
+            expectEquals (panel.buildRequest().bpm, 100);
+        }
+
+        beginTest ("clearing the BPM field resumes host sync");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 128.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getBpmEditor().setText ("100", true);
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000),
+                    "typing a BPM did not take the field off sync");
+
+            // Back to the "Auto" placeholder — the panel's existing convention for
+            // "let something else decide", and the only way back to sync.
+            panel.getBpmEditor().setText ("", true);
+            expect (pumpUntil ([&] { return panel.isBpmSynced(); }, 5000),
+                    "clearing the field did not resume sync");
+
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "128"; }, 5000),
+                    "the host tempo did not come back after resyncing");
+        }
+
+        beginTest ("a host that reports no tempo leaves BPM on Auto and says so");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.reportsPosition = false;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // No invented default: an unknown host tempo stays Auto, which is what the
+            // server treats as "you choose".
+            expect (panel.getBpmEditor().getText().isEmpty(),
+                    "a tempo was invented for a silent host: " + panel.getBpmEditor().getText());
+            expect (panel.buildRequest().bpm < 0);
+            expect (panel.getSyncLabel().getText().containsIgnoreCase ("no host tempo"),
+                    "the indicator did not report the missing tempo: "
+                        + panel.getSyncLabel().getText());
+        }
+
+        //======================================================================
+        // US-24.2 — selection-aware generation.
+
+        beginTest ("AC: selecting bars 5-13 auto-sets the duration to 16 seconds");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;   // bar 5
+            playHead.loopEndPpq = 48.0;     // bar 13
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("16"),
+                          "the duration did not follow the selection");
+            expect (panel.isDurationSynced());
+
+            // And it reaches the request, so the generation is actually that long.
+            panel.getPromptEditor().setText ("fits the gap", true);
+            expectEquals (panel.buildRequest().durationSeconds, 16);
+        }
+
+        beginTest ("AC: the selection is displayed in the generation panel");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+
+            const auto text = editor.getGenerationPanel().getSelectionLabel().getText();
+
+            expect (text.contains ("5"), "no start bar in: " + text);
+            expect (text.contains ("13"), "no end bar in: " + text);
+            expect (text.contains ("16.0s"), "no length in: " + text);
+        }
+
+        beginTest ("a moved selection re-drives the duration");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("16"));
+
+            // The musician drags the loop range out to 16 bars.
+            playHead.loopEndPpq = 80.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (pumpUntil ([&] { return panel.getDurationEditor().getText() == "32"; }, 5000),
+                    "duration stayed at " + panel.getDurationEditor().getText());
+        }
+
+        beginTest ("AC: a manual duration override survives the host, and clearing resumes");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getDurationEditor().setText ("45", true);
+            expect (pumpUntil ([&] { return ! panel.isDurationSynced(); }, 5000),
+                    "typing a duration did not stop the tracking");
+
+            playHead.loopEndPpq = 80.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            expect (! pumpUntil ([&] { return panel.getDurationEditor().getText() != "45"; }, 1500),
+                    "the host overwrote a manually entered duration");
+
+            // Clearing hands it back, exactly as the BPM field does.
+            panel.getDurationEditor().setText ("", true);
+            expect (pumpUntil ([&] { return panel.getDurationEditor().getText() == "32"; }, 5000),
+                    "clearing did not resume selection tracking");
+        }
+
+        beginTest ("AC: with no selection the panel behaves exactly as it did in Stage 23");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            // No cycle locators set: loopStartPpq == loopEndPpq == 0.
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // The Stage-23 default, untouched.
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
+            panel.getPromptEditor().setText ("no selection here", true);
+            expectEquals (panel.buildRequest().durationSeconds, 60);
+
+            expect (panel.getSelectionLabel().getText().containsIgnoreCase ("none"),
+                    "did not report the absent selection: "
+                        + panel.getSelectionLabel().getText());
+
+            // And it stays 60 across several ticks rather than drifting to 0.
+            expect (! pumpUntil ([&] { return panel.getDurationEditor().getText() != "60"; }, 1500),
+                    "the duration moved with no selection to move it");
+        }
+
+        beginTest ("a selection with no host tempo sets no duration and says why");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 0.0;              // host publishes no tempo
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            // Without a tempo the length in seconds is unknowable — 0 would be a lie.
+            expectEquals (panel.getDurationEditor().getText(), juce::String ("60"));
+
+            const auto text = panel.getSelectionLabel().getText();
+            expect (! text.contains ("0.0s"), "reported a fabricated length: " + text);
+            expect (text.containsIgnoreCase ("no host tempo"), "did not explain: " + text);
+        }
+
+        beginTest ("clearing a field and hitting Generate immediately uses the host value");
+        {
+            // The 2Hz timer is not the only path that has to be right: a user who clears
+            // the duration to resume sync and clicks Generate straight away must get the
+            // selection's length, not the 60 second fallback an empty field means.
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;     // 16 seconds
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("something", true);
+
+            panel.getDurationEditor().setText ("45", true);
+            expect (pumpUntil ([&] { return ! panel.isDurationSynced(); }, 5000));
+
+            // Clear it, then read the request with no timer tick in between.
+            panel.getDurationEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().durationSeconds, 16,
+                          "an immediate Generate after clearing fell back to the default");
+
+            // Same for BPM: clearing must restore the host tempo, not leave it on Auto.
+            panel.getBpmEditor().setText ("100", true);
+            expect (pumpUntil ([&] { return ! panel.isBpmSynced(); }, 5000));
+            panel.getBpmEditor().setText ("", juce::sendNotificationSync);
+
+            expectEquals (panel.buildRequest().bpm, 120,
+                          "an immediate Generate after clearing BPM fell back to Auto");
+        }
+
+        beginTest ("the sync and selection readouts fit the space they are given");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            playHead.timeSigNumerator = 4;
+            playHead.timeSigDenominator = 4;
+            playHead.loopStartPpq = 16.0;
+            playHead.loopEndPpq = 48.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            // The minimum the editor allows, so this is the worst case a user can make.
+            editor.setSize (560, 800);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto fits = [this] (juce::Label& label, const char* what)
+            {
+                const auto needed = juce::GlyphArrangement::getStringWidth (label.getFont(),
+                                                                           label.getText());
+                expect ((float) label.getWidth() >= needed,
+                        juce::String (what) + " is clipped: \"" + label.getText() + "\" needs "
+                            + juce::String (needed, 0) + "px, has "
+                            + juce::String (label.getWidth()) + "px");
+            };
+
+            fits (panel.getSyncLabel(), "the sync indicator");
+            fits (panel.getSelectionLabel(), "the selection readout");
+        }
+
+        //======================================================================
+        // US-24.3 — captures and mode availability.
+
+        beginTest ("AC: modes are only offered once their input has been captured");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            using Mode = GenerationRequest::Mode;
+
+            // Text to Music needs nothing and is always available.
+            expect (panel.isModeAvailable (Mode::textToMusic));
+
+            // Nothing captured yet, and no sidechain routed in this processor.
+            expect (! panel.isModeAvailable (Mode::complete), "Complete offered with no MIDI");
+            expect (! panel.isModeAvailable (Mode::cover), "Cover offered with no sidechain");
+            expect (! panel.isModeAvailable (Mode::repaint), "Repaint offered with no sidechain");
+
+            // Play something in.
+            processor.getMidiCapture().setRecording (true);
+            {
+                juce::MidiBuffer on;
+                on.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+                processor.getMidiCapture().processBlock (on, 512);
+
+                juce::MidiBuffer off;
+                off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                processor.getMidiCapture().processBlock (off, 512);
+            }
+            processor.getMidiCapture().setRecording (false);
+
+            expect (panel.isModeAvailable (Mode::complete),
+                    "Complete stayed unavailable after MIDI was captured");
+
+            // Cover still is not: this processor has no sidechain bus enabled, and a
+            // mode that can never be satisfied must not look available.
+            expect (! panel.isModeAvailable (Mode::cover));
+
+            expect (pumpUntil ([&] { return panel.getCaptureLabel().getText().contains ("MIDI"); }, 5000),
+                    "the capture indicator does not mention the MIDI take: "
+                        + panel.getCaptureLabel().getText());
+        }
+
+        beginTest ("with a sidechain routed, Cover and Repaint unlock once it is captured");
+        {
+            PluginProcessor processor (nullptr, false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+            expect (processor.hasSidechainInput());
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            using Mode = GenerationRequest::Mode;
+            expect (! panel.isModeAvailable (Mode::cover), "Cover offered before anything was captured");
+
+            processor.getSidechainCapture().setRecording (true);
+            {
+                juce::AudioBuffer<float> block (2, 512);
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int i = 0; i < 512; ++i)
+                        block.setSample (channel, i, 0.4f);
+
+                processor.getSidechainCapture().processBlock (block);
+            }
+            processor.getSidechainCapture().setRecording (false);
+
+            expect (panel.isModeAvailable (Mode::cover), "Cover stayed unavailable after a capture");
+            expect (panel.isModeAvailable (Mode::repaint), "Repaint stayed unavailable after a capture");
+            expect (! panel.isModeAvailable (Mode::complete), "Complete unlocked from sidechain audio");
+        }
+
+        beginTest ("AC: choosing Complete or Repaint actually submits that mode, not text-to-music");
+        {
+            // The gate being right is not the same as the request being right. This
+            // drives the whole path: pick the mode, check what buildRequest() produces.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("a prompt", true);
+
+            const auto modes = GenerationRequest::allModes();
+
+            for (int i = 0; i < modes.size(); ++i)
+            {
+                panel.getModeSelector().setSelectedId (i + 1, juce::sendNotificationSync);
+                expect (panel.buildRequest().mode == modes[i],
+                        "selecting \"" + GenerationRequest::toString (modes[i])
+                            + "\" built a request for \""
+                            + GenerationRequest::toString (panel.buildRequest().mode) + "\"");
+            }
+        }
+
+        beginTest ("AC: Generate becomes available once a source mode has its capture");
+        {
+            // findProblem() rejects a source mode with no path, and the path is only
+            // written at click time — so without care Generate stays dead forever.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+            panel.getPromptEditor().setText ("restyle this", true);
+
+            // Cover, with nothing captured: the request is not submittable, and says why.
+            panel.getModeSelector().setSelectedId (2, juce::sendNotificationSync);
+            expect (! panel.buildRequest().isValid(), "Cover was submittable with no capture");
+
+            // Capture something.
+            processor.getSidechainCapture().setRecording (true);
+            {
+                juce::AudioBuffer<float> block (2, 512);
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int i = 0; i < 512; ++i)
+                        block.setSample (channel, i, 0.3f);
+
+                processor.getSidechainCapture().processBlock (block);
+            }
+            processor.getSidechainCapture().setRecording (false);
+
+            const auto request = panel.buildRequest();
+            expect (request.mode == GenerationRequest::Mode::cover);
+            expect (request.sourceAudioPath.isNotEmpty(),
+                    "the request names no source, so Generate can never enable");
+            expect (request.isValid(),
+                    "Cover stayed unsubmittable after a capture: " + request.findProblem());
+
+            // Same for Complete once MIDI exists.
+            processor.getMidiCapture().setRecording (true);
+            {
+                juce::MidiBuffer on;
+                on.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+                processor.getMidiCapture().processBlock (on, 512);
+                juce::MidiBuffer off;
+                off.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                processor.getMidiCapture().processBlock (off, 512);
+            }
+            processor.getMidiCapture().setRecording (false);
+
+            panel.getModeSelector().setSelectedId (3, juce::sendNotificationSync);   // Complete
+            const auto complete = panel.buildRequest();
+            expect (complete.mode == GenerationRequest::Mode::complete);
+            expect (complete.isValid(), "Complete stayed unsubmittable: " + complete.findProblem());
+            expect (complete.sourceAudioPath.endsWith ("midi-sketch.wav"),
+                    "Complete pointed at the wrong capture: " + complete.sourceAudioPath);
+
+            // And the two modes must not share a file.
+            expect (complete.sourceAudioPath != request.sourceAudioPath,
+                    "Complete and Cover were pointed at the same capture file");
+        }
+
+        beginTest ("AC: Lego builds layers in order, each on top of the ones before");
+        {
+            ScopedClipCleanup cleanup;
+            const auto cleanupRoot = cleanup.root;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a tight drum beat", true);
+
+            // The track list is ACE-Step's.
+            expectEquals (panel.getLegoTrackSelector().getNumItems(), LegoStack::trackNames().size());
+
+            // First layer: nothing to build on, so no source and a plain text2music payload.
+            const auto first = panel.buildRequest();
+            expect (first.mode == GenerationRequest::Mode::lego);
+            expect (first.legoTrack.isNotEmpty(), "no track was chosen");
+            expect (first.sourceAudioPath.isEmpty(),
+                    "the first layer claimed a context it does not have");
+            expect (first.isValid(), first.findProblem());
+
+            // Record it as a layer. Real audio, so the context mix can actually be built.
+            const auto layerOne = writeTone (cleanupRoot.getChildFile ("layer1.wav"), 220.0);
+            const auto layerTwo = writeTone (cleanupRoot.getChildFile ("layer2.wav"), 330.0);
+
+            panel.addLegoLayer (layerOne);
+            expectEquals (panel.getLegoStack().getNumLayers(), 1);
+
+            // Second layer: now there is context, so it becomes a real lego task.
+            panel.getLegoTrackSelector().setSelectedId (2, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a funky bass line", true);
+
+            const auto second = panel.buildRequest();
+            expect (second.sourceAudioPath.isNotEmpty(),
+                    "the second layer has no context to build on");
+            expect (second.sourceAudioPath.endsWith ("lego-context.wav"));
+
+            const juce::var payload = second.toPayload();
+            expectEquals (payload.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"));
+            expect (payload.getDynamicObject()->getProperty ("instruction").toString()
+                        .contains (second.legoTrack.toUpperCase()),
+                    "the instruction does not name the chosen track");
+
+            panel.addLegoLayer (layerTwo);
+            expectEquals (panel.getLegoStack().getNumLayers(), 2);
+            expectEquals (panel.getLegoStack().getLayers()[0].track, juce::String ("drums"));
+            expectEquals (panel.getLegoStack().getLayers()[1].prompt,
+                          juce::String ("a funky bass line"));
+
+            expect (panel.getLegoLabel().getText().contains ("2 layers"),
+                    "the layer readout is wrong: " + panel.getLegoLabel().getText());
+        }
+
+        beginTest ("AC: Lego is selectable from an empty stack, with nothing captured");
+        {
+            // Every Lego build starts here. Gating the mode behind a capture made it
+            // impossible to reach at all.
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            expect (panel.isModeAvailable (GenerationRequest::Mode::lego),
+                    "Lego was unavailable with an empty stack, so it can never be started");
+
+            const auto legoIndex = GenerationRequest::allModes()
+                                       .indexOf (GenerationRequest::Mode::lego);
+            expect (panel.getModeSelector().isItemEnabled (legoIndex + 1),
+                    "the Lego entry is greyed out in the dropdown");
+        }
+
+        beginTest ("AC: a finished Lego generation becomes the next layer, in production");
+        {
+            // The piece-wise tests all passed while nothing in the plugin ever called
+            // addLegoLayer, so the stack stayed empty and every layer was a first layer.
+            // This drives the real path: click Generate, let the run finish, check the
+            // stack grew and the next request has context.
+            ScopedClipCleanup cleanup;
+            const auto cleanupRoot = cleanup.root;
+
+            Harness harness { std::move (cleanup.properties) };
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            expect (connect (harness, server), "never connected");
+
+            auto& panel = harness.panel();
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            panel.getPromptEditor().setText ("a tight drum beat", true);
+
+            expect (pumpUntil ([&] { return panel.getGenerateButton().isEnabled(); }),
+                    "Generate never enabled for a first Lego layer");
+
+            const auto trackChosen = panel.getLegoTrackSelector().getText();
+            panel.getGenerateButton().triggerClick();
+            expect (pumpUntil ([&] { return harness.generation().isBusy(); }), "never started");
+
+            // The run finishes and publishes a clip, exactly as a real one would.
+            const auto produced = writeTone (cleanupRoot.getChildFile ("produced.wav"), 220.0);
+            harness.generation().setClipsForTesting ({ produced });
+
+            expect (pumpUntil ([&] { return panel.getLegoStack().getNumLayers() == 1; }, 5000),
+                    "the finished layer was never added to the stack");
+
+            expectEquals (panel.getLegoStack().getLayers()[0].track, trackChosen,
+                          "the layer recorded the wrong track");
+            expectEquals (panel.getLegoStack().getLayers()[0].prompt,
+                          juce::String ("a tight drum beat"));
+
+            // ...and it is only added once, however many change messages arrive.
+            harness.generation().sendChangeMessage();
+            harness.generation().sendChangeMessage();
+            expect (! pumpUntil ([&] { return panel.getLegoStack().getNumLayers() != 1; }, 1200),
+                    "the layer was added more than once");
+
+            // The next generation now has context, so it is a real lego task.
+            panel.getPromptEditor().setText ("a funky bass line", true);
+            const auto second = panel.buildRequest();
+            expect (second.sourceAudioPath.isNotEmpty(),
+                    "the second layer still has no context, so the stack is not being used");
+
+            const juce::var payload = second.toPayload();
+            expectEquals (payload.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"),
+                          "the second layer went out as text-to-music again");
+        }
+
+        beginTest ("the Lego controls only appear in Lego mode");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 950);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getModeSelector().setSelectedId (1, juce::sendNotificationSync);   // Text to Music
+            expect (! panel.getLegoTrackSelector().isVisible(),
+                    "the Lego track selector is showing outside Lego mode");
+
+            const auto legoId = GenerationRequest::allModes()
+                                    .indexOf (GenerationRequest::Mode::lego) + 1;
+            panel.getModeSelector().setSelectedId (legoId, juce::sendNotificationSync);
+            expect (panel.getLegoTrackSelector().isVisible(),
+                    "the Lego track selector is hidden in Lego mode");
+        }
+
+        beginTest ("the capture toggles arm the captures they name");
+        {
+            PluginProcessor processor (nullptr, false);
+            processor.prepareToPlay (44100.0, 512);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 920);
+            auto& panel = editor.getGenerationPanel();
+
+            panel.getMidiRecordToggle().setToggleState (true, juce::sendNotificationSync);
+            expect (processor.getMidiCapture().isRecording(), "the MIDI capture was not armed");
+
+            panel.getMidiRecordToggle().setToggleState (false, juce::sendNotificationSync);
+            expect (! processor.getMidiCapture().isRecording(), "the MIDI capture stayed armed");
+
+            // No sidechain routed here, so that toggle must not be offered at all.
+            expect (! panel.getSidechainRecordToggle().isEnabled(),
+                    "sidechain capture was offered with no sidechain bus");
+        }
+
+        beginTest ("applying a request with its own BPM takes the field off sync");
+        {
+            PluginProcessor processor (nullptr, false);
+            test::FakePlayHead playHead;
+            playHead.bpm = 120.0;
+            processor.getHostSync().captureFrom (&playHead);
+
+            PluginEditor editor (processor);
+            editor.setSize (720, 640);
+            auto& panel = editor.getGenerationPanel();
+
+            GenerationRequest request;
+            request.prompt = "recalled preset";
+            request.bpm = 174;
+            panel.applyRequest (request);
+
+            expect (! panel.isBpmSynced(), "a recalled BPM was left on sync");
+            expect (! pumpUntil ([&] { return panel.getBpmEditor().getText() != "174"; }, 1500),
+                    "the host overwrote a recalled BPM");
+
+            // A request that left BPM on Auto hands the field back to the host.
+            request.bpm = -1;
+            panel.applyRequest (request);
+            expect (panel.isBpmSynced());
+            expect (pumpUntil ([&] { return panel.getBpmEditor().getText() == "120"; }, 5000),
+                    "an Auto-BPM request did not resume host sync");
         }
     }
 };

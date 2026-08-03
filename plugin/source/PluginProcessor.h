@@ -4,6 +4,9 @@
 #include "ClipPlayer.h"
 #include "ConnectionManager.h"
 #include "GenerationManager.h"
+#include "HostSync.h"
+#include "MidiCapture.h"
+#include "SidechainCapture.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -54,7 +57,9 @@ public:
     const juce::String getName() const override               { return "AceMusic Studio"; }
     static juce::String getPluginVersion()                    { return ACEMUSIC_PLUGIN_VERSION; }
 
-    bool acceptsMidi() const override                         { return false; }
+    // US-24.3: MIDI is captured as a melodic sketch for Complete mode. The plugin still
+    // produces no MIDI and is not a MIDI effect.
+    bool acceptsMidi() const override                         { return true; }
     bool producesMidi() const override                        { return false; }
     bool isMidiEffect() const override                        { return false; }
     double getTailLengthSeconds() const override              { return 0.0; }
@@ -84,6 +89,20 @@ public:
         processBlock is what mixes it. */
     ClipPlayer& getClipPlayer() noexcept                      { return clipPlayer; }
 
+    /** The host's tempo and transport position, sampled in processBlock. This is the
+        only place anything reads the play head — see HostSync for why. */
+    HostSync& getHostSync() noexcept                          { return hostSync; }
+
+    /** MIDI played into the plugin, for Complete mode. */
+    MidiCapture& getMidiCapture() noexcept                    { return midiCapture; }
+
+    /** The sidechain input, for Cover and Repaint. */
+    SidechainCapture& getSidechainCapture() noexcept          { return sidechainCapture; }
+
+    /** True when the host actually gave us a sidechain bus with channels on it — a
+        Cover or Repaint offered without one would be a dead end. */
+    bool hasSidechainInput() const;
+
     /** The plugin config file, or null when running without one. */
     juce::PropertiesFile* getSettings() noexcept              { return properties.get(); }
 
@@ -97,6 +116,9 @@ private:
     ConnectionManager connectionManager;
     GenerationManager generationManager;
     ClipPlayer clipPlayer;
+    HostSync hostSync;
+    MidiCapture midiCapture;
+    SidechainCapture sidechainCapture;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

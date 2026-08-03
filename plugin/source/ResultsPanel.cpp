@@ -1,4 +1,5 @@
 #include "ResultsPanel.h"
+#include "TimeStretch.h"
 
 namespace acemusic
 {
@@ -20,6 +21,7 @@ ResultsPanel::ClipRow::ClipRow (const juce::File& fileToShow,
                                 juce::AudioThumbnailCache& cache,
                                 int index)
     : file (fileToShow),
+      dragFile (fileToShow),
       player (playerToUse),
       thumbnail (512, formats, cache),
       clipIndex (index)
@@ -54,7 +56,86 @@ bool ResultsPanel::ClipRow::hasWaveform() const
 
 juce::StringArray ResultsPanel::ClipRow::getDragPayload() const
 {
-    return { file.getFullPathName() };
+    // The tempo-matched copy when there is one, so what lands in the DAW is already at
+    // the project's tempo. Falls back to the clip itself, which is always a valid drop.
+    return { dragFile.getFullPathName() };
+}
+
+void ResultsPanel::ClipRow::ensureTempoMatch (double hostBpm, double clipBpm,
+                                              BackgroundTaskQueue& queue)
+{
+    if (matchInFlight)
+        return;
+
+    if (! TimeStretch::isWorthStretching (TimeStretch::rateFor (clipBpm, hostBpm)))
+    {
+        // Either tempo unknown, or they already agree: hand over the original.
+        if (dragFile != file)
+        {
+            dragFile = file;
+            updateNameLabel();
+        }
+
+        matchedToBpm = 0.0;
+        return;
+    }
+
+    if (juce::approximatelyEqual (matchedToBpm, hostBpm))
+        return;   // already built for exactly this tempo
+
+    matchInFlight = true;
+
+    // Off the message thread: stretching a few minutes of audio is tens of
+    // milliseconds, and the message thread here is the DAW's UI thread. Doing it now
+    // rather than inside mouseDrag also means the drag itself never stalls.
+    juce::Component::SafePointer<ClipRow> safeThis { this };
+    const auto clip = file;
+
+    queue.enqueue ([safeThis, clip, hostBpm, clipBpm]
+    {
+        // A local format manager rather than the player's: the player is destroyed
+        // before the queue during teardown, so a reference to its manager could
+        // outlive it. Registering the basic formats is cheap.
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        const auto matched = TimeStretch::matchTempo (clip, clipBpm, hostBpm, formats);
+
+        BackgroundTaskQueue::callOnMessageThread ([safeThis, matched, hostBpm]
+        {
+            if (auto* row = safeThis.getComponent())
+            {
+                row->matchInFlight = false;
+                row->dragFile = matched;
+                row->matchedToBpm = matched != row->file ? hostBpm : 0.0;
+                row->updateNameLabel();
+            }
+        });
+    });
+}
+
+void ResultsPanel::ClipRow::setTargetBar (double bar, bool present)
+{
+    if (present == hasTargetBar && (! present || juce::approximatelyEqual (bar, targetBar)))
+        return;
+
+    hasTargetBar = present;
+    targetBar = bar;
+    updateNameLabel();
+}
+
+void ResultsPanel::ClipRow::updateNameLabel()
+{
+    juce::String text { "Clip " + juce::String (clipIndex + 1) };
+
+    if (dragFile != file)
+        text << " | " << juce::String (juce::roundToInt (matchedToBpm)) << " BPM";
+
+    if (hasTargetBar)
+        text << " | bar " << HostSync::formatBar (targetBar);
+
+    if (nameLabel.getText() != text)
+        nameLabel.setText (text, juce::dontSendNotification);
 }
 
 void ResultsPanel::ClipRow::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -108,7 +189,12 @@ void ResultsPanel::ClipRow::paint (juce::Graphics& g)
 void ResultsPanel::ClipRow::resized()
 {
     auto bounds = getLocalBounds();
-    nameLabel.setBounds (bounds.removeFromLeft (52).reduced (2));
+
+    // 52px fitted "Clip 1" and nothing else. The caption now also carries the tempo
+    // match (US-24.1) and the drop-target bar (US-24.2), so it scales with the row and
+    // the waveform gets what is left.
+    const auto nameWidth = juce::jlimit (52, 200, bounds.getWidth() * 2 / 5);
+    nameLabel.setBounds (bounds.removeFromLeft (nameWidth).reduced (2));
     playButton.setBounds (bounds.removeFromLeft (70).reduced (2));
 }
 
@@ -137,11 +223,13 @@ void ResultsPanel::ClipRow::mouseUp (const juce::MouseEvent&)
 //==============================================================================
 ResultsPanel::ResultsPanel (GenerationManager& generationToUse,
                             ClipPlayer& playerToUse,
-                            juce::AudioProcessor& processorToUse,
+                            HostSync& hostSyncToUse,
+                            BackgroundTaskQueue& queueToUse,
                             juce::PropertiesFile* settings)
     : generation (generationToUse),
       player (playerToUse),
-      processor (processorToUse),
+      hostSync (hostSyncToUse),
+      queue (queueToUse),
       cache (settings)
 {
     titleLabel.setText ("RESULTS", juce::dontSendNotification);
@@ -370,25 +458,46 @@ bool ResultsPanel::deleteSelectedEntry()
 
 void ResultsPanel::timerCallback()
 {
+    // From HostSync rather than processor.getPlayHead(): the play head is an audio
+    // thread API and this is the message thread. HostSync reads it once, in
+    // processBlock, and publishes it.
+    const auto host = hostSync.get();
+
     juce::String text { "Host playhead: --" };
 
-    if (auto* playHead = processor.getPlayHead())
+    if (host.hasTime())
     {
-        if (const auto position = playHead->getPosition())
-        {
-            if (const auto seconds = position->getTimeInSeconds())
-            {
-                const auto total = (int) *seconds;
-                text = "Host playhead: "
-                     + juce::String (total / 60) + ":"
-                     + juce::String (total % 60).paddedLeft ('0', 2) + "."
-                     + juce::String ((int) ((*seconds - (double) total) * 1000.0)).paddedLeft ('0', 3);
-            }
-        }
+        const auto total = (int) host.timeInSeconds;
+        text = "Host playhead: "
+             + juce::String (total / 60) + ":"
+             + juce::String (total % 60).paddedLeft ('0', 2) + "."
+             + juce::String ((int) ((host.timeInSeconds - (double) total) * 1000.0)).paddedLeft ('0', 3);
     }
 
     if (playheadLabel.getText() != text)
         playheadLabel.setText (text, juce::dontSendNotification);
+
+    updateTempoMatches();
+}
+
+void ResultsPanel::updateTempoMatches()
+{
+    const auto host = hostSync.get();
+
+    // Rounded, because the panel's BPM field is whole numbers and a host tempo that
+    // wobbles in the third decimal must not rebuild the match on every tick.
+    const auto hostBpm = host.hasBpm() ? (double) juce::roundToInt (host.bpm) : 0.0;
+    const auto clipBpm = (double) generation.getRequestedBpm();
+
+    // Where a drop should land: the start of the host's loop range. The plugin cannot
+    // put it there itself (VST3 has no arrangement write), so it says where.
+    const auto selection = HostSync::describeSelection (host);
+
+    for (auto* row : clipRows)
+    {
+        row->ensureTempoMatch (hostBpm, clipBpm, queue);
+        row->setTargetBar (selection.startBar, selection.present && selection.hasBars);
+    }
 }
 
 void ResultsPanel::rebuildRows()

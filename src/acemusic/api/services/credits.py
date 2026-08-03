@@ -61,6 +61,12 @@ VIDEO_LONG_DURATION_S = 180.0
 VIDEO_LONG_DURATION_SURCHARGE = 2.0
 VIDEO_MAX_COST = 10.0
 
+# US-25.1: training a custom voice model is a premium action -- minutes of GPU
+# fine-tuning rather than one inference pass -- and is priced accordingly. Kept
+# out of ``_COSTS`` because it is not a generation mode; ``get_cost("voice_training")``
+# would wrongly suggest it is one.
+VOICE_TRAINING_COST = 10.0
+
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50
 

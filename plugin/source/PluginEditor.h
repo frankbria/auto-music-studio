@@ -2,6 +2,7 @@
 
 #include "ConnectionPanel.h"
 #include "GenerationPanel.h"
+#include "PlatformPanel.h"
 #include "ResultsPanel.h"
 #include "PluginProcessor.h"
 
@@ -30,11 +31,13 @@ private:
     ConnectionPanel  connectionPanel;
     GenerationPanel  generationPanel;
     ResultsPanel     resultsPanel;
+    PlatformPanel    platformPanel;
 
 public:
     /** Test seam — lets a test drive the real widgets rather than re-deriving them. */
     ConnectionPanel& getConnectionPanel() noexcept            { return connectionPanel; }
     GenerationPanel& getGenerationPanel() noexcept            { return generationPanel; }
+    PlatformPanel& getPlatformPanel() noexcept          { return platformPanel; }
     ResultsPanel& getResultsPanel() noexcept                  { return resultsPanel; }
 
 private:
