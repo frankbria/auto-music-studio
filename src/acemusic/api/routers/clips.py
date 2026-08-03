@@ -1,6 +1,7 @@
 """Clip endpoints (US-9.3 audio retrieval, US-9.4 CRUD), mounted under ``/api/v1/clips``.
 
 * ``GET    /clips``           → paginated list with search/filter/sort (US-9.4)
+* ``POST   /clips/upload``    → push a clip in from outside the platform (US-24.5)
 * ``GET    /clips/{id}``      → clip metadata (404 if missing/not owned)
 * ``PATCH  /clips/{id}``      → rename and/or change visibility (title, visibility; US-17.6, US-20.7)
 * ``DELETE /clips/{id}``      → remove the record and its stored audio
@@ -25,7 +26,7 @@ import math
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from acemusic.storage import StorageBackend, get_storage_backend
@@ -333,6 +334,50 @@ async def list_clips(
         per_page=params.per_page,
         total_pages=math.ceil(total / params.per_page),
     )
+
+
+@router.post("/upload", response_model=ClipResponse, status_code=status.HTTP_201_CREATED)
+async def upload_clip(
+    file: UploadFile = File(...),
+    workspace_id: str = Form(...),
+    title: str | None = Form(default=None),
+    duration: float | None = Form(default=None),
+    bpm: int | None = Form(default=None),
+    key: str | None = Form(default=None),
+    style_tags: str | None = Form(default=None),
+    model: str | None = Form(default=None),
+    current: CurrentUser = Depends(require_existing_user),
+) -> ClipResponse:
+    """Store an audio file produced outside the platform as a clip (US-24.5).
+
+    Used by the VST3 plugin to push a locally generated clip back to the musician's
+    workspace. The format is sniffed from the bytes, not taken from the filename or the
+    declared content type.
+    """
+    # Rejected before the body is buffered when the client reports a size, with the
+    # actual byte length re-checked in the service as the authority — the same two-step
+    # the artwork upload uses.
+    if file.size is not None and file.size > clip_service.CLIP_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Audio exceeds the maximum upload size of {clip_service.CLIP_UPLOAD_MAX_BYTES} bytes.",
+        )
+
+    data = await file.read()
+    tags = [tag.strip() for tag in (style_tags or "").split(",") if tag.strip()]
+
+    clip = await clip_service.upload_clip(
+        current.user_id,
+        workspace_id,
+        data,
+        title=title,
+        duration=duration,
+        bpm=bpm,
+        key=key,
+        style_tags=tags,
+        model=model,
+    )
+    return ClipResponse.from_clip(clip)
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)

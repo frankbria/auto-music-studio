@@ -2,17 +2,20 @@
 
 JUCE-based plugin that brings ACE-Step generation into a DAW.
 
-Stage 23 progress:
+Progress:
 
 | Story | State |
 | --- | --- |
 | US-23.1 — JUCE project, cross-platform build, off-audio-thread work queue | done |
 | US-23.2 — Connection panel: server URL, API key, status, model list | done |
-| US-23.3 — Generation panel | not started |
-| US-23.4 — Results panel and clip insertion | not started |
-| US-23.5 — Local cache and file management | not started |
-
-The Generation and Results panels are still outlined placeholders in the UI.
+| US-23.3 — Generation panel | done |
+| US-23.4 — Results panel and clip insertion | done |
+| US-23.5 — Local cache and file management | done |
+| US-24.1 — DAW tempo sync and tempo-matched insertion | done |
+| US-24.2 — Selection-aware generation | done |
+| US-24.3 — MIDI input and sidechain audio | done |
+| US-24.4 — Lego mode, layer by layer | done |
+| US-24.5 — Platform integration and clip sync | done |
 
 | Format | Windows | macOS | Linux |
 | --- | --- | --- | --- |
@@ -88,8 +91,14 @@ the VST3 in Reaper once and confirm the UI renders and audio passes through:
    `%COMMONPROGRAMFILES%\VST3` on Windows).
 2. Reaper → Options → Preferences → Plug-ins → VST → *Re-scan*.
 3. Add it to a track with audio on it, open the UI, confirm the three panels
-   render (Connection is live; Generation and Results are placeholders) and the
-   audio is unchanged.
+   render and the audio is unchanged.
+4. Set the project tempo to 120 and confirm the **BPM** field reads 120 and the
+   indicator says `Sync: host 120 BPM`; change the project tempo and watch it
+   follow. This is the one part of US-24.1 that no unit test can cover, because
+   it needs a real host publishing a real tempo.
+5. Set the cycle locators over bars 5–13 and confirm the panel reads
+   `Selection: bars 5-13, 16.0s` with **Duration** at 16. Same reason: it needs a
+   real host publishing a real loop range.
 
 ## Connecting to ACE-Step
 
@@ -131,6 +140,223 @@ follow you into new projects:
 Settings live in this file rather than the plugin's project state on purpose:
 project state would only come back inside the same DAW project, and the
 requirement is to survive *sessions*.
+
+## Host sync
+
+The plugin follows the DAW's tempo. Open it in a 120 BPM project and the **BPM**
+field reads 120; drag the project tempo and the field follows. The **Sync**
+indicator next to the parameter row says which of these is happening:
+
+| Indicator | Meaning |
+| --- | --- |
+| `Sync: host 120 BPM` | BPM is following the host |
+| `Sync: off (manual BPM)` | you typed a BPM; the host will not overwrite it |
+| `Sync: no host tempo` | the host publishes no tempo — BPM stays on *Auto* |
+
+**To take manual control**, type a BPM. **To hand it back**, clear the field —
+empty is the panel's existing "Auto" state, so there is no extra button.
+
+### Key is not synced, and cannot be
+
+`juce::AudioPlayHead::PositionInfo` carries tempo, time signature, PPQ and the
+transport flags — and **no key signature**. The only key-signature channel in
+JUCE is [ARA](https://www.celemony.com/en/service1/about-celemony/technologies),
+a separately licensed SDK that a handful of hosts implement. There is no way to
+read the project key through VST3, AU or Standalone, so the **Key** field is
+always manual. The indicator deliberately never claims otherwise.
+
+### Selection
+
+The plugin follows the host's **loop / cycle range** and sizes generation to it. Set
+the cycle locators over bars 5–13 in a 120 BPM 4/4 project and the panel reads
+`Selection: bars 5-13, 16.0s`, with the **Duration** field set to 16.
+
+Duration follows the same rule as BPM: it tracks the host until you type your own
+value, and clearing the field hands it back.
+
+**It is the loop range, not an arbitrary time selection.** VST3 has no API for the
+latter — `AudioPlayHead::PositionInfo::getLoopPoints()` is what exists, and JUCE fills
+it from `Vst::ProcessContext::kCycleValid`. In Reaper the loop range is linked to the
+time selection by default (Options → Loop points linked to time selection); in Cubase
+and Logic these are the cycle markers. In a DAW where the two are not linked, moving
+the time selection alone will not move the plugin's.
+
+With no loop range set, the panel reads `Selection: none` and Duration keeps its
+default of 60 — the Stage-23 behaviour, unchanged.
+
+A loop range with no host tempo behind it shows the bars but no length, rather than
+claiming `0.0s`.
+
+### Where to drop it
+
+The results panel tags each clip with the bar a drop should line up with —
+`Clip 1  ->  120 BPM  @ bar 5`. The plugin cannot place the audio there itself: VST3
+gives it no way to write the host's arrangement. This is the same resolution agreed on
+[#318](https://github.com/frankbria/auto-music-studio/issues/318) for the playhead
+readout — the plugin reports the position, and the drop stays yours.
+
+### Tempo-matched insertion
+
+If a clip was generated at a different BPM from the project, dragging it out
+hands the host a **tempo-matched copy** rather than the original — a 118 BPM clip
+dropped into a 120 BPM project arrives at 120.
+
+The stretch is WSOLA (waveform-similarity overlap-add), not a resample.
+Resampling would be less code, but it changes pitch with speed: 118→120 is a 1.7%
+rate change and therefore a 29-cent detune, and audio that lands out of tune with
+the project defeats the point of syncing to it in the first place.
+
+Matched copies are written to a `tempo-match/` directory inside the run's cache
+folder, built once per tempo on the background queue, and removed with the run.
+They live in a subdirectory rather than beside the clip because the cache browser
+lists `*.wav` per run non-recursively — as siblings they would be counted as
+extra clips of that generation.
+
+The clip's own tempo is the BPM that was **requested**, not one measured from the
+returned audio. A generation that left BPM on *Auto* has no known tempo, so
+nothing is stretched: guessing would be worse than leaving it alone. Detecting
+the tempo of a finished clip is a separate story.
+
+Everything reads the host transport through `HostSync`, which samples the play
+head once in `processBlock` and publishes it. `getPlayHead()` is an audio-thread
+API; calling it from a timer, as the results panel used to for its playhead
+readout, is a data race.
+
+## MIDI and sidechain input
+
+Two more ways to seed a generation, beyond typing a prompt.
+
+| Mode | Needs | Server task type |
+| --- | --- | --- |
+| Text to Music | nothing | *(server default)* |
+| Cover | a sidechain capture | `cover` |
+| Complete | a MIDI capture | `complete` |
+| Repaint | a sidechain capture (+ the loop range) | `repaint` |
+
+A mode is greyed out until its input has actually been captured, so the selector never
+offers something that cannot be submitted.
+
+### MIDI reaches the model as audio, not as MIDI
+
+**ACE-Step has no MIDI input.** Its task types are `text2music`, `cover`, `repaint`,
+`extract`, `lego`, `complete` and `mashup`, and `complete` — the one this feeds — takes
+`src_audio_path`. There is not a single reference to MIDI anywhere in the ACE-Step
+source.
+
+So *Record MIDI* captures what you play, and the plugin **renders it to a plain tone**
+which is submitted as the melodic reference. The rendering is a description of the
+performance — pitch and rhythm — not an attempt to sound good. What conditions the model
+is that audio, not your note data.
+
+Nothing is synthesised on the audio thread: `processBlock` only pushes note events into
+a lock-free FIFO, and the rendering happens on the message thread when you disarm.
+
+If a take overruns the event buffer, the indicator says how many events were dropped
+rather than reporting the take as clean.
+
+### Sidechain
+
+*Capture sidechain* records the plugin's sidechain input, for Cover and Repaint. The
+sidechain bus is **disabled by default**, so a host with no sidechain send is unaffected
+and existing sessions do not change shape; the toggle is unavailable until you route
+something to it.
+
+The capture buffer is allocated once, in `prepareToPlay`, and holds up to
+`SidechainCapture::maxSeconds`. When it fills, recording stops and the indicator says so
+— it does not wrap, because overwriting the start of a take would quietly hand the model
+the wrong reference.
+
+**Repaint's time range** comes from the host loop range (US-24.2), expressed as an
+offset into the take rather than into the project. The transport position when the take
+started is recorded for exactly this. If the loop range does not overlap the capture,
+the range is omitted and the server decides.
+
+Captures are written under `<cache>/captures/` and referenced by `src_audio_path`. That
+is a **server-side** path, which works because the plugin targets a local ACE-Step;
+a remote server would need an upload endpoint.
+
+## Lego mode — building a track a layer at a time
+
+Pick **Lego** as the mode and a **Layer** track, describe the part, and Generate. Each
+finished layer is added to the stack, and the next generation is handed the mix of the
+layers so far as its context — so a bass generated after drums is generated *against*
+those drums.
+
+`lego` is a real ACE-Step task type ("generate a specific instrument track in context").
+The server steers it off an `instruction` string naming the track, not off your prompt:
+
+```
+Generate the BASS track based on the audio context:
+```
+
+The track list is ACE-Step's own `TRACK_NAMES`, so a layer always names something the
+model was trained on: `drums, bass, guitar, keyboard, synth, strings, brass, woodwinds,
+percussion, fx, vocals, backing_vocals`. Your prompt still describes *what kind* of part
+you want ("a funky bass line") — the two work together.
+
+**The first layer is an ordinary text-to-music generation.** There is nothing to build on
+yet, so no `task_type` and no context are sent. Only from the second layer on is it a
+`lego` task.
+
+**Regenerating a layer excludes that layer from its own context**, so a replacement bass
+is generated against the drums it sits under rather than against the bass it is replacing.
+Layers can also be muted out of the context without being deleted.
+
+### One track per layer is your drop, not the plugin's
+
+The story asks for each layer to be placed on its own DAW track. **VST3 gives a plugin no
+way to create tracks or write the host's arrangement** — the same limit settled on
+[#318](https://github.com/frankbria/auto-music-studio/issues/318) and applied again in
+US-24.2. Each layer is a draggable clip; dropping each onto its own track takes a couple
+of seconds, and the plugin cannot do it for you.
+
+### The context is the plugin's layers, not the DAW's timeline
+
+A plugin cannot read other tracks in the host. The Lego context is the mixdown of the
+layers *this plugin* generated. To bring real DAW audio in, capture it on the sidechain
+(US-24.3) — the two compose.
+
+## Platform sync
+
+The **Platform** panel browses the musician's web-app workspaces and clips, imports one
+into the DAW, and pushes a locally generated clip back up.
+
+**Entirely optional.** With no platform configured the panel says so and the rest of the
+plugin is unchanged — generation against a local ACE-Step server never needs it. A
+platform outage cannot affect local generation either: the two clients share no state,
+and there is a test that generates locally while the platform is unreachable.
+
+Set the platform URL and API key, press **Connect**, pick a workspace, and the clip list
+fills. **Import** downloads the selected clip into the cache and shows it in Results,
+where it is draggable like any generated clip — the plugin cannot place audio on the
+timeline (see the US-23.4 note), so the drop stays yours. **Push** uploads the most
+recent generated clip with its metadata.
+
+The API key persists in the same settings file as the ACE-Step key, with the same
+plaintext caveat.
+
+### HTTPS needs libcurl on Linux
+
+Until US-24.5 the plugin only talked to `localhost` over plain HTTP, so it was built with
+`JUCE_USE_CURL=0`. The platform is a remote HTTPS host, and JUCE's socket fallback has no
+TLS.
+
+Only **Linux** needs curl for this — macOS goes through NSURLSession and Windows through
+WinHTTP, both of which do TLS natively. So rather than a hard requirement, curl is
+**detected** at configure time:
+
+```
+sudo apt-get install -y libcurl4-openssl-dev
+```
+
+Without it the plugin still builds and every local feature works; only the platform panel
+is unavailable, and it says exactly that rather than failing an `https://` request with a
+socket error you cannot act on.
+
+> A caveat if you are debugging this: `find_package(CURL)` reports success when only the
+> *runtime* `libcurl.so` is installed, pointing `CURL_INCLUDE_DIR` at a directory with no
+> `curl/` in it — and the build then fails on a missing `curl.h`. The CMake checks for the
+> header directly for that reason.
 
 ## Networking
 

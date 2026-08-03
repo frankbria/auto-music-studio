@@ -55,18 +55,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # JUCE's Linux requirements minus curl and webkit — the plugin is built
-          # with JUCE_USE_CURL=0 and JUCE_WEB_BROWSER=0. xvfb runs the editor
-          # tests headlessly.
+          # JUCE's Linux requirements minus webkit (JUCE_WEB_BROWSER=0). curl is
+          # needed since US-24.5: the platform API is a remote HTTPS host and
+          # JUCE's socket fallback has no TLS. macOS and Windows do TLS natively,
+          # so only Linux needs the package. xvfb runs the editor tests headlessly.
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libfreetype-dev libfontconfig1-dev \
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
             libxinerama-dev libxrandr-dev libxrender-dev \
-            libgl1-mesa-dev xvfb
+            libgl1-mesa-dev xvfb \
+            libcurl4-openssl-dev
 
       # The JUCE shallow clone is the slowest part of a cold configure.
       - name: Cache JUCE
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: plugin/build/_deps
           key: juce-${{ runner.os }}-${{ hashFiles('plugin/CMakeLists.txt') }}
@@ -138,7 +140,7 @@ jobs:
 
       - name: Upload VST3
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: acemusic-vst3-${{ runner.os }}
           path: plugin/build/AceMusicPlugin_artefacts/**/VST3/

@@ -40,10 +40,98 @@ public:
         {
             auto owned = makeOfflineProcessor();
             auto& processor = *owned;
-            expect (! processor.acceptsMidi());
+            // acceptsMidi is true since US-24.3 — see its own test above. The plugin
+            // still emits no MIDI and is not a MIDI effect.
             expect (! processor.producesMidi());
             expect (! processor.isMidiEffect());
             expectEquals (processor.getTailLengthSeconds(), 0.0);
+        }
+
+        beginTest ("accepts MIDI, for the Complete-mode sketch");
+        {
+            auto owned = makeOfflineProcessor();
+            expect (owned->acceptsMidi(), "MIDI input is off, so Complete mode has no source");
+            expect (! owned->producesMidi());
+            expect (! owned->isMidiEffect());
+        }
+
+        beginTest ("the sidechain bus is optional, and every layout pluginval tries is accepted");
+        {
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
+
+            using ChannelSet = juce::AudioChannelSet;
+
+            // Off by default, so a host with no sidechain send is unaffected.
+            expect (processor.getBus (true, 1) != nullptr, "no sidechain bus was declared");
+            expect (! processor.getBus (true, 1)->isEnabled(),
+                    "the sidechain is enabled by default, which changes existing sessions");
+            expect (! processor.hasSidechainInput());
+
+            for (const auto& sidechain : { ChannelSet::disabled(), ChannelSet::mono(), ChannelSet::stereo() })
+            {
+                expect (processor.setBusesLayout ({ { ChannelSet::stereo(), sidechain },
+                                                    { ChannelSet::stereo() } }),
+                        "rejected a sidechain layout pluginval will try: "
+                            + sidechain.getDescription());
+            }
+
+            // Something the plugin genuinely cannot handle.
+            expect (! processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::create5point1() },
+                                                  { ChannelSet::stereo() } }),
+                    "accepted a 5.1 sidechain");
+
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            expect (processor.hasSidechainInput(), "an enabled sidechain was not reported");
+        }
+
+        beginTest ("audio still passes through untouched with MIDI and a sidechain present");
+        {
+            // The regression that matters most in US-24.3: capturing must not colour or
+            // interrupt the audio the host is already sending through the plugin.
+            auto owned = makeOfflineProcessor();
+            auto& processor = *owned;
+
+            using ChannelSet = juce::AudioChannelSet;
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), ChannelSet::stereo() },
+                                                { ChannelSet::stereo() } }));
+            processor.prepareToPlay (44100.0, 512);
+
+            // Main input on channels 0-1, sidechain on 2-3.
+            juce::AudioBuffer<float> buffer (4, 512);
+            buffer.clear();
+
+            for (int i = 0; i < 512; ++i)
+            {
+                buffer.setSample (0, i, 0.25f);
+                buffer.setSample (1, i, -0.25f);
+                buffer.setSample (2, i, 0.9f);    // sidechain
+                buffer.setSample (3, i, 0.9f);
+            }
+
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+
+            processor.getMidiCapture().setRecording (true);
+            processor.getSidechainCapture().setRecording (true);
+            processor.processBlock (buffer, midi);
+
+            for (int i = 0; i < 512; ++i)
+            {
+                expectWithinAbsoluteError (buffer.getSample (0, i), 0.25f, 1.0e-6f,
+                                           "the main input was altered at sample " + juce::String (i));
+                expectWithinAbsoluteError (buffer.getSample (1, i), -0.25f, 1.0e-6f,
+                                           "the main input was altered at sample " + juce::String (i));
+            }
+
+            // And both captures actually saw something.
+            processor.getMidiCapture().setRecording (false);
+            processor.getSidechainCapture().setRecording (false);
+
+            expect (processor.getMidiCapture().hasCapture(), "the MIDI note was not captured");
+            expect (processor.getSidechainCapture().hasCapture(), "the sidechain was not captured");
+            expectEquals ((int) processor.getSidechainCapture().getRecordedSamples(), 512);
         }
 
         beginTest ("supports mono and stereo, rejects mismatched layouts");
@@ -53,13 +141,17 @@ public:
 
             using ChannelSet = juce::AudioChannelSet;
 
-            expect (processor.setBusesLayout ({ { ChannelSet::stereo() }, { ChannelSet::stereo() } }),
+            // Three buses since US-24.3: main in, sidechain in, main out. The sidechain
+            // is disabled here; its own layouts are covered below.
+            const auto off = ChannelSet::disabled();
+
+            expect (processor.setBusesLayout ({ { ChannelSet::stereo(), off }, { ChannelSet::stereo() } }),
                     "stereo in / stereo out rejected");
-            expect (processor.setBusesLayout ({ { ChannelSet::mono() }, { ChannelSet::mono() } }),
+            expect (processor.setBusesLayout ({ { ChannelSet::mono(), off }, { ChannelSet::mono() } }),
                     "mono in / mono out rejected");
-            expect (! processor.setBusesLayout ({ { ChannelSet::stereo() }, { ChannelSet::mono() } }),
+            expect (! processor.setBusesLayout ({ { ChannelSet::stereo(), off }, { ChannelSet::mono() } }),
                     "mismatched stereo in / mono out accepted");
-            expect (! processor.setBusesLayout ({ { ChannelSet::create5point1() }, { ChannelSet::create5point1() } }),
+            expect (! processor.setBusesLayout ({ { ChannelSet::create5point1(), off }, { ChannelSet::create5point1() } }),
                     "5.1 accepted");
         }
 
@@ -112,7 +204,8 @@ public:
             auto owned = makeOfflineProcessor();
             auto& processor = *owned;
 
-            expect (processor.setBusesLayout ({ { juce::AudioChannelSet::disabled() },
+            expect (processor.setBusesLayout ({ { juce::AudioChannelSet::disabled(),
+                                                 juce::AudioChannelSet::disabled() },
                                                { juce::AudioChannelSet::stereo() } }),
                     "disabled input / stereo output rejected");
             expectEquals (processor.getTotalNumInputChannels(), 0);

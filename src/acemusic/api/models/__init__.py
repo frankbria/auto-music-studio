@@ -18,6 +18,7 @@ from .release import Release, ReleaseStatus
 from .soundcloud_connection import SoundCloudConnection
 from .user import User
 from .video import Video
+from .voice_model import VoiceModel, VoiceModelStatus
 from .workspace import Workspace
 
 ALL_MODELS = [
@@ -36,9 +37,12 @@ ALL_MODELS = [
     Counter,
     PlaybackQueue,
     Video,
+    VoiceModel,
 ]
 
 __all__ = [
+    "VoiceModel",
+    "VoiceModelStatus",
     "User",
     "Workspace",
     "Clip",

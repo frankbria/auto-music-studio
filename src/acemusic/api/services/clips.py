@@ -20,13 +20,46 @@ from beanie import PydanticObjectId
 from beanie.operators import In
 from fastapi import HTTPException, status
 
+from acemusic.constants import BPM_MAX, BPM_MIN
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
+from ..tasks.common import store_clip
 from . import daw_export as daw_export_service, workspaces as workspace_service
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
+
+# US-24.5: the plugin pushes finished DAW clips back to the workspace. Bounded because
+# the whole body is buffered to sniff and store it; a few minutes of WAV fits easily.
+CLIP_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
+
+#: Container signatures, checked against the bytes rather than the filename or the
+#: client's content type — both are caller-controlled and neither is evidence.
+_AUDIO_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "wav": (b"RIFF",),
+    "flac": (b"fLaC",),
+    "mp3": (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xfa"),
+}
+
+
+def sniff_audio_format(data: bytes) -> str | None:
+    """Return "wav"/"flac"/"mp3" for ``data``, or None when it is not one of them.
+
+    A WAV is only accepted when the RIFF header actually declares WAVE, so a RIFF AVI
+    cannot be pushed in as audio.
+    """
+    if len(data) < 12:
+        return None
+    if data[:4] == b"RIFF":
+        return "wav" if data[8:12] == b"WAVE" else None
+    for fmt, signatures in _AUDIO_SIGNATURES.items():
+        if fmt == "wav":
+            continue
+        if any(data.startswith(signature) for signature in signatures):
+            return fmt
+    return None
+
 
 # US-10.6: cap ancestry traversal so a corrupt/cyclic graph can never walk
 # unboundedly. 50 levels is the documented maximum lineage depth.
@@ -304,6 +337,84 @@ def _enforce_publish_guard(clip: Clip) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Publishing requires {' and '.join(missing)}.",
         )
+
+
+async def upload_clip(
+    user_id: str,
+    workspace_id: str,
+    data: bytes,
+    *,
+    title: str | None = None,
+    duration: float | None = None,
+    bpm: int | None = None,
+    key: str | None = None,
+    style_tags: list[str] | None = None,
+    model: str | None = None,
+) -> Clip:
+    """Store a clip pushed in from outside the platform (US-24.5, the VST3 plugin).
+
+    The workspace is ownership-checked first, so a clip cannot be pushed into someone
+    else's workspace — same 404-on-not-yours as every other workspace-scoped path. The
+    format is sniffed from the bytes; ``generation_mode`` is recorded as ``"imported"``
+    so a pushed clip stays distinguishable from a generated one in lineage.
+
+    Raises HTTPException 413 when oversized and 415 when the body is not audio.
+    """
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The uploaded file is empty.",
+        )
+
+    # Bounded like every other BPM input on the API (see generation.py, presets.py).
+    # Without this a direct caller can persist bpm=-120 onto a Clip, and it then shows
+    # up in every listing and in the plugin's browser.
+    if bpm is not None and not (BPM_MIN <= bpm <= BPM_MAX):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"bpm must be between {BPM_MIN} and {BPM_MAX}.",
+        )
+
+    if duration is not None and duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="duration must be greater than zero.",
+        )
+    if len(data) > CLIP_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Audio exceeds the maximum upload size of {CLIP_UPLOAD_MAX_BYTES} bytes.",
+        )
+
+    fmt = sniff_audio_format(data)
+    if fmt is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported audio format. Upload a WAV, FLAC or MP3 file.",
+        )
+
+    # Ownership first: nothing is stored before we know the destination is the
+    # caller's. Raises 404 for a workspace that is missing or not theirs.
+    workspace = await workspace_service.get_workspace(workspace_id, user_id)
+
+    clip_id = PydanticObjectId()
+    clip = Clip(
+        id=clip_id,
+        user_id=PydanticObjectId(user_id),
+        workspace_id=workspace.id,
+        file_path=f"{user_id}/{workspace.id}/clips/{clip_id}.{fmt}",
+        format=fmt,
+        title=title,
+        duration=duration,
+        bpm=bpm,
+        key=key,
+        style_tags=list(style_tags or []),
+        model=model,
+        generation_mode="imported",
+    )
+
+    storage = get_storage_backend()
+    return await store_clip(storage, clip, data)
 
 
 async def update_clip_fields(
