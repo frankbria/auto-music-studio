@@ -14,6 +14,9 @@ import {
 export type VoiceModelsState =
   | { phase: "loading" }
   | { phase: "ready"; models: VoiceModelSummary[] }
+  /** No access token: signed out, or a refresh that failed. Distinct from an
+      error so the UI can say "sign in" rather than showing a red failure. */
+  | { phase: "signed-out" }
   | { phase: "error"; message: string }
 
 export type UseVoiceModels = {
@@ -51,7 +54,14 @@ export function useVoiceModels(): UseVoiceModels {
 
     const load = async () => {
       const token = tokenRef.current
-      if (!token) return
+
+      if (!token) {
+        // Drops the models as well as stopping the spinner. Without this a
+        // cleared token leaves the previous user's voice metadata on screen
+        // until navigation completes, and a first visit spins forever.
+        if (!cancelled) setState({ phase: "signed-out" })
+        return
+      }
 
       try {
         const models = await fetchVoiceModels(token)

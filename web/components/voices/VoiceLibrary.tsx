@@ -179,6 +179,10 @@ export function VoiceLibrary() {
     return <p className="text-sm text-muted-foreground">Loading your voices…</p>
   }
 
+  if (state.phase === "signed-out") {
+    return <p className="text-sm text-muted-foreground">Sign in to see your voices.</p>
+  }
+
   if (state.phase === "error") {
     return <p className="text-sm text-destructive">{state.message}</p>
   }
