@@ -182,6 +182,158 @@ public:
             expectEquals (reparsed.getProperty ("lyrics", juce::var()).toString(), request.lyrics,
                           "lyrics were mangled by JSON encoding");
         }
+
+        //======================================================================
+        // US-24.3 — modes that need a source.
+
+        beginTest ("every mode but Text to Music needs source audio");
+        {
+            expect (! GenerationRequest::needsSourceAudio (GenerationRequest::Mode::textToMusic));
+            expect (GenerationRequest::needsSourceAudio (GenerationRequest::Mode::cover));
+            expect (GenerationRequest::needsSourceAudio (GenerationRequest::Mode::complete));
+            expect (GenerationRequest::needsSourceAudio (GenerationRequest::Mode::repaint));
+
+            GenerationRequest request;
+            request.prompt = "anything";
+            request.mode = GenerationRequest::Mode::complete;
+
+            expect (! request.isValid(), "Complete was submittable with no sketch");
+            expect (request.findProblem().containsIgnoreCase ("Complete"),
+                    "the problem does not name the mode: " + request.findProblem());
+
+            request.sourceAudioPath = "/tmp/sketch.wav";
+            expect (request.isValid());
+        }
+
+        beginTest ("the task_type sent matches what ACE-Step expects");
+        {
+            // These strings are ACE-Step's, not ours: see TaskType in
+            // src/acemusic/client.py. Getting one wrong is a silent server-side default.
+            expect (GenerationRequest::taskTypeFor (GenerationRequest::Mode::textToMusic).isEmpty(),
+                    "text2music should be omitted, as the Python client omits it");
+            expectEquals (GenerationRequest::taskTypeFor (GenerationRequest::Mode::cover),
+                          juce::String ("cover"));
+            expectEquals (GenerationRequest::taskTypeFor (GenerationRequest::Mode::complete),
+                          juce::String ("complete"));
+            expectEquals (GenerationRequest::taskTypeFor (GenerationRequest::Mode::repaint),
+                          juce::String ("repaint"));
+        }
+
+        beginTest ("Complete sends the rendered sketch as src_audio_path");
+        {
+            GenerationRequest request;
+            request.prompt = "flesh this out";
+            request.mode = GenerationRequest::Mode::complete;
+            request.sourceAudioPath = "/tmp/midi-sketch.wav";
+
+            const juce::var payload = request.toPayload();
+            auto* object = payload.getDynamicObject();
+            expect (object != nullptr);
+            expectEquals (object->getProperty ("task_type").toString(), juce::String ("complete"));
+            expectEquals (object->getProperty ("src_audio_path").toString(),
+                          juce::String ("/tmp/midi-sketch.wav"));
+            expect (! object->hasProperty ("repainting_start"),
+                    "a non-repaint request carried a repaint range");
+        }
+
+        beginTest ("Repaint carries its range, and omits it when it is not set");
+        {
+            GenerationRequest request;
+            request.prompt = "redo this bit";
+            request.mode = GenerationRequest::Mode::repaint;
+            request.sourceAudioPath = "/tmp/sidechain.wav";
+
+            {
+                const juce::var payload = request.toPayload();
+                auto* object = payload.getDynamicObject();
+                expect (! object->hasProperty ("repainting_start"),
+                        "an unset range was sent rather than omitted");
+                expect (! object->hasProperty ("repainting_end"));
+            }
+
+            request.repaintStartSeconds = 4.0;
+            request.repaintEndSeconds = 12.0;
+            expect (request.hasRepaintRange());
+
+            {
+                const juce::var payload = request.toPayload();
+                auto* object = payload.getDynamicObject();
+                expectEquals ((double) object->getProperty ("repainting_start"), 4.0);
+                expectEquals ((double) object->getProperty ("repainting_end"), 12.0);
+            }
+
+            // A backwards or zero-length range is not a range.
+            request.repaintEndSeconds = 4.0;
+            expect (! request.hasRepaintRange(), "a zero-length range was accepted");
+            request.repaintEndSeconds = 1.0;
+            expect (! request.hasRepaintRange(), "a backwards range was accepted");
+        }
+
+        //======================================================================
+        // US-24.4 — Lego layers.
+
+        beginTest ("AC: a Lego layer carries the track instruction the server steers off");
+        {
+            GenerationRequest request;
+            request.prompt = "a funky bass line";
+            request.mode = GenerationRequest::Mode::lego;
+            request.legoTrack = "bass";
+            request.sourceAudioPath = "/tmp/context.wav";
+
+            expect (request.isValid(), request.findProblem());
+
+            const juce::var payload = request.toPayload();
+            auto* object = payload.getDynamicObject();
+
+            expectEquals (object->getProperty ("task_type").toString(), juce::String ("lego"));
+            expectEquals (object->getProperty ("src_audio_path").toString(),
+                          juce::String ("/tmp/context.wav"));
+
+            // ACE-Step steers lego off the instruction, not the caption. Getting this
+            // wrong produces a layer for whatever track the model feels like.
+            expectEquals (object->getProperty ("instruction").toString(),
+                          juce::String ("Generate the BASS track based on the audio context:"));
+        }
+
+        beginTest ("Lego without a track is refused, since the instruction would be empty");
+        {
+            GenerationRequest request;
+            request.prompt = "something";
+            request.mode = GenerationRequest::Mode::lego;
+            request.sourceAudioPath = "/tmp/context.wav";
+
+            expect (! request.isValid(), "a Lego layer with no track was submittable");
+            expect (request.findProblem().containsIgnoreCase ("track"),
+                    "the problem does not mention the track: " + request.findProblem());
+        }
+
+        beginTest ("the first Lego layer is a plain text-to-music generation");
+        {
+            // Nothing to build on yet. A `lego` task with no context has no audio to add
+            // a track to, so it goes out as text2music instead.
+            GenerationRequest request;
+            request.prompt = "a tight drum beat";
+            request.mode = GenerationRequest::Mode::lego;
+            request.legoTrack = "drums";
+            // sourceAudioPath deliberately empty
+
+            expect (request.isValid(),
+                    "the first layer was refused for having no context: " + request.findProblem());
+
+            const juce::var payload = request.toPayload();
+            auto* object = payload.getDynamicObject();
+
+            expect (! object->hasProperty ("task_type"),
+                    "the first layer was sent as a lego task with nothing to build on");
+            expect (! object->hasProperty ("src_audio_path"));
+            expect (! object->hasProperty ("instruction"));
+
+            // And the second layer, once there is context, is a real lego task.
+            request.sourceAudioPath = "/tmp/context.wav";
+            const juce::var second = request.toPayload();
+            expectEquals (second.getDynamicObject()->getProperty ("task_type").toString(),
+                          juce::String ("lego"));
+        }
     }
 };
 
