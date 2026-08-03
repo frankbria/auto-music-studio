@@ -110,6 +110,13 @@ class ApiSettings(BaseSettings):
     compute_preference: Literal["local_first", "remote_first", "local_only", "remote_only"] = "local_first"
     local_url: str = "http://localhost:8001"
 
+    # US-25.1: where voice-training artefacts are written. ACE-Step's training
+    # endpoints take *paths, not uploads*, and its path-safety check rejects
+    # anything outside its own working directory -- so this must be the same
+    # directory ACE-Step sees as ``./acemusic-voice-training``. Co-located by
+    # default; a split deployment needs a shared volume here.
+    voice_training_root: str = "./acemusic-voice-training"
+
     # RunPod serverless remote routing (US-11.2). The credentials are optional: a
     # deployment without them runs local-only — ``runpod_enabled`` is False, so the
     # routing engine reports remote unavailable (``*_first`` falls back, ``remote_only``
