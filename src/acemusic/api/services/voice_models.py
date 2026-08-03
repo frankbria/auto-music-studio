@@ -20,6 +20,7 @@ from beanie import PydanticObjectId
 from acemusic.storage import StorageBackend, get_storage_backend
 
 from ..models import Job, NotificationEvent, User, VoiceModel, VoiceModelStatus
+from ..models.common import utcnow
 from ..models.voice_model import (
     MAX_REFERENCE_BYTES,
     MAX_REFERENCE_FILES,
@@ -420,6 +421,72 @@ async def list_voice_models(user_id: str) -> list[VoiceModel]:
     models = await VoiceModel.find(VoiceModel.user_id == uid).to_list()
     models.sort(key=lambda m: m.created_at, reverse=True)
     return models
+
+
+async def delete_voice_model(model_id: str, user_id: str) -> bool:
+    """Remove a voice model and free its stored objects (US-25.3, AC 3).
+
+    Storage first, then the record: a crash between the two leaves a re-deletable
+    row rather than orphaned objects, which is the same ordering ``delete_clip``
+    uses. Each object is best-effort — one already missing from the backend must
+    not make the model undeletable.
+
+    A model that is still training is refused: deleting the row out from under a
+    running job strands the worker and the credits it charged.
+
+    @returns False when there is no such model for this user.
+    """
+    model = await find_owned_model(model_id, user_id)
+
+    if model is None:
+        return False
+
+    if model.status in (VoiceModelStatus.QUEUED, VoiceModelStatus.TRAINING):
+        raise VoiceModelError("This voice is still training. Wait for it to finish before deleting it.")
+
+    storage = get_storage_backend()
+
+    for key in [*model.reference_paths, *([model.weights_path] if model.weights_path else [])]:
+        try:
+            await asyncio.to_thread(storage.delete, key)
+        except Exception:  # pragma: no cover - cleanup is best-effort
+            logger.exception("Could not delete voice model object %s", key)
+
+    await model.delete()
+    return True
+
+
+async def rename_voice_model(
+    model_id: str, user_id: str, *, name: str | None = None, description: str | None = None
+) -> VoiceModel | None:
+    """Update a voice model's name and/or description (US-25.3, AC 2).
+
+    Only these two fields; status and weights are the system's, not the client's.
+
+    "Renaming updates it everywhere it appears" holds because there is **one row** —
+    the name is not denormalised. The exception is a notification already sent,
+    which keeps the name it was sent with, and that is correct: it describes what
+    happened at the time.
+
+    @returns None when there is no such model for this user.
+    """
+    model = await find_owned_model(model_id, user_id)
+
+    if model is None:
+        return None
+
+    if name is not None:
+        cleaned = name.strip()
+        if not cleaned:
+            raise VoiceModelError("Give the voice model a name.")
+        model.name = cleaned
+
+    if description is not None:
+        model.description = description.strip() or None
+
+    model.updated_at = utcnow()
+    await model.save()
+    return model
 
 
 async def find_owned_model(model_id: str, user_id: str) -> VoiceModel | None:

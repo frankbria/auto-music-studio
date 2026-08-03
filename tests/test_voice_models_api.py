@@ -819,3 +819,135 @@ class TestTrainingNotifications:
         stored = await NotificationEvent.get(event.id)
         assert stored.release_id == release_id
         assert stored.voice_model_id is None
+
+
+# ---------------------------------------------------------------------------
+# US-25.3 — library management
+# ---------------------------------------------------------------------------
+
+
+class TestLibraryAuthGate:
+    def test_patch_and_delete_require_a_token(self) -> None:
+        client = TestClient(create_app())
+        model_id = str(PydanticObjectId())
+        assert client.patch(f"{LIST_URL}/{model_id}", json={"name": "x"}).status_code == 401
+        assert client.delete(f"{LIST_URL}/{model_id}").status_code == 401
+
+
+@pytest.mark.integration
+class TestLibraryManagement:
+    async def _ready_model(self, client, settings, user, name: str = "Voice"):
+        resp = await client.post(TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": name})
+        assert resp.status_code == 202, resp.text
+        model = await VoiceModel.get(resp.json()["voice_model"]["id"])
+        # Pretend training finished, with weights in storage to be freed later.
+        storage = get_storage_backend()
+        model.weights_path = f"{user.id}/voice-models/{model.id}/adapter"
+        storage.upload(model.weights_path, b"fake adapter weights")
+        model.status = VoiceModelStatus.READY
+        await model.save()
+        return model
+
+    async def test_renaming_updates_the_one_row_it_lives_in(self, client, settings, local_storage) -> None:
+        # "Updates everywhere it appears" holds because the name is not
+        # denormalised. This test documents that, and that a notification already
+        # sent keeps the name it was sent with -- which is correct, it describes
+        # what happened at the time.
+        from acemusic.api.models import NotificationEvent
+
+        user = await _make_user("rename@example.com")
+        model = await self._ready_model(client, settings, user, name="Old name")
+        await voice_service.notify_training_finished(model, succeeded=True)
+
+        resp = await client.patch(
+            f"{LIST_URL}/{model.id}",
+            headers=_auth_headers(user, settings),
+            json={"name": "New name", "description": "warmer"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "New name"
+        assert resp.json()["description"] == "warmer"
+
+        listed = await client.get(LIST_URL, headers=_auth_headers(user, settings))
+        assert [m["name"] for m in listed.json()] == ["New name"]
+
+        event = (await NotificationEvent.find(NotificationEvent.user_id == user.id).to_list())[0]
+        assert event.payload["name"] == "Old name"
+
+    async def test_a_blank_name_is_refused(self, client, settings, local_storage) -> None:
+        user = await _make_user("blankname@example.com")
+        model = await self._ready_model(client, settings, user)
+
+        resp = await client.patch(f"{LIST_URL}/{model.id}", headers=_auth_headers(user, settings), json={"name": "   "})
+        assert resp.status_code == 422
+        assert (await VoiceModel.get(model.id)).name == "Voice"
+
+    async def test_status_and_weights_cannot_be_set_by_a_client(self, client, settings, local_storage) -> None:
+        user = await _make_user("forbidden@example.com")
+        model = await self._ready_model(client, settings, user)
+
+        resp = await client.patch(
+            f"{LIST_URL}/{model.id}",
+            headers=_auth_headers(user, settings),
+            json={"name": "ok", "status": "ready", "weights_path": "/etc/passwd"},
+        )
+        assert resp.status_code == 422, "a client smuggled system fields through PATCH"
+
+    async def test_deleting_removes_the_record_and_frees_the_storage(self, client, settings, local_storage) -> None:
+        user = await _make_user("delete@example.com")
+        model = await self._ready_model(client, settings, user)
+        storage = get_storage_backend()
+
+        keys = [*model.reference_paths, model.weights_path]
+        for key in keys:
+            assert storage.download(key), f"{key} was not stored to begin with"
+
+        resp = await client.delete(f"{LIST_URL}/{model.id}", headers=_auth_headers(user, settings))
+        assert resp.status_code == 204, resp.text
+
+        assert await VoiceModel.get(model.id) is None
+        for key in keys:
+            with pytest.raises(Exception):
+                storage.download(key)
+
+    async def test_deleting_a_model_still_training_is_refused(self, client, settings, local_storage) -> None:
+        # Deleting the row out from under a running job strands the worker and
+        # the credits it charged.
+        user = await _make_user("deletetraining@example.com")
+        resp = await client.post(TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "V"})
+        model_id = resp.json()["voice_model"]["id"]
+
+        deleted = await client.delete(f"{LIST_URL}/{model_id}", headers=_auth_headers(user, settings))
+        assert deleted.status_code == 409
+        assert await VoiceModel.get(model_id) is not None
+
+    async def test_another_user_can_neither_rename_nor_delete(self, client, settings, local_storage) -> None:
+        owner = await _make_user("libowner@example.com")
+        intruder = await _make_user("libintruder@example.com")
+        model = await self._ready_model(client, settings, owner, name="Private")
+
+        patched = await client.patch(
+            f"{LIST_URL}/{model.id}", headers=_auth_headers(intruder, settings), json={"name": "Mine now"}
+        )
+        deleted = await client.delete(f"{LIST_URL}/{model.id}", headers=_auth_headers(intruder, settings))
+
+        # 404, not 403: another user's model should be indistinguishable from one
+        # that does not exist.
+        assert patched.status_code == 404
+        assert deleted.status_code == 404
+
+        survivor = await VoiceModel.get(model.id)
+        assert survivor is not None and survivor.name == "Private"
+
+    async def test_a_missing_storage_object_does_not_make_a_model_undeletable(
+        self, client, settings, local_storage
+    ) -> None:
+        user = await _make_user("halfgone@example.com")
+        model = await self._ready_model(client, settings, user)
+
+        # The backend has already lost one object; the record must still go.
+        get_storage_backend().delete(model.reference_paths[0])
+
+        resp = await client.delete(f"{LIST_URL}/{model.id}", headers=_auth_headers(user, settings))
+        assert resp.status_code == 204, resp.text
+        assert await VoiceModel.get(model.id) is None

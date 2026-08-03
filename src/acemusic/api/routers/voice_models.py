@@ -4,6 +4,8 @@
 * ``POST   /voice-models/train``                  → validate, charge, queue training
 * ``GET    /voice-models/train/{job_id}/status``  → phase, progress, ETA (US-25.2)
 * ``GET    /voice-models``                        → the caller's models, newest first
+* ``PATCH  /voice-models/{id}``                   → rename / re-describe (US-25.3)
+* ``DELETE /voice-models/{id}``                   → remove it and free its storage
 
 Every read is owner-scoped: a voice model is private, and ownership is part of
 the query rather than a check afterwards, so there is no path that reads someone
@@ -12,9 +14,10 @@ else's model at all.
 
 import logging
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..auth.dependencies import CurrentUser, require_existing_user
 from ..models import VoiceModel, VoiceModelStatus
@@ -152,6 +155,53 @@ async def get_training_status(
         loss=progress.get("loss"),
         error=progress.get("error"),
     )
+
+
+class VoiceModelUpdate(BaseModel):
+    """Editable fields. ``extra="forbid"`` so a client cannot smuggle in ``status``
+    or ``weights_path`` — those are the system's, not theirs. Mirrors ClipUpdate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    description: Annotated[str, Field(max_length=1000)] | None = None
+
+
+@router.patch("/{model_id}", response_model=VoiceModelResponse)
+async def update_voice_model(
+    model_id: str,
+    update: VoiceModelUpdate,
+    current: CurrentUser = Depends(require_existing_user),
+) -> VoiceModelResponse:
+    """Rename or re-describe a voice model."""
+    try:
+        model = await voice_service.rename_voice_model(
+            model_id, current.user_id, name=update.name, description=update.description
+        )
+    except voice_service.VoiceModelError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice model not found.")
+
+    return VoiceModelResponse.from_model(model)
+
+
+@router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_voice_model(
+    model_id: str,
+    current: CurrentUser = Depends(require_existing_user),
+) -> Response:
+    """Remove a voice model and free its stored weights and references."""
+    try:
+        removed = await voice_service.delete_voice_model(model_id, current.user_id)
+    except voice_service.VoiceModelError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice model not found.")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("", response_model=list[VoiceModelResponse])
