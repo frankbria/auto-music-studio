@@ -68,7 +68,7 @@ jobs:
 
       # The JUCE shallow clone is the slowest part of a cold configure.
       - name: Cache JUCE
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: plugin/build/_deps
           key: juce-${{ runner.os }}-${{ hashFiles('plugin/CMakeLists.txt') }}
