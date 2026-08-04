@@ -66,6 +66,9 @@ class _FakeAceClient:
         self._fail_download_after = fail_download_after
         self._downloads = 0
         self.submitted: list[dict] = []
+        # The real client carries this; the voice adapter (US-25.4) reads it to know
+        # which host's LoRA state a submit belongs to.
+        self.base_url = "http://ace-step.test"
 
     def submit_task(self, **kwargs) -> str:
         self.submitted.append(kwargs)

@@ -43,6 +43,7 @@ from ..services import (
     iterative as iterative_service,
     users as user_service,
 )
+from ._validators import require_voice_model
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,8 @@ class ExtendRequest(BaseModel):
     from_point: str = "end"
     style_override: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
     lyrics: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
+    #: US-25.4: sing the new tail in one of the caller's trained voices.
+    voice_model_id: str | None = None
 
     @field_validator("duration")
     @classmethod
@@ -150,6 +153,8 @@ class CoverRequest(BaseModel):
 
     style: str = Field(min_length=1, max_length=STYLE_MAX_LENGTH)
     lyrics_override: str | None = Field(default=None, max_length=LYRICS_MAX_LENGTH)
+    #: US-25.4: sing the cover in one of the caller's trained voices.
+    voice_model_id: str | None = None
 
 
 class RemixRequest(BaseModel):
@@ -204,6 +209,8 @@ class AddVocalRequest(BaseModel):
 
     lyrics: str = Field(min_length=1, max_length=LYRICS_MAX_LENGTH)
     vocal_style: str | None = Field(default=None, max_length=STYLE_MAX_LENGTH)
+    #: US-25.4: sing the added vocal in one of the caller's trained voices.
+    voice_model_id: str | None = None
 
 
 class FullSongRequest(BaseModel):
@@ -399,6 +406,7 @@ async def extend_clip(
 ) -> IterativeJobResponse:
     """Enqueue an extension of ``clip_id`` by ``duration``; the original is preserved."""
     clip = await _owned_wav_clip(clip_id, current.user_id)
+    await require_voice_model(request.voice_model_id, current.user_id)
     # The worker needs the source duration for every extend (it splices the new
     # tail onto the existing audio), so require it before charging — otherwise a
     # clip without duration metadata would deduct a credit then fail in the worker.
@@ -427,6 +435,7 @@ async def extend_clip(
         "from_point": request.from_point,
         "style_override": request.style_override,
         "lyrics": request.lyrics,
+        "voice_model_id": request.voice_model_id,
     }
     return await _enqueue_generation(
         user_id=current.user_id,
@@ -446,10 +455,12 @@ async def cover_clip(
 ) -> IterativeJobResponse:
     """Enqueue a cover (restyle) of ``clip_id``; the original is preserved."""
     clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
+    await require_voice_model(request.voice_model_id, current.user_id)
     params = {
         "clip_id": str(clip.id),
         "style": request.style,
         "lyrics_override": request.lyrics_override,
+        "voice_model_id": request.voice_model_id,
     }
     return await _enqueue_generation(
         user_id=current.user_id,
@@ -555,10 +566,12 @@ async def add_vocal_clip(
 ) -> IterativeJobResponse:
     """Enqueue a vocal layering onto ``clip_id``; the original is preserved."""
     clip = await _owned_wav_clip(clip_id, current.user_id, cap_duration=True)
+    await require_voice_model(request.voice_model_id, current.user_id)
     params = {
         "clip_id": str(clip.id),
         "lyrics": request.lyrics,
         "vocal_style": request.vocal_style,
+        "voice_model_id": request.voice_model_id,
     }
     return await _enqueue_generation(
         user_id=current.user_id,

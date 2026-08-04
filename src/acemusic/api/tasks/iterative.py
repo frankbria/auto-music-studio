@@ -63,6 +63,7 @@ from ..services.iterative import (
     SAMPLE_JOB_TYPE,
 )
 from .common import JobProcessingError, download_clip, load_clip, rollback_clips, store_clip
+from .voice_adapter import active_voice, resolve_weights
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +114,17 @@ async def _submit_and_download(
     submit_kwargs: dict[str, Any],
     *,
     expected: int = 1,
+    voice_weights: str | None = None,
 ) -> list[bytes]:
-    """Submit one ACE-Step task, poll to completion, return the downloaded audio."""
-    task_id = await asyncio.to_thread(partial(client.submit_task, **submit_kwargs))
-    result = await poll(client, task_id)
+    """Submit one ACE-Step task, poll to completion, return the downloaded audio.
+
+    Every iterative submit goes through here, so this is also where the host's LoRA
+    adapter is pinned for the duration (US-25.4) — including for the modes that take no
+    voice, which must not inherit one from a job running alongside them.
+    """
+    async with active_voice(client.base_url, voice_weights):
+        task_id = await asyncio.to_thread(partial(client.submit_task, **submit_kwargs))
+        result = await poll(client, task_id)
     if result.get("status") == "failed":
         raise JobProcessingError(result.get("error") or "ACE-Step task failed")
     audio_urls = result.get("audio_urls") or []
@@ -226,6 +234,7 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
                 "repainting_start": from_s,
                 "repainting_end": target_duration,
             },
+            voice_weights=await resolve_weights(job),
         )
     extend_lyrics = params.get("lyrics")
     clip_id = await _store_child_clip(
@@ -275,6 +284,7 @@ async def _process_restyle_job(
                 "task_type": "cover",
                 "src_audio_path": str(src_path.resolve()),
             },
+            voice_weights=await resolve_weights(job),
         )
     clip_id = await _store_child_clip(
         job,
@@ -343,6 +353,7 @@ async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: Ac
                 "task_type": "complete",
                 "src_audio_path": str(src_path.resolve()),
             },
+            voice_weights=await resolve_weights(job),
         )
     clip_id = await _store_child_clip(
         job,

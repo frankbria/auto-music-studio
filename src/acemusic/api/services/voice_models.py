@@ -37,6 +37,18 @@ class VoiceModelError(Exception):
     """A reference set that cannot be trained on."""
 
 
+class VoiceModelNotFoundError(Exception):
+    """No such voice model — unknown id, or one belonging to someone else.
+
+    Deliberately one error for both: telling the two apart would confirm that another
+    user's model exists.
+    """
+
+
+class VoiceModelNotReadyError(Exception):
+    """The voice exists but has no usable weights yet (still training, or failed)."""
+
+
 class InsufficientCreditsError(Exception):
     """Not enough credits to start training."""
 
@@ -501,3 +513,20 @@ async def find_owned_model(model_id: str, user_id: str) -> VoiceModel | None:
         return None
 
     return await VoiceModel.find_one(VoiceModel.id == oid, VoiceModel.user_id == PydanticObjectId(user_id))
+
+
+async def weights_for(model_id: str, user_id: str) -> str:
+    """The loadable adapter path of a voice ``user_id`` owns and can generate with (US-25.4).
+
+    Both the request path (before charging) and the worker (before submitting) go
+    through this, so "is this voice usable" is decided in one place.
+    """
+    model = await find_owned_model(model_id, user_id)
+
+    if model is None:
+        raise VoiceModelNotFoundError("Voice model not found.")
+    if not model.is_usable:
+        raise VoiceModelNotReadyError(f"Voice model '{model.name}' is not ready to use yet.")
+
+    # is_usable already asserts weights_path is set; the cast keeps the return type honest.
+    return str(model.weights_path)

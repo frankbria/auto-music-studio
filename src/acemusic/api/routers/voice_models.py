@@ -4,6 +4,7 @@
 * ``POST   /voice-models/train``                  → validate, charge, queue training
 * ``GET    /voice-models/train/{job_id}/status``  → phase, progress, ETA (US-25.2)
 * ``GET    /voice-models``                        → the caller's models, newest first
+* ``GET    /voice-models/{id}/preview``           → a reference recording to listen to (US-25.4)
 * ``PATCH  /voice-models/{id}``                   → rename / re-describe (US-25.3)
 * ``DELETE /voice-models/{id}``                   → remove it and free its storage
 
@@ -12,6 +13,7 @@ the query rather than a check afterwards, so there is no path that reads someone
 else's model at all.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Annotated
@@ -19,10 +21,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from acemusic.storage import get_storage_backend
+
 from ..auth.dependencies import CurrentUser, require_existing_user
 from ..models import VoiceModel, VoiceModelStatus
 from ..models.voice_model import MAX_REFERENCE_FILES, MIN_REFERENCE_FILES
 from ..services import credits as credits_service, voice_models as voice_service
+from ..utils.media_types import get_audio_content_type
 
 logger = logging.getLogger(__name__)
 
@@ -211,3 +216,32 @@ async def list_voice_models(
     """The caller's voice models, newest first."""
     models = await voice_service.list_voice_models(current.user_id)
     return [VoiceModelResponse.from_model(m) for m in models]
+
+
+@router.get("/{model_id}/preview")
+async def preview_voice_model(
+    model_id: str,
+    current: CurrentUser = Depends(require_existing_user),
+) -> Response:
+    """The first reference recording this voice was trained from (US-25.4).
+
+    It is what the musician can actually listen to before attaching a voice: a trained
+    LoRA has no renderable sample of its own, and generating one on demand would cost a
+    GPU run per browse. Owner-scoped like every other read here.
+    """
+    model = await voice_service.find_owned_model(model_id, current.user_id)
+
+    if model is None or not model.reference_paths:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice model preview not found.")
+
+    path = model.reference_paths[0]
+    storage = get_storage_backend()
+
+    try:
+        data = await asyncio.to_thread(storage.download, path)
+    except FileNotFoundError as exc:
+        logger.warning("Voice model %s exists but its reference %r is missing", model.id, path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice model preview not found.") from exc
+
+    suffix = path.rsplit(".", 1)[-1] if "." in path else None
+    return Response(content=data, media_type=get_audio_content_type(suffix))
