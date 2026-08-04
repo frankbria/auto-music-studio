@@ -5,6 +5,7 @@ import "./globals.css"
 import { AppShell, BottomPlaybar } from "@/components/layout"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/contexts/auth-context"
+import { CreditsProvider } from "@/contexts/credits-context"
 import { NotificationsProvider } from "@/contexts/notifications-context"
 import { PlayerProvider } from "@/contexts/player-context"
 import { VideoJobsProvider } from "@/contexts/video-jobs-context"
@@ -31,18 +32,23 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <AuthProvider>
-            <NotificationsProvider>
-              {/* Watches in-flight video renders across navigation so completion
+            {/* The balance renders in the Sidebar on every page while the actions
+                that spend credits live all over the app (US-26.1), so it sits at the
+                root. Inside Auth — it needs the token. */}
+            <CreditsProvider>
+              <NotificationsProvider>
+                {/* Watches in-flight video renders across navigation so completion
                   notifies globally (US-22.3). Inside Notifications (needs notify)
                   and Auth (needs the token). */}
-              <VideoJobsProvider>
-                <PlayerProvider>
-                  <AppShell>{children}</AppShell>
-                  {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
-                  <BottomPlaybar />
-                </PlayerProvider>
-              </VideoJobsProvider>
-            </NotificationsProvider>
+                <VideoJobsProvider>
+                  <PlayerProvider>
+                    <AppShell>{children}</AppShell>
+                    {/* Sibling of AppShell so the fixed playbar stays viewport-anchored. */}
+                    <BottomPlaybar />
+                  </PlayerProvider>
+                </VideoJobsProvider>
+              </NotificationsProvider>
+            </CreditsProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>

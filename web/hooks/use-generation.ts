@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
+import { useCredits } from "@/contexts/credits-context"
 import { fetchJobStatus } from "@/lib/job-status"
 import type { SubmitResult } from "@/lib/generate"
 
@@ -44,6 +45,7 @@ export function useGeneration({
   onComplete,
 }: { onComplete?: () => void } = {}): UseGeneration {
   const router = useRouter()
+  const { refresh: refreshCredits } = useCredits()
   const [state, setState] = useState<GenerationState>({ phase: "idle" })
 
   // The active job. A ref (not state) so the poll loop reads the latest without
@@ -140,6 +142,9 @@ export function useGeneration({
       switch (result.status) {
         case "accepted":
           jobRef.current = { id: result.jobId, token: accessToken, polls: 0 }
+          // Credits are deducted at enqueue (US-26.1), so the sidebar balance is
+          // stale from here on.
+          refreshCredits()
           setState({
             phase: "polling",
             estimatedSeconds: result.estimatedSeconds,
@@ -156,7 +161,7 @@ export function useGeneration({
           return
       }
     },
-    [poll, router]
+    [poll, refreshCredits, router]
   )
 
   const retry = useCallback(() => {

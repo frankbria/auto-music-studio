@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
+import { useCredits } from "@/contexts/credits-context"
 import { fetchJobStatus } from "@/lib/job-status"
 import type { EditSubmitResult } from "@/lib/editing"
 
@@ -41,11 +42,14 @@ export type UseClipEdit = {
  */
 export function useClipEdit(): UseClipEdit {
   const router = useRouter()
+  const { refresh: refreshCredits } = useCredits()
   const [state, setState] = useState<ClipEditState>({ phase: "idle" })
 
   // The active job, in a ref so the poll loop reads the latest without
   // re-subscribing; cleared the moment the job is superseded or terminal.
-  const jobRef = useRef<{ id: string; token: string; polls: number } | null>(null)
+  const jobRef = useRef<{ id: string; token: string; polls: number } | null>(
+    null
+  )
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Monotonic epoch bumped on every submit, reset, and unmount. A submit
   // captures its epoch and, after the async `makeRequest()` resolves, drops the
@@ -115,7 +119,10 @@ export function useClipEdit(): UseClipEdit {
           const { progress } = result
           setState((s) => (s.phase === "polling" ? { ...s, progress } : s))
         }
-        timerRef.current = setTimeout(() => void pollRef.current(), POLL_INTERVAL_MS)
+        timerRef.current = setTimeout(
+          () => void pollRef.current(),
+          POLL_INTERVAL_MS
+        )
         return
     }
   }, [router])
@@ -137,7 +144,13 @@ export function useClipEdit(): UseClipEdit {
       switch (result.status) {
         case "accepted":
           jobRef.current = { id: result.jobId, token: accessToken, polls: 0 }
-          setState({ phase: "polling", estimatedSeconds: result.estimatedSeconds })
+          // The charge lands at enqueue (US-26.1), so the sidebar balance is stale
+          // the moment this returns.
+          refreshCredits()
+          setState({
+            phase: "polling",
+            estimatedSeconds: result.estimatedSeconds,
+          })
           // Poll immediately so a fast job doesn't idle through the first interval.
           void poll()
           return
@@ -145,6 +158,8 @@ export function useClipEdit(): UseClipEdit {
           router.push("/login")
           return
         case "insufficientCredits":
+          // The balance the server just reported may be news to us.
+          refreshCredits()
           setState({
             phase: "error",
             message: `Not enough credits — this needs ${result.required}, you have ${result.balance}.`,
@@ -156,7 +171,7 @@ export function useClipEdit(): UseClipEdit {
           return
       }
     },
-    [poll, router]
+    [poll, refreshCredits, router]
   )
 
   const reset = useCallback(() => {
