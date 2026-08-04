@@ -83,3 +83,11 @@ jobs:
       - name: Audit web dependencies
         working-directory: web
         run: npm audit --audit-level=high
+
+      # A lockfile can be internally inconsistent while `npm ci` still succeeds — an
+      # npm version that drops bundled nested entries leaves declared dependencies
+      # with no corresponding package entry. This PR shipped exactly that for one
+      # commit, and only a reviewer caught it.
+      - name: Check the web lockfile is internally consistent
+        working-directory: web
+        run: npm ls --package-lock-only --all > /dev/null
