@@ -6,8 +6,8 @@ runs. Two consequences, and this module exists for both:
 
 * A voice job and an ordinary job running at the same time against one host share that
   adapter, so the ordinary job comes back singing in someone else's voice. Every local
-  generation therefore goes through :func:`active_voice`, which holds a single lock for
-  the whole submit-and-poll.
+  generation therefore goes through :func:`active_voice`, which pins the adapter for the
+  whole submit-and-poll.
 * Loading a 43MB adapter that is already loaded is wasted work, so the state of the host
   is tracked and ``/v1/lora/{load,unload}`` is only called when it has to change.
 
@@ -16,6 +16,12 @@ custom voice never talks to ``/v1/lora`` at all. Once anything *is* loaded the t
 exact, and any failed call marks the state unknown so the next generation re-states what it
 wants — a stale belief here means audio in the wrong voice, which is worse than a redundant
 HTTP call.
+
+ponytail: a switch holds the condition lock across the HTTP call, so a wedged
+``/v1/lora/load`` blocks even the trivial "is it already loaded" check for up to
+``LORA_TIMEOUT_S``. Deliberate — nothing may generate while the host's adapter is in an
+unknown state — but it means the timeout below is the worst-case stall for *all* local
+generation, not just for the job that asked for the voice.
 
 ponytail: the tracked state is per-process and covers one ACE-Step host. Several workers
 against one host would each believe their own answer — move the state into Mongo, or to
