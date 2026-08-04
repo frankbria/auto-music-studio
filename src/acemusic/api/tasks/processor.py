@@ -38,6 +38,7 @@ from acemusic.video_client import VideoGenerationService
 from .. import database
 from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
+from ..services import credits as credits_service
 from .artwork import ARTWORK_JOB_HANDLERS
 from .common import JobProcessingError
 from .daw_export import DAW_EXPORT_JOB_HANDLERS
@@ -565,3 +566,16 @@ class JobProcessor:
             )
         except Exception:  # pragma: no cover - last-ditch; never crash the worker
             logger.exception("Failed to record failure for job %s", job.id)
+            # The status write is what makes the refund safe to attempt (it is
+            # gated on FAILED, and its idempotency rests on the ledger, not on
+            # this call happening exactly once). If it did not land, do not pay.
+            return
+
+        # US-26.1: nobody should keep paying for work that did not happen. This is
+        # the single place every job type converges on, so it needs no per-handler
+        # wiring — and it refunds only what is still owed, so the handlers that
+        # already returned their own partial work are not paid twice.
+        try:
+            await credits_service.refund_failed_job(job)
+        except Exception:  # pragma: no cover - a refund must never mask the failure
+            logger.exception("Failed to refund credits for failed job %s", job.id)

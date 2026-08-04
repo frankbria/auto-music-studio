@@ -37,7 +37,7 @@ from acemusic.mastering_orchestrator import MasteringOrchestrator, ServiceNotCon
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
-from ..services import credits as credits_service, users as user_service
+from ..services import credits as credits_service
 from ..services.clips import native_format
 from ..services.mastering import MASTERING_JOB_TYPE
 from .common import JobProcessingError, download_clip, load_source_clip, store_clip
@@ -63,7 +63,9 @@ async def _refund_unperformed(job: Job, service: str) -> None:
     except ValueError:  # pragma: no cover - service already validated by the router
         return
     try:
-        await credits_service.refund_credits(job.user_id, cost)
+        await credits_service.refund_credits(
+            job.user_id, cost, action_type=f"{MASTERING_JOB_TYPE}_refund", job_id=str(job.id)
+        )
     except Exception:  # pragma: no cover - refund is best-effort; never mask the cause
         logger.exception("Failed to refund mastering job %s after a pre-flight rejection", job.id)
 
@@ -103,20 +105,23 @@ async def _reconcile_fallback_credits(job: Job, requested_service: str, actual_s
                     diff,
                 )
                 return
+            # Only the top-up needs its own ledger row; the refund branch below is
+            # ledgered by refund_credits itself (US-26.1). Writing one here too would
+            # double-count the movement and make amount_owed_for_job under-report.
+            await credits_service.record_transaction(
+                user_id=job.user_id,
+                amount=-diff,  # negative: this is a charge
+                action_type=MASTERING_JOB_TYPE,
+                job_id=str(job.id),
+                balance_after=balance_after,
+            )
         else:
-            await credits_service.refund_credits(job.user_id, -diff)
-            user = await user_service.get_user_by_id(str(job.user_id))
-            balance_after = user.credits_balance if user is not None else 0.0
-        # amount sign matches the router's convention: negative for a charge,
-        # positive for a refund. ``-diff`` is negative when diff>0 (top-up) and
-        # positive when diff<0 (refund).
-        await credits_service.record_transaction(
-            user_id=job.user_id,
-            amount=-diff,
-            action_type=MASTERING_JOB_TYPE,
-            job_id=str(job.id),
-            balance_after=balance_after,
-        )
+            await credits_service.refund_credits(
+                job.user_id,
+                -diff,
+                action_type=f"{MASTERING_JOB_TYPE}_refund",
+                job_id=str(job.id),
+            )
     except Exception:  # pragma: no cover - reconciliation is best-effort
         logger.exception("Failed to reconcile mastering credits for job %s", job.id)
 

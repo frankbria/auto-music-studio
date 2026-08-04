@@ -277,7 +277,7 @@ async def create_training_job(
     except BaseException:
         # BaseException, not Exception: a shutdown CancelledError must also give
         # the credits back rather than leaving the musician charged for nothing.
-        await credits_service.refund_credits(uid, cost)
+        await credits_service.reverse_unrecorded_charge(uid, cost)
         await _cleanup_partial(storage, model)
         raise
 
@@ -323,15 +323,14 @@ async def fail_training(model: VoiceModel, reason: str) -> VoiceModel:
     await model.save()
 
     if model.credits_charged > 0:
-        await credits_service.refund_credits(model.user_id, model.credits_charged)
-
-        user = await User.get(model.user_id)
-        await credits_service.record_transaction(
-            user_id=model.user_id,
-            amount=model.credits_charged,
+        # refund_credits ledgers the movement itself (US-26.1), so this no longer
+        # writes its own row — and no longer re-reads the user for balance_after,
+        # which a concurrent charge could have moved between the two statements.
+        await credits_service.refund_credits(
+            model.user_id,
+            model.credits_charged,
             action_type="voice_training_refund",
             job_id=str(model.job_id) if model.job_id else "",
-            balance_after=user.credits_balance if user is not None else 0.0,
         )
 
     return model

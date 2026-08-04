@@ -352,7 +352,7 @@ async def _enqueue_generation(
     except BaseException:
         # The deduction already landed but no job exists — give the credit back.
         # BaseException (not Exception): asyncio.CancelledError must also refund.
-        await credits_service.refund_credits(user.id, cost)
+        await credits_service.reverse_unrecorded_charge(user.id, cost)
         raise
     try:
         await credits_service.record_transaction(

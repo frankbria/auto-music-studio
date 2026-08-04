@@ -749,7 +749,10 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
         if unperformed > 0:
             try:
                 await credits_service.refund_credits(
-                    job.user_id, unperformed * credits_service.get_cost(FULL_SONG_JOB_TYPE)
+                    job.user_id,
+                    unperformed * credits_service.get_cost(FULL_SONG_JOB_TYPE),
+                    action_type=f"{FULL_SONG_JOB_TYPE}_refund",
+                    job_id=str(job.id),
                 )
             except Exception:  # pragma: no cover - refund is best-effort; never mask the cause
                 logger.exception("Failed to refund %d unperformed full-song section(s) for job %s", unperformed, job.id)
