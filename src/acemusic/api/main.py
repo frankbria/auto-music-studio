@@ -27,6 +27,7 @@ from .routers import (
     batch,
     clips,
     compute,
+    credits,
     daw_export,
     distribution,
     editing,
@@ -46,6 +47,7 @@ from .routers import (
     voice_models,
     workspaces,
 )
+from .services.credits import UPGRADE_URL, InsufficientCreditsError
 from .settings import ApiSettings
 from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
@@ -199,6 +201,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(editing.router, prefix=API_V1_PREFIX)
     app.include_router(artwork.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
+    app.include_router(credits.router, prefix=API_V1_PREFIX)
     app.include_router(daw_export.router, prefix=API_V1_PREFIX)
     app.include_router(studio.router, prefix=API_V1_PREFIX)
     app.include_router(iterative.router, prefix=API_V1_PREFIX)
@@ -225,6 +228,27 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.exception_handler(DuplicateIdentifierError)
     async def _duplicate_identifier(_request: Request, exc: DuplicateIdentifierError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": f"{exc.field} already in use"})
+
+    # US-26.1: one 402 shape for every billed action, so a client can handle
+    # "out of credits" once. Keys match what the routers already hand-rolled;
+    # ``upgrade_url`` is what turns a dead end into something the musician can act on.
+    @app.exception_handler(InsufficientCreditsError)
+    async def _insufficient_credits(_request: Request, exc: InsufficientCreditsError) -> JSONResponse:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": {
+                    "error": "insufficient_credits",
+                    "balance": exc.balance,
+                    "required": exc.required,
+                    "message": (
+                        f"This action needs {exc.required:g} credits and you have {exc.balance:g}. "
+                        "Top up or upgrade your plan to continue."
+                    ),
+                    "upgrade_url": UPGRADE_URL,
+                }
+            },
+        )
 
     return app
 
