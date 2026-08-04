@@ -71,12 +71,49 @@ export async function fetchTrainingStatus(
 }
 
 /** Every voice model the caller owns, newest first. */
-export async function fetchVoiceModels(token: string): Promise<VoiceModelSummary[]> {
+export async function fetchVoiceModels(
+  token: string
+): Promise<VoiceModelSummary[]> {
   const res = await fetch("/api/voice-models", {
     headers: { authorization: `Bearer ${token}` },
     cache: "no-store",
   })
-  return parse<VoiceModelSummary[]>(res, "Could not load your voice models.")
+  const body = await parse<VoiceModelSummary[]>(
+    res,
+    "Could not load your voice models."
+  )
+  // A 200 that isn't a list is a broken response, not an empty library — surfacing it
+  // as an error beats handing a non-array to callers that will iterate it.
+  if (!Array.isArray(body)) {
+    throw new VoiceModelError("Could not load your voice models.", res.status)
+  }
+  return body
+}
+
+/**
+ * A reference recording to listen to before attaching a voice (US-25.4).
+ *
+ * Returned as a Blob rather than a URL because the route needs the Bearer token and
+ * an `<audio src>` cannot carry one — the caller hands the Blob to `<AudioPreview>`.
+ */
+export async function fetchVoicePreview(
+  id: string,
+  token: string
+): Promise<Blob> {
+  const res = await fetch(
+    `/api/voice-models/${encodeURIComponent(id)}/preview`,
+    { headers: { authorization: `Bearer ${token}` }, cache: "no-store" }
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new VoiceModelError(
+      typeof body?.detail === "string"
+        ? body.detail
+        : "Could not load a preview for this voice.",
+      res.status
+    )
+  }
+  return res.blob()
 }
 
 /** Rename and/or re-describe a voice model. */
@@ -87,14 +124,20 @@ export async function updateVoiceModel(
 ): Promise<VoiceModelSummary> {
   const res = await fetch(`/api/voice-models/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify(update),
   })
   return parse<VoiceModelSummary>(res, "Could not update the voice model.")
 }
 
 /** Delete a voice model and free its stored weights. */
-export async function deleteVoiceModel(id: string, token: string): Promise<void> {
+export async function deleteVoiceModel(
+  id: string,
+  token: string
+): Promise<void> {
   const res = await fetch(`/api/voice-models/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${token}` },
@@ -103,7 +146,9 @@ export async function deleteVoiceModel(id: string, token: string): Promise<void>
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new VoiceModelError(
-      typeof body?.detail === "string" ? body.detail : "Could not delete the voice model.",
+      typeof body?.detail === "string"
+        ? body.detail
+        : "Could not delete the voice model.",
       res.status
     )
   }

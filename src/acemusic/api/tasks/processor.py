@@ -48,6 +48,7 @@ from .iterative import ITERATIVE_JOB_HANDLERS
 from .mastering import MASTERING_JOB_HANDLERS
 from .studio import STUDIO_JOB_HANDLERS
 from .video import VIDEO_JOB_HANDLERS
+from .voice_adapter import active_voice, resolve_weights
 from .voice_training import TRAINING_ROOT as VOICE_TRAINING_ROOT, VOICE_TRAINING_JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
@@ -411,8 +412,12 @@ class JobProcessor:
             client = self._client_factory()
             poll_interval, timeout, backend = self._ace_poll_interval, self._poll_timeout, "ACE-Step"
 
-        task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
-        result = await self._poll_until_complete(client, task_id, poll_interval=poll_interval, timeout=timeout)
+        # US-25.4: the LoRA is host-wide state, so the adapter is set and held for the
+        # whole run — a job sharing the host must not inherit another job's voice.
+        # RunPod has no LoRA endpoints, hence no base_url to set one on.
+        async with active_voice(None if remote else client.base_url, await resolve_weights(job)):
+            task_id = await asyncio.to_thread(partial(client.submit_task, **self._build_submit_kwargs(params)))
+            result = await self._poll_until_complete(client, task_id, poll_interval=poll_interval, timeout=timeout)
         if result.get("status") == "failed":
             raise JobProcessingError(result.get("error") or f"{backend} generation failed")
 

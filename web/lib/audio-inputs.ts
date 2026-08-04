@@ -1,9 +1,9 @@
 /**
  * Shared types and placeholder data for the creation-page input modals (US-16.8):
  * Add Audio (remix a clip / upload a file / record from mic), Add Voice, and
- * Add Inspiration. Voice models and playlists have no backend yet, so the modals
- * read from the MOCK_* arrays below — shaped to match the eventual API responses
- * so swapping in a real fetch is a one-line change.
+ * Add Inspiration. Add Voice reads the musician's real library (US-25.4); playlists
+ * have no backend yet, so that modal still reads from MOCK_PLAYLISTS below — shaped
+ * to match the eventual API response so swapping in a fetch is a one-line change.
  */
 
 /** Accepted upload formats for the Add Audio → Upload tab. */
@@ -27,13 +27,6 @@ export type VoiceSelection = { id: string; name: string }
 
 export type InspirationSelection = { id: string; name: string }
 
-export type VoiceModel = {
-  id: string
-  name: string
-  description: string
-  previewUrl: string
-}
-
 export type Playlist = {
   id: string
   name: string
@@ -41,29 +34,9 @@ export type Playlist = {
   thumbnailUrl?: string
 }
 
-// ponytail: placeholder data — replace with a fetch once the voices/playlists
-// APIs exist. Shapes match the planned responses so callers don't change.
-export const MOCK_VOICES: VoiceModel[] = [
-  {
-    id: "voice-aria",
-    name: "Aria",
-    description: "Warm female pop vocal",
-    previewUrl: "/audio/voices/aria.mp3",
-  },
-  {
-    id: "voice-rex",
-    name: "Rex",
-    description: "Gritty male rock vocal",
-    previewUrl: "/audio/voices/rex.mp3",
-  },
-  {
-    id: "voice-lumen",
-    name: "Lumen",
-    description: "Airy androgynous synth vocal",
-    previewUrl: "/audio/voices/lumen.mp3",
-  },
-]
-
+// ponytail: placeholder data — replace with a fetch once the playlists API exists.
+// Shapes match the planned response so callers don't change. (Voices became real in
+// US-25.4 and now come from `@/lib/voice-models`.)
 export const MOCK_PLAYLISTS: Playlist[] = [
   { id: "pl-latenight", name: "Late Night Drive", trackCount: 12 },
   { id: "pl-focus", name: "Deep Focus", trackCount: 28 },

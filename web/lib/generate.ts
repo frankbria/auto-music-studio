@@ -26,6 +26,8 @@ export type GenerationFormData = {
   lyrics: string
   instrumental: boolean
   selectedTags: string[]
+  /** Trained voice attached via the Add Voice modal (US-25.4); undefined = default voice. */
+  voiceModelId?: string
 }
 
 /** Subset of the backend GenerationRequest these forms send (extra keys forbidden). */
@@ -46,6 +48,8 @@ export type GenerationPayload = {
   seed?: number
   mode?: "song" | "sound"
   sound_type?: "one-shot" | "loop"
+  /** Sing this generation in one of the caller's trained voices (US-25.4). */
+  voice_model_id?: string
 }
 
 export type SubmitResult =
@@ -75,6 +79,7 @@ export function buildGenerationPayload(
   }
   if (style) payload.style = style
   if (lyrics) payload.lyrics = lyrics
+  if (data.voiceModelId) payload.voice_model_id = data.voiceModelId
   return payload
 }
 
@@ -99,6 +104,8 @@ export type AdvancedFormData = {
   /** "Random" → no explicit seed is sent (the job picks one). */
   seedRandom: boolean
   seed: string
+  /** Trained voice attached via the Add Voice modal (US-25.4); undefined = default voice. */
+  voiceModelId?: string
 }
 
 /** Combine the styles textarea and the selected tag pills into one style string. */
@@ -138,6 +145,7 @@ export function buildAdvancedPayload(
   if (data.timeSignature) payload.time_signature = data.timeSignature
   if (data.duration.trim()) payload.duration = Number(data.duration)
   if (!data.seedRandom && data.seed.trim()) payload.seed = Number(data.seed)
+  if (data.voiceModelId) payload.voice_model_id = data.voiceModelId
   return payload
 }
 

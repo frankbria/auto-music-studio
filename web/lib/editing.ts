@@ -35,11 +35,15 @@ export type ExtendPayload = {
   from_point?: string
   style_override?: string
   lyrics?: string
+  /** Sing the new tail in one of the caller's trained voices (US-25.4). */
+  voice_model_id?: string
 }
 
 export type CoverPayload = {
   style: string
   lyrics_override?: string
+  /** Sing the cover in one of the caller's trained voices (US-25.4). */
+  voice_model_id?: string
 }
 
 export type RemixPayload = {
@@ -64,6 +68,8 @@ export type SamplePayload = {
 export type AddVocalPayload = {
   lyrics: string
   vocal_style?: string
+  /** Sing the added vocal in one of the caller's trained voices (US-25.4). */
+  voice_model_id?: string
 }
 
 export type MashupPayload = {
@@ -101,7 +107,10 @@ function extractCredits(body: unknown): { balance: number; required: number } {
     body && typeof body === "object" && "detail" in body
       ? (body as { detail: unknown }).detail
       : undefined
-  const obj = detail && typeof detail === "object" ? (detail as Record<string, unknown>) : {}
+  const obj =
+    detail && typeof detail === "object"
+      ? (detail as Record<string, unknown>)
+      : {}
   const num = (v: unknown) => (typeof v === "number" ? v : 0)
   return { balance: num(obj.balance), required: num(obj.required) }
 }
@@ -128,7 +137,10 @@ async function postEdit(
       body: JSON.stringify(payload),
     })
   } catch {
-    return { status: "error", detail: "Something went wrong. Please try again." }
+    return {
+      status: "error",
+      detail: "Something went wrong. Please try again.",
+    }
   }
   return classifyEditResponse(res)
 }
@@ -147,7 +159,10 @@ async function classifyEditResponse(res: Response): Promise<EditSubmitResult> {
       estimated_time_seconds?: number
     }
     if (!jobId) {
-      return { status: "error", detail: "Server returned an unexpected response." }
+      return {
+        status: "error",
+        detail: "Server returned an unexpected response.",
+      }
     }
     return {
       status: "accepted",
@@ -162,7 +177,10 @@ async function classifyEditResponse(res: Response): Promise<EditSubmitResult> {
     return { status: "insufficientCredits", ...extractCredits(body) }
   }
   if (res.status === 422) {
-    return { status: "invalid", detail: extractDetail(body, "Please check your input.") }
+    return {
+      status: "invalid",
+      detail: extractDetail(body, "Please check your input."),
+    }
   }
   return {
     status: "error",
@@ -186,41 +204,77 @@ const clipPath = (clipId: string, op: string) =>
 
 // --- Editing endpoints (no credits) ---
 
-export function submitCrop(clipId: string, payload: CropPayload, token: string) {
+export function submitCrop(
+  clipId: string,
+  payload: CropPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "crop"), compact(payload), token)
 }
 
-export function submitSpeed(clipId: string, payload: SpeedPayload, token: string) {
+export function submitSpeed(
+  clipId: string,
+  payload: SpeedPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "speed"), compact(payload), token)
 }
 
-export function submitRemaster(clipId: string, payload: RemasterPayload, token: string) {
+export function submitRemaster(
+  clipId: string,
+  payload: RemasterPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "remaster"), compact(payload), token)
 }
 
 // --- Iterative endpoints (consume credits) ---
 
-export function submitExtend(clipId: string, payload: ExtendPayload, token: string) {
+export function submitExtend(
+  clipId: string,
+  payload: ExtendPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "extend"), compact(payload), token)
 }
 
-export function submitCover(clipId: string, payload: CoverPayload, token: string) {
+export function submitCover(
+  clipId: string,
+  payload: CoverPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "cover"), compact(payload), token)
 }
 
-export function submitRemix(clipId: string, payload: RemixPayload, token: string) {
+export function submitRemix(
+  clipId: string,
+  payload: RemixPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "remix"), compact(payload), token)
 }
 
-export function submitRepaint(clipId: string, payload: RepaintPayload, token: string) {
+export function submitRepaint(
+  clipId: string,
+  payload: RepaintPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "repaint"), compact(payload), token)
 }
 
-export function submitSample(clipId: string, payload: SamplePayload, token: string) {
+export function submitSample(
+  clipId: string,
+  payload: SamplePayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "sample"), compact(payload), token)
 }
 
-export function submitAddVocal(clipId: string, payload: AddVocalPayload, token: string) {
+export function submitAddVocal(
+  clipId: string,
+  payload: AddVocalPayload,
+  token: string
+) {
   return postEdit(clipPath(clipId, "add-vocal"), compact(payload), token)
 }
 
@@ -250,7 +304,8 @@ export async function saveClipVersion(
 ): Promise<EditSubmitResult> {
   const form = new FormData()
   form.append("file", wav, "version.wav")
-  if (meta.title && meta.title.trim() !== "") form.append("title", meta.title.trim())
+  if (meta.title && meta.title.trim() !== "")
+    form.append("title", meta.title.trim())
   form.append("operations", JSON.stringify(meta.operations))
 
   let res: Response
@@ -262,7 +317,10 @@ export async function saveClipVersion(
       body: form,
     })
   } catch {
-    return { status: "error", detail: "Something went wrong. Please try again." }
+    return {
+      status: "error",
+      detail: "Something went wrong. Please try again.",
+    }
   }
   return classifyEditResponse(res)
 }

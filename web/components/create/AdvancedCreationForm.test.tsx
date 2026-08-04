@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -14,6 +14,27 @@ vi.mock("@/contexts/model-selection-context", () => ({
     models: [{ key: "base", display_name: "Base" }],
     selectedModel: "base",
     isLoading: false,
+  }),
+}))
+
+// The Add Voice modal reads the musician's real library (US-25.4).
+vi.mock("@/hooks/use-voice-models", () => ({
+  useVoiceModels: () => ({
+    state: {
+      phase: "ready",
+      models: [
+        {
+          id: "v1",
+          name: "Aria",
+          description: "Warm and breathy",
+          status: "ready",
+          reference_count: 3,
+          job_id: null,
+          error: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
   }),
 }))
 
@@ -188,5 +209,25 @@ describe("AdvancedCreationForm", () => {
     )
     await user.click(screen.getByRole("button", { name: /apply/i }))
     expect(screen.getByRole("status")).toHaveTextContent(/coming soon/i)
+  })
+
+  it("sends the attached voice with the generation (US-25.4)", async () => {
+    submitAdvancedGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
+    const user = userEvent.setup()
+    render(<AdvancedCreationForm />)
+
+    await user.type(screen.getByLabelText("Styles"), "orchestral")
+    await user.click(screen.getByRole("button", { name: /voice/i }))
+    await user.click(screen.getByRole("button", { name: /aria/i }))
+    await user.click(createButton())
+
+    await waitFor(() => expect(submitAdvancedGeneration).toHaveBeenCalled())
+    expect(submitAdvancedGeneration.mock.calls[0][0]).toMatchObject({
+      voiceModelId: "v1",
+    })
   })
 })

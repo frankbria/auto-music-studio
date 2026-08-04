@@ -9,11 +9,13 @@ import { useClipEdit } from "@/hooks/use-clip-edit"
 import { DURATION_MAX } from "@/lib/constants/generation"
 import { submitExtend } from "@/lib/editing"
 import { parseTimeString, validateTimeField } from "@/lib/editing-validation"
+import type { VoiceSelection } from "@/lib/audio-inputs"
 import type { Clip } from "@/lib/workspace-clips"
 
 import { EditModalShell } from "./EditModalShell"
 import { StyleTextarea } from "./StyleTextarea"
 import { TimeDurationInput } from "./TimeDurationInput"
+import { VoiceField } from "./VoiceField"
 
 // Extend modal (US-17.3): lengthen a clip from its end or from a chosen
 // timestamp, optionally steering the continuation with a style override and
@@ -30,7 +32,8 @@ export function ExtendModal({
 }) {
   const { accessToken } = useAuth()
   const edit = useClipEdit()
-  const durationMs = clip.duration != null ? Math.round(clip.duration * 1000) : 0
+  const durationMs =
+    clip.duration != null ? Math.round(clip.duration * 1000) : 0
   const fromPointId = useId()
 
   const [duration, setDuration] = useState("")
@@ -38,10 +41,13 @@ export function ExtendModal({
   const [timestamp, setTimestamp] = useState("")
   const [styleOverride, setStyleOverride] = useState("")
   const [lyrics, setLyrics] = useState("")
+  const [voice, setVoice] = useState<VoiceSelection | null>(null)
 
   const durationError =
     validateTimeField(duration, "Duration") ||
-    ((parseTimeString(duration) ?? 0) <= 0 ? "Duration must be greater than 0." : null)
+    ((parseTimeString(duration) ?? 0) <= 0
+      ? "Duration must be greater than 0."
+      : null)
 
   const timestampError = useMemo(() => {
     if (mode !== "timestamp") return null
@@ -49,7 +55,8 @@ export function ExtendModal({
     if (fieldError) return fieldError
     const ms = parseTimeString(timestamp) as number
     if (ms <= 0) return "Timestamp must be greater than 0."
-    if (durationMs && ms > durationMs) return "Timestamp can't exceed the clip length."
+    if (durationMs && ms > durationMs)
+      return "Timestamp can't exceed the clip length."
     return null
   }, [mode, timestamp, durationMs])
 
@@ -58,7 +65,8 @@ export function ExtendModal({
   // a near-limit extend fails inline instead of round-tripping a 422.
   const capError = useMemo(() => {
     if (durationError || timestampError) return null
-    const fromMs = mode === "timestamp" ? (parseTimeString(timestamp) ?? 0) : durationMs
+    const fromMs =
+      mode === "timestamp" ? (parseTimeString(timestamp) ?? 0) : durationMs
     const durMs = parseTimeString(duration) ?? 0
     if (durMs <= 0) return null
     return fromMs + durMs > DURATION_MAX * 1000
@@ -80,6 +88,7 @@ export function ExtendModal({
             from_point: mode === "timestamp" ? timestamp : "end",
             style_override: styleOverride,
             lyrics,
+            voice_model_id: voice?.id,
           },
           accessToken
         ),
@@ -157,6 +166,7 @@ export function ExtendModal({
         placeholder="Optional — lyrics for the extended section"
         maxLength={5000}
       />
+      <VoiceField value={voice} onChange={setVoice} />
     </EditModalShell>
   )
 }

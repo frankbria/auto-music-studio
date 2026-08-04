@@ -5,10 +5,12 @@ import { useState } from "react"
 import { useAuth } from "@/hooks/use-auth"
 import { useClipEdit } from "@/hooks/use-clip-edit"
 import { submitCover } from "@/lib/editing"
+import type { VoiceSelection } from "@/lib/audio-inputs"
 import type { Clip } from "@/lib/workspace-clips"
 
 import { EditModalShell } from "./EditModalShell"
 import { StyleTextarea } from "./StyleTextarea"
+import { VoiceField } from "./VoiceField"
 
 // Cover modal (US-17.3): re-record a clip in a new target style, optionally
 // swapping in fresh lyrics. Iterative (POST /clips/{id}/cover) so it consumes a
@@ -28,6 +30,7 @@ export function CoverModal({
 
   const [style, setStyle] = useState("")
   const [lyricsOverride, setLyricsOverride] = useState("")
+  const [voice, setVoice] = useState<VoiceSelection | null>(null)
 
   const error = !style.trim() ? "Target style is required." : null
   const canSubmit = !error
@@ -38,7 +41,11 @@ export function CoverModal({
       () =>
         submitCover(
           clip.id,
-          { style: style.trim(), lyrics_override: lyricsOverride },
+          {
+            style: style.trim(),
+            lyrics_override: lyricsOverride,
+            voice_model_id: voice?.id,
+          },
           accessToken
         ),
       accessToken
@@ -79,6 +86,7 @@ export function CoverModal({
         placeholder="Optional — replace the lyrics for the cover"
         maxLength={5000}
       />
+      <VoiceField value={voice} onChange={setVoice} />
     </EditModalShell>
   )
 }

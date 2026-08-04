@@ -46,7 +46,7 @@ from ..services import (
 )
 from ..services.routing import ComputePreference, ComputeUnavailableError
 from ..settings import ApiSettings
-from ._validators import validate_format, validate_model, validate_time_signature
+from ._validators import require_voice_model, validate_format, validate_model, validate_time_signature
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,11 @@ class GenerationRequest(BaseModel):
     # ``"local"``/``"remote"`` pin the target with no fallback. This is a routing
     # hint, not a creative param — never forwarded to the job's input_params.
     compute_target: Literal["auto", "local", "remote"] | None = None
+
+    # US-25.4: sing this generation in one of the caller's trained voices. Validated
+    # against the caller's library in the handler (it needs the resolved user), and
+    # kept in the job params so the worker can load the adapter before submitting.
+    voice_model_id: str | None = None
 
     prompt: Annotated[str, Field(min_length=1, max_length=PROMPT_MAX_LENGTH)]
     style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
@@ -200,11 +205,15 @@ async def create_generation(
         # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
         preset = await preset_service.get_preset(request.preset_id, current.user_id)
         request = _apply_preset(request, preset)
+    # US-25.4: a voice the caller cannot use is rejected before anything is charged.
+    await require_voice_model(request.voice_model_id, str(user.id))
     # US-11.1: pick the compute target BEFORE charging credits, so an unavailable
     # backend yields a clean 503 without ever touching the balance.
     try:
         resolved_target = await routing_service.resolve_compute_target(
-            request_target=request.compute_target,
+            # A trained adapter is a file on the local ACE-Step host, so a custom voice
+            # pins the job there rather than being silently dropped by a remote backend.
+            request_target="local" if request.voice_model_id else request.compute_target,
             preference=ComputePreference(settings.compute_preference),
             local_url=settings.local_url,
             settings=settings,
@@ -212,7 +221,9 @@ async def create_generation(
     except ComputeUnavailableError as exc:
         # Distinguish a request-pinned target from the server preference so the
         # 503 doesn't report a synthetic "preference" the client never set.
-        if request.compute_target in ("local", "remote"):
+        # A voice pins local just as explicitly as compute_target="local" does, so it
+        # reports the same way rather than blaming a preference the caller never set.
+        if request.compute_target in ("local", "remote") or request.voice_model_id:
             detail = f"Requested compute target '{exc.target.value}' is unavailable."
         else:
             detail = f"Compute target '{exc.target.value}' is unavailable (preference: {exc.preference.value})."

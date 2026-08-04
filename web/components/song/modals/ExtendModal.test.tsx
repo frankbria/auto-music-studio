@@ -6,12 +6,37 @@ import { ExtendModal } from "@/components/song/modals/ExtendModal"
 import { makeClip } from "@/test/clip-factory"
 
 vi.mock("@/hooks/use-auth", () => ({
-  useAuth: () => ({ accessToken: "tok", isLoading: false, isAuthenticated: true }),
+  useAuth: () => ({
+    accessToken: "tok",
+    isLoading: false,
+    isAuthenticated: true,
+  }),
 }))
 
 const submitExtend = vi.fn()
 vi.mock("@/lib/editing", () => ({
   submitExtend: (...args: unknown[]) => submitExtend(...args),
+}))
+
+// The Add Voice control reads the musician's real library (US-25.4).
+vi.mock("@/hooks/use-voice-models", () => ({
+  useVoiceModels: () => ({
+    state: {
+      phase: "ready",
+      models: [
+        {
+          id: "v1",
+          name: "Aria",
+          description: "Warm and breathy",
+          status: "ready",
+          reference_count: 3,
+          job_id: null,
+          error: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  }),
 }))
 
 const fetchJobStatus = vi.fn()
@@ -38,8 +63,15 @@ describe("ExtendModal", () => {
   })
 
   it("submits the extend payload from the end and reaches success", async () => {
-    submitExtend.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
-    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["extended-1"] })
+    submitExtend.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["extended-1"],
+    })
 
     render(<ExtendModal clip={makeClip()} open onClose={vi.fn()} />)
     await userEvent.type(screen.getByLabelText("Duration"), "45s")
@@ -57,11 +89,32 @@ describe("ExtendModal", () => {
 
   it("blocks an extend that would exceed the 240s generation cap", async () => {
     // 200s clip + a 60s extension from the end = 260s > DURATION_MAX (240s).
-    render(<ExtendModal clip={makeClip({ duration: 200 })} open onClose={vi.fn()} />)
+    render(
+      <ExtendModal clip={makeClip({ duration: 200 })} open onClose={vi.fn()} />
+    )
     await userEvent.type(screen.getByLabelText("Duration"), "60s")
 
     expect(screen.getByText(/can't exceed 240s/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Extend" })).toBeDisabled()
     expect(submitExtend).not.toHaveBeenCalled()
+  })
+  it("sends the attached voice (US-25.4)", async () => {
+    submitExtend.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["ext-1"] })
+
+    render(<ExtendModal clip={makeClip()} open onClose={vi.fn()} />)
+    await userEvent.type(screen.getByLabelText(/Duration/), "20s")
+    await userEvent.click(screen.getByRole("button", { name: /add voice/i }))
+    await userEvent.click(screen.getByRole("button", { name: /aria/i }))
+    await userEvent.click(screen.getByRole("button", { name: "Extend" }))
+
+    await waitFor(() => expect(submitExtend).toHaveBeenCalled())
+    expect(submitExtend.mock.calls[0][1]).toMatchObject({
+      voice_model_id: "v1",
+    })
   })
 })
