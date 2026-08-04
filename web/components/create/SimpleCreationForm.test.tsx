@@ -8,6 +8,27 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+// The Add Voice modal reads the musician's real library (US-25.4).
+vi.mock("@/hooks/use-voice-models", () => ({
+  useVoiceModels: () => ({
+    state: {
+      phase: "ready",
+      models: [
+        {
+          id: "v1",
+          name: "Aria",
+          description: "Warm and breathy",
+          status: "ready",
+          reference_count: 3,
+          job_id: null,
+          error: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  }),
+}))
+
 vi.mock("@/contexts/model-selection-context", () => ({
   useModelSelection: () => ({
     models: [{ key: "base", display_name: "Base" }],
@@ -184,5 +205,46 @@ describe("SimpleCreationForm", () => {
 
     await user.click(screen.getByRole("button", { name: /clear all/i }))
     expect(screen.queryByLabelText("Attached inputs")).not.toBeInTheDocument()
+  })
+
+  it("sends the attached voice with the generation (US-25.4)", async () => {
+    submitGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
+    fetchJobStatus.mockResolvedValue({ status: "completed", clipIds: [] })
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+
+    await user.type(screen.getByLabelText("Song description"), "a warm ballad")
+    await user.click(screen.getByRole("button", { name: /voice/i }))
+    await user.click(screen.getByRole("button", { name: /aria/i }))
+    await user.click(createButton())
+
+    await waitFor(() => expect(submitGeneration).toHaveBeenCalled())
+    expect(submitGeneration.mock.calls[0][0]).toMatchObject({
+      voiceModelId: "v1",
+    })
+  })
+
+  it("reverts to the default voice once the chip is removed", async () => {
+    submitGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
+    fetchJobStatus.mockResolvedValue({ status: "completed", clipIds: [] })
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+
+    await user.type(screen.getByLabelText("Song description"), "a warm ballad")
+    await user.click(screen.getByRole("button", { name: /voice/i }))
+    await user.click(screen.getByRole("button", { name: /aria/i }))
+    await user.click(screen.getByRole("button", { name: /remove aria/i }))
+    await user.click(createButton())
+
+    await waitFor(() => expect(submitGeneration).toHaveBeenCalled())
+    expect(submitGeneration.mock.calls[0][0].voiceModelId).toBeUndefined()
   })
 })

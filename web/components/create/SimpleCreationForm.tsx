@@ -83,7 +83,13 @@ export function SimpleCreationForm({
     await generation.submit(
       () =>
         submitGeneration(
-          { description, lyrics: effectiveLyrics, instrumental, selectedTags },
+          {
+            description,
+            lyrics: effectiveLyrics,
+            instrumental,
+            selectedTags,
+            voiceModelId: inputs.voice?.id,
+          },
           accessToken,
           selectedModel
         ),

@@ -122,6 +122,7 @@ export function AdvancedCreationForm({
       styleInfluence: options.styleInfluence,
       seedRandom: options.seedRandom,
       seed: options.seed,
+      voiceModelId: inputs.voice?.id,
     }
   }
 

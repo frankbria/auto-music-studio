@@ -9,7 +9,32 @@ import {
   type AudioInputsValue,
 } from "@/components/create/AudioInputs"
 
-vi.mock("@/hooks/use-clips", () => ({ useClips: () => ({ data: null, loading: false }) }))
+vi.mock("@/hooks/use-clips", () => ({
+  useClips: () => ({ data: null, loading: false }),
+}))
+vi.mock("@/hooks/use-auth", () => ({
+  useAuth: () => ({ accessToken: "token-1" }),
+}))
+// The Add Voice modal reads the musician's real library (US-25.4).
+vi.mock("@/hooks/use-voice-models", () => ({
+  useVoiceModels: () => ({
+    state: {
+      phase: "ready",
+      models: [
+        {
+          id: "v1",
+          name: "Aria",
+          description: "Warm and breathy",
+          status: "ready",
+          reference_count: 3,
+          job_id: null,
+          error: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  }),
+}))
 vi.mock("@/hooks/use-workspaces", () => ({
   useWorkspaces: () => ({ workspaces: [], defaultWorkspace: null }),
 }))

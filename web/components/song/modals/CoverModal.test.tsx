@@ -6,12 +6,37 @@ import { CoverModal } from "@/components/song/modals/CoverModal"
 import { makeClip } from "@/test/clip-factory"
 
 vi.mock("@/hooks/use-auth", () => ({
-  useAuth: () => ({ accessToken: "tok", isLoading: false, isAuthenticated: true }),
+  useAuth: () => ({
+    accessToken: "tok",
+    isLoading: false,
+    isAuthenticated: true,
+  }),
 }))
 
 const submitCover = vi.fn()
 vi.mock("@/lib/editing", () => ({
   submitCover: (...args: unknown[]) => submitCover(...args),
+}))
+
+// The Add Voice control reads the musician's real library (US-25.4).
+vi.mock("@/hooks/use-voice-models", () => ({
+  useVoiceModels: () => ({
+    state: {
+      phase: "ready",
+      models: [
+        {
+          id: "v1",
+          name: "Aria",
+          description: "Warm and breathy",
+          status: "ready",
+          reference_count: 3,
+          job_id: null,
+          error: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  }),
 }))
 
 const fetchJobStatus = vi.fn()
@@ -35,11 +60,21 @@ describe("CoverModal", () => {
   })
 
   it("submits the cover payload and reaches success", async () => {
-    submitCover.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
-    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["cover-1"] })
+    submitCover.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["cover-1"],
+    })
 
     render(<CoverModal clip={makeClip()} open onClose={vi.fn()} />)
-    await userEvent.type(screen.getByLabelText(/Target style/), "acoustic ballad")
+    await userEvent.type(
+      screen.getByLabelText(/Target style/),
+      "acoustic ballad"
+    )
     await userEvent.click(screen.getByRole("button", { name: "Create cover" }))
 
     await waitFor(() =>
@@ -50,5 +85,28 @@ describe("CoverModal", () => {
       expect.objectContaining({ style: "acoustic ballad" }),
       "tok"
     )
+  })
+  it("sends the attached voice, and reverts when it is removed (US-25.4)", async () => {
+    submitCover.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["cover-1"],
+    })
+
+    render(<CoverModal clip={makeClip()} open onClose={vi.fn()} />)
+    await userEvent.type(
+      screen.getByLabelText(/Target style/),
+      "acoustic ballad"
+    )
+    await userEvent.click(screen.getByRole("button", { name: /add voice/i }))
+    await userEvent.click(screen.getByRole("button", { name: /aria/i }))
+    await userEvent.click(screen.getByRole("button", { name: "Create cover" }))
+
+    await waitFor(() => expect(submitCover).toHaveBeenCalled())
+    expect(submitCover.mock.calls[0][1]).toMatchObject({ voice_model_id: "v1" })
   })
 })
