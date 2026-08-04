@@ -155,6 +155,42 @@ class TestAdapterState:
         for concurrent in seen:
             assert len(set(concurrent)) == 1, f"two different voices were live at once: {concurrent}"
 
+    async def test_a_queued_voice_is_not_starved_by_steady_base_traffic(self, calls) -> None:
+        """A switch already queued goes next, ahead of arrivals the loaded adapter suits.
+
+        Without this, a generation asking for a voice waits behind an unbounded stream of
+        plain generations — each of which matches the loaded (base) adapter — and never
+        sees the host go quiet.
+        """
+        state = _AdapterState()
+        started: list[str] = []
+        running = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def hold_open() -> None:
+            async with state.hold(BASE_URL, None):
+                started.append("first-plain")
+                running.set()
+                await finish.wait()
+
+        async def queued(label: str, weights: str | None) -> None:
+            async with state.hold(BASE_URL, weights):
+                started.append(label)
+
+        first = asyncio.create_task(hold_open())
+        await running.wait()
+
+        # Queued while the host is busy: the voice first, then more plain traffic.
+        wants_voice = asyncio.create_task(queued("voice", "/lora/aria/adapter"))
+        await asyncio.sleep(0)
+        later_plain = [asyncio.create_task(queued(f"plain-{i}", None)) for i in range(3)]
+        await asyncio.sleep(0)
+
+        finish.set()
+        await asyncio.gather(first, wants_voice, *later_plain)
+
+        assert started[1] == "voice", f"the queued voice was overtaken: {started}"
+
     async def test_generations_sharing_a_voice_still_run_concurrently(self, calls) -> None:
         """Voices must not cost the throughput that plain generation had."""
         state = _AdapterState()

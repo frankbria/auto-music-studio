@@ -69,6 +69,11 @@ class _AdapterState:
         #: Generations queued to change it. New arrivals queue behind them even when the
         #: current adapter suits, so a steady stream of one voice cannot starve another.
         self._switchers = 0
+        #: Bumped on every adapter change. A waiter may only skip its own switch if a
+        #: change happened *after it started waiting* — without that test a new arrival
+        #: whose adapter is already loaded would walk straight past a queued switcher,
+        #: and under steady traffic that switcher would never see the host go quiet.
+        self._epoch = 0
 
     @asynccontextmanager
     async def hold(self, base_url: str, weights_path: str | None) -> AsyncIterator[None]:
@@ -88,11 +93,12 @@ class _AdapterState:
                 self._users += 1
                 return
 
+            entered_at = self._epoch
             self._switchers += 1
             try:
-                # Either someone else swaps to what we want while we wait, or the host
-                # goes quiet and we swap it ourselves.
-                while not (self._matches(weights_path) or self._users == 0):
+                # Either someone else swaps to what we want while we wait — in which case
+                # we ride in behind them — or the host goes quiet and we swap it ourselves.
+                while not ((self._epoch != entered_at and self._matches(weights_path)) or self._users == 0):
                     await self._cond.wait()
                 if not self._matches(weights_path):
                     await self._apply(base_url, weights_path)
@@ -128,6 +134,7 @@ class _AdapterState:
 
         self._loaded = weights_path
         self._synced = True
+        self._epoch += 1
         logger.info("ACE-Step voice adapter set to %s", weights_path or "the base model")
 
 
