@@ -25,7 +25,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6.3.0
@@ -56,3 +56,38 @@ jobs:
         run: uv run pytest -m integration
         env:
           ACEMUSIC_TEST_MONGODB_URL: mongodb://localhost:27017
+
+  # US-26.0: web/ had no CI at all, which is why eleven npm advisories (eight high)
+  # accumulated unnoticed. This is the security gate specifically — typecheck, lint,
+  # test and build are still local-only, deliberately (they carry branch-protection
+  # implications this change does not take on).
+  #
+  # Its own job rather than a step in `ci`: it needs Node, not Python, and it must not
+  # run once per Python version.
+  web-audit:
+    name: web npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `npm audit` reads the lockfile and does not need node_modules, so this skips
+      # a full install. The advisory database is queried live, so a newly published
+      # advisory can fail a PR that changed nothing — that is the point of a gate.
+      - name: Audit web dependencies
+        working-directory: web
+        run: npm audit --audit-level=high
+
+      # A lockfile can be internally inconsistent while `npm ci` still succeeds — an
+      # npm version that drops bundled nested entries leaves declared dependencies
+      # with no corresponding package entry. This PR shipped exactly that for one
+      # commit, and only a reviewer caught it.
+      - name: Check the web lockfile is internally consistent
+        working-directory: web
+        run: npm ls --package-lock-only --all > /dev/null
