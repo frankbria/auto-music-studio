@@ -304,3 +304,89 @@ class TestProcessorRefundsOnFailure:
         refreshed = await Job.get(job.id)
         assert refreshed.status is JobStatus.COMPLETED
         assert await _balance(user) == 9.0, "a successful generation was refunded"
+
+
+class TestChargeAndCreate:
+    """The invariant the helper exists for: charged => a job exists, or the credit is back.
+
+    Added after a mutation check — deleting the compensating reversal killed no test,
+    because the pre-existing coverage exercised the hand-rolled copies in the routers
+    rather than this helper.
+    """
+
+    async def test_a_successful_charge_deducts_and_ledgers_once(self, mongo_db) -> None:
+        user = await _user("cac-ok@example.com", credits=10.0)
+
+        async def _create() -> Job:
+            return await _job(user)
+
+        job = await credits_service.charge_and_create(user_id=user.id, cost=1.0, action_type="song", create=_create)
+
+        assert await _balance(user) == 9.0
+        rows = await _rows(job)
+        assert [(r.action_type, r.amount) for r in rows] == [("song", -1.0)]
+
+    async def test_a_failure_to_create_gives_the_credit_back(self, mongo_db) -> None:
+        user = await _user("cac-fail@example.com", credits=10.0)
+
+        async def _boom() -> Job:
+            raise RuntimeError("could not queue")
+
+        with pytest.raises(RuntimeError):
+            await credits_service.charge_and_create(user_id=user.id, cost=1.0, action_type="song", create=_boom)
+
+        assert await _balance(user) == 10.0, "the charge was kept for a job that never existed"
+
+    async def test_a_failure_to_create_leaves_no_ledger_trace(self, mongo_db) -> None:
+        # Neither the charge nor its reversal was recorded, so the history must be
+        # empty rather than showing a credit from nowhere.
+        user = await _user("cac-fail-ledger@example.com", credits=10.0)
+
+        async def _boom() -> Job:
+            raise RuntimeError("could not queue")
+
+        with pytest.raises(RuntimeError):
+            await credits_service.charge_and_create(user_id=user.id, cost=1.0, action_type="song", create=_boom)
+
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+
+    async def test_a_cancelled_request_also_gives_the_credit_back(self, mongo_db) -> None:
+        # BaseException, not Exception: a shutdown mid-request must not leave someone
+        # charged for work that will never run.
+        import asyncio
+
+        user = await _user("cac-cancel@example.com", credits=10.0)
+
+        async def _cancelled() -> Job:
+            raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await credits_service.charge_and_create(user_id=user.id, cost=1.0, action_type="song", create=_cancelled)
+
+        assert await _balance(user) == 10.0
+
+    async def test_an_unaffordable_action_is_refused_before_the_job_exists(self, mongo_db) -> None:
+        user = await _user("cac-broke@example.com", credits=0.0)
+        created = False
+
+        async def _create() -> Job:
+            nonlocal created
+            created = True
+            return await _job(user)
+
+        with pytest.raises(credits_service.InsufficientCreditsError) as exc:
+            await credits_service.charge_and_create(user_id=user.id, cost=1.0, action_type="song", create=_create)
+
+        assert not created, "the job was created despite an insufficient balance"
+        assert exc.value.required == 1.0
+        assert exc.value.balance == 0.0
+
+    async def test_a_free_action_creates_without_touching_the_balance(self, mongo_db) -> None:
+        user = await _user("cac-free@example.com", credits=10.0)
+
+        job = await credits_service.charge_and_create(
+            user_id=user.id, cost=0.0, action_type="crop", create=lambda: _job(user, job_type="crop")
+        )
+
+        assert await _balance(user) == 10.0
+        assert await _rows(job) == []
