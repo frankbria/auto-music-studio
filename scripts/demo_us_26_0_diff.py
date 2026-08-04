@@ -1,10 +1,11 @@
 """Show exactly which packages this branch moves, and why each one moved."""
+
 import json
 import subprocess
 
-main = json.loads(
-    subprocess.run(["git", "show", "main:web/package-lock.json"], capture_output=True, text=True).stdout
-)["packages"]
+main = json.loads(subprocess.run(["git", "show", "main:web/package-lock.json"], capture_output=True, text=True).stdout)[
+    "packages"
+]
 cur = json.load(open("web/package-lock.json"))["packages"]
 
 changed = sorted(
