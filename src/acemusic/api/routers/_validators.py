@@ -15,7 +15,9 @@ from fastapi import HTTPException, status
 
 from acemusic.constants import VALID_FORMATS, VALID_MODELS, VALID_TIME_SIGNATURES
 
+from ..auth.dependencies import require_tier_capability
 from ..services import voice_models as voice_service
+from ..services.tiers import Capability
 
 
 def validate_format(value: str | None) -> str | None:
@@ -42,9 +44,16 @@ async def require_voice_model(voice_model_id: str | None, user_id: str) -> None:
     Runs *before* credits are deducted, so an unusable voice never costs anything.
     404 covers both "no such id" and "someone else's voice"; a voice that exists but
     is still training is a 409, which is a different thing to tell the musician.
+
+    US-26.2 adds the tier check here rather than as a router dependency, because this is
+    conditional on an *argument*: generating without a voice is free-tier work, and only
+    naming one is Pro. Checked before the lookup, so the 403 does not depend on whether
+    the voice exists.
     """
     if voice_model_id is None:
         return
+
+    await require_tier_capability(user_id, Capability.VOICE_MODELS)
 
     try:
         await voice_service.weights_for(voice_model_id, user_id)

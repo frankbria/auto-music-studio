@@ -40,6 +40,11 @@ async def get_balance(current: CurrentUser = Depends(get_current_user)) -> Balan
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    # US-26.2: the allocation is applied lazily on read rather than by a scheduler, and
+    # this is the read the sidebar makes on every page — so the monthly top-up lands the
+    # first time someone looks after their anniversary.
+    user = await credits_service.apply_monthly_reset(user)
+
     return BalanceResponse(
         balance=user.credits_balance,
         tier=user.subscription_tier,

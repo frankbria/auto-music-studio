@@ -6,8 +6,10 @@ layer raises plain exceptions, never ``HTTPException``, so it stays
 transport-agnostic.
 """
 
+import calendar
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
 from beanie import PydanticObjectId
 from pymongo import DESCENDING, ReturnDocument
@@ -365,3 +367,101 @@ async def get_recent_transactions(user_id: PydanticObjectId, limit: int = HISTOR
         .limit(limit)
         .to_list()
     )
+
+
+# ---------------------------------------------------------------------------
+# Monthly allocation (US-26.2 AC5)
+# ---------------------------------------------------------------------------
+
+
+def next_reset_due(last_reset: datetime, anniversary_day: int | None = None) -> datetime:
+    """One month after ``last_reset``, anchored to ``anniversary_day``.
+
+    Anchored to the signup anniversary rather than the calendar month, so nobody gains or
+    loses a partial period by signing up on the 3rd.
+
+    ``anniversary_day`` is passed separately because clamping must not stick: an account
+    created on the 31st clamps to the 28th in February and has to return to the 31st in
+    March. Deriving the day from ``last_reset`` alone would strand it on the 28th forever.
+    """
+    day = anniversary_day or last_reset.day
+    year, month = (last_reset.year + 1, 1) if last_reset.month == 12 else (last_reset.year, last_reset.month + 1)
+
+    # A month shorter than the anniversary day takes its last day instead — February
+    # must not be skipped, and must not spill into March.
+    return last_reset.replace(year=year, month=month, day=min(day, calendar.monthrange(year, month)[1]))
+
+
+async def apply_monthly_reset(user: User) -> User:
+    """Top ``user`` back up to their tier's monthly allocation if a period has elapsed.
+
+    Lazy, on read, rather than scheduled: a cron that misses its window leaves someone
+    short until the next one, and there is no window to miss if the answer is derived from
+    the dates every time it is asked for.
+
+    Three things it deliberately does **not** do:
+
+    * **Claw back.** A balance above the allocation is left alone — a top-up purchase
+      (US-26.4) must not be confiscated by the monthly reset.
+    * **Pay for missed periods.** Someone away six months returns to one month's
+      allowance, not six.
+    * **Pay accounts that predate the field.** ``credits_reset_at is None`` means "never
+      run", which is backfilled from the anniversary rather than treated as infinitely
+      overdue — otherwise every existing account collects a windfall on next read.
+    """
+    from . import tiers
+
+    now = datetime.now(timezone.utc)
+    created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
+
+    if user.credits_reset_at is None:
+        # Backfill the anchor without granting anything.
+        user.credits_reset_at = created
+        await user.save()
+        return user
+
+    last = user.credits_reset_at
+    last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+
+    if now < next_reset_due(last, anniversary_day=created.day):
+        return user
+
+    allocation = tiers.monthly_allocation(user.subscription_tier)
+    # Stamp the period we are *entering*, not `now`: a reset read a week late still
+    # anchors to the anniversary rather than drifting the schedule forward each month.
+    user.credits_reset_at = _period_start(created, now)
+
+    if user.credits_balance >= allocation:
+        await user.save()
+        return user
+
+    granted = allocation - user.credits_balance
+    user.credits_balance = allocation
+    await user.save()
+
+    try:
+        await record_transaction(
+            user_id=user.id,
+            amount=granted,
+            action_type="monthly_reset",
+            job_id="",
+            balance_after=allocation,
+        )
+    except Exception:  # pragma: no cover - a missing history row must not undo the grant
+        logger.exception("Monthly reset applied for %s but its ledger row failed", user.id)
+
+    return user
+
+
+def _period_start(created: datetime, now: datetime) -> datetime:
+    """The anniversary date of the period ``now`` falls in."""
+    day = min(created.day, calendar.monthrange(now.year, now.month)[1])
+    start = created.replace(year=now.year, month=now.month, day=day)
+
+    if start > now:
+        # Before this month's anniversary, so the current period began last month.
+        previous = start.replace(day=1) - timedelta(days=1)
+        day = min(created.day, calendar.monthrange(previous.year, previous.month)[1])
+        start = created.replace(year=previous.year, month=previous.month, day=day)
+
+    return start

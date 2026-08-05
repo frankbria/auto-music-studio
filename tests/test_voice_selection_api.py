@@ -76,9 +76,13 @@ def _auth(user: User, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, credits: float = 100.0) -> User:
+async def _make_user(email: str, credits: float = 100.0, tier: str = "pro") -> User:
+    # Pro by default: US-26.2 makes generating with a custom voice a Pro capability, so a
+    # free account is refused with 403 before any of the voice rules below are reached.
+    # The tier gate itself is covered in tests/test_tier_enforcement_api.py.
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
     user.credits_balance = credits
+    user.subscription_tier = tier
     await user.save()
     return user
 

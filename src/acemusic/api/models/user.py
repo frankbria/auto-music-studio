@@ -30,6 +30,12 @@ class User(Document):
     # US-9.6: deducted atomically at job-queue time (see services/credits.py).
     # Documents predating the field load with the default starting balance.
     credits_balance: float = DEFAULT_CREDITS_BALANCE
+    # US-26.2: when the monthly allocation was last applied. The reset is anchored to
+    # ``created_at`` (the subscription anniversary) rather than the calendar month, so
+    # nobody gains or loses a partial period by signing up on the 3rd. Null means it has
+    # never run — for accounts predating this field, the first read backfills it rather
+    # than handing out a windfall.
+    credits_reset_at: datetime | None = None
     # Profile fields (US-8.4). All optional so existing/OAuth-created users remain
     # valid; ``handle`` stays null until the user claims one.
     display_name: str | None = None

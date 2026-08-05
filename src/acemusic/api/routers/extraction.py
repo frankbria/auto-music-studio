@@ -25,9 +25,10 @@ from pydantic import BaseModel
 
 from acemusic.stems_client import STEM_LABELS
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_capability, require_existing_user
 from ..models import Clip
 from ..services import clips as clip_service, credits as credits_service, extraction as extraction_service
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,14 @@ async def _midi_result(clip: Clip) -> MidiResult:
     return MidiResult(download_urls=urls, parent_clip_id=str(clip.id))
 
 
-@router.post("/{clip_id}/stems", status_code=status.HTTP_202_ACCEPTED, response_model=None)
+@router.post(
+    "/{clip_id}/stems",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=None,
+    # US-26.2: Pro-only. The dependency runs before the handler, so a free account is
+    # refused before a clip is even looked up.
+    dependencies=[Depends(require_capability(Capability.STEMS))],
+)
 async def separate_stems(
     clip_id: str,
     response: Response,
@@ -153,7 +161,12 @@ async def get_stems(
     return _stems_result(clip, existing)
 
 
-@router.post("/{clip_id}/midi", status_code=status.HTTP_202_ACCEPTED, response_model=None)
+@router.post(
+    "/{clip_id}/midi",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=None,
+    dependencies=[Depends(require_capability(Capability.MIDI))],
+)
 async def extract_midi(
     clip_id: str,
     response: Response,
