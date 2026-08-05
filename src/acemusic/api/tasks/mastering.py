@@ -227,10 +227,11 @@ async def process_mastering_job(
             requested_service=service,
         )
     except Exception as exc:
-        # The pre-flight get_client already handled the unconfigured-requested
-        # case (with a refund); any failure reaching here is a backend error from
-        # a configured service that exhausted its fallback chain, so the job fails
-        # without a refund (mirrors the existing runtime-failure behaviour).
+        # The pre-flight get_client already handled the unconfigured-requested case
+        # (refunding there, before any work). Anything reaching here is a backend error
+        # from a configured service that exhausted its fallback chain, so the job just
+        # fails — US-26.1 made _mark_failed refund whatever is still owed, so raising is
+        # now the whole story rather than "fails without a refund" as this said before.
         raise JobProcessingError(f"Mastering failed: {exc}") from exc
 
     clip_id = await _store_master_clip(job, source, storage, output.audio_bytes, fmt)

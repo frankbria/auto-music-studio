@@ -171,10 +171,10 @@ export function useClipEdit(): UseClipEdit {
         case "insufficientCredits":
           // The balance the server just reported may be news to us.
           refreshCredits()
-          setState({
-            phase: "error",
-            message: `Not enough credits — this needs ${result.required}, you have ${result.balance}.`,
-          })
+          // The server's own sentence, not a re-worded one — it is the copy that also
+          // knows about upgrading, and two places phrasing this differently is how they
+          // drift (US-26.1).
+          setState({ phase: "error", message: result.message })
           return
         case "invalid":
         case "error":

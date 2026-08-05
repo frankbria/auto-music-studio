@@ -23,7 +23,9 @@ const section: Section = {
   styleHint: "intro, atmospheric build, sparse arrangement",
 }
 
-function renderStep(props: Partial<React.ComponentProps<typeof SectionGenerationStep>> = {}) {
+function renderStep(
+  props: Partial<React.ComponentProps<typeof SectionGenerationStep>> = {}
+) {
   const onComplete = vi.fn()
   render(
     <SectionGenerationStep
@@ -43,7 +45,11 @@ function renderStep(props: Partial<React.ComponentProps<typeof SectionGeneration
 
 describe("SectionGenerationStep", () => {
   it("extends the cumulative clip with the section duration + composed style, then reports the new clip", async () => {
-    submitExtend.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    submitExtend.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
     fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["gen-1"] })
 
     const { onComplete } = renderStep()
@@ -61,7 +67,11 @@ describe("SectionGenerationStep", () => {
   })
 
   it("folds regeneration instructions into the style override", async () => {
-    submitExtend.mockResolvedValue({ status: "accepted", jobId: "j1", estimatedSeconds: 0 })
+    submitExtend.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 0,
+    })
     fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["gen-1"] })
 
     renderStep({ instructions: "more energy" })
@@ -73,7 +83,15 @@ describe("SectionGenerationStep", () => {
   })
 
   it("surfaces an error with a Retry when generation can't be afforded", async () => {
-    submitExtend.mockResolvedValue({ status: "insufficientCredits", balance: 0, required: 1 })
+    // US-26.1 widened the result: the hook now shows the server's own sentence rather
+    // than composing one, so a mock without `message` renders a blank alert.
+    submitExtend.mockResolvedValue({
+      status: "insufficientCredits",
+      balance: 0,
+      required: 1,
+      message: "Not enough credits — this needs 1, you have 0.",
+      upgradeUrl: "/settings/billing",
+    })
 
     const { onComplete } = renderStep()
 
@@ -83,7 +101,11 @@ describe("SectionGenerationStep", () => {
     expect(onComplete).not.toHaveBeenCalled()
 
     // Retry re-issues the extend.
-    submitExtend.mockResolvedValue({ status: "accepted", jobId: "j2", estimatedSeconds: 0 })
+    submitExtend.mockResolvedValue({
+      status: "accepted",
+      jobId: "j2",
+      estimatedSeconds: 0,
+    })
     fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["gen-2"] })
     await userEvent.click(screen.getByRole("button", { name: "Retry" }))
     await waitFor(() => expect(onComplete).toHaveBeenCalledWith("gen-2"))

@@ -48,7 +48,13 @@ describe("submitCrop", () => {
     )
     await submitCrop(
       "c",
-      { start: "0s", end: "10s", fade_in: "", fade_out: undefined, snap_to_beat: true },
+      {
+        start: "0s",
+        end: "10s",
+        fade_in: "",
+        fade_out: undefined,
+        snap_to_beat: true,
+      },
       "tok"
     )
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
@@ -63,12 +69,20 @@ describe("submitSpeed", () => {
   it("carries the estimated time from an iterative-style 202", async () => {
     stubFetch(
       new Response(
-        JSON.stringify({ job_id: "j2", status: "queued", estimated_time_seconds: 45 }),
+        JSON.stringify({
+          job_id: "j2",
+          status: "queued",
+          estimated_time_seconds: 45,
+        }),
         { status: 202 }
       )
     )
     const result = await submitSpeed("c", { multiplier: 1.5 }, "tok")
-    expect(result).toEqual({ status: "accepted", jobId: "j2", estimatedSeconds: 45 })
+    expect(result).toEqual({
+      status: "accepted",
+      jobId: "j2",
+      estimatedSeconds: 45,
+    })
   })
 })
 
@@ -84,24 +98,44 @@ describe("submitSample", () => {
     )
     const result = await submitSample(
       "c",
-      { start: "0s", end: "5s", role: "loop-bed", prompt: "warm", num_clips: 4 },
+      {
+        start: "0s",
+        end: "5s",
+        role: "loop-bed",
+        prompt: "warm",
+        num_clips: 4,
+      },
       "tok"
     )
-    expect(result).toEqual({ status: "insufficientCredits", balance: 2, required: 4 })
+    // US-26.1 widened the result: the UI needs somewhere to send the musician, not
+    // just the numbers. This body predates the richer server shape (no `message`),
+    // so the fallback composes one and supplies the default upgrade target.
+    expect(result).toEqual({
+      status: "insufficientCredits",
+      balance: 2,
+      required: 4,
+      message: "Not enough credits — 4 required, 2 available.",
+      upgradeUrl: "/settings/billing",
+    })
   })
 })
 
 describe("submitRemaster", () => {
   it("classifies 401 as unauthorized", async () => {
     stubFetch(new Response("{}", { status: 401 }))
-    expect(await submitRemaster("c", {}, "tok")).toEqual({ status: "unauthorized" })
+    expect(await submitRemaster("c", {}, "tok")).toEqual({
+      status: "unauthorized",
+    })
   })
 
   it("classifies 422 as invalid with the field message", async () => {
     stubFetch(
-      new Response(JSON.stringify({ detail: [{ msg: "unsupported format" }] }), {
-        status: 422,
-      })
+      new Response(
+        JSON.stringify({ detail: [{ msg: "unsupported format" }] }),
+        {
+          status: 422,
+        }
+      )
     )
     expect(await submitRemaster("c", {}, "tok")).toEqual({
       status: "invalid",
@@ -125,9 +159,12 @@ describe("submitRemaster", () => {
 describe("submitMashup", () => {
   it("POSTs the ordered clip ids to the mashup route", async () => {
     const fetchMock = stubFetch(
-      new Response(JSON.stringify({ job_id: "m1", estimated_time_seconds: 45 }), {
-        status: 202,
-      })
+      new Response(
+        JSON.stringify({ job_id: "m1", estimated_time_seconds: 45 }),
+        {
+          status: 202,
+        }
+      )
     )
     await submitMashup({ clip_ids: ["a", "b"], blend_mode: "layered" }, "tok")
     const [url, opts] = fetchMock.mock.calls[0]
@@ -146,17 +183,26 @@ describe("saveClipVersion", () => {
 
   it("uploads the WAV + metadata as multipart to the version route and returns the job", async () => {
     const fetchMock = stubFetch(
-      new Response(JSON.stringify({ job_id: "v1", status: "queued" }), { status: 202 })
+      new Response(JSON.stringify({ job_id: "v1", status: "queued" }), {
+        status: 202,
+      })
     )
 
     const result = await saveClipVersion(
       "clip-xyz",
       wav(),
-      { title: "  Radio edit  ", operations: [{ kind: "delete", startSec: 1, endSec: 2 }] },
+      {
+        title: "  Radio edit  ",
+        operations: [{ kind: "delete", startSec: 1, endSec: 2 }],
+      },
       "tok"
     )
 
-    expect(result).toEqual({ status: "accepted", jobId: "v1", estimatedSeconds: 0 })
+    expect(result).toEqual({
+      status: "accepted",
+      jobId: "v1",
+      estimatedSeconds: 0,
+    })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/clips/clip-xyz/version")
     expect(opts.method).toBe("POST")
@@ -181,7 +227,9 @@ describe("saveClipVersion", () => {
   })
 
   it("classifies a 404 (endpoint not yet deployed) as an error result", async () => {
-    stubFetch(new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 }))
+    stubFetch(
+      new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })
+    )
     const result = await saveClipVersion("c", wav(), { operations: [] }, "tok")
     expect(result).toEqual({ status: "error", detail: "Not Found" })
   })

@@ -105,13 +105,23 @@ describe("useClipEdit", () => {
     const { result } = renderHook(() => useClipEdit())
     await act(async () => {
       await result.current.submit(
-        make({ status: "insufficientCredits", balance: 1, required: 4 }),
+        make({
+          status: "insufficientCredits",
+          balance: 1,
+          required: 4,
+          // US-26.1: the server supplies the sentence (and the upgrade target); the
+          // hook shows it rather than composing its own.
+          message:
+            "This action needs 4 credits and you have 1. Top up to continue.",
+          upgradeUrl: "/settings/billing",
+        }),
         "tok"
       )
     })
     expect(result.current.state).toEqual({
       phase: "error",
-      message: "Not enough credits — this needs 4, you have 1.",
+      message:
+        "This action needs 4 credits and you have 1. Top up to continue.",
     })
   })
 
