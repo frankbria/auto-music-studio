@@ -14,6 +14,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, User
 from acemusic.api.services import credits as credits_service, users as user_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 
 pytestmark = pytest.mark.integration
@@ -50,7 +51,11 @@ def _auth(user: User, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _user(email: str, credits: float = 100.0) -> User:
+    # Pro: this file is about what an action *costs*, and stems/midi/remaster became
+    # Pro-only in US-26.2. A free user would be refused before the charge, which would
+    # test the gate instead of the price. The gate is tested in test_tier_enforcement_api.py.
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
     user.credits_balance = credits
     await user.save()
     return user

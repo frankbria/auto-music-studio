@@ -561,6 +561,13 @@ async def stream_clip_audio(
 
     storage = get_storage_backend()
     native_format = clip_service.native_format(clip)
+
+    # US-26.2: the same lossless gate as GET /clips/{id}/audio. This endpoint offers the
+    # identical on-the-fly conversion, so without it "download the WAV" is one URL away
+    # from the refusal the sibling endpoint just made — and the anonymous path means
+    # signing out would work too, hence the gate covers callers with no account.
+    if format in LOSSLESS_FORMATS and format != native_format:
+        await require_tier_capability(current.user_id if current else None, Capability.LOSSLESS_EXPORT)
     # Access-controlled: a shorter max-age bounds how long a shared cache keeps
     # serving a clip after it is made private again (the origin check can't reach
     # cached copies). Private clips stay client-only and uncached.

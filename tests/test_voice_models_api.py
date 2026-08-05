@@ -23,6 +23,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import CreditTransaction, Job, User, VoiceModel, VoiceModelStatus
 from acemusic.api.services import credits as credits_service, users as user_service, voice_models as voice_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
 
@@ -163,7 +164,11 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str, credits: float = 100.0):
+    # Pro: custom voice models are a Pro capability since US-26.2, and this file tests how
+    # voice training behaves, not who may ask for it. The refusal is tested in
+    # test_tier_enforcement_api.py.
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
     user.credits_balance = credits
     await user.save()
     return user

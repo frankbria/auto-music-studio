@@ -414,14 +414,23 @@ async def apply_monthly_reset(user: User) -> User:
     now = datetime.now(timezone.utc)
     created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
 
+    collection = User.get_pymongo_collection()
+
     if user.credits_reset_at is None:
         # Backfill without granting. Anchored to the CURRENT period, not to created_at:
         # for an account older than a month, created_at is already overdue, so the very
         # next read would pay out the windfall this branch exists to prevent. Found by
         # codex review — the original test used a days-old account, where the two are
         # the same date and the bug cannot show.
-        user.credits_reset_at = _period_start(created, now)
-        await user.save()
+        #
+        # Only the anchor is written, and only while it is still unset. A full save()
+        # would push the whole stale document back — including a balance read before a
+        # concurrent deduction landed, silently reverting the charge. Every new account
+        # takes this branch on its first read, which is exactly when it is likeliest to
+        # be spending its first credit.
+        anchor = _period_start(created, now)
+        await collection.update_one({"_id": user.id, "credits_reset_at": None}, {"$set": {"credits_reset_at": anchor}})
+        user.credits_reset_at = anchor
         return user
 
     last = user.credits_reset_at
@@ -433,15 +442,35 @@ async def apply_monthly_reset(user: User) -> User:
     allocation = tiers.monthly_allocation(user.subscription_tier)
     # Stamp the period we are *entering*, not `now`: a reset read a week late still
     # anchors to the anniversary rather than drifting the schedule forward each month.
-    user.credits_reset_at = _period_start(created, now)
+    entering = _period_start(created, now)
+    # No claw-back, so a balance already at or above the allocation moves only the anchor.
+    granted = max(0.0, allocation - user.credits_balance)
 
-    if user.credits_balance >= allocation:
-        await user.save()
+    # Filtered on the anchor we read, so two concurrent reads of an overdue account
+    # serialise: one moves it and grants, the other matches nothing and grants nothing.
+    # Without it both would pass the due check and write two monthly_reset rows for one
+    # period. $inc rather than $set on the balance for the same reason deduct_credits
+    # uses it — a charge landing mid-reset composes instead of being overwritten.
+    update: dict[str, dict[str, object]] = {"$set": {"credits_reset_at": entering}}
+    if granted:
+        update["$inc"] = {"credits_balance": granted}
+
+    doc = await collection.find_one_and_update(
+        {"_id": user.id, "credits_reset_at": user.credits_reset_at},
+        update,
+        return_document=ReturnDocument.AFTER,
+    )
+
+    if doc is None:
+        # Lost the race. The winner applied this same period's reset, so re-read rather
+        # than reporting the stale balance we came in with.
+        return await User.get(user.id) or user
+
+    user.credits_reset_at = entering
+    user.credits_balance = doc["credits_balance"]
+
+    if not granted:
         return user
-
-    granted = allocation - user.credits_balance
-    user.credits_balance = allocation
-    await user.save()
 
     try:
         await record_transaction(
@@ -449,7 +478,7 @@ async def apply_monthly_reset(user: User) -> User:
             amount=granted,
             action_type="monthly_reset",
             job_id="",
-            balance_after=allocation,
+            balance_after=user.credits_balance,
         )
     except Exception:  # pragma: no cover - a missing history row must not undo the grant
         logger.exception("Monthly reset applied for %s but its ledger row failed", user.id)

@@ -28,6 +28,7 @@ from acemusic.api.services.studio import (
     clip_ids_in,
     studio_export_storage_path,
 )
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
 
@@ -233,7 +234,13 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    # Pro: Studio editing is a Pro capability since US-26.2 (free is view-only), and this
+    # file tests how the Studio behaves, not who may edit in it. The refusal is tested in
+    # test_tier_enforcement_api.py.
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
+    await user.save()
+    return user
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:

@@ -12,7 +12,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Job, User
+from acemusic.api.models import Clip, Job, User, VisibilityState
 from acemusic.api.services import credits as credits_service, tiers, users as user_service
 from acemusic.api.settings import ApiSettings
 
@@ -63,6 +63,20 @@ async def _wav_clip(user: User) -> Clip:
         workspace_id=workspace_id,
         file_path=f"{user.id}/{workspace_id}/clips/source.wav",
         format="wav",
+        duration=30.0,
+    )
+    await clip.insert()
+    return clip
+
+
+async def _mp3_clip(user: User) -> Clip:
+    """A clip stored lossily, so asking for wav/flac is a genuine conversion."""
+    workspace_id = PydanticObjectId()
+    clip = Clip(
+        user_id=user.id,
+        workspace_id=workspace_id,
+        file_path=f"{user.id}/{workspace_id}/clips/source.mp3",
+        format="mp3",
         duration=30.0,
     )
     await clip.insert()
@@ -393,5 +407,46 @@ class TestLosslessExportGate:
         clip = await _wav_clip(user)
 
         resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/audio?format={fmt}", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text
+
+    async def test_the_stream_endpoint_is_not_a_way_around_the_gate(self, client, settings) -> None:
+        # /stream offers the same on-the-fly conversion as /audio. Gating one and not the
+        # other makes the refusal a URL away from being undone.
+        user = await _user("free-stream")
+        clip = await _mp3_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/stream?format=wav", headers=_auth(user, settings))
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "lossless_export"
+
+    async def test_signing_out_is_not_a_way_around_the_gate(self, client) -> None:
+        # /stream serves public clips anonymously. No account is no plan, so the anonymous
+        # path has to refuse too — otherwise logging out beats the gate.
+        user = await _user("free-anon-stream")
+        clip = await _mp3_clip(user)
+        clip.visibility = VisibilityState.PUBLIC
+        await clip.save()
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/stream?format=wav")
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "lossless_export"
+
+    async def test_streaming_a_clip_in_its_stored_format_is_never_gated(self, client, settings) -> None:
+        # Playback, not export — the free tier still plays its own library.
+        user = await _user("free-stream-native")
+        clip = await _wav_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/stream?format=wav", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text
+
+    async def test_a_pro_account_may_stream_a_lossless_conversion(self, client, settings) -> None:
+        user = await _user("pro-stream", tier="pro")
+        clip = await _mp3_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/stream?format=wav", headers=_auth(user, settings))
 
         assert resp.status_code != 403, resp.text

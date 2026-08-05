@@ -97,23 +97,32 @@ async def require_existing_user(current: CurrentUser = Depends(get_current_user)
     return current
 
 
-async def require_tier_capability(user_id: str, capability: Capability) -> None:
+async def require_tier_capability(user_id: str | None, capability: Capability) -> None:
     """Raise 403 unless ``user_id``'s tier may use ``capability`` (US-26.2).
 
     Reads the tier from the **database**, not the token claims: an access token outlives
     a plan change by up to its TTL, so claims would let a downgraded account keep Pro and
     make someone who just paid wait for Pro to start working.
 
+    ``user_id`` may be ``None`` on the endpoints that also serve anonymous callers (public
+    clip streaming). No account is no plan, so that is refused as free — otherwise signing
+    out would be the way around a Pro gate.
+
     The 403 body mirrors the 402's shape — what is locked, what it would do, where to go —
     so a client presents "you cannot do this yet" the same way whether the obstacle is
     money or plan.
     """
-    user = await user_service.get_user_by_id(user_id)
+    tier = tiers.FREE
 
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if user_id is not None:
+        user = await user_service.get_user_by_id(user_id)
 
-    if tiers.allows(user.subscription_tier, capability):
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+        tier = user.subscription_tier
+
+    if tiers.allows(tier, capability):
         return
 
     name, benefit = tiers.describe(capability)
@@ -123,7 +132,7 @@ async def require_tier_capability(user_id: str, capability: Capability) -> None:
             "error": "upgrade_required",
             "capability": capability.value,
             "feature": name,
-            "tier": tiers.normalise(user.subscription_tier),
+            "tier": tiers.normalise(tier),
             "required_tier": tiers.PRO,
             "message": f"{name} is a Pro feature — upgrade to {benefit}.",
             "upgrade_url": credits_service.UPGRADE_URL,
