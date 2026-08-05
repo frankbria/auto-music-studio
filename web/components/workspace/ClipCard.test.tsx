@@ -13,6 +13,16 @@ import type { Clip } from "@/lib/workspace-clips"
 // router, downloads call downloadClipAudio, delete hits the DELETE proxy. Capture
 // the router push and stub the download so those effects are observable/inert.
 const push = vi.fn()
+// US-26.2: useSongActions now reads the tier, which would otherwise fetch
+// /api/users/me and land ahead of the call each test asserts on.
+vi.mock("@/hooks/use-subscription-tier", () => ({
+  useSubscriptionTier: () => ({
+    tier: "pro",
+    isFreeTier: false,
+    isLoading: false,
+  }),
+}))
+
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 
 const downloadClipAudio = vi.fn<(...args: unknown[]) => Promise<boolean>>(() =>
@@ -181,13 +191,11 @@ describe("ClipCard", () => {
   })
 
   it("changes visibility to public for a ready clip, persisting via the PATCH proxy", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ id: "c1", visibility: "public" }), {
-          status: 200,
-        })
-      )
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "c1", visibility: "public" }), {
+        status: 200,
+      })
+    )
     vi.stubGlobal("fetch", fetchMock)
     const onVisibilityChange = vi.fn()
     renderCard({ onVisibilityChange })
@@ -198,9 +206,7 @@ describe("ClipCard", () => {
     await userEvent.click(screen.getByRole("menuitemradio", { name: "Public" }))
 
     expect(onVisibilityChange).toHaveBeenCalledWith("c1", "public")
-    await waitFor(() =>
-      expect(screen.getByText("Public")).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText("Public")).toBeInTheDocument())
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/clips/c1")
     expect(opts.method).toBe("PATCH")

@@ -48,9 +48,7 @@ class TestNextResetDue:
 class TestApplyMonthlyReset:
     async def _user(self, label: str, *, tier: str, balance: float, created: datetime, last_reset=None) -> User:
         email = f"{label}-{PydanticObjectId()}@example.com"
-        user = await user_service.get_or_create_user(
-            email=email, provider="google", oauth_id=email, name="T"
-        )
+        user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=email, name="T")
         user.subscription_tier = tier
         user.credits_balance = balance
         user.created_at = created

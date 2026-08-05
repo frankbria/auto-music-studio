@@ -122,6 +122,9 @@ function ActionItem({
   onAction: (action: SongActionId) => void
   hideIcon?: boolean
 }) {
+  // US-26.2 AC2: a locked item stays *clickable*. It used to render `disabled`, so
+  // clicking a Pro feature did nothing at all — which reads as a broken menu rather than
+  // a boundary. The parent turns the click into an upgrade modal.
   const locked = !!action.proOnly && isFreeTier
   const label =
     action.id === "publish-toggle"
@@ -133,7 +136,7 @@ function ActionItem({
   return (
     <DropdownMenuItem
       variant={action.destructive ? "destructive" : "default"}
-      disabled={locked}
+      data-locked={locked || undefined}
       onSelect={() => onAction(action.id)}
     >
       {!hideIcon && (

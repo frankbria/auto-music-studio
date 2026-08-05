@@ -30,10 +30,7 @@ import {
 
 /** Formats offered in a Download submenu (song menu and clip card). */
 export type DownloadAction =
-  | "download-mp3"
-  | "download-wav"
-  | "download-flac"
-  | "download-stems"
+  "download-mp3" | "download-wav" | "download-flac" | "download-stems"
 
 /** Every action reachable from the clip card menus (spec §9.2). */
 export type ClipMenuAction =
@@ -64,7 +61,8 @@ export type SongActionId =
   | "get-full-song"
   | "publish-toggle"
 
-export type SongActionCategory = "edit" | "create" | "audio" | "export" | "manage"
+export type SongActionCategory =
+  "edit" | "create" | "audio" | "export" | "manage"
 
 /**
  * How an action is carried out when selected:
@@ -82,6 +80,12 @@ export type SongActionDefinition = {
   workflow: SongActionWorkflow
   /** Gated behind the Pro tier; free-tier users see a locked item. */
   proOnly?: boolean
+  /**
+   * Which capability the lock is about, matching the API's 403 `detail.capability`
+   * (US-26.2). Drives the upgrade modal's copy, so a locked click explains the right
+   * feature rather than a generic pitch.
+   */
+  capability?: string
   destructive?: boolean
 }
 
@@ -111,6 +115,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: PencilEdit02Icon,
         workflow: "navigation",
         proOnly: true,
+        capability: "studio_editing",
       },
       {
         id: "open-studio",
@@ -158,7 +163,12 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
     category: "audio",
     label: "Audio",
     actions: [
-      { id: "add-vocal", label: "Add Vocal", icon: VoiceIcon, workflow: "modal" },
+      {
+        id: "add-vocal",
+        label: "Add Vocal",
+        icon: VoiceIcon,
+        workflow: "modal",
+      },
       {
         // One-click, no modal (US-17.3): remaster runs immediately with the
         // default -14 LUFS target and shows inline progress.
@@ -192,6 +202,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: Rocket01Icon,
         workflow: "modal",
         proOnly: true,
+        capability: "mastering",
       },
       {
         id: "export-daw",
@@ -199,6 +210,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: FileExportIcon,
         workflow: "modal",
         proOnly: true,
+        capability: "studio_editing",
       },
       {
         id: "create-video",
@@ -207,6 +219,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         // Navigates to the video creation page (US-22.2).
         workflow: "navigation",
         proOnly: true,
+        capability: "high_res_video",
       },
     ],
   },
@@ -238,8 +251,18 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
  * through the modal workflow and is Pro-gated.
  */
 export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
-  { id: "download-mp3", label: "MP3", icon: AudioWave01Icon, workflow: "download" },
-  { id: "download-wav", label: "WAV", icon: AudioWave01Icon, workflow: "download" },
+  {
+    id: "download-mp3",
+    label: "MP3",
+    icon: AudioWave01Icon,
+    workflow: "download",
+  },
+  {
+    id: "download-wav",
+    label: "WAV",
+    icon: AudioWave01Icon,
+    workflow: "download",
+  },
   {
     id: "download-flac",
     label: "FLAC",
@@ -252,6 +275,7 @@ export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
     icon: Layers01Icon,
     workflow: "modal",
     proOnly: true,
+    capability: "stems",
   },
 ]
 
@@ -262,6 +286,8 @@ const ACTION_INDEX = new Map<SongActionId, SongActionDefinition>(
 )
 
 /** Look up an action definition by id (download items included). */
-export function findSongAction(id: SongActionId): SongActionDefinition | undefined {
+export function findSongAction(
+  id: SongActionId
+): SongActionDefinition | undefined {
   return ACTION_INDEX.get(id)
 }

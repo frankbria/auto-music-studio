@@ -5,6 +5,7 @@ import { LineageSection } from "@/components/song/LineageSection"
 import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { RelatedSongs } from "@/components/song/RelatedSongs"
 import { SongActionModal } from "@/components/song/SongActionModal"
+import { UpgradeModal } from "@/components/upgrade/UpgradeModal"
 import { SongActionsMenu } from "@/components/song/SongActionsMenu"
 import { RemasterStatus } from "@/components/song/RemasterStatus"
 import { SongHeader } from "@/components/song/SongHeader"
@@ -35,7 +36,10 @@ export function SongDetail({ clipId }: { clipId: string }) {
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-5xl space-y-4 p-8" data-testid="song-loading">
+      <div
+        className="mx-auto max-w-5xl space-y-4 p-8"
+        data-testid="song-loading"
+      >
         <div className="h-8 w-64 animate-pulse rounded bg-muted" />
         <div className="h-24 animate-pulse rounded-lg bg-muted" />
         <div className="h-40 animate-pulse rounded-lg bg-muted" />
@@ -133,6 +137,14 @@ function SongDetailContent({ clip }: { clip: Clip }) {
         clip={clip}
         action={actions.activeModal}
         onClose={actions.closeModal}
+      />
+      {/* US-26.2: a free-tier click on a Pro action opens this instead of running. */}
+      <UpgradeModal
+        feature={actions.lockedFeature}
+        open={actions.lockedFeature !== null}
+        onOpenChange={(open) => {
+          if (!open) actions.dismissUpgrade()
+        }}
       />
       <DeleteSongDialog
         open={actions.confirmingDelete}

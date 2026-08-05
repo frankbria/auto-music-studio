@@ -87,7 +87,9 @@ describe("SongActionsMenu", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
     for (const label of ["MP3", "WAV", "FLAC", "Stems"]) {
-      expect(screen.getByRole("menuitem", { name: new RegExp(label) })).toBeInTheDocument()
+      expect(
+        screen.getByRole("menuitem", { name: new RegExp(label) })
+      ).toBeInTheDocument()
     }
     await userEvent.click(screen.getByRole("menuitem", { name: /WAV/ }))
     expect(onAction).toHaveBeenCalledWith("download-wav")
@@ -100,17 +102,28 @@ describe("SongActionsMenu", () => {
     expect(screen.queryByText(/^Publish$/)).not.toBeInTheDocument()
   })
 
-  it("locks Pro-only actions for free-tier users", async () => {
-    const { onAction } = renderMenu({ isFreeTier: true })
+  it("marks Pro-only actions as locked for free-tier users", async () => {
+    renderMenu({ isFreeTier: true })
     await openMenu()
 
     const editor = screen.getByRole("menuitem", { name: /open in editor/i })
-    expect(editor).toHaveAttribute("aria-disabled", "true")
+    expect(editor).toHaveAttribute("data-locked", "true")
     // Pro badge is visible on gated items.
     expect(screen.getAllByText("Pro").length).toBeGreaterThanOrEqual(4)
+  })
 
-    await userEvent.click(editor)
-    expect(onAction).not.toHaveBeenCalled()
+  it("still emits a locked action so the parent can prompt (US-26.2 AC2)", async () => {
+    // These used to render `disabled`, so clicking a Pro feature did nothing at all —
+    // which reads as a broken menu rather than a boundary. The parent turns this into
+    // an upgrade modal; see hooks/use-song-actions.test.tsx.
+    const { onAction } = renderMenu({ isFreeTier: true })
+    await openMenu()
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /open in editor/i })
+    )
+
+    expect(onAction).toHaveBeenCalledWith("open-editor")
   })
 
   it("keeps Pro badges but no lock for pro users", async () => {
