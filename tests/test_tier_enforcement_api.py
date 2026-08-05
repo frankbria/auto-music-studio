@@ -286,3 +286,112 @@ class TestArgumentDependentGates:
         )
 
         assert resp.status_code == 404, resp.text
+
+
+class TestResolutionAndFormatGates:
+    """The two capabilities that were declared but not enforced until codex flagged it.
+
+    Both turn on an argument, and both were reachable by calling the API directly while
+    only the UI held the line — which is the definition of a gate that is not one.
+    """
+
+    async def test_a_free_account_may_render_720p(self, client, settings) -> None:
+        # The free tier keeps a working video path; the boundary is the resolution.
+        user = await _user("free-720", credits=100.0)
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str(clip.id), "resolution": "720p", "prompt": "neon city"},
+            headers=_auth(user, settings),
+        )
+
+        # 503 here, because no video provider is configured in the test environment.
+        # That is the point: the request got *past* the tier gate to the deployment
+        # check, which a refusal never would.
+        assert resp.status_code == 503, resp.text
+
+    @pytest.mark.parametrize("resolution", ["1080p", "4k"])
+    async def test_a_free_account_is_refused_above_720p(self, client, settings, resolution) -> None:
+        user = await _user(f"free-{resolution}", credits=100.0)
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str(clip.id), "resolution": resolution, "prompt": "neon city"},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "high_res_video"
+
+    async def test_a_refused_resolution_costs_nothing(self, client, settings) -> None:
+        # The gate runs before the charge — video is the most expensive action there is.
+        user = await _user("free-4k-nocharge", credits=100.0)
+        clip = await _wav_clip(user)
+
+        await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str(clip.id), "resolution": "4k", "prompt": "neon city"},
+            headers=_auth(user, settings),
+        )
+
+        assert (await User.get(user.id)).credits_balance == 100.0
+
+    @pytest.mark.parametrize("resolution", ["720p", "1080p", "4k"])
+    async def test_a_pro_account_may_render_any_resolution(self, client, settings, resolution) -> None:
+        user = await _user(f"pro-{resolution}", tier="pro", credits=100.0)
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str(clip.id), "resolution": resolution, "prompt": "neon city"},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code != 403, resp.text
+
+
+class TestLosslessExportGate:
+    async def test_a_free_account_may_download_mp3(self, client, settings) -> None:
+        user = await _user("free-mp3")
+        clip = await _wav_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/audio?format=mp3", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text
+
+    @pytest.mark.parametrize("fmt", ["wav", "flac"])
+    async def test_a_free_account_is_refused_a_lossless_conversion(self, client, settings, fmt) -> None:
+        # Reachable by calling the API directly until this gate existed — the menu was
+        # the only thing holding the line, and a menu is not a gate.
+        user = await _user(f"free-{fmt}")
+        clip = await _wav_clip(user)
+        # Stored as mp3 so the requested format is a genuine conversion.
+        clip.format = "mp3"
+        clip.file_path = clip.file_path.replace(".wav", ".mp3")
+        await clip.save()
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/audio?format={fmt}", headers=_auth(user, settings))
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "lossless_export"
+
+    async def test_playing_a_clip_in_its_stored_format_is_never_gated(self, client, settings) -> None:
+        # A wav clip streamed as wav is playback, not an export. Gating that would break
+        # the free tier's own library.
+        user = await _user("free-native")
+        clip = await _wav_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/audio?format=wav", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text
+
+    @pytest.mark.parametrize("fmt", ["wav", "flac", "mp3"])
+    async def test_a_pro_account_may_request_any_format(self, client, settings, fmt) -> None:
+        user = await _user(f"pro-{fmt}", tier="pro")
+        clip = await _wav_clip(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/audio?format={fmt}", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text

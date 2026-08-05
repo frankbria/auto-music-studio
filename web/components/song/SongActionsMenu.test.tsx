@@ -108,8 +108,11 @@ describe("SongActionsMenu", () => {
 
     const editor = screen.getByRole("menuitem", { name: /open in editor/i })
     expect(editor).toHaveAttribute("data-locked", "true")
-    // Pro badge is visible on gated items.
-    expect(screen.getAllByText("Pro").length).toBeGreaterThanOrEqual(4)
+    // Exactly the three top-level gated actions carry a badge: Open in Editor, Send to
+    // Mastering, Export to DAW. Create Music Video is deliberately not among them
+    // (US-26.2 — the free tier gets 720p, so the form stays reachable), and the gated
+    // downloads live in a submenu that is not open here.
+    expect(screen.getAllByText("Pro")).toHaveLength(3)
   })
 
   it("still emits a locked action so the parent can prompt (US-26.2 AC2)", async () => {
@@ -131,8 +134,8 @@ describe("SongActionsMenu", () => {
     await openMenu()
 
     const editor = screen.getByRole("menuitem", { name: /open in editor/i })
-    expect(editor).not.toHaveAttribute("aria-disabled", "true")
-    expect(screen.getAllByText("Pro").length).toBeGreaterThanOrEqual(4)
+    expect(editor).not.toHaveAttribute("data-locked")
+    expect(screen.getAllByText("Pro")).toHaveLength(3)
   })
 
   it("supports keyboard navigation: arrows move focus, Escape closes", async () => {

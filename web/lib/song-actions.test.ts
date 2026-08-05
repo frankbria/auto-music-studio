@@ -64,15 +64,26 @@ describe("SONG_ACTION_GROUPS", () => {
 
   it("marks exactly the Pro-gated actions as proOnly", () => {
     const pro = allActions.filter((a) => a.proOnly).map((a) => a.id)
+    // create-video is deliberately absent (US-26.2): the free tier gets 720p, so the
+    // form must stay reachable and the Pro boundary is the resolution inside it.
     expect(pro.sort()).toEqual(
       [
-        "create-video",
+        "download-flac",
         "download-stems",
+        "download-wav",
         "export-daw",
         "open-editor",
         "send-mastering",
       ].sort()
     )
+  })
+
+  it("gives every Pro-gated action a capability for the upgrade prompt", () => {
+    // Without one the modal falls back to generic copy, which defeats leading with
+    // the feature the musician actually reached for (US-26.2 AC2).
+    for (const action of allActions.filter((a) => a.proOnly)) {
+      expect(action.capability, `${action.id} has no capability`).toBeTruthy()
+    }
   })
 
   it("routes studio to navigation and remaster/publish/delete inline", () => {
@@ -121,11 +132,18 @@ describe("SONG_DOWNLOAD_ITEMS", () => {
       "download-flac",
       "download-stems",
     ])
-    for (const id of ["download-mp3", "download-wav", "download-flac"] as const) {
-      const item = findSongAction(id)
-      expect(item?.workflow).toBe("download")
-      expect(item?.proOnly).toBeFalsy()
+    for (const id of [
+      "download-mp3",
+      "download-wav",
+      "download-flac",
+    ] as const) {
+      expect(findSongAction(id)?.workflow).toBe("download")
     }
+    // US-26.2: "MP3 download only" on the free tier. MP3 stays open; the lossless two
+    // are gated, matching what GET /clips/{id}/audio?format= enforces.
+    expect(findSongAction("download-mp3")?.proOnly).toBeFalsy()
+    expect(findSongAction("download-wav")?.proOnly).toBe(true)
+    expect(findSongAction("download-flac")?.proOnly).toBe(true)
     // Stem separation is a backend job (POST /clips/{id}/stems), not a file
     // fetch — it goes through the modal workflow like other generation actions.
     expect(findSongAction("download-stems")?.workflow).toBe("modal")

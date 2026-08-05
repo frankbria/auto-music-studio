@@ -139,3 +139,60 @@ class TestApplyMonthlyReset:
         refreshed = await credits_service.apply_monthly_reset(user)
 
         assert refreshed.credits_balance == 50.0
+
+
+@pytest.mark.integration
+class TestBackfillDoesNotPayLater:
+    """The backfill must hold on the *second* read too.
+
+    The original test used an account created days ago, so its backfilled anchor was
+    never overdue and the bug hid. An account created months ago anchors to a date that
+    is immediately due, and pays out on the very next request.
+    """
+
+    async def _old_account(self, label: str, *, balance: float) -> User:
+        email = f"{label}-{PydanticObjectId()}@example.com"
+        user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=email, name="T")
+        user.subscription_tier = "free"
+        user.credits_balance = balance
+        # Predates the field by a long way — this is the shape that leaked.
+        user.created_at = datetime.now(timezone.utc) - timedelta(days=200)
+        user.credits_reset_at = None
+        await user.save()
+        return user
+
+    async def test_a_long_lived_account_is_not_paid_on_the_second_read(self, mongo_db) -> None:
+        user = await self._old_account("legacy", balance=12.0)
+
+        await credits_service.apply_monthly_reset(user)
+        await credits_service.apply_monthly_reset(await User.get(user.id))
+        await credits_service.apply_monthly_reset(await User.get(user.id))
+
+        assert (await User.get(user.id)).credits_balance == 12.0
+
+    async def test_the_backfilled_anchor_is_the_current_period_not_the_signup(self, mongo_db) -> None:
+        # Anchoring to created_at leaves a date months in the past, which the very next
+        # read reads as overdue.
+        user = await self._old_account("legacy-anchor", balance=12.0)
+
+        refreshed = await credits_service.apply_monthly_reset(user)
+
+        assert refreshed.credits_reset_at is not None
+        anchor = refreshed.credits_reset_at
+        anchor = anchor if anchor.tzinfo else anchor.replace(tzinfo=timezone.utc)
+        due = credits_service.next_reset_due(anchor)
+        assert due > datetime.now(timezone.utc), "the backfilled anchor was already overdue"
+
+    async def test_it_still_pays_once_the_next_period_arrives(self, mongo_db) -> None:
+        # The backfill must not become a permanent freeze — only the immediate windfall
+        # is suppressed.
+        user = await self._old_account("legacy-later", balance=12.0)
+        await credits_service.apply_monthly_reset(user)
+
+        stale = await User.get(user.id)
+        stale.credits_reset_at = stale.credits_reset_at - timedelta(days=40)
+        await stale.save()
+
+        refreshed = await credits_service.apply_monthly_reset(await User.get(user.id))
+
+        assert refreshed.credits_balance == 50.0

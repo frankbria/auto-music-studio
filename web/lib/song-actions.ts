@@ -218,8 +218,9 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: Video01Icon,
         // Navigates to the video creation page (US-22.2).
         workflow: "navigation",
-        proOnly: true,
-        capability: "high_res_video",
+        // US-26.2: deliberately NOT proOnly. The free tier gets 720p, so the form has
+        // to be reachable; the Pro boundary is the *resolution*, enforced in VideoForm
+        // and on POST /videos/generate.
       },
     ],
   },
@@ -262,12 +263,22 @@ export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
     label: "WAV",
     icon: AudioWave01Icon,
     workflow: "download",
+    // US-26.2: the free tier is "MP3 download only". Marked here so the menu matches
+    // what GET /clips/{id}/audio?format= now enforces — offering a download that the
+    // API refuses is worse than not offering it.
+    proOnly: true,
+    capability: "lossless_export",
   },
   {
     id: "download-flac",
     label: "FLAC",
     icon: AudioWave01Icon,
     workflow: "download",
+    // US-26.2: the free tier is "MP3 download only". Marked here so the menu matches
+    // what GET /clips/{id}/audio?format= now enforces — offering a download that the
+    // API refuses is worse than not offering it.
+    proOnly: true,
+    capability: "lossless_export",
   },
   {
     id: "download-stems",

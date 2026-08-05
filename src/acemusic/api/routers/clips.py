@@ -31,16 +31,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import StorageBackend, get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_existing_user
+from ..auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_current_user_optional,
+    require_existing_user,
+    require_tier_capability,
+)
 from ..models import Clip, VisibilityState
 from ..services import clips as clip_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
+from ..services.tiers import Capability
 from ..utils.media_types import get_audio_content_type
 from ..utils.range_requests import stream_stored_object
 from ..utils.rate_limit import enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
+
+#: Formats the free tier may not convert to (US-26.2: "MP3 download only").
+LOSSLESS_FORMATS = frozenset({"wav", "flac"})
 
 
 async def _download_clip_audio(storage: StorageBackend, clip: Clip) -> bytes:
@@ -469,6 +479,12 @@ async def get_clip_audio(
 ) -> Response:
     """Return the clip's audio — full (200) or a requested byte range (206)."""
     clip = await get_clip_for_audio_access(clip_id, current.user_id)
+
+    # US-26.2: the free tier is "MP3 download only". Gated on the requested format rather
+    # than the endpoint, so ordinary playback of a clip in its stored format is untouched
+    # — this only refuses an explicit *conversion* to a lossless one.
+    if format in LOSSLESS_FORMATS and format != clip_service.native_format(clip):
+        await require_tier_capability(current.user_id, Capability.LOSSLESS_EXPORT)
 
     storage = get_storage_backend()
     native_format = clip_service.native_format(clip)

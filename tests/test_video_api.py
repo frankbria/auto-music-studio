@@ -112,11 +112,15 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
+async def _make_user(email: str, *, balance: float | None = None, tier: str = "pro"):
+    # Pro by default: US-26.2 makes 1080p/4K a Pro capability, and several cases here
+    # submit those resolutions. The tier gate itself is covered in
+    # tests/test_tier_enforcement_api.py; these cases are about cost and persistence.
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = tier
     if balance is not None:
         user.credits_balance = balance
-        await user.save()
+    await user.save()
     return user
 
 

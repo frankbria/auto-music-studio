@@ -415,8 +415,12 @@ async def apply_monthly_reset(user: User) -> User:
     created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
 
     if user.credits_reset_at is None:
-        # Backfill the anchor without granting anything.
-        user.credits_reset_at = created
+        # Backfill without granting. Anchored to the CURRENT period, not to created_at:
+        # for an account older than a month, created_at is already overdue, so the very
+        # next read would pay out the windfall this branch exists to prevent. Found by
+        # codex review — the original test used a days-old account, where the two are
+        # the same date and the bug cannot show.
+        user.credits_reset_at = _period_start(created, now)
         await user.save()
         return user
 
