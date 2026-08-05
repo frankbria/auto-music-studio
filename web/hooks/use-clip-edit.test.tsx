@@ -12,6 +12,14 @@ vi.mock("@/lib/job-status", () => ({
   fetchJobStatus: (...args: unknown[]) => fetchJobStatus(...args),
 }))
 
+const refreshCredits = vi.hoisted(() => vi.fn())
+vi.mock("@/contexts/credits-context", () => ({
+  useCredits: () => ({
+    state: { phase: "signed-out" },
+    refresh: refreshCredits,
+  }),
+}))
+
 afterEach(() => vi.clearAllMocks())
 
 const make = (result: EditSubmitResult) => vi.fn().mockResolvedValue(result)
@@ -29,7 +37,10 @@ describe("useClipEdit", () => {
     })
 
     await waitFor(() => expect(result.current.state.phase).toBe("success"))
-    expect(result.current.state).toEqual({ phase: "success", clipIds: ["new-1"] })
+    expect(result.current.state).toEqual({
+      phase: "success",
+      clipIds: ["new-1"],
+    })
     expect(fetchJobStatus).toHaveBeenCalledWith("j1", "tok")
   })
 
@@ -44,7 +55,10 @@ describe("useClipEdit", () => {
       )
     })
 
-    expect(result.current.state).toMatchObject({ phase: "polling", estimatedSeconds: 30 })
+    expect(result.current.state).toMatchObject({
+      phase: "polling",
+      estimatedSeconds: 30,
+    })
     act(() => result.current.reset())
     expect(result.current.state.phase).toBe("idle")
   })
@@ -135,5 +149,40 @@ describe("useClipEdit", () => {
       await result.current.submit(make({ status: "unauthorized" }), "tok")
     })
     expect(push).toHaveBeenCalledWith("/login")
+  })
+
+  describe("credit balance freshness (US-26.1)", () => {
+    it("refreshes the balance once a charged edit is accepted", async () => {
+      fetchJobStatus.mockResolvedValue({ kind: "pending" })
+      const { result } = renderHook(() => useClipEdit())
+
+      await act(async () => {
+        await result.current.submit(
+          make({ status: "accepted", jobId: "j1", estimatedSeconds: 30 }),
+          "tok"
+        )
+      })
+
+      // The charge lands at enqueue, so the sidebar is stale from here.
+      expect(refreshCredits).toHaveBeenCalled()
+    })
+
+    it("refreshes again when the job fails, because the worker refunds it", async () => {
+      // Without this the musician keeps seeing a deduction for work they were not
+      // charged for, until something else happens to refresh.
+      fetchJobStatus.mockResolvedValue({ kind: "failed", error: "boom" })
+      const { result } = renderHook(() => useClipEdit())
+
+      await act(async () => {
+        await result.current.submit(
+          make({ status: "accepted", jobId: "j1", estimatedSeconds: 30 }),
+          "tok"
+        )
+      })
+
+      await waitFor(() => expect(result.current.state.phase).toBe("error"))
+      // Once for the charge at enqueue, once for the refund on failure.
+      expect(refreshCredits).toHaveBeenCalledTimes(2)
+    })
   })
 })

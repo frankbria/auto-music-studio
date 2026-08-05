@@ -103,8 +103,16 @@ class TestNonPositiveCostGuard:
 
     @pytest.mark.parametrize("cost", [0.0, -1.0])
     async def test_refund_rejects_non_positive_cost(self, cost: float) -> None:
+        # action_type/job_id became keyword-required in US-26.1; without them this
+        # raises TypeError at the call and never reaches the guard under test.
         with pytest.raises(ValueError):
-            await credits_service.refund_credits(PydanticObjectId(), cost)
+            await credits_service.refund_credits(PydanticObjectId(), cost, action_type="song_refund", job_id="")
+
+    @pytest.mark.parametrize("cost", [0.0, -1.0])
+    async def test_reverse_unrecorded_charge_rejects_non_positive_cost(self, cost: float) -> None:
+        # The un-ledgered reversal needs the same guard: a negative "reversal" charges.
+        with pytest.raises(ValueError):
+            await credits_service.reverse_unrecorded_charge(PydanticObjectId(), cost)
 
 
 def _async_client(app) -> httpx.AsyncClient:

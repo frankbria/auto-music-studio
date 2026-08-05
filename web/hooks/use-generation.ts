@@ -46,6 +46,12 @@ export function useGeneration({
 }: { onComplete?: () => void } = {}): UseGeneration {
   const router = useRouter()
   const { refresh: refreshCredits } = useCredits()
+  // poll() is memoised and must not be re-created when the credits context
+  // re-renders, so the refresher is reached through a ref.
+  const refreshCreditsRef = useRef(refreshCredits)
+  useEffect(() => {
+    refreshCreditsRef.current = refreshCredits
+  }, [refreshCredits])
   const [state, setState] = useState<GenerationState>({ phase: "idle" })
 
   // The active job. A ref (not state) so the poll loop reads the latest without
@@ -96,6 +102,11 @@ export function useGeneration({
       case "failed":
         jobRef.current = null
         clearTimer()
+        // The worker refunds a failed job (US-26.1), so the balance the sidebar is
+        // showing is now too low. Without this the musician keeps seeing the
+        // deduction for work they were not charged for, until something else
+        // happens to refresh.
+        refreshCreditsRef.current()
         setState({ phase: "error", message: result.error })
         return
       case "unauthorized":
