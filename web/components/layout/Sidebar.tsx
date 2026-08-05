@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Coins01Icon,
   SidebarLeftIcon,
   UserIcon,
 } from "@hugeicons/core-free-icons"
@@ -16,7 +17,9 @@ import {
   type NavDialogItem,
   type NavLinkItem,
 } from "@/config/navigation"
+import { useCredits } from "@/contexts/credits-context"
 import { useUnreadCount } from "@/contexts/notifications-context"
+import { formatCredits } from "@/lib/credits"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
 import {
@@ -77,7 +80,7 @@ function NavLink({
           <span
             data-testid="nav-unread-badge"
             aria-label={`${badge} unread`}
-            className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
+            className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none font-semibold text-primary-foreground"
           >
             {badge > 99 ? "99+" : badge}
           </span>
@@ -170,6 +173,48 @@ function NavDialog({
  * the toggle expands it to an icon+label rail. Lives in the persistent App
  * Router layout, so the expand state survives route changes.
  */
+/**
+ * The credit balance, on screen wherever the musician is (US-26.1).
+ *
+ * Renders nothing when signed out or still loading rather than a placeholder number —
+ * a wrong balance is worse than no balance when it is what someone budgets against.
+ * The figure itself shows in both states; only the word "credits" is dropped when
+ * collapsed, because "visible at all times" is the acceptance criterion and an icon
+ * alone does not tell anyone what they have left.
+ */
+function CreditBalanceItem({ expanded }: { expanded: boolean }) {
+  const { state } = useCredits()
+
+  if (state.phase !== "ready") return null
+
+  const { balance, upgrade_url: upgradeUrl } = state.balance
+  const formatted = formatCredits(balance)
+  const label = `${formatted} credits remaining`
+
+  return (
+    <Link
+      href={upgradeUrl}
+      aria-label={label}
+      title={label}
+      data-testid="credit-balance"
+      className={cn(
+        sidebarItemBase,
+        !expanded && "flex-col justify-center gap-0 px-0 text-[11px]"
+      )}
+    >
+      <HugeiconsIcon
+        icon={Coins01Icon}
+        size={expanded ? 22 : 18}
+        className="shrink-0"
+      />
+      <span aria-hidden className="truncate text-sm tabular-nums">
+        {expanded ? `${formatted} credits` : formatted}
+      </span>
+      <span className="sr-only">{label}</span>
+    </Link>
+  )
+}
+
 export function Sidebar() {
   const pathname = usePathname()
   const [expanded, setExpanded] = useState(false)
@@ -194,7 +239,10 @@ export function Sidebar() {
         <HugeiconsIcon
           icon={SidebarLeftIcon}
           size={22}
-          className={cn("shrink-0 transition-transform", !expanded && "rotate-180")}
+          className={cn(
+            "shrink-0 transition-transform",
+            !expanded && "rotate-180"
+          )}
         />
         {expanded && <span className="truncate text-sm">Collapse</span>}
       </button>
@@ -214,6 +262,7 @@ export function Sidebar() {
       </nav>
 
       <div className="flex flex-col gap-1">
+        <CreditBalanceItem expanded={expanded} />
         {bottomNav.map((item) =>
           item.isDialog ? (
             <NavDialog key={item.id} item={item} expanded={expanded} />

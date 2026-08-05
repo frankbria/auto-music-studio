@@ -184,7 +184,8 @@ async def create_mastering_batch(
         except Exception:
             # Refund just this clip's share — the others stay charged and queued.
             logger.exception("Failed to queue mastering job for clip %s", clip.id)
-            await credits_service.refund_credits(uid, per_clip_cost)
+            # No job id: queueing is what failed, so there is nothing to attribute to.
+            await credits_service.reverse_unrecorded_charge(uid, per_clip_cost)
             entries.append(BatchClipEntry(clip_id=str(clip.id), error="Failed to queue mastering job."))
             continue
         running_balance -= per_clip_cost

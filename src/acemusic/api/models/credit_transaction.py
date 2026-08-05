@@ -33,4 +33,8 @@ class CreditTransaction(Document):
             # Serves the "this user's history, newest first" query entirely
             # from the index (same pattern as Clip's workspace listing).
             IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
+            # US-26.1: amount_owed_for_job() sums every row for one job, and it runs on
+            # every job failure via refund_failed_job. Without this it is a collection
+            # scan of an append-only ledger — the one collection that only ever grows.
+            IndexModel([("job_id", ASCENDING)]),
         ]

@@ -8,6 +8,10 @@
  * iterative endpoints can return.
  */
 
+import { parseInsufficientCredits } from "@/lib/credits"
+
+/** Fallback target for a 402 that predates the shared shape. */
+const UPGRADE_FALLBACK = "/settings/billing"
 import type { BlendMode, SampleRole } from "@/lib/constants/editing"
 
 // --- Request payloads (mirror the Pydantic models; optionals omitted when unset) ---
@@ -83,7 +87,15 @@ export type EditSubmitResult =
   | { status: "accepted"; jobId: string; estimatedSeconds: number }
   | { status: "unauthorized" }
   | { status: "invalid"; detail: string }
-  | { status: "insufficientCredits"; balance: number; required: number }
+  | {
+      status: "insufficientCredits"
+      balance: number
+      required: number
+      /** Ready-to-show sentence from the server, so the UI does not re-word it. */
+      message: string
+      /** Where to send someone who has run out. */
+      upgradeUrl: string
+    }
   | { status: "error"; detail: string }
 
 /** Pull a human message out of a FastAPI error body (string or [{msg}] detail). */
@@ -102,7 +114,29 @@ function extractDetail(body: unknown, fallback: string): string {
 }
 
 /** Pull `{balance, required}` out of a 402 insufficient-credits detail object. */
-function extractCredits(body: unknown): { balance: number; required: number } {
+function extractCredits(body: unknown): {
+  balance: number
+  required: number
+  message: string
+  upgradeUrl: string
+} {
+  // US-26.1 gave every billed endpoint one 402 shape carrying a readable message and
+  // somewhere to go. Parsing it here rather than re-deriving balance/required means the
+  // upgrade link actually reaches the UI — an error that only says "no" leaves the
+  // musician stuck, which is the whole point of the richer body.
+  const parsed = parseInsufficientCredits(body)
+
+  if (parsed) {
+    return {
+      balance: parsed.balance,
+      required: parsed.required,
+      message: parsed.message,
+      upgradeUrl: parsed.upgrade_url,
+    }
+  }
+
+  // A 402 from somewhere that has not adopted the shape yet: keep the numbers, and
+  // build the sentence from them rather than showing nothing.
   const detail =
     body && typeof body === "object" && "detail" in body
       ? (body as { detail: unknown }).detail
@@ -112,7 +146,15 @@ function extractCredits(body: unknown): { balance: number; required: number } {
       ? (detail as Record<string, unknown>)
       : {}
   const num = (v: unknown) => (typeof v === "number" ? v : 0)
-  return { balance: num(obj.balance), required: num(obj.required) }
+  const balance = num(obj.balance)
+  const required = num(obj.required)
+
+  return {
+    balance,
+    required,
+    message: `Not enough credits — this needs ${required}, you have ${balance}.`,
+    upgradeUrl: UPGRADE_FALLBACK,
+  }
 }
 
 /**

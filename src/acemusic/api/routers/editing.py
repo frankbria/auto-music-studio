@@ -7,7 +7,7 @@
 Each endpoint validates the request against the source clip, persists a queued
 :class:`~acemusic.api.models.job.Job` and returns 202 with a job id trackable
 via ``GET /api/v1/jobs/{id}/status`` (mirrors ``POST /generate``). Editing is
-non-generative local CPU work, so no credits are deducted.
+local CPU work; crop and speed remain free, but US-26.1 prices remaster at 0.5 credits.
 
 Time parameters are human-readable strings ("10s", "1m30s", "5") parsed with
 :func:`acemusic.utils.parse_time_string`, matching the CLI commands.
@@ -24,7 +24,7 @@ from acemusic.utils import parse_time_string, snap_to_beat
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Clip
-from ..services import clips as clip_service, editing as editing_service
+from ..services import clips as clip_service, credits as credits_service, editing as editing_service
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +115,23 @@ def _require_duration_ms(clip: Clip) -> int:
     return int(round(clip.duration * 1000))
 
 
-async def _enqueue(clip: Clip, job_type: str, params: dict) -> EditJobResponse:
-    job = await editing_service.create_edit_job(
+async def _enqueue(clip: Clip, job_type: str, params: dict, *, cost: float = 0.0) -> EditJobResponse:
+    """Queue one edit. ``cost`` defaults to free — crop and speed still are.
+
+    Remaster is the exception (US-26.1): it passes REMASTER_COST, and
+    charge_and_create skips the money entirely for the free ones rather than
+    making them take a different code path.
+    """
+    job = await credits_service.charge_and_create(
         user_id=clip.user_id,
-        workspace_id=clip.workspace_id,
-        job_type=job_type,
-        params={"clip_id": str(clip.id), **params},
+        cost=cost,
+        action_type=job_type,
+        create=lambda: editing_service.create_edit_job(
+            user_id=clip.user_id,
+            workspace_id=clip.workspace_id,
+            job_type=job_type,
+            params={"clip_id": str(clip.id), **params},
+        ),
     )
     return EditJobResponse(job_id=str(job.id))
 
@@ -214,4 +225,9 @@ async def remaster_clip(
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     _require_wav(clip)
 
-    return await _enqueue(clip, editing_service.REMASTER_JOB_TYPE, {"target_lufs": request.target_lufs})
+    return await _enqueue(
+        clip,
+        editing_service.REMASTER_JOB_TYPE,
+        {"target_lufs": request.target_lufs},
+        cost=credits_service.REMASTER_COST,
+    )

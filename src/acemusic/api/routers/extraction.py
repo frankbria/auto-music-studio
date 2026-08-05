@@ -9,8 +9,12 @@ The POST endpoints are *cache-first*: if a clip already has stems (child clips)
 or MIDI (``Clip.midi_paths``), they return the existing results with 200 instead
 of enqueuing a duplicate job. Otherwise they persist a queued
 :class:`~acemusic.api.models.job.Job` and return 202 with a job id trackable via
-``GET /api/v1/jobs/{id}/status`` (mirrors the editing endpoints). Extraction is
-non-generative local CPU work, so no credits are deducted.
+``GET /api/v1/jobs/{id}/status`` (mirrors the editing endpoints).
+
+Extraction is local CPU work rather than a generation, but US-26.1 prices it
+anyway: stems and MIDI each cost 1 credit. The cache-first behaviour above is what
+keeps that fair — re-requesting stems a clip already has returns them with 200 and
+charges nothing, so the credit buys the separation, not the lookup.
 """
 
 import logging
@@ -23,7 +27,7 @@ from acemusic.stems_client import STEM_LABELS
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Clip
-from ..services import clips as clip_service, extraction as extraction_service
+from ..services import clips as clip_service, credits as credits_service, extraction as extraction_service
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +119,18 @@ async def separate_stems(
         return _stems_result(clip, existing)
 
     _require_wav(clip)
-    job = await extraction_service.create_extraction_job(
+    # Charged only once the cache miss and the format check have passed, so a
+    # request that was never going to run costs nothing (US-26.1).
+    job = await credits_service.charge_and_create(
         user_id=clip.user_id,
-        workspace_id=clip.workspace_id,
-        job_type=extraction_service.STEMS_JOB_TYPE,
-        clip_id=clip.id,
+        cost=credits_service.STEMS_COST,
+        action_type=extraction_service.STEMS_JOB_TYPE,
+        create=lambda: extraction_service.create_extraction_job(
+            user_id=clip.user_id,
+            workspace_id=clip.workspace_id,
+            job_type=extraction_service.STEMS_JOB_TYPE,
+            clip_id=clip.id,
+        ),
     )
     return ExtractionJobResponse(job_id=str(job.id))
 
@@ -156,11 +167,16 @@ async def extract_midi(
         return await _midi_result(clip)
 
     _require_wav(clip)
-    job = await extraction_service.create_extraction_job(
+    job = await credits_service.charge_and_create(
         user_id=clip.user_id,
-        workspace_id=clip.workspace_id,
-        job_type=extraction_service.MIDI_JOB_TYPE,
-        clip_id=clip.id,
+        cost=credits_service.MIDI_COST,
+        action_type=extraction_service.MIDI_JOB_TYPE,
+        create=lambda: extraction_service.create_extraction_job(
+            user_id=clip.user_id,
+            workspace_id=clip.workspace_id,
+            job_type=extraction_service.MIDI_JOB_TYPE,
+            clip_id=clip.id,
+        ),
     )
     return ExtractionJobResponse(job_id=str(job.id))
 

@@ -6,11 +6,16 @@ layer raises plain exceptions, never ``HTTPException``, so it stays
 transport-agnostic.
 """
 
+import logging
+from collections.abc import Awaitable, Callable
+
 from beanie import PydanticObjectId
 from pymongo import DESCENDING, ReturnDocument
 
-from ..models import CreditTransaction, User
+from ..models import CreditTransaction, Job, JobStatus, User
 from ..models.user import DEFAULT_CREDITS_BALANCE
+
+logger = logging.getLogger(__name__)
 
 SONG_COST = 1.0
 SOUND_COST = 0.5
@@ -66,6 +71,22 @@ VIDEO_MAX_COST = 10.0
 # out of ``_COSTS`` because it is not a generation mode; ``get_cost("voice_training")``
 # would wrongly suggest it is one.
 VOICE_TRAINING_COST = 10.0
+
+# US-26.1 prices three actions that shipped free. The editing and extraction routers
+# had documented them as "non-generative local CPU work, so no credits are deducted";
+# the story sets stems 1, MIDI 1, remaster 0.5, so they are billed from now on. That
+# reasoning was not wrong — this is a pricing decision, not a correction — and it is a
+# change for existing users, called out in the PR rather than slipped in.
+#
+# Kept out of ``_COSTS``: these are not generation modes, and ``get_cost("stems")``
+# would wrongly suggest otherwise.
+STEMS_COST = 1.0
+MIDI_COST = 1.0
+REMASTER_COST = 0.5
+
+#: Where a musician out of credits is sent. Relative so it works on any deployment;
+#: US-26.4 (credit top-up purchase) is what will make the page do something.
+UPGRADE_URL = "/settings/billing"
 
 # History page size for GET /users/me/credits.
 HISTORY_LIMIT = 50
@@ -144,15 +165,172 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
     return doc["credits_balance"]
 
 
-async def refund_credits(user_id: PydanticObjectId, cost: float) -> None:
-    """Compensating credit for a deduction whose job never got queued."""
+async def refund_credits(
+    user_id: PydanticObjectId,
+    cost: float,
+    *,
+    action_type: str,
+    job_id: str,
+) -> None:
+    """Compensating credit for a deduction, ledgered (US-26.1).
+
+    ``action_type`` and ``job_id`` are keyword-*required* on purpose. This used to
+    move the balance and write nothing, so most refunds were invisible in the
+    history and the ledger could not answer "how much has this job been paid back?".
+    Both now have one answer, in one place, because
+    :func:`refund_failed_job` depends on the ledger being complete.
+
+    ``job_id`` may be ``""``: the request paths refund when job creation itself
+    failed, so there is no id to attribute the movement to.
+    """
     # Symmetric guard: a non-positive "refund" would silently deduct.
     if cost <= 0:
         raise ValueError("cost must be positive")
-    await User.get_pymongo_collection().update_one(
+
+    # find_one_and_update rather than update_one + re-read: the balance recorded on
+    # the ledger row has to be the one this movement produced, not whatever a
+    # concurrent charge left behind a moment later.
+    doc = await User.get_pymongo_collection().find_one_and_update(
         {"_id": user_id},
         {"$inc": {"credits_balance": cost}},
+        return_document=ReturnDocument.AFTER,
     )
+
+    if doc is None:
+        # No user, so no balance moved — recording a movement would be a lie.
+        logger.warning("Refund of %s credits skipped: user %s not found", cost, user_id)
+        return
+
+    await record_transaction(
+        user_id=user_id,
+        amount=cost,
+        action_type=action_type,
+        job_id=job_id,
+        balance_after=doc["credits_balance"],
+    )
+
+
+class InsufficientCreditsError(Exception):
+    """The balance cannot cover an action. Carries what the 402 needs to say."""
+
+    def __init__(self, balance: float, required: float) -> None:
+        super().__init__(f"This action needs {required} credits; balance is {balance}.")
+        self.balance = balance
+        self.required = required
+
+
+async def charge_and_create(
+    *,
+    user_id: PydanticObjectId,
+    cost: float,
+    action_type: str,
+    create: "Callable[[], Awaitable[Job]]",
+) -> "Job":
+    """Deduct ``cost``, create the job, and ledger the charge — or leave nothing behind.
+
+    The four steps in here were already hand-written in five places (generation,
+    iterative, videos, mastering, batch mastering) and US-26.1 adds three more. Each
+    copy has to get the same things right, in order:
+
+    * deduct **atomically** — the balance-conditioned update is the concurrency guard,
+      so two requests racing over the last credit cannot both win;
+    * compensate on *any* failure to create the job, ``BaseException`` included, so a
+      cancelled request does not leave someone charged for work that will never run;
+    * ledger the charge **last**, and only best-effort — the credit is taken and the
+      job is dispatched by then, so failing the request would invite a retry that
+      charges twice. A missing history row is the cheaper loss.
+
+    ``cost <= 0`` skips the money entirely, so a free action can share this path.
+    """
+    if cost <= 0:
+        return await create()
+
+    balance_after = await deduct_credits(user_id, cost)
+
+    if balance_after is None:
+        user = await User.get(user_id)
+        raise InsufficientCreditsError(
+            balance=user.credits_balance if user is not None else 0.0,
+            required=cost,
+        )
+
+    try:
+        job = await create()
+    except BaseException:
+        # Not yet ledgered, so this reversal must not be either — see
+        # reverse_unrecorded_charge.
+        await reverse_unrecorded_charge(user_id, cost)
+        raise
+
+    try:
+        await record_transaction(
+            user_id=user_id,
+            amount=-cost,
+            action_type=action_type,
+            job_id=str(job.id),
+            balance_after=balance_after,
+        )
+    except Exception:
+        logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user_id)
+
+    return job
+
+
+async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float) -> None:
+    """Undo a deduction whose ledger row was never written — balance only, no row.
+
+    The request paths deduct, create the job, and ledger the charge **last**. So when
+    their compensating ``except`` runs, the charge was never recorded, and writing a
+    refund row would leave a lone positive movement in the history: a credit the user
+    appears to have been granted out of nowhere. A deduction and its reversal that
+    both leave no trace are, correctly, invisible.
+
+    Everywhere the charge *was* ledgered, use :func:`refund_credits` instead, so the
+    money that moved is money the user can see.
+    """
+    if cost <= 0:
+        raise ValueError("cost must be positive")
+
+    await User.get_pymongo_collection().update_one({"_id": user_id}, {"$inc": {"credits_balance": cost}})
+
+
+async def amount_owed_for_job(job_id: str) -> float:
+    """What is still owed back for ``job_id``: charges taken, less refunds already made.
+
+    Charges are negative and refunds positive in the ledger, so the sum is the net
+    movement and its negation is the outstanding debt. Clamped at zero — a job
+    refunded past what it was charged owes nothing, and feeding a negative back into
+    :func:`refund_credits` would charge the user instead.
+    """
+    if not job_id:
+        return 0.0
+
+    rows = await CreditTransaction.find(CreditTransaction.job_id == job_id).to_list()
+    return max(0.0, -sum(row.amount for row in rows))
+
+
+async def refund_failed_job(job) -> None:
+    """Give back whatever a failed job was charged and has not already been returned.
+
+    Idempotent by construction: the refund it writes is itself a ledger row, so a
+    second call finds nothing owed. That is what lets the blanket "refund on failure"
+    coexist with the handlers that already refund their own partial work (full-song
+    sections, mastering pre-flight, voice training) without paying twice.
+
+    A free job — an edit, an export — has no charges and so gets nothing, rather than
+    having credits minted for it.
+    """
+    if job.status is not JobStatus.FAILED:
+        # Refunding a job that succeeded would be a straight giveaway; refuse rather
+        # than trust the caller wired this to the right lifecycle transition.
+        raise ValueError(f"refund_failed_job called for a {job.status.value} job ({job.id})")
+
+    owed = await amount_owed_for_job(str(job.id))
+
+    if owed <= 0:
+        return
+
+    await refund_credits(job.user_id, owed, action_type=f"{job.job_type}_refund", job_id=str(job.id))
 
 
 async def record_transaction(
