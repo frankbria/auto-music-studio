@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
 
+import { SongActionsMenu } from "@/components/song/SongActionsMenu"
 import { ClipCard, type ClipCardProps } from "@/components/workspace/ClipCard"
 import { AuthContext } from "@/contexts/auth-context"
 import { PlayerProvider, usePlayer } from "@/contexts/player-context"
@@ -369,7 +370,8 @@ describe("ClipCard", () => {
     renderCard({ onMenuAction })
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
     await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
-    await userEvent.click(screen.getByRole("menuitem", { name: "WAV" }))
+    // "WAV Pro" now — the item carries its registry badge (#404).
+    await userEvent.click(screen.getByRole("menuitem", { name: /^WAV/ }))
     expect(onMenuAction).toHaveBeenCalledWith("download-wav", "c1")
   })
 
@@ -444,6 +446,121 @@ describe("ClipCard", () => {
     expect(item).not.toHaveAttribute("aria-disabled", "true")
   })
 
+  // #404: the ⋯ menu used to hardcode its items, so only Open in Editor carried a
+  // badge — Send to Mastering, Export to DAW and the whole Download submenu are
+  // `proOnly` in the registry but rendered bare. Both menus render from the registry
+  // now, so these are the items other than Open in Editor.
+  it.each(["Send to Mastering", "Export to DAW"])(
+    "badges %s as Pro in the more-options menu",
+    async (label) => {
+      renderCard({ isFreeTier: true })
+      await userEvent.click(
+        screen.getByRole("button", { name: /more options/i })
+      )
+      const item = screen.getByRole("menuitem", {
+        name: new RegExp(label, "i"),
+      })
+      expect(item).toHaveTextContent("Pro")
+      expect(item).toHaveAttribute("data-locked", "true")
+    }
+  )
+
+  it("badges the Pro download formats, honouring the native-format carve-out", async () => {
+    // The clip is stored as WAV, so serving it back is not a conversion and the API
+    // permits it — the item is still Pro-marked, but must not read as locked.
+    renderCard({ isFreeTier: true })
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
+
+    for (const label of ["WAV", "FLAC", "Stems"]) {
+      expect(
+        screen.getByRole("menuitem", { name: new RegExp(`^${label}`) })
+      ).toHaveTextContent("Pro")
+    }
+    expect(screen.getByRole("menuitem", { name: /^WAV/ })).not.toHaveAttribute(
+      "data-locked"
+    )
+    expect(screen.getByRole("menuitem", { name: /^FLAC/ })).toHaveAttribute(
+      "data-locked",
+      "true"
+    )
+    // MP3 is free at every tier.
+    expect(
+      screen.getByRole("menuitem", { name: /^MP3/ })
+    ).not.toHaveTextContent("Pro")
+  })
+
+  it("leaves Pro items unlocked for a Pro musician", async () => {
+    renderCard({ isFreeTier: false })
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    const item = screen.getByRole("menuitem", { name: /Send to Mastering/i })
+    expect(item).toHaveTextContent("Pro")
+    expect(item).not.toHaveAttribute("data-locked")
+  })
+
+  it("marks the same actions as song detail for the same clip and tier", async () => {
+    // AC3. The two surfaces disagreed because the card hardcoded its items; assert the
+    // agreement directly rather than trusting that they share a component.
+    const c = clip()
+    const { unmount } = renderCard({ isFreeTier: true })
+    await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
+    const card = markedItems()
+    unmount()
+
+    render(
+      <SongActionsMenu
+        isPublic={false}
+        isFreeTier
+        nativeFormat={c.format}
+        onAction={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByRole("button", { name: /song actions/i }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Download" }))
+    const detail = markedItems()
+
+    // Only the actions both menus offer — song detail carries extras (Repaint, Crop…).
+    for (const [label, mark] of card) {
+      if (detail.has(label))
+        expect([label, mark]).toEqual([label, detail.get(label)])
+    }
+    // …and the shared list is not trivially empty.
+    expect(
+      [...card.keys()].filter((l) => detail.has(l)).length
+    ).toBeGreaterThan(5)
+  })
+
+  /** Every open menu item, mapped to how it is marked ("pro" / "pro-locked" / "beta" / ""). */
+  function markedItems() {
+    return new Map(
+      screen.getAllByRole("menuitem").map((el) => {
+        const text = el.textContent ?? ""
+        const pro = text.includes("Pro")
+        const locked = el.getAttribute("data-locked") === "true"
+        return [
+          text.replace(/Pro|Beta/g, "").trim(),
+          [pro && "pro", locked && "locked", text.includes("Beta") && "beta"]
+            .filter(Boolean)
+            .join("+"),
+        ] as const
+      })
+    )
+  }
+
+  it("badges the Remix CTA's Pro items from the same registry", async () => {
+    renderCard({ isFreeTier: true })
+    await userEvent.click(
+      screen.getByRole("button", { name: /remix or edit/i })
+    )
+    expect(
+      screen.getByRole("menuitem", { name: /Open in Editor/i })
+    ).toHaveAttribute("data-locked", "true")
+    expect(
+      screen.getByRole("menuitem", { name: /Sample from Song/i })
+    ).toHaveTextContent("Beta")
+  })
+
   it("opens the upgrade prompt when a free-tier user clicks a Pro action (US-26.2 AC2)", async () => {
     // The card dispatches through the same useSongActions as song detail, but it did
     // not render the modal that interception drives — so on this entry point the click
@@ -451,7 +568,9 @@ describe("ClipCard", () => {
     tier.isFreeTier = true
     try {
       renderCard({ isFreeTier: true })
-      await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+      await userEvent.click(
+        screen.getByRole("button", { name: /more options/i })
+      )
       await userEvent.click(
         screen.getByRole("menuitem", { name: /Open in Editor/i })
       )
