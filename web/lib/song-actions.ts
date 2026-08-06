@@ -23,10 +23,10 @@ import {
   VoiceIcon,
 } from "@hugeicons/core-free-icons"
 
-// Shared action vocabulary for song/clip operations (US-17.2). The song-detail
-// full action menu renders from this registry; ClipCard's menus predate it and
-// keep their own item arrays, but their `ClipMenuAction` type now derives from
-// the ids here so the two surfaces can't drift apart.
+// Shared action vocabulary for song/clip operations (US-17.2). Every menu —
+// song detail's grouped list and both of ClipCard's — renders from this registry
+// through `SongActionItem`, so the Pro/Beta marks on a given action are the same
+// wherever it appears (#404: they weren't, while ClipCard hardcoded its items).
 
 /** Formats offered in a Download submenu (song menu and clip card). */
 export type DownloadAction =
@@ -86,6 +86,8 @@ export type SongActionDefinition = {
    * feature rather than a generic pitch.
    */
   capability?: string
+  /** Shipped but still rough; renders a Beta badge wherever the action appears. */
+  beta?: boolean
   destructive?: boolean
 }
 
@@ -142,6 +144,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         label: "Sample from Song",
         icon: AudioWave01Icon,
         workflow: "modal",
+        beta: true,
       },
       {
         // Only meaningful for short seeds (<60s); SongDetail hides it otherwise
@@ -251,7 +254,9 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
  * the audio endpoint directly; stem separation is a backend job, so Stems goes
  * through the modal workflow and is Pro-gated.
  */
-export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
+export const SONG_DOWNLOAD_ITEMS: (SongActionDefinition & {
+  id: DownloadAction
+})[] = [
   {
     id: "download-mp3",
     label: "MP3",
@@ -317,12 +322,16 @@ const DOWNLOAD_FORMAT: Partial<Record<SongActionId, string>> = {
  */
 export function isSongActionLocked(
   action: SongActionDefinition | undefined,
-  { isFreeTier, nativeFormat }: { isFreeTier: boolean; nativeFormat?: string | null }
+  {
+    isFreeTier,
+    nativeFormat,
+  }: { isFreeTier: boolean; nativeFormat?: string | null }
 ): boolean {
   if (!action?.proOnly || !isFreeTier) return false
 
   const requested = DOWNLOAD_FORMAT[action.id]
-  if (requested && requested === (nativeFormat ?? "").toLowerCase()) return false
+  if (requested && requested === (nativeFormat ?? "").toLowerCase())
+    return false
 
   return true
 }

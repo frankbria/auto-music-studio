@@ -4,10 +4,8 @@ import { useMemo, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
-  Delete02Icon,
   Edit02Icon,
   FavouriteIcon,
-  LockIcon,
   MoreHorizontalIcon,
   MusicNote01Icon,
   PlayIcon,
@@ -21,7 +19,6 @@ import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -32,6 +29,7 @@ import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
 import { UpgradeModal } from "@/components/upgrade/UpgradeModal"
 import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { ShareModal } from "@/components/song/ShareModal"
+import { SongActionItem } from "@/components/song/SongActionItem"
 import { SongActionModal } from "@/components/song/SongActionModal"
 import { VisibilityBadge } from "@/components/song/VisibilityBadge"
 import { VisibilityToggle } from "@/components/song/VisibilityToggle"
@@ -62,7 +60,12 @@ import type { Clip, Visibility } from "@/lib/workspace-clips"
 // ADD_CLIP placement.
 
 export type { ClipMenuAction } from "@/lib/song-actions"
-import type { ClipMenuAction, SongActionId } from "@/lib/song-actions"
+import {
+  SONG_DOWNLOAD_ITEMS,
+  findSongAction,
+  type ClipMenuAction,
+  type SongActionId,
+} from "@/lib/song-actions"
 
 export type ClipCardProps = {
   clip: Clip
@@ -93,30 +96,34 @@ function toSongAction(action: ClipMenuAction): SongActionId {
 }
 
 /**
- * Remix/Edit sub-options for the primary CTA dropdown. The flat ⋯ menu below is
- * a deliberately different shape (full §9.2 list with separators) and hardcodes
- * its own open-editor Pro lock / sample Beta badge — keep those in sync with the
- * `pro`/`beta` flags here by hand until a third consumer justifies a shared renderer.
+ * Both card menus are id lists rendered through the shared registry (#404). They
+ * used to hardcode their own labels and Pro/Beta flags, which is how the ⋯ menu
+ * ended up badging Open in Editor and none of the other Pro items.
  */
-const REMIX_ITEMS: {
-  action: ClipMenuAction
-  label: string
-  pro?: boolean
-  beta?: boolean
-}[] = [
-  { action: "open-studio", label: "Open in Studio" },
-  { action: "open-editor", label: "Open in Editor", pro: true },
-  { action: "cover", label: "Cover" },
-  { action: "extend", label: "Extend" },
-  { action: "mashup", label: "Mashup" },
-  { action: "sample", label: "Sample from Song", beta: true },
+const REMIX_ITEMS: ClipMenuAction[] = [
+  "open-studio",
+  "open-editor",
+  "cover",
+  "extend",
+  "mashup",
+  "sample",
 ]
 
-const DOWNLOAD_ITEMS: { action: ClipMenuAction; label: string }[] = [
-  { action: "download-mp3", label: "MP3" },
-  { action: "download-wav", label: "WAV" },
-  { action: "download-flac", label: "FLAC" },
-  { action: "download-stems", label: "Stems" },
+/** The flat §9.2 list, in card order; `null` is a separator. */
+const MORE_ITEMS: (ClipMenuAction | null)[] = [
+  "remix-edit",
+  null,
+  "open-studio",
+  "open-editor",
+  "cover",
+  "extend",
+  "mashup",
+  "sample",
+  "use-inspiration",
+  null,
+  "send-mastering",
+  "export-daw",
+  "create-video",
 ]
 
 /** Full clip card: metadata, playback, inline rename, and action menus. */
@@ -188,6 +195,27 @@ export function ClipCard({
     // Dispatch to the shared workflow seam, then notify any observer.
     actions.handleAction(toSongAction(action))
     onMenuAction?.(action, clip.id)
+  }
+
+  /**
+   * One menu item off the registry. Icons stay off in the card's compact menus
+   * (Delete keeps its own, as before); the observer still sees the clip-menu id,
+   * so `remix-edit` keeps its identity separate from `remix`.
+   */
+  function item(action: ClipMenuAction, label?: string, showIcon = false) {
+    const definition = findSongAction(toSongAction(action))
+    if (!definition) return null
+    return (
+      <SongActionItem
+        key={action}
+        action={definition}
+        label={label}
+        isFreeTier={isFreeTier}
+        nativeFormat={clip.format}
+        onSelect={() => emitMenu(action)}
+        hideIcon={!showIcon}
+      />
+    )
   }
 
   function dislike() {
@@ -374,44 +402,7 @@ export function ClipCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {REMIX_ITEMS.map((item) => {
-                  const locked = !!item.pro && isFreeTier
-                  return (
-                    <DropdownMenuItem
-                      key={item.action}
-                      // US-26.2 AC2: locked, but still clickable — `disabled` made the
-                      // click do nothing, which reads as a broken menu rather than a
-                      // boundary. emitMenu dispatches through useSongActions, which
-                      // intercepts it into the upgrade prompt.
-                      data-locked={locked || undefined}
-                      onSelect={() => emitMenu(item.action)}
-                    >
-                      {item.label}
-                      {item.pro && (
-                        <Badge
-                          variant="outline"
-                          className="ml-auto text-[10px]"
-                        >
-                          {locked && (
-                            <HugeiconsIcon
-                              icon={LockIcon}
-                              data-icon="inline-start"
-                            />
-                          )}
-                          Pro
-                        </Badge>
-                      )}
-                      {item.beta && (
-                        <Badge
-                          variant="secondary"
-                          className="ml-auto text-[10px]"
-                        >
-                          Beta
-                        </Badge>
-                      )}
-                    </DropdownMenuItem>
-                  )
-                })}
+                {REMIX_ITEMS.map((action) => item(action))}
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -429,75 +420,25 @@ export function ClipCard({
               <DropdownMenuContent align="end" className="w-52">
                 {/* Remix/Edit opens the remix flow; the generation actions below
                     are the flat §9.2 items (the primary CTA is the shortcut). */}
-                <DropdownMenuItem onSelect={() => emitMenu("remix-edit")}>
-                  Remix / Edit
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => emitMenu("open-studio")}>
-                  Open in Studio
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  data-locked={isFreeTier || undefined}
-                  onSelect={() => emitMenu("open-editor")}
-                >
-                  Open in Editor
-                  <Badge variant="outline" className="ml-auto text-[10px]">
-                    {isFreeTier && (
-                      <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />
-                    )}
-                    Pro
-                  </Badge>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("cover")}>
-                  Cover
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("extend")}>
-                  Extend
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("mashup")}>
-                  Mashup
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("sample")}>
-                  Sample from Song
-                  <Badge variant="secondary" className="ml-auto text-[10px]">
-                    Beta
-                  </Badge>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("use-inspiration")}>
-                  Use as Inspiration
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => emitMenu("send-mastering")}>
-                  Send to Mastering
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("export-daw")}>
-                  Export to DAW
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => emitMenu("create-video")}>
-                  Create Music Video
-                </DropdownMenuItem>
+                {MORE_ITEMS.map((action, i) =>
+                  action === null ? (
+                    <DropdownMenuSeparator key={`sep-${i}`} />
+                  ) : (
+                    item(
+                      action,
+                      action === "remix-edit" ? "Remix / Edit" : undefined
+                    )
+                  )
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>Download</DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
-                    {DOWNLOAD_ITEMS.map((item) => (
-                      <DropdownMenuItem
-                        key={item.action}
-                        onSelect={() => emitMenu(item.action)}
-                      >
-                        {item.label}
-                      </DropdownMenuItem>
-                    ))}
+                    {SONG_DOWNLOAD_ITEMS.map((format) => item(format.id))}
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => emitMenu("delete")}
-                >
-                  <HugeiconsIcon icon={Delete02Icon} size={16} />
-                  Delete
-                </DropdownMenuItem>
+                {item("delete", undefined, true)}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

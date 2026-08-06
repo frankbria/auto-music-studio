@@ -1,19 +1,13 @@
 "use client"
 
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowDown01Icon,
-  Download01Icon,
-  LockIcon,
-} from "@hugeicons/core-free-icons"
+import { ArrowDown01Icon, Download01Icon } from "@hugeicons/core-free-icons"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -21,11 +15,10 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { SongActionItem } from "@/components/song/SongActionItem"
 import {
   SONG_ACTION_GROUPS,
   SONG_DOWNLOAD_ITEMS,
-  isSongActionLocked,
-  type SongActionDefinition,
   type SongActionId,
 } from "@/lib/song-actions"
 
@@ -78,13 +71,20 @@ export function SongActionsMenu({
             {group.actions
               .filter((action) => !hidden.has(action.id))
               .map((action) => (
-                <ActionItem
+                <SongActionItem
                   key={action.id}
                   action={action}
-                  isPublic={isPublic}
+                  // The registry label is static; the menu shows the state it flips to.
+                  label={
+                    action.id === "publish-toggle"
+                      ? isPublic
+                        ? "Unpublish"
+                        : "Publish"
+                      : undefined
+                  }
                   isFreeTier={isFreeTier}
                   nativeFormat={nativeFormat}
-                  onAction={onAction}
+                  onSelect={() => onAction(action.id)}
                 />
               ))}
             {group.category === "export" && (
@@ -99,13 +99,12 @@ export function SongActionsMenu({
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
                   {SONG_DOWNLOAD_ITEMS.map((action) => (
-                    <ActionItem
+                    <SongActionItem
                       key={action.id}
                       action={action}
-                      isPublic={isPublic}
                       isFreeTier={isFreeTier}
                       nativeFormat={nativeFormat}
-                      onAction={onAction}
+                      onSelect={() => onAction(action.id)}
                       hideIcon
                     />
                   ))}
@@ -116,55 +115,5 @@ export function SongActionsMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
-  )
-}
-
-function ActionItem({
-  action,
-  isPublic,
-  isFreeTier,
-  nativeFormat,
-  onAction,
-  hideIcon = false,
-}: {
-  action: SongActionDefinition
-  isPublic: boolean
-  isFreeTier: boolean
-  nativeFormat?: string | null
-  onAction: (action: SongActionId) => void
-  hideIcon?: boolean
-}) {
-  // US-26.2 AC2: a locked item stays *clickable*. It used to render `disabled`, so
-  // clicking a Pro feature did nothing at all — which reads as a broken menu rather than
-  // a boundary. The parent turns the click into an upgrade modal.
-  const locked = isSongActionLocked(action, { isFreeTier, nativeFormat })
-  const label =
-    action.id === "publish-toggle"
-      ? isPublic
-        ? "Unpublish"
-        : "Publish"
-      : action.label
-
-  return (
-    <DropdownMenuItem
-      variant={action.destructive ? "destructive" : "default"}
-      data-locked={locked || undefined}
-      onSelect={() => onAction(action.id)}
-    >
-      {!hideIcon && (
-        <HugeiconsIcon
-          icon={action.icon}
-          size={16}
-          className="text-muted-foreground"
-        />
-      )}
-      {label}
-      {action.proOnly && (
-        <Badge variant="outline" className="ml-auto text-[10px]">
-          {locked && <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />}
-          Pro
-        </Badge>
-      )}
-    </DropdownMenuItem>
   )
 }
