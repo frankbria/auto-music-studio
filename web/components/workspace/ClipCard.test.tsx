@@ -522,10 +522,13 @@ describe("ClipCard", () => {
 
     // Only the actions both menus offer — song detail carries extras (Repaint, Crop…).
     for (const [label, mark] of card) {
-      if (detail.has(label)) expect([label, mark]).toEqual([label, detail.get(label)])
+      if (detail.has(label))
+        expect([label, mark]).toEqual([label, detail.get(label)])
     }
     // …and the shared list is not trivially empty.
-    expect([...card.keys()].filter((l) => detail.has(l)).length).toBeGreaterThan(5)
+    expect(
+      [...card.keys()].filter((l) => detail.has(l)).length
+    ).toBeGreaterThan(5)
   })
 
   /** Every open menu item, mapped to how it is marked ("pro" / "pro-locked" / "beta" / ""). */
