@@ -64,6 +64,46 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 
 Profile fields: `display_name` (user-editable name, 1–100 chars), `handle` (unique public identifier — alphanumeric + hyphens, 3–30 chars, must start and end with a letter or number; currently case-sensitive), `bio` (up to 500 chars), `style_tags` (up to 20 tags, 30 chars each). A duplicate handle returns `409 Conflict`; an invalid handle or unknown PATCH key returns `422`.
 
+### Subscription tiers (US-26.2)
+
+Two tiers: **Free** (50 credits/month) and **Pro** (500 credits/month).
+`src/acemusic/api/services/tiers.py` is the single table of what each unlocks; the UI badges
+and the API refusals both derive from it. The table **fails closed** — anything that is not
+exactly `"pro"` is free, and the free tier is defined by what it *lacks*, so a capability
+added later is locked by default rather than leaking.
+
+| Capability | Enforced at |
+| --- | --- |
+| `stems` | `POST /clips/{id}/stems`, `POST /batch/stems` |
+| `midi` | `POST /clips/{id}/midi` |
+| `mastering` | `POST /mastering/jobs`, `POST /mastering/batch` |
+| `distribution` | SoundCloud upload |
+| `studio_editing` | `POST /studio/mixdown`, `POST /studio/export/daw`, `POST /clips/{id}/export/daw` |
+| `voice_models` | `POST /voice-models/train`, and generating with a custom voice |
+| `high_res_video` | `POST /videos/generate` when `resolution` is above 720p |
+| `lossless_export` | `GET /clips/{id}/audio` and `GET /clips/{id}/stream` when `format` converts to wav/flac, and `POST /batch/export` for any non-mp3 format |
+
+A refused request returns **`403`** with the same shape as the credits `402` — what is
+locked, what it would do, and where to go:
+
+```json
+{"detail": {"error": "upgrade_required", "capability": "stems", "feature": "Stem separation",
+ "tier": "free", "required_tier": "pro",
+ "message": "Stem separation is a Pro feature — upgrade to split a track into vocals, drums, bass and other.",
+ "upgrade_url": "/settings/billing"}}
+```
+
+Two rules worth knowing. **Reads stay open** — the free tier is "Studio *view-only*" and "no
+stems export", not "cannot see your own data", so a downgraded account can still list and
+delete voices it trained. And **the tier is read from the database, not the token claims**:
+claims outlive a plan change by up to the token TTL, which would let a downgrade keep Pro and
+make someone who has just paid wait for it to expire.
+
+Credits reset to the tier allocation on the **signup anniversary**, applied lazily when a
+balance is read (`GET /credits/balance`, `GET /users/me/credits`) rather than by a scheduler.
+It does not claw back a balance above the allocation, does not pay for missed periods, and
+does not pay accounts that predate the field.
+
 The OAuth `state` is bound to the initiating client to prevent login CSRF /
 session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
 nonce, and `/callback` requires that cookie to match the signed `state`. **The
@@ -186,9 +226,9 @@ The queue is owner-scoped (one document per user, unique on `user_id`). Repeat i
 
 `GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
 
-All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
+All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). Converting **to** a lossless format is Pro-only (`lossless_export`, US-26.2) — serving a clip in its own stored format is playback, not export, and is never gated. For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
 
-`GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
+`GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges, and is Pro-only when it converts *to* wav — including for anonymous callers, since otherwise signing out would beat the gate), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
 
 `GET /api/v1/clips/{id}/similar` finds clips related to a seed for a radio-style queue (pairs with the playback queue above). It scores candidates by shared style tags (each +1, case-insensitive), BPM within ±10% (+1), the same or relative key (+1), and matching model **and** generation mode (+1), returning them most-similar first. `?scope=mine|public|all` (default `all`) selects the candidate pool — the caller's own clips, public clips, or both — and `?limit=N` caps the result (default 20, max 50); `total` reports how many candidates matched before the limit. The seed is resolved like `/audio` (`404` unknown, `403` another user's private clip), so any clip the caller can see may seed a queue, and no matches returns `200` with an empty array.
 
@@ -211,7 +251,7 @@ All three editing endpoints are non-destructive: the original clip is never modi
 | `POST /api/v1/clips/{id}/midi` | Extract `melody`/`chords`/`bass`/`drums` MIDI; returns 202 + `job_id` (or 200 with the existing files on a cache hit) |
 | `GET /api/v1/clips/{id}/midi` | Download URLs for the extracted `.mid` files (404 until extracted) |
 
-Both operations run as background jobs and are tracked via `GET /api/v1/jobs/{id}/status` — completed stems jobs surface `clip_ids`/`audio_urls`, completed MIDI jobs surface `midi_download_urls`. Stems become **four child clips** linked to the parent (`generation_mode="stems"`, same duration as the source); MIDI files are stored as objects (not clip records) and referenced from the parent clip's `midi_paths`. Requests are cache-first and idempotent per clip: re-requesting returns the existing results, and a second request while a job is in flight rides the existing job rather than enqueuing a duplicate. Only `wav` source clips are accepted (422 otherwise); no credits are deducted.
+Both operations run as background jobs and are tracked via `GET /api/v1/jobs/{id}/status` — completed stems jobs surface `clip_ids`/`audio_urls`, completed MIDI jobs surface `midi_download_urls`. Stems become **four child clips** linked to the parent (`generation_mode="stems"`, same duration as the source); MIDI files are stored as objects (not clip records) and referenced from the parent clip's `midi_paths`. Requests are cache-first and idempotent per clip: re-requesting returns the existing results, and a second request while a job is in flight rides the existing job rather than enqueuing a duplicate. Only `wav` source clips are accepted (422 otherwise); no credits are deducted. Both `POST` endpoints are **Pro-only** (`stems` / `midi`, US-26.2) — a free account gets `403 upgrade_required`; the `GET` reads stay open.
 
 ### Iterative Generation (US-10.3)
 
@@ -236,6 +276,8 @@ All endpoints are non-destructive: the original clip(s) are never modified. Each
 | `POST /api/v1/batch/stems` | Queue stem separation for many clips at once (`{clip_ids[]}`); returns 202 + `batch_job_id` and one `sub_job_id` per queued clip |
 | `POST /api/v1/batch/export` | Queue audio export of many clips to `format` (`{clip_ids[], format}`); returns 202 + `batch_job_id` and `sub_job_ids` |
 | `GET /api/v1/batch/{batch_id}/status` | Overall progress (`completed`/`processing`/`failed`/`partial_success`) with a per-clip breakdown (404 if missing or not owned) |
+
+Both `POST` endpoints are **Pro-only** (US-26.2): `batch/stems` requires the `stems` capability, and `batch/export` requires `lossless_export` when `format` is anything other than `mp3` — the free tier is "MP3 download only", not "no batch export". A free account gets `403 upgrade_required`. See [Subscription tiers](#subscription-tiers-us-262).
 
 Each request fans out into one sub-job per clip, tracked under a `BatchJob`. The 50-clip cap, an empty list, and duplicate ids each return 422. A clip that is unknown, not owned, or (for stems) non-`wav` is recorded as a **failed sub-job** rather than rejecting the whole request, so individual failures never halt the batch — the status reports `partial_success`. Stems sub-jobs reuse the single-clip stems job (wav only); export sub-jobs transcode any generated source (`wav`/`flac`/`mp3`/`aac`/`opus`) to a `wav`/`wav32`/`flac`/`mp3` target via ffmpeg and surface a `download_url` when complete. Like the single-clip extraction endpoints, these are non-generative local work, so **no credits are deducted**.
 
@@ -302,7 +344,7 @@ A preset is a named snapshot of generation parameters. Every creative field acce
 | `POST /api/v1/studio/export/daw` | Assemble a DAW hand-off bundle — one full-timeline WAV stem per track plus `project.json` (tempo, markers, track names, per-track volume/pan/mute/solo); returns 202 + `job_id` |
 | `GET /api/v1/studio/export/daw/{job_id}` | Download the assembled ZIP (`application/zip`); 409 until the job completes, 404 if unknown/unowned |
 
-Arrangement state has no backend persistence, so each request carries the full arrangement (tracks → placements referencing workspace clips with `start_sec`/`duration_sec` offsets and per-track `volume_db`/`pan`/`muted`/`solo`). The workspace and every referenced clip are ownership-checked up front (404 before any job is created), and requests are bounded: 1–64 tracks, ≤256 placements per track, ≥1 placement overall, field and computed timeline length capped at 4 hours (the worker re-checks the real arrangement duration, since an untrimmed placement runs its full source clip). Mixing is a pure 48 kHz stereo sum with per-track gain/pan; mute beats solo, and a soloed-but-muted track does not silence the rest. Progress is reported through the generic job status endpoint (`Downloading tracks` → `Mixing`/`Bundling` → `Uploading`). `flac`/`mp3` mixdowns require ffmpeg on the API host; DAW ZIPs are stored under `exports/` keyed by job id and are not cascade-deleted.
+Arrangement state has no backend persistence, so each request carries the full arrangement (tracks → placements referencing workspace clips with `start_sec`/`duration_sec` offsets and per-track `volume_db`/`pan`/`muted`/`solo`). The workspace and every referenced clip are ownership-checked up front (404 before any job is created), and requests are bounded: 1–64 tracks, ≤256 placements per track, ≥1 placement overall, field and computed timeline length capped at 4 hours (the worker re-checks the real arrangement duration, since an untrimmed placement runs its full source clip). Mixing is a pure 48 kHz stereo sum with per-track gain/pan; mute beats solo, and a soloed-but-muted track does not silence the rest. Progress is reported through the generic job status endpoint (`Downloading tracks` → `Mixing`/`Bundling` → `Uploading`). `flac`/`mp3` mixdowns require ffmpeg on the API host; DAW ZIPs are stored under `exports/` keyed by job id and are not cascade-deleted. Both `POST` endpoints are **Pro-only** (`studio_editing`, US-26.2) — the free tier is Studio *view-only* — as is the per-clip `POST /api/v1/clips/{id}/export/daw`, which builds the same kind of bundle from a single clip.
 
 ### Music Video Generation (US-22.1, US-22.3)
 
