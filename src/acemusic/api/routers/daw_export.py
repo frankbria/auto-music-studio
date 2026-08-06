@@ -21,9 +21,10 @@ from pydantic import BaseModel
 from acemusic.daw_export import project_slug
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_capability, require_existing_user
 from ..models import Clip
 from ..services import clips as clip_service, daw_export as daw_export_service
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,15 @@ def _export_path(clip: Clip) -> str:
     return daw_export_service.export_storage_path(clip.user_id, clip.workspace_id, clip.id)
 
 
-@router.post("/{clip_id}/export/daw", response_model=DawExportJobResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{clip_id}/export/daw",
+    response_model=DawExportJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    # US-26.2: the same capability as POST /studio/export/daw, which builds the same kind
+    # of bundle from an arrangement rather than one clip. Gating only that one would have
+    # left the per-clip route as the way around it.
+    dependencies=[Depends(require_capability(Capability.STUDIO_EDITING))],
+)
 async def create_daw_export(
     clip_id: str,
     current: CurrentUser = Depends(require_existing_user),

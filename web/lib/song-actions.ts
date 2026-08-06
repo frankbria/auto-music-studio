@@ -30,10 +30,7 @@ import {
 
 /** Formats offered in a Download submenu (song menu and clip card). */
 export type DownloadAction =
-  | "download-mp3"
-  | "download-wav"
-  | "download-flac"
-  | "download-stems"
+  "download-mp3" | "download-wav" | "download-flac" | "download-stems"
 
 /** Every action reachable from the clip card menus (spec §9.2). */
 export type ClipMenuAction =
@@ -64,7 +61,8 @@ export type SongActionId =
   | "get-full-song"
   | "publish-toggle"
 
-export type SongActionCategory = "edit" | "create" | "audio" | "export" | "manage"
+export type SongActionCategory =
+  "edit" | "create" | "audio" | "export" | "manage"
 
 /**
  * How an action is carried out when selected:
@@ -82,6 +80,12 @@ export type SongActionDefinition = {
   workflow: SongActionWorkflow
   /** Gated behind the Pro tier; free-tier users see a locked item. */
   proOnly?: boolean
+  /**
+   * Which capability the lock is about, matching the API's 403 `detail.capability`
+   * (US-26.2). Drives the upgrade modal's copy, so a locked click explains the right
+   * feature rather than a generic pitch.
+   */
+  capability?: string
   destructive?: boolean
 }
 
@@ -111,6 +115,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: PencilEdit02Icon,
         workflow: "navigation",
         proOnly: true,
+        capability: "studio_editing",
       },
       {
         id: "open-studio",
@@ -158,7 +163,12 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
     category: "audio",
     label: "Audio",
     actions: [
-      { id: "add-vocal", label: "Add Vocal", icon: VoiceIcon, workflow: "modal" },
+      {
+        id: "add-vocal",
+        label: "Add Vocal",
+        icon: VoiceIcon,
+        workflow: "modal",
+      },
       {
         // One-click, no modal (US-17.3): remaster runs immediately with the
         // default -14 LUFS target and shows inline progress.
@@ -192,6 +202,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: Rocket01Icon,
         workflow: "modal",
         proOnly: true,
+        capability: "mastering",
       },
       {
         id: "export-daw",
@@ -199,6 +210,7 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: FileExportIcon,
         workflow: "modal",
         proOnly: true,
+        capability: "studio_editing",
       },
       {
         id: "create-video",
@@ -206,7 +218,9 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         icon: Video01Icon,
         // Navigates to the video creation page (US-22.2).
         workflow: "navigation",
-        proOnly: true,
+        // US-26.2: deliberately NOT proOnly. The free tier gets 720p, so the form has
+        // to be reachable; the Pro boundary is the *resolution*, enforced in VideoForm
+        // and on POST /videos/generate.
       },
     ],
   },
@@ -238,13 +252,33 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
  * through the modal workflow and is Pro-gated.
  */
 export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
-  { id: "download-mp3", label: "MP3", icon: AudioWave01Icon, workflow: "download" },
-  { id: "download-wav", label: "WAV", icon: AudioWave01Icon, workflow: "download" },
+  {
+    id: "download-mp3",
+    label: "MP3",
+    icon: AudioWave01Icon,
+    workflow: "download",
+  },
+  {
+    id: "download-wav",
+    label: "WAV",
+    icon: AudioWave01Icon,
+    workflow: "download",
+    // US-26.2: the free tier is "MP3 download only". Marked here so the menu matches
+    // what GET /clips/{id}/audio?format= now enforces — offering a download that the
+    // API refuses is worse than not offering it.
+    proOnly: true,
+    capability: "lossless_export",
+  },
   {
     id: "download-flac",
     label: "FLAC",
     icon: AudioWave01Icon,
     workflow: "download",
+    // US-26.2: the free tier is "MP3 download only". Marked here so the menu matches
+    // what GET /clips/{id}/audio?format= now enforces — offering a download that the
+    // API refuses is worse than not offering it.
+    proOnly: true,
+    capability: "lossless_export",
   },
   {
     id: "download-stems",
@@ -252,6 +286,7 @@ export const SONG_DOWNLOAD_ITEMS: SongActionDefinition[] = [
     icon: Layers01Icon,
     workflow: "modal",
     proOnly: true,
+    capability: "stems",
   },
 ]
 
@@ -261,7 +296,40 @@ const ACTION_INDEX = new Map<SongActionId, SongActionDefinition>(
   )
 )
 
+/** Which stored format each download action asks the API to serve. */
+const DOWNLOAD_FORMAT: Partial<Record<SongActionId, string>> = {
+  "download-mp3": "mp3",
+  "download-wav": "wav",
+  "download-flac": "flac",
+}
+
+/**
+ * Whether `action` is locked for this musician — the single answer the click
+ * handler and the menu badge both use, so they cannot drift apart.
+ *
+ * `nativeFormat` is the clip's stored format, and it matters because the API gates
+ * lossless export only on a genuine *conversion*
+ * (`format !== native_format` — see `GET /clips/{id}/audio`). Upload is not
+ * tier-gated, so a free musician can own a WAV they uploaded themselves, and the
+ * API will serve it back to them. Locking the menu item anyway would refuse
+ * something the backend permits — the mirror image of the "a menu is not a gate"
+ * problem this story exists to fix.
+ */
+export function isSongActionLocked(
+  action: SongActionDefinition | undefined,
+  { isFreeTier, nativeFormat }: { isFreeTier: boolean; nativeFormat?: string | null }
+): boolean {
+  if (!action?.proOnly || !isFreeTier) return false
+
+  const requested = DOWNLOAD_FORMAT[action.id]
+  if (requested && requested === (nativeFormat ?? "").toLowerCase()) return false
+
+  return true
+}
+
 /** Look up an action definition by id (download items included). */
-export function findSongAction(id: SongActionId): SongActionDefinition | undefined {
+export function findSongAction(
+  id: SongActionId
+): SongActionDefinition | undefined {
   return ACTION_INDEX.get(id)
 }

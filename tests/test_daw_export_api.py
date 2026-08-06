@@ -32,6 +32,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
 from acemusic.api.services import users as user_service
 from acemusic.api.services.daw_export import export_storage_path
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.daw_export import CANONICAL_STEMS, assemble_daw_bundle
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS
@@ -193,7 +194,13 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    # Pro: DAW export is a Pro capability since US-26.2, and this file tests how the
+    # export behaves, not who may ask for it. The refusal is tested in
+    # test_tier_enforcement_api.py.
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
+    await user.save()
+    return user
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:

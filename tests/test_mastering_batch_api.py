@@ -16,6 +16,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import BatchClipEntry, BatchJob, Clip, CreditTransaction, Job, JobStatus, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 
 BATCH_URL = f"{API_V1_PREFIX}/mastering/batch"
@@ -75,10 +76,14 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str, *, balance: float | None = None):
+    # Pro: mastering is a Pro capability since US-26.2, and this file tests how batch
+    # mastering behaves, not who may ask for it. The refusal is tested in
+    # test_tier_enforcement_api.py.
     user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
     if balance is not None:
         user.credits_balance = balance
-        await user.save()
+    await user.save()
     return user
 
 

@@ -23,10 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, require_existing_user
+from ..auth.dependencies import CurrentUser, require_capability, require_existing_user
 from ..models import VoiceModel, VoiceModelStatus
 from ..models.voice_model import MAX_REFERENCE_FILES, MIN_REFERENCE_FILES
 from ..services import credits as credits_service, voice_models as voice_service
+from ..services.tiers import Capability
 from ..utils.media_types import get_audio_content_type
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,14 @@ class TrainingAccepted(BaseModel):
     credits_charged: float
 
 
-@router.post("/train", response_model=TrainingAccepted, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/train",
+    response_model=TrainingAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    # US-26.2: Pro-only. Reads stay open so a downgraded account can still see and
+    # delete voices it already trained.
+    dependencies=[Depends(require_capability(Capability.VOICE_MODELS))],
+)
 async def train_voice_model(
     files: list[UploadFile] = File(...),
     name: str = Form(...),

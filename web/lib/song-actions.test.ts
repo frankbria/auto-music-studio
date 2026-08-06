@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   SONG_ACTION_GROUPS,
   SONG_DOWNLOAD_ITEMS,
+  isSongActionLocked,
   findSongAction,
   type SongActionDefinition,
 } from "@/lib/song-actions"
@@ -64,15 +65,26 @@ describe("SONG_ACTION_GROUPS", () => {
 
   it("marks exactly the Pro-gated actions as proOnly", () => {
     const pro = allActions.filter((a) => a.proOnly).map((a) => a.id)
+    // create-video is deliberately absent (US-26.2): the free tier gets 720p, so the
+    // form must stay reachable and the Pro boundary is the resolution inside it.
     expect(pro.sort()).toEqual(
       [
-        "create-video",
+        "download-flac",
         "download-stems",
+        "download-wav",
         "export-daw",
         "open-editor",
         "send-mastering",
       ].sort()
     )
+  })
+
+  it("gives every Pro-gated action a capability for the upgrade prompt", () => {
+    // Without one the modal falls back to generic copy, which defeats leading with
+    // the feature the musician actually reached for (US-26.2 AC2).
+    for (const action of allActions.filter((a) => a.proOnly)) {
+      expect(action.capability, `${action.id} has no capability`).toBeTruthy()
+    }
   })
 
   it("routes studio to navigation and remaster/publish/delete inline", () => {
@@ -121,11 +133,18 @@ describe("SONG_DOWNLOAD_ITEMS", () => {
       "download-flac",
       "download-stems",
     ])
-    for (const id of ["download-mp3", "download-wav", "download-flac"] as const) {
-      const item = findSongAction(id)
-      expect(item?.workflow).toBe("download")
-      expect(item?.proOnly).toBeFalsy()
+    for (const id of [
+      "download-mp3",
+      "download-wav",
+      "download-flac",
+    ] as const) {
+      expect(findSongAction(id)?.workflow).toBe("download")
     }
+    // US-26.2: "MP3 download only" on the free tier. MP3 stays open; the lossless two
+    // are gated, matching what GET /clips/{id}/audio?format= enforces.
+    expect(findSongAction("download-mp3")?.proOnly).toBeFalsy()
+    expect(findSongAction("download-wav")?.proOnly).toBe(true)
+    expect(findSongAction("download-flac")?.proOnly).toBe(true)
     // Stem separation is a backend job (POST /clips/{id}/stems), not a file
     // fetch — it goes through the modal workflow like other generation actions.
     expect(findSongAction("download-stems")?.workflow).toBe("modal")
@@ -136,5 +155,34 @@ describe("findSongAction", () => {
   it("resolves any id, including download submenu items", () => {
     expect(findSongAction("remix")?.label).toBe("Remix")
     expect(findSongAction("download-wav")?.label).toBe("WAV")
+  })
+})
+
+describe("isSongActionLocked", () => {
+  const wav = findSongAction("download-wav")
+  const mastering = findSongAction("send-mastering")
+
+  it("does not lock anything for a Pro account", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: false, nativeFormat: "mp3" })).toBe(false)
+  })
+
+  it("locks a lossless download that is a genuine conversion", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "mp3" })).toBe(true)
+  })
+
+  it("does not lock a download of the clip's own stored format", () => {
+    // Mirrors the API: the lossless gate fires on `format !== native_format`, so a
+    // free musician may download back the wav they uploaded.
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "wav" })).toBe(false)
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "WAV" })).toBe(false)
+  })
+
+  it("leaves non-download Pro actions locked regardless of format", () => {
+    // The carve-out is about serving a stored file, not about capabilities at large.
+    expect(isSongActionLocked(mastering, { isFreeTier: true, nativeFormat: "wav" })).toBe(true)
+  })
+
+  it("locks when the format is unknown", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: null })).toBe(true)
   })
 })

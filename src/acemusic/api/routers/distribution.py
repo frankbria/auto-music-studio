@@ -23,7 +23,7 @@ from pymongo.errors import DuplicateKeyError
 
 from acemusic.storage import StorageBackend, get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_capability
 from ..models import Clip, SoundCloudConnection
 from ..models.common import utcnow
 from ..models.distribution import SOUNDCLOUD_CHANNEL, DistributionStatus
@@ -33,6 +33,7 @@ from ..services import (
     releases as release_service,
     soundcloud as sc,
 )
+from ..services.tiers import Capability
 from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,13 @@ async def soundcloud_status(current: CurrentUser = Depends(get_current_user)) ->
     )
 
 
-@router.post("/soundcloud/upload", response_model=UploadResponse)
+@router.post(
+    "/soundcloud/upload",
+    response_model=UploadResponse,
+    # US-26.2: publishing is Pro-only. Connect/callback stay open so an account can
+    # finish an OAuth round-trip it started, and reads stay open.
+    dependencies=[Depends(require_capability(Capability.DISTRIBUTION))],
+)
 async def soundcloud_upload(
     body: UploadRequest,
     request: Request,

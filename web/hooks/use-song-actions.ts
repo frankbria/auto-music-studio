@@ -4,6 +4,8 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { useAuth } from "@/hooks/use-auth"
+import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
+import { lockedFeature, type LockedFeature } from "@/lib/tiers"
 import { useClipEdit } from "@/hooks/use-clip-edit"
 import {
   downloadClipAudio,
@@ -11,7 +13,11 @@ import {
   type DownloadFormat,
 } from "@/lib/clips"
 import { submitRemaster } from "@/lib/editing"
-import { findSongAction, type SongActionId } from "@/lib/song-actions"
+import {
+  findSongAction,
+  isSongActionLocked,
+  type SongActionId,
+} from "@/lib/song-actions"
 import { visibilityOf, type Clip, type Visibility } from "@/lib/workspace-clips"
 
 // US-17.2: dispatch for the full action menu. Routes a selected action to its
@@ -50,27 +56,42 @@ export type UseSongActionsOptions = {
   onDeleted?: (id: string) => void
 }
 
-export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions = {}) {
+export function useSongActions(
+  clip: Clip,
+  { onDeleted }: UseSongActionsOptions = {}
+) {
   const router = useRouter()
+  const { isFreeTier } = useSubscriptionTier()
   const { accessToken } = useAuth()
   const remaster = useClipEdit()
   const [activeModal, setActiveModal] = useState<SongActionId | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [optimisticVisibility, setOptimisticVisibility] = useState<Visibility | null>(
-    null
-  )
+  const [optimisticVisibility, setOptimisticVisibility] =
+    useState<Visibility | null>(null)
   // Set when going public is blocked (client guard) or rejected (server 422);
   // drives the PublishGuardPrompt. Null means no prompt. Unlisted has no
   // requirements, so it never sets this.
   const [publishGuard, setPublishGuard] = useState<PublishGuard | null>(null)
+  // The Pro feature a free-tier musician just reached for, driving the upgrade modal.
+  const [locked, setLockedFeature] = useState<LockedFeature | null>(null)
 
   const visibility = optimisticVisibility ?? visibilityOf(clip)
   const isPublic = visibility === "public"
 
   function handleAction(action: SongActionId) {
-    const workflow = findSongAction(action)?.workflow
+    const definition = findSongAction(action)
+
+    // US-26.2 AC2: reaching for a Pro feature on the free tier opens an upgrade
+    // prompt — not an error, and not the silence a `disabled` menu item gave. The
+    // check is here rather than in the menu so every entry point behaves the same.
+    if (isSongActionLocked(definition, { isFreeTier, nativeFormat: clip.format })) {
+      setLockedFeature(lockedFeature(definition?.capability))
+      return
+    }
+
+    const workflow = definition?.workflow
     if (workflow === "navigation") {
       // open-editor → the waveform editor (US-18.1); create-video → the video
       // page (US-22.2); open-studio → the studio.
@@ -93,7 +114,8 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
       if (!format || !accessToken) return
       void downloadClipAudio(clip.id, format, accessToken, clip.title).then(
         (ok) => {
-          if (!ok) setActionError("Couldn't download this song. Please try again.")
+          if (!ok)
+            setActionError("Couldn't download this song. Please try again.")
         }
       )
       return
@@ -191,6 +213,9 @@ export function useSongActions(clip: Clip, { onDeleted }: UseSongActionsOptions 
   }
 
   return {
+    /** The Pro feature that was reached for, or null. Drives the upgrade modal (US-26.2). */
+    lockedFeature: locked,
+    dismissUpgrade: () => setLockedFeature(null),
     /** Tri-state visibility (US-20.7): "private" | "unlisted" | "public". */
     visibility,
     /** Back-compat derived flag: `visibility === "public"`. */

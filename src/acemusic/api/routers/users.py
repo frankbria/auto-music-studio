@@ -175,6 +175,9 @@ async def get_my_credits(current: CurrentUser = Depends(get_current_user)) -> Cr
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise _not_found()
+    # US-26.2: same lazy monthly top-up as /credits/balance, so the two cannot disagree
+    # about the balance depending on which one you asked.
+    user = await credits_service.apply_monthly_reset(user)
     transactions = await credits_service.get_recent_transactions(user.id)
     return CreditsResponse(
         balance=user.credits_balance,

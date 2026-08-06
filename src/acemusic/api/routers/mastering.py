@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_capability
 from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus
 from ..services import (
     clips as clip_service,
@@ -31,6 +31,7 @@ from ..services import (
     users as user_service,
 )
 from ..services.common import coerce_object_id
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,14 @@ class MasteringJobResponse(BaseModel):
     status: Literal["queued"] = "queued"
 
 
-@router.post("/jobs", response_model=MasteringJobResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/jobs",
+    response_model=MasteringJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    # US-26.2: Pro-only. Gated per action rather than on the router, so a free account
+    # can still read masters it produced while on Pro.
+    dependencies=[Depends(require_capability(Capability.MASTERING))],
+)
 async def create_mastering_job(
     request: MasteringRequest,
     # The router-level dependency already gates auth; declaring it here too gives
@@ -227,7 +235,12 @@ class BatchStatusResponse(BaseModel):
     jobs: list[BatchSubJobStatus]
 
 
-@router.post("/batch", response_model=BatchMasteringResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/batch",
+    response_model=BatchMasteringResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_capability(Capability.MASTERING))],
+)
 async def create_mastering_batch(
     request: BatchMasteringRequest,
     current: CurrentUser = Depends(get_current_user),

@@ -9,6 +9,18 @@ import type { Clip } from "@/lib/workspace-clips"
 const push = vi.fn()
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 
+// US-26.2 gates the Pro actions in this hook, so the tier has to be stated. Pro by
+// default: these cases are about routing and modals, not about the gate. The free-tier
+// path has its own describe block below.
+const tier = vi.hoisted(() => ({ isFreeTier: false }))
+vi.mock("@/hooks/use-subscription-tier", () => ({
+  useSubscriptionTier: () => ({
+    tier: tier.isFreeTier ? "free" : "pro",
+    isFreeTier: tier.isFreeTier,
+    isLoading: false,
+  }),
+}))
+
 const submitRemaster = vi.fn()
 vi.mock("@/lib/editing", () => ({
   submitRemaster: (...args: unknown[]) => submitRemaster(...args),
@@ -104,7 +116,10 @@ describe("useSongActions", () => {
       jobId: "j1",
       estimatedSeconds: 0,
     })
-    fetchJobStatus.mockResolvedValue({ kind: "completed", clipIds: ["remastered-1"] })
+    fetchJobStatus.mockResolvedValue({
+      kind: "completed",
+      clipIds: ["remastered-1"],
+    })
     const { result } = setup()
 
     await act(async () => {
@@ -113,7 +128,9 @@ describe("useSongActions", () => {
 
     // No modal opens for the one-click action.
     expect(result.current.activeModal).toBeNull()
-    await waitFor(() => expect(result.current.remasterState.phase).toBe("success"))
+    await waitFor(() =>
+      expect(result.current.remasterState.phase).toBe("success")
+    )
     expect(submitRemaster).toHaveBeenCalledWith("c1", {}, "tok")
   })
 
@@ -130,7 +147,9 @@ describe("useSongActions", () => {
     await act(async () => {
       result.current.handleAction("remaster")
     })
-    await waitFor(() => expect(result.current.remasterState.phase).toBe("polling"))
+    await waitFor(() =>
+      expect(result.current.remasterState.phase).toBe("polling")
+    )
 
     // A second click while polling must not enqueue another job.
     act(() => result.current.handleAction("remaster"))
@@ -211,12 +230,14 @@ describe("useSongActions", () => {
       // the server's specific message must win instead.
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(
-          new Response(
-            JSON.stringify({ detail: "Publishing requires a title." }),
-            { status: 422 }
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(
+              JSON.stringify({ detail: "Publishing requires a title." }),
+              { status: 422 }
+            )
           )
-        )
       )
       const { result } = setup(ready())
 
@@ -306,9 +327,9 @@ describe("useSongActions", () => {
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/clips/c1")
     expect(opts.method).toBe("DELETE")
-    expect(
-      (opts.headers as Record<string, string>).authorization
-    ).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
     expect(push).toHaveBeenCalledWith("/")
   })
 
@@ -404,5 +425,86 @@ describe("useSongActions", () => {
 
     act(() => result.current.clearActionError())
     expect(result.current.actionError).toBeNull()
+  })
+
+  describe("free-tier gating (US-26.2)", () => {
+    afterEach(() => {
+      tier.isFreeTier = false
+    })
+
+    it("opens an upgrade prompt instead of running a Pro action", async () => {
+      tier.isFreeTier = true
+      const { result } = setup()
+
+      act(() => result.current.handleAction("open-editor"))
+
+      expect(result.current.lockedFeature).toEqual({
+        name: "Studio editing",
+        benefit: "arrange and mix in the multi-track Studio",
+      })
+      // Not an error, and not silence: the action must not also run.
+      expect(push).not.toHaveBeenCalled()
+    })
+
+    it("names the feature that was actually reached for", async () => {
+      tier.isFreeTier = true
+      const { result } = setup()
+
+      act(() => result.current.handleAction("send-mastering"))
+
+      expect(result.current.lockedFeature?.name).toBe("Mastering")
+    })
+
+    it("dismisses the prompt", async () => {
+      tier.isFreeTier = true
+      const { result } = setup()
+
+      act(() => result.current.handleAction("open-editor"))
+      act(() => result.current.dismissUpgrade())
+
+      expect(result.current.lockedFeature).toBeNull()
+    })
+
+    it("leaves free actions alone", async () => {
+      tier.isFreeTier = true
+      const { result } = setup()
+
+      act(() => result.current.handleAction("open-studio"))
+
+      expect(result.current.lockedFeature).toBeNull()
+      expect(push).toHaveBeenCalled()
+    })
+
+    it("does not gate a Pro account", async () => {
+      const { result } = setup()
+
+      act(() => result.current.handleAction("open-editor"))
+
+      expect(result.current.lockedFeature).toBeNull()
+      expect(push).toHaveBeenCalledWith("/editor/c1")
+    })
+
+    it("lets a free account download its own clip in the format it is stored in", () => {
+      // Upload is not tier-gated, so a free musician can own a wav they uploaded
+      // themselves, and GET /clips/{id}/audio?format=wav serves it — the API gates
+      // lossless export only on a genuine *conversion*. Locking the menu item here
+      // would refuse something the backend permits.
+      tier.isFreeTier = true
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob() }))
+      const { result } = setup(clip({ format: "wav" }))
+
+      act(() => result.current.handleAction("download-wav"))
+
+      expect(result.current.lockedFeature).toBeNull()
+    })
+
+    it("still gates a lossless download that is a real conversion", () => {
+      tier.isFreeTier = true
+      const { result } = setup(clip({ format: "mp3" }))
+
+      act(() => result.current.handleAction("download-wav"))
+
+      expect(result.current.lockedFeature?.name).toBe("Lossless export")
+    })
   })
 })

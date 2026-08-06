@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from acemusic.storage import get_storage_backend
 from acemusic.utils import make_slug
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_capability, require_existing_user
 from ..models import Job, JobStatus
 from ..services import clips as clip_service, studio as studio_service, workspaces as workspace_service
 from ..services.studio import (
@@ -36,6 +36,7 @@ from ..services.studio import (
     clip_ids_in,
     studio_export_storage_path,
 )
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,14 @@ async def _validated_workspace_and_clips(workspace_id: str, tracks, user_id: str
     return workspace.id
 
 
-@router.post("/mixdown", response_model=StudioJobResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/mixdown",
+    response_model=StudioJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    # US-26.2: the free tier is Studio *view-only*, so the writes are gated and the
+    # reads are not.
+    dependencies=[Depends(require_capability(Capability.STUDIO_EDITING))],
+)
 async def create_mixdown(
     request: StudioMixdownRequest,
     current: CurrentUser = Depends(require_existing_user),
@@ -78,7 +86,12 @@ async def create_mixdown(
     return StudioJobResponse(job_id=str(job.id))
 
 
-@router.post("/export/daw", response_model=StudioJobResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/export/daw",
+    response_model=StudioJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_capability(Capability.STUDIO_EDITING))],
+)
 async def create_daw_export(
     request: StudioDawExportRequest,
     current: CurrentUser = Depends(require_existing_user),

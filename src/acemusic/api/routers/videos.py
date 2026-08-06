@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional
+from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_tier_capability
 from ..models import JobStatus, Video
 from ..services import (
     clips as clip_service,
@@ -31,11 +31,15 @@ from ..services import (
     video as video_service,
 )
 from ..services.clips import get_clip_for_streaming
+from ..services.tiers import Capability
 from ..settings import ApiSettings
 from ..utils.range_requests import stream_stored_object
 from ..utils.rate_limit import enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
+
+#: The one resolution the free tier may render (US-26.2); above it is Pro.
+FREE_TIER_RESOLUTION = "720p"
 
 router = APIRouter(prefix="/videos", tags=["videos"], dependencies=[Depends(get_current_user)])
 
@@ -146,6 +150,14 @@ async def create_video_job(
     configured), 404 (stale token or unknown/unowned clip) and 402 (insufficient
     credits).
     """
+    # US-26.2: 720p is free-tier, above it is Pro. Checked FIRST, ahead of the
+    # deployment check below, because the plan boundary does not depend on whether this
+    # deployment happens to have a video provider — and telling a free account "not
+    # configured" when the real answer is "that is Pro" sends them to the wrong place.
+    # Gated on the *argument*, so the free tier keeps a working 720p path.
+    if request.resolution != FREE_TIER_RESOLUTION:
+        await require_tier_capability(current.user_id, Capability.HIGH_RES_VIDEO)
+
     # Gate BEFORE any charge: settings are process-static, so an unconfigured
     # deployment would otherwise take the credits and then have the worker fail
     # every claimed job with "not configured" — a guaranteed charge for nothing.

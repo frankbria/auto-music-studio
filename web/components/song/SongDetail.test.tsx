@@ -8,8 +8,16 @@ import type { Clip } from "@/lib/workspace-clips"
 
 // Mutable so a test can render the page as a signed-out visitor (US-20.0);
 // defaults to a signed-in user, which is what most cases exercise.
-const SIGNED_IN = { accessToken: "tok", isLoading: false, isAuthenticated: true }
-const ANONYMOUS = { accessToken: null, isLoading: false, isAuthenticated: false }
+const SIGNED_IN = {
+  accessToken: "tok",
+  isLoading: false,
+  isAuthenticated: true,
+}
+const ANONYMOUS = {
+  accessToken: null,
+  isLoading: false,
+  isAuthenticated: false,
+}
 let authValue: {
   accessToken: string | null
   isLoading: boolean
@@ -264,13 +272,32 @@ describe("SongDetail full action menu (US-17.2)", () => {
     expect(push).toHaveBeenCalledWith("/editor/c1")
   })
 
-  it("locks Pro-only actions for a free user", async () => {
+  it("marks Pro-only actions as locked for a free user", async () => {
     stubFetch({ clip: clip(), tier: "free" })
     renderDetail()
     await openActions()
     expect(
       screen.getByRole("menuitem", { name: /open in editor/i })
-    ).toHaveAttribute("aria-disabled", "true")
+    ).toHaveAttribute("data-locked", "true")
+  })
+
+  it("opens an upgrade prompt when a free user picks a Pro action (US-26.2 AC2)", async () => {
+    // The whole point of the change: this used to be a disabled item, so the click
+    // did nothing and the musician was told nothing.
+    stubFetch({ clip: clip(), tier: "free" })
+    renderDetail()
+    await openActions()
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /open in editor/i })
+    )
+
+    const modal = await screen.findByTestId("upgrade-modal")
+    expect(modal).toHaveTextContent(/Studio editing is a Pro feature/i)
+    expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute(
+      "href",
+      "/settings/billing"
+    )
   })
 
   it("shares publish state between the menu and the header visibility toggle", async () => {
@@ -287,9 +314,13 @@ describe("SongDetail full action menu (US-17.2)", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Visibility: Public" })
     )
-    await userEvent.click(screen.getByRole("menuitemradio", { name: "Private" }))
+    await userEvent.click(
+      screen.getByRole("menuitemradio", { name: "Private" })
+    )
     await openActions()
-    expect(screen.getByRole("menuitem", { name: /^publish$/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole("menuitem", { name: /^publish$/i })
+    ).toBeInTheDocument()
   })
 
   it("closes the workflow modal with Escape", async () => {
@@ -394,7 +425,9 @@ describe("SongDetail (public link)", () => {
 
   it("reads through the public endpoint without an Authorization header when signed out", async () => {
     authValue = ANONYMOUS
-    const fetchMock = stubFetch({ clip: clip({ is_public: true, is_owner: false }) })
+    const fetchMock = stubFetch({
+      clip: clip({ is_public: true, is_owner: false }),
+    })
     renderDetail()
     await screen.findByText("Midnight Drive")
 
@@ -464,7 +497,9 @@ describe("SongDetail (public link)", () => {
       const url = String(input)
       if (url.includes("/users/me")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ subscription_tier: "free" }), { status: 200 })
+          new Response(JSON.stringify({ subscription_tier: "free" }), {
+            status: 200,
+          })
         )
       }
       if (url.includes("/similar")) {
@@ -475,9 +510,12 @@ describe("SongDetail (public link)", () => {
       const auth = (init?.headers ?? {}) as Record<string, string>
       if (auth.authorization) {
         return Promise.resolve(
-          new Response(JSON.stringify({ detail: "Access token has expired." }), {
-            status: 401,
-          })
+          new Response(
+            JSON.stringify({ detail: "Access token has expired." }),
+            {
+              status: 401,
+            }
+          )
         )
       }
       return Promise.resolve(new Response(JSON.stringify(c), { status: 200 }))
@@ -493,7 +531,10 @@ describe("SongDetail (public link)", () => {
   it("shows the loading state (not an error) while an anonymous read is in flight", async () => {
     authValue = ANONYMOUS
     // Never resolves — pins the state an anonymous visitor sees mid-fetch.
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {}))
+    )
     renderDetail()
 
     expect(await screen.findByTestId("song-loading")).toBeInTheDocument()

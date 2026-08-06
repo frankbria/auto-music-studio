@@ -24,15 +24,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from acemusic.audio import EXPORT_FORMATS
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user
+from ..auth.dependencies import CurrentUser, get_current_user, require_tier_capability
 from ..models import BatchJob, Job, JobStatus
 from ..services import batch as batch_service
 from ..services.common import coerce_object_id
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
 # Per-request cap (issue #85): more than this many clips is a 422.
 MAX_BATCH_CLIPS = 50
+
+# US-26.2: the free tier's one allowed download format is mp3, so everything else in
+# EXPORT_FORMATS (wav, wav32, flac) is a lossless export. Defined by subtraction on
+# purpose — like the tier table itself, a format added later is gated by default rather
+# than silently escaping the gate.
+LOSSLESS_EXPORT_FORMATS = frozenset(EXPORT_FORMATS) - {"mp3"}
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the extraction/jobs routers), so unauthenticated requests get 401.
@@ -125,6 +132,12 @@ async def batch_stems(
     current: CurrentUser = Depends(get_current_user),
 ) -> BatchJobCreated:
     """Queue stem separation for every clip in ``clip_ids``."""
+    # US-26.2: stems are Pro-only, and doing them fifty at a time is not the exception.
+    # Gating the single-clip endpoint alone would have made this the cheaper way in.
+    # Checked here rather than as a router dependency so a malformed envelope is still a
+    # 422 without a database round-trip, the way it was before the gate existed.
+    await require_tier_capability(current.user_id, Capability.STEMS)
+
     batch = await batch_service.create_batch(
         user_id=current.user_id,
         operation=batch_service.BATCH_STEMS_OPERATION,
@@ -139,6 +152,22 @@ async def batch_export(
     current: CurrentUser = Depends(get_current_user),
 ) -> BatchJobCreated:
     """Queue audio export of every clip in ``clip_ids`` to ``format``."""
+    # US-26.2: the free tier is "MP3 download only". Gated on the requested format rather
+    # than the endpoint — a batch mp3 export is exactly what the free tier is allowed —
+    # and imperatively rather than as a dependency, because a dependency cannot read the
+    # body. Same capability, same 403 as the single-clip download.
+    #
+    # Deliberately WITHOUT the native-format carve-out that GET /clips/{id}/audio applies.
+    # There, one clip has one stored format, so "is this a conversion?" has an answer. A
+    # batch is a set of clips with potentially different formats, and the response is a
+    # single status for the whole request: a mixed batch would have to either refuse
+    # clips it should serve or serve clips it should refuse, and 403-vs-202 cannot say
+    # "some of each". Refusing the lossless *request* is the honest simplification, and
+    # it errs toward over-gating rather than leaking. A free musician who wants the wav
+    # they uploaded still has the ungated single-clip download.
+    if request.format in LOSSLESS_EXPORT_FORMATS:
+        await require_tier_capability(current.user_id, Capability.LOSSLESS_EXPORT)
+
     batch = await batch_service.create_batch(
         user_id=current.user_id,
         operation=batch_service.BATCH_EXPORT_OPERATION,

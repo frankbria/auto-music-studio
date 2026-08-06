@@ -13,7 +13,8 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from ..services import users as user_service
+from ..services import credits as credits_service, tiers, users as user_service
+from ..services.tiers import Capability
 from ..settings import ApiSettings
 from .tokens import TokenExpiredError, TokenInvalidError, decode_access_token
 
@@ -94,6 +95,65 @@ async def require_existing_user(current: CurrentUser = Depends(get_current_user)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return current
+
+
+async def require_tier_capability(user_id: str | None, capability: Capability) -> None:
+    """Raise 403 unless ``user_id``'s tier may use ``capability`` (US-26.2).
+
+    Reads the tier from the **database**, not the token claims: an access token outlives
+    a plan change by up to its TTL, so claims would let a downgraded account keep Pro and
+    make someone who just paid wait for Pro to start working.
+
+    ``user_id`` may be ``None`` on the endpoints that also serve anonymous callers (public
+    clip streaming). No account is no plan, so that is refused as free — otherwise signing
+    out would be the way around a Pro gate.
+
+    The 403 body mirrors the 402's shape — what is locked, what it would do, where to go —
+    so a client presents "you cannot do this yet" the same way whether the obstacle is
+    money or plan.
+    """
+    tier = tiers.FREE
+
+    if user_id is not None:
+        user = await user_service.get_user_by_id(user_id)
+
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+        tier = user.subscription_tier
+
+    if tiers.allows(tier, capability):
+        return
+
+    name, benefit = tiers.describe(capability)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "upgrade_required",
+            "capability": capability.value,
+            "feature": name,
+            "tier": tiers.normalise(tier),
+            "required_tier": tiers.PRO,
+            "message": f"{name} is a Pro feature — upgrade to {benefit}.",
+            "upgrade_url": credits_service.UPGRADE_URL,
+        },
+    )
+
+
+def require_capability(capability: Capability):
+    """Router dependency form of :func:`require_tier_capability`.
+
+    Use this when the whole endpoint is Pro-only. When the gate depends on a request
+    *argument* instead — a video resolution, an export format, whether a generation named
+    a custom voice — call ``require_tier_capability`` directly; a dependency cannot see
+    those. Both raise the same 403, because they are the same check.
+    """
+
+    async def _dependency(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        await require_tier_capability(current.user_id, capability)
+        return current
+
+    return _dependency
 
 
 def get_current_user_optional(
