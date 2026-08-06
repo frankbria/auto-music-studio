@@ -14,11 +14,13 @@ import type { Clip } from "@/lib/workspace-clips"
 // the router push and stub the download so those effects are observable/inert.
 const push = vi.fn()
 // US-26.2: useSongActions now reads the tier, which would otherwise fetch
-// /api/users/me and land ahead of the call each test asserts on.
+// /api/users/me and land ahead of the call each test asserts on. Pro by default —
+// these cases are about the card, not the gate; the free-tier case sets it.
+const tier = vi.hoisted(() => ({ isFreeTier: false }))
 vi.mock("@/hooks/use-subscription-tier", () => ({
   useSubscriptionTier: () => ({
-    tier: "pro",
-    isFreeTier: false,
+    tier: tier.isFreeTier ? "free" : "pro",
+    isFreeTier: tier.isFreeTier,
     isLoading: false,
   }),
 }))
@@ -435,10 +437,33 @@ describe("ClipCard", () => {
     renderCard({ isFreeTier: true })
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
     expect(screen.getByText("Beta")).toBeInTheDocument()
-    // Open in Editor is Pro-gated: disabled so a click can never dispatch it.
-    expect(
-      screen.getByRole("menuitem", { name: /Open in Editor/i })
-    ).toHaveAttribute("aria-disabled", "true")
+    // US-26.2 AC2: Pro-gated, and marked so — but NOT `disabled`. It used to be, which
+    // made the click do nothing at all; the prompt below is what replaced that silence.
+    const item = screen.getByRole("menuitem", { name: /Open in Editor/i })
+    expect(item).toHaveAttribute("data-locked", "true")
+    expect(item).not.toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("opens the upgrade prompt when a free-tier user clicks a Pro action (US-26.2 AC2)", async () => {
+    // The card dispatches through the same useSongActions as song detail, but it did
+    // not render the modal that interception drives — so on this entry point the click
+    // went silent again, which is the exact failure AC2 names.
+    tier.isFreeTier = true
+    try {
+      renderCard({ isFreeTier: true })
+      await userEvent.click(screen.getByRole("button", { name: /more options/i }))
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: /Open in Editor/i })
+      )
+
+      expect(
+        await screen.findByText(/Studio editing is a Pro feature/i)
+      ).toBeInTheDocument()
+      // Not an error, and not silence: the action must not also run.
+      expect(push).not.toHaveBeenCalled()
+    } finally {
+      tier.isFreeTier = false
+    }
   })
 
   it("is draggable, carrying an 'add' payload for the Studio timeline (US-19.1)", () => {

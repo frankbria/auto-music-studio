@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { DeleteSongDialog } from "@/components/song/DeleteSongDialog"
+import { UpgradeModal } from "@/components/upgrade/UpgradeModal"
 import { PublishGuardPrompt } from "@/components/song/PublishGuardPrompt"
 import { ShareModal } from "@/components/song/ShareModal"
 import { SongActionModal } from "@/components/song/SongActionModal"
@@ -77,7 +78,10 @@ export type ClipCardProps = {
   onShare?: (id: string) => void
   /** Visibility picker (US-20.7); `next` is the requested tri-state value. */
   onVisibilityChange?: (id: string, next: Visibility) => void
-  /** Free-tier users see Pro-only menu items locked (badge + lock, disabled). */
+  /**
+   * Free-tier users see Pro-only menu items locked (badge + padlock). Locked items
+   * stay clickable — the click opens the upgrade prompt (US-26.2 AC2).
+   */
   isFreeTier?: boolean
   /** Called after this clip is deleted so the list can drop the card. */
   onDeleted?: (id: string) => void
@@ -375,7 +379,11 @@ export function ClipCard({
                   return (
                     <DropdownMenuItem
                       key={item.action}
-                      disabled={locked}
+                      // US-26.2 AC2: locked, but still clickable — `disabled` made the
+                      // click do nothing, which reads as a broken menu rather than a
+                      // boundary. emitMenu dispatches through useSongActions, which
+                      // intercepts it into the upgrade prompt.
+                      data-locked={locked || undefined}
                       onSelect={() => emitMenu(item.action)}
                     >
                       {item.label}
@@ -429,7 +437,7 @@ export function ClipCard({
                   Open in Studio
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  disabled={isFreeTier}
+                  data-locked={isFreeTier || undefined}
                   onSelect={() => emitMenu("open-editor")}
                 >
                   Open in Editor
@@ -526,6 +534,17 @@ export function ClipCard({
       <PublishGuardPrompt
         guard={actions.publishGuard}
         onClose={actions.dismissPublishGuard}
+      />
+      {/* US-26.2 AC2: the card dispatches through the same useSongActions as song
+          detail, so a free-tier click on a Pro action is intercepted here too — but
+          without this the interception had nothing to render, and the click went
+          silent again. Silence is the failure mode this story exists to remove. */}
+      <UpgradeModal
+        feature={actions.lockedFeature}
+        open={actions.lockedFeature !== null}
+        onOpenChange={(open) => {
+          if (!open) actions.dismissUpgrade()
+        }}
       />
     </div>
   )
