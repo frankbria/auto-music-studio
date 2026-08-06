@@ -5,6 +5,7 @@ import {
   SONG_DOWNLOAD_ITEMS,
   isSongActionLocked,
   findSongAction,
+  type ClipMenuAction,
   type SongActionDefinition,
 } from "@/lib/song-actions"
 
@@ -163,26 +164,74 @@ describe("isSongActionLocked", () => {
   const mastering = findSongAction("send-mastering")
 
   it("does not lock anything for a Pro account", () => {
-    expect(isSongActionLocked(wav, { isFreeTier: false, nativeFormat: "mp3" })).toBe(false)
+    expect(
+      isSongActionLocked(wav, { isFreeTier: false, nativeFormat: "mp3" })
+    ).toBe(false)
   })
 
   it("locks a lossless download that is a genuine conversion", () => {
-    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "mp3" })).toBe(true)
+    expect(
+      isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "mp3" })
+    ).toBe(true)
   })
 
   it("does not lock a download of the clip's own stored format", () => {
     // Mirrors the API: the lossless gate fires on `format !== native_format`, so a
     // free musician may download back the wav they uploaded.
-    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "wav" })).toBe(false)
-    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "WAV" })).toBe(false)
+    expect(
+      isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "wav" })
+    ).toBe(false)
+    expect(
+      isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "WAV" })
+    ).toBe(false)
   })
 
   it("leaves non-download Pro actions locked regardless of format", () => {
     // The carve-out is about serving a stored file, not about capabilities at large.
-    expect(isSongActionLocked(mastering, { isFreeTier: true, nativeFormat: "wav" })).toBe(true)
+    expect(
+      isSongActionLocked(mastering, { isFreeTier: true, nativeFormat: "wav" })
+    ).toBe(true)
   })
 
   it("locks when the format is unknown", () => {
-    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: null })).toBe(true)
+    expect(
+      isSongActionLocked(wav, { isFreeTier: true, nativeFormat: null })
+    ).toBe(true)
   })
+})
+
+describe("clip-menu coverage", () => {
+  // ClipCard renders its menus by looking each id up in the registry and drops any that
+  // misses. TypeScript catches a typo but not a new ClipMenuAction variant added without
+  // a registry entry — the item would silently vanish, the same class of quiet drift
+  // #404 was about. This literal must name every variant to compile, which is what makes
+  // the check below exhaustive. Raised in review on PR #405.
+  const CLIP_MENU_ACTIONS: Record<ClipMenuAction, true> = {
+    "remix-edit": true,
+    "open-studio": true,
+    "open-editor": true,
+    cover: true,
+    extend: true,
+    mashup: true,
+    sample: true,
+    "use-inspiration": true,
+    "send-mastering": true,
+    "export-daw": true,
+    "create-video": true,
+    "download-mp3": true,
+    "download-wav": true,
+    "download-flac": true,
+    "download-stems": true,
+    delete: true,
+  }
+
+  it.each(Object.keys(CLIP_MENU_ACTIONS) as ClipMenuAction[])(
+    "resolves %s to a registry entry",
+    (action) => {
+      // `remix-edit` is the one id that differs from its registry action.
+      expect(
+        findSongAction(action === "remix-edit" ? "remix" : action)
+      ).toBeDefined()
+    }
+  )
 })
