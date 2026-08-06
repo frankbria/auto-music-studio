@@ -26,6 +26,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import BatchJob, Clip, Job, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
 
@@ -157,7 +158,13 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    # Pro: batch stems and lossless batch export are Pro capabilities since US-26.2, and
+    # this file tests how batching behaves, not who may ask for it. The refusal is tested
+    # in test_tier_enforcement_api.py.
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user.subscription_tier = PRO
+    await user.save()
+    return user
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:

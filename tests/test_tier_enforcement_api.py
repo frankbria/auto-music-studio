@@ -450,3 +450,89 @@ class TestLosslessExportGate:
         resp = await client.get(f"{API_V1_PREFIX}/clips/{clip.id}/stream?format=wav", headers=_auth(user, settings))
 
         assert resp.status_code != 403, resp.text
+
+
+class TestBatchIsNotTheCheapWayIn:
+    """The batch endpoints do the same Pro work in bulk, so they need the same gates.
+
+    Found by the US-26.2 demo: every single-clip path refused a free account while
+    ``POST /batch/stems`` accepted fifty at once.
+    """
+
+    async def test_a_free_account_is_refused_batch_stems(self, client, settings) -> None:
+        user = await _user("free-batch-stems")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/batch/stems",
+            json={"clip_ids": [str(clip.id)]},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "stems"
+
+    async def test_a_pro_account_may_batch_stems(self, client, settings) -> None:
+        user = await _user("pro-batch-stems", tier="pro")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/batch/stems",
+            json={"clip_ids": [str(clip.id)]},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code != 403, resp.text
+
+    @pytest.mark.parametrize("fmt", ["wav", "wav32", "flac"])
+    async def test_a_free_account_is_refused_a_lossless_batch_export(self, client, settings, fmt) -> None:
+        user = await _user(f"free-batch-{fmt}")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/batch/export",
+            json={"clip_ids": [str(clip.id)], "format": fmt},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "lossless_export"
+
+    async def test_a_free_account_may_batch_export_mp3(self, client, settings) -> None:
+        # The free tier is "MP3 download only", not "no batch export".
+        user = await _user("free-batch-mp3")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/batch/export",
+            json={"clip_ids": [str(clip.id)], "format": "mp3"},
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code != 403, resp.text
+
+    async def test_a_free_account_is_refused_a_per_clip_daw_export(self, client, settings) -> None:
+        # The sibling POST /studio/export/daw was gated; this one builds the same bundle
+        # from a single clip and was not.
+        user = await _user("free-clip-daw")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(f"{API_V1_PREFIX}/clips/{clip.id}/export/daw", headers=_auth(user, settings))
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["capability"] == "studio_editing"
+
+    async def test_a_pro_account_may_run_a_per_clip_daw_export(self, client, settings) -> None:
+        user = await _user("pro-clip-daw", tier="pro")
+        clip = await _wav_clip(user)
+
+        resp = await client.post(f"{API_V1_PREFIX}/clips/{clip.id}/export/daw", headers=_auth(user, settings))
+
+        assert resp.status_code != 403, resp.text
+
+    async def test_every_lossless_export_format_is_gated(self) -> None:
+        # Fails if a format is added to EXPORT_FORMATS and quietly escapes the gate.
+        from acemusic.api.routers.batch import LOSSLESS_EXPORT_FORMATS
+        from acemusic.audio import EXPORT_FORMATS
+
+        assert set(EXPORT_FORMATS) - LOSSLESS_EXPORT_FORMATS == {"mp3"}
