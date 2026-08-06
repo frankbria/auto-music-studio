@@ -156,6 +156,15 @@ async def batch_export(
     # than the endpoint — a batch mp3 export is exactly what the free tier is allowed —
     # and imperatively rather than as a dependency, because a dependency cannot read the
     # body. Same capability, same 403 as the single-clip download.
+    #
+    # Deliberately WITHOUT the native-format carve-out that GET /clips/{id}/audio applies.
+    # There, one clip has one stored format, so "is this a conversion?" has an answer. A
+    # batch is a set of clips with potentially different formats, and the response is a
+    # single status for the whole request: a mixed batch would have to either refuse
+    # clips it should serve or serve clips it should refuse, and 403-vs-202 cannot say
+    # "some of each". Refusing the lossless *request* is the honest simplification, and
+    # it errs toward over-gating rather than leaking. A free musician who wants the wav
+    # they uploaded still has the ungated single-clip download.
     if request.format in LOSSLESS_EXPORT_FORMATS:
         await require_tier_capability(current.user_id, Capability.LOSSLESS_EXPORT)
 

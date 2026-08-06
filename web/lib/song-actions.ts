@@ -296,6 +296,37 @@ const ACTION_INDEX = new Map<SongActionId, SongActionDefinition>(
   )
 )
 
+/** Which stored format each download action asks the API to serve. */
+const DOWNLOAD_FORMAT: Partial<Record<SongActionId, string>> = {
+  "download-mp3": "mp3",
+  "download-wav": "wav",
+  "download-flac": "flac",
+}
+
+/**
+ * Whether `action` is locked for this musician — the single answer the click
+ * handler and the menu badge both use, so they cannot drift apart.
+ *
+ * `nativeFormat` is the clip's stored format, and it matters because the API gates
+ * lossless export only on a genuine *conversion*
+ * (`format !== native_format` — see `GET /clips/{id}/audio`). Upload is not
+ * tier-gated, so a free musician can own a WAV they uploaded themselves, and the
+ * API will serve it back to them. Locking the menu item anyway would refuse
+ * something the backend permits — the mirror image of the "a menu is not a gate"
+ * problem this story exists to fix.
+ */
+export function isSongActionLocked(
+  action: SongActionDefinition | undefined,
+  { isFreeTier, nativeFormat }: { isFreeTier: boolean; nativeFormat?: string | null }
+): boolean {
+  if (!action?.proOnly || !isFreeTier) return false
+
+  const requested = DOWNLOAD_FORMAT[action.id]
+  if (requested && requested === (nativeFormat ?? "").toLowerCase()) return false
+
+  return true
+}
+
 /** Look up an action definition by id (download items included). */
 export function findSongAction(
   id: SongActionId

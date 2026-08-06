@@ -486,6 +486,11 @@ class TestBatchIsNotTheCheapWayIn:
 
     @pytest.mark.parametrize("fmt", ["wav", "wav32", "flac"])
     async def test_a_free_account_is_refused_a_lossless_batch_export(self, client, settings, fmt) -> None:
+        # Note the clip here is natively wav, and this still refuses — unlike the
+        # single-clip download, batch export has no native-format carve-out. A batch is a
+        # set of clips with different formats and one status code, so it cannot say "some
+        # of each"; refusing the lossless request over-gates rather than leaks. See the
+        # comment on batch_export.
         user = await _user(f"free-batch-{fmt}")
         clip = await _wav_clip(user)
 

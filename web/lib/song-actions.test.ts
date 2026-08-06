@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   SONG_ACTION_GROUPS,
   SONG_DOWNLOAD_ITEMS,
+  isSongActionLocked,
   findSongAction,
   type SongActionDefinition,
 } from "@/lib/song-actions"
@@ -154,5 +155,34 @@ describe("findSongAction", () => {
   it("resolves any id, including download submenu items", () => {
     expect(findSongAction("remix")?.label).toBe("Remix")
     expect(findSongAction("download-wav")?.label).toBe("WAV")
+  })
+})
+
+describe("isSongActionLocked", () => {
+  const wav = findSongAction("download-wav")
+  const mastering = findSongAction("send-mastering")
+
+  it("does not lock anything for a Pro account", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: false, nativeFormat: "mp3" })).toBe(false)
+  })
+
+  it("locks a lossless download that is a genuine conversion", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "mp3" })).toBe(true)
+  })
+
+  it("does not lock a download of the clip's own stored format", () => {
+    // Mirrors the API: the lossless gate fires on `format !== native_format`, so a
+    // free musician may download back the wav they uploaded.
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "wav" })).toBe(false)
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: "WAV" })).toBe(false)
+  })
+
+  it("leaves non-download Pro actions locked regardless of format", () => {
+    // The carve-out is about serving a stored file, not about capabilities at large.
+    expect(isSongActionLocked(mastering, { isFreeTier: true, nativeFormat: "wav" })).toBe(true)
+  })
+
+  it("locks when the format is unknown", () => {
+    expect(isSongActionLocked(wav, { isFreeTier: true, nativeFormat: null })).toBe(true)
   })
 })

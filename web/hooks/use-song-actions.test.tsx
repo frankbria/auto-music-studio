@@ -483,5 +483,28 @@ describe("useSongActions", () => {
       expect(result.current.lockedFeature).toBeNull()
       expect(push).toHaveBeenCalledWith("/editor/c1")
     })
+
+    it("lets a free account download its own clip in the format it is stored in", () => {
+      // Upload is not tier-gated, so a free musician can own a wav they uploaded
+      // themselves, and GET /clips/{id}/audio?format=wav serves it — the API gates
+      // lossless export only on a genuine *conversion*. Locking the menu item here
+      // would refuse something the backend permits.
+      tier.isFreeTier = true
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob() }))
+      const { result } = setup(clip({ format: "wav" }))
+
+      act(() => result.current.handleAction("download-wav"))
+
+      expect(result.current.lockedFeature).toBeNull()
+    })
+
+    it("still gates a lossless download that is a real conversion", () => {
+      tier.isFreeTier = true
+      const { result } = setup(clip({ format: "mp3" }))
+
+      act(() => result.current.handleAction("download-wav"))
+
+      expect(result.current.lockedFeature?.name).toBe("Lossless export")
+    })
   })
 })

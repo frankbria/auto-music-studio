@@ -24,6 +24,7 @@ import {
 import {
   SONG_ACTION_GROUPS,
   SONG_DOWNLOAD_ITEMS,
+  isSongActionLocked,
   type SongActionDefinition,
   type SongActionId,
 } from "@/lib/song-actions"
@@ -38,8 +39,14 @@ import {
 export type SongActionsMenuProps = {
   /** Current visibility; flips the Publish/Unpublish label. */
   isPublic: boolean
-  /** Free-tier users see Pro-only actions locked (badge + lock, disabled). */
+  /** Free-tier users see Pro-only actions locked (badge + padlock). */
   isFreeTier: boolean
+  /**
+   * The clip's stored audio format. A lossless download of a clip already in that
+   * format is not a conversion, and the API does not gate it — so neither does the
+   * menu. See `isSongActionLocked`.
+   */
+  nativeFormat?: string | null
   onAction: (action: SongActionId) => void
   /** Actions to omit entirely — e.g. Get Full Song on a clip too long to seed one (US-17.4). */
   hiddenActionIds?: readonly SongActionId[]
@@ -48,6 +55,7 @@ export type SongActionsMenuProps = {
 export function SongActionsMenu({
   isPublic,
   isFreeTier,
+  nativeFormat,
   onAction,
   hiddenActionIds,
 }: SongActionsMenuProps) {
@@ -75,6 +83,7 @@ export function SongActionsMenu({
                   action={action}
                   isPublic={isPublic}
                   isFreeTier={isFreeTier}
+                  nativeFormat={nativeFormat}
                   onAction={onAction}
                 />
               ))}
@@ -95,6 +104,7 @@ export function SongActionsMenu({
                       action={action}
                       isPublic={isPublic}
                       isFreeTier={isFreeTier}
+                      nativeFormat={nativeFormat}
                       onAction={onAction}
                       hideIcon
                     />
@@ -113,19 +123,21 @@ function ActionItem({
   action,
   isPublic,
   isFreeTier,
+  nativeFormat,
   onAction,
   hideIcon = false,
 }: {
   action: SongActionDefinition
   isPublic: boolean
   isFreeTier: boolean
+  nativeFormat?: string | null
   onAction: (action: SongActionId) => void
   hideIcon?: boolean
 }) {
   // US-26.2 AC2: a locked item stays *clickable*. It used to render `disabled`, so
   // clicking a Pro feature did nothing at all — which reads as a broken menu rather than
   // a boundary. The parent turns the click into an upgrade modal.
-  const locked = !!action.proOnly && isFreeTier
+  const locked = isSongActionLocked(action, { isFreeTier, nativeFormat })
   const label =
     action.id === "publish-toggle"
       ? isPublic

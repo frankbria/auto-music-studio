@@ -97,6 +97,7 @@ function SongDetailContent({ clip }: { clip: Clip }) {
               <SongActionsMenu
                 isPublic={actions.isPublic}
                 isFreeTier={isFreeTier}
+                nativeFormat={clip.format}
                 onAction={actions.handleAction}
                 // Full Song only makes sense for a short seed; hide it otherwise.
                 hiddenActionIds={

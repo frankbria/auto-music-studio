@@ -13,7 +13,11 @@ import {
   type DownloadFormat,
 } from "@/lib/clips"
 import { submitRemaster } from "@/lib/editing"
-import { findSongAction, type SongActionId } from "@/lib/song-actions"
+import {
+  findSongAction,
+  isSongActionLocked,
+  type SongActionId,
+} from "@/lib/song-actions"
 import { visibilityOf, type Clip, type Visibility } from "@/lib/workspace-clips"
 
 // US-17.2: dispatch for the full action menu. Routes a selected action to its
@@ -82,8 +86,8 @@ export function useSongActions(
     // US-26.2 AC2: reaching for a Pro feature on the free tier opens an upgrade
     // prompt — not an error, and not the silence a `disabled` menu item gave. The
     // check is here rather than in the menu so every entry point behaves the same.
-    if (definition?.proOnly && isFreeTier) {
-      setLockedFeature(lockedFeature(definition.capability))
+    if (isSongActionLocked(definition, { isFreeTier, nativeFormat: clip.format })) {
+      setLockedFeature(lockedFeature(definition?.capability))
       return
     }
 
