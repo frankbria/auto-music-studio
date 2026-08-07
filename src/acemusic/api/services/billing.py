@@ -259,6 +259,19 @@ def verify_webhook(payload: bytes, signature: str | None, settings: ApiSettings)
     return json.loads(payload)
 
 
+def _is_stale(user: User, occurred_at: datetime | None) -> bool:
+    """Whether this event predates the state already applied for ``user``.
+
+    Stripe does not guarantee ordering, and every handler here applies its state change
+    *before* the idempotency row is written (so a crash between the two cannot lose an
+    entitlement). That ordering is only safe while each mutation is idempotent **with
+    respect to newer state** — which is what this check provides. Used by every handler
+    that stamps ``subscription_synced_at``, including the one that grants Pro.
+    """
+    last_sync = _as_utc(user.subscription_synced_at)
+    return bool(occurred_at and last_sync and occurred_at < last_sync)
+
+
 async def _user_for_customer(customer_id: str | None) -> User | None:
     if not customer_id:
         return None
@@ -354,6 +367,18 @@ async def _handle_checkout_completed(
         logger.warning("billing: checkout for unknown customer %r", session.get("customer"))
         return "unknown_customer"
 
+    # Raised in review on PR #420. This handler stamped the watermark without reading it
+    # back, which made it the one place the ordering guard did not protect — and the one
+    # place that *grants* Pro. Because the state change deliberately runs before the
+    # idempotency row is written, a Stripe redelivery (or an operator clicking "Resend"
+    # in the dashboard) of an old checkout event would re-grant Pro to a musician who had
+    # since cancelled, then report "duplicate" as though nothing had happened.
+    if _is_stale(user, occurred_at):
+        logger.info("billing: dropping superseded checkout event for %s", user.id)
+        if not await _record_event(user, event_id, event_type):
+            return "duplicate"
+        return "stale"
+
     user.stripe_subscription_id = session.get("subscription") or user.stripe_subscription_id
     user.subscription_tier = tiers.PRO
     user.subscription_status = "active"
@@ -394,13 +419,12 @@ async def _handle_subscription_change(
         logger.warning("billing: subscription event for unknown customer %r", subscription.get("customer"))
         return "unknown_customer"
 
-    last_sync = _as_utc(user.subscription_synced_at)
-    if occurred_at and last_sync and occurred_at < last_sync:
+    if _is_stale(user, occurred_at):
         logger.info(
             "billing: dropping out-of-order %s (%s older than last sync %s)",
             event_type,
             occurred_at,
-            last_sync,
+            user.subscription_synced_at,
         )
         return "stale"
 

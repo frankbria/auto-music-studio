@@ -718,6 +718,45 @@ class TestOrderingWatermarkArmedAtCheckout:
     its timestamp said — leaving unguarded exactly the window in which someone has just paid.
     """
 
+    async def test_a_replayed_checkout_cannot_resurrect_a_cancelled_subscription(self, client) -> None:
+        # Raised in review on PR #420, and a regression from this PR's own crash-safety
+        # reorder: the checkout handler stamped the watermark without reading it back,
+        # so it was the one place the ordering guard did not protect — and the one place
+        # that grants Pro. A redelivery (or an operator clicking "Resend" in the Stripe
+        # dashboard) of an old checkout event re-granted Pro to a musician who had since
+        # cancelled, then reported "duplicate" as though nothing had happened.
+        user = await _subscriber("sub-replay@example.com")
+        now = int(time.time())
+        await _post_event_at(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            "evt_replay_checkout",
+            now - 600,
+        )
+        await _post_event_at(
+            client,
+            "customer.subscription.deleted",
+            _subscription("canceled"),
+            "evt_replay_deleted",
+            now,
+        )
+        assert (await User.get(user.id)).subscription_tier == "free"
+
+        # Stripe resends the original checkout event.
+        resp = await _post_event_at(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            "evt_replay_checkout",
+            now - 600,
+        )
+
+        assert resp.status_code == 200
+        assert (
+            await User.get(user.id)
+        ).subscription_tier == "free", "a cancelled musician must not come back on Pro for free"
+
     async def test_a_snapshot_older_than_the_checkout_cannot_undo_it(self, client) -> None:
         user = await _subscriber("sub-watermark@example.com")
         now = int(time.time())
