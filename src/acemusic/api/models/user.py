@@ -56,6 +56,13 @@ class User(Document):
     subscription_current_period_end: datetime | None = None
     #: Cancellation requested but not yet effective — Pro until the period end.
     subscription_cancel_at_period_end: bool = False
+    #: When the subscription snapshot above was taken, from the Stripe event's own
+    #: timestamp. Stripe does not guarantee event ordering, and each delivery carries
+    #: its own event id so the idempotency guard cannot catch a late *older* snapshot —
+    #: which would otherwise overwrite an active subscription with a stale
+    #: ``incomplete``/``past_due`` one and downgrade a paying musician. Events older
+    #: than this are dropped.
+    subscription_synced_at: datetime | None = None
     # Profile fields (US-8.4). All optional so existing/OAuth-created users remain
     # valid; ``handle`` stays null until the user claims one.
     display_name: str | None = None

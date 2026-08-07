@@ -21,6 +21,7 @@ machinery:
 Like the other service modules this raises plain exceptions, never ``HTTPException``.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -81,6 +82,17 @@ def _timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Make a stored datetime comparable with a fresh one.
+
+    MongoDB hands back naive datetimes, and comparing naive with aware raises. Same
+    normalisation ``credits.apply_monthly_reset`` already does for ``created_at``.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def subscription_fields(subscription: dict[str, Any]) -> dict[str, Any]:
     """Map a Stripe subscription object onto the user fields that mirror it.
 
@@ -124,14 +136,26 @@ async def ensure_customer(user: User, settings: ApiSettings) -> str:
         return user.stripe_customer_id
 
     client = _client(settings)
-    customer = client.customers.create(
-        params={
-            "email": user.email,
-            "name": user.display_name or user.name,
-            # Lets an operator go from a Stripe dashboard row back to a platform user
-            # without a lookup table.
-            "metadata": {"user_id": str(user.id)},
-        }
+    # ``idempotency_key`` is what actually makes this race-safe. Two concurrent checkout
+    # clicks (two tabs, a double-click) both reach here with no customer id; without the
+    # key each would create a *different* Stripe customer, and the loser's checkout would
+    # complete against an orphaned customer that no webhook could map back to a user — a
+    # musician who paid and stayed free. With it, Stripe returns the same customer to
+    # both. Raised in review on PR #420.
+    #
+    # ``to_thread`` because the Stripe SDK is synchronous: called directly it would block
+    # the event loop for the whole round-trip, stalling every other request.
+    customer = await asyncio.to_thread(
+        lambda: client.customers.create(
+            params={
+                "email": user.email,
+                "name": user.display_name or user.name,
+                # Lets an operator go from a Stripe dashboard row back to a platform
+                # user without a lookup table.
+                "metadata": {"user_id": str(user.id)},
+            },
+            options={"idempotency_key": f"acemusic-customer-{user.id}"},
+        )
     )
     user.stripe_customer_id = customer.id
     await user.save()
@@ -159,18 +183,20 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
 
     customer_id = await ensure_customer(user, settings)
     client = _client(settings)
-    session = client.checkout.sessions.create(
-        params={
-            "mode": "subscription",
-            "customer": customer_id,
-            "line_items": [{"price": settings.stripe_price_id_pro, "quantity": 1}],
-            "success_url": settings.stripe_success_url,
-            "cancel_url": settings.stripe_cancel_url,
-            # Lets an operator trace a Stripe subscription back to a platform user.
-            # Proration on a *plan change* is the portal's job — this path only ever
-            # creates a first subscription, per the guard above.
-            "subscription_data": {"metadata": {"user_id": str(user.id)}},
-        }
+    session = await asyncio.to_thread(
+        lambda: client.checkout.sessions.create(
+            params={
+                "mode": "subscription",
+                "customer": customer_id,
+                "line_items": [{"price": settings.stripe_price_id_pro, "quantity": 1}],
+                "success_url": settings.stripe_success_url,
+                "cancel_url": settings.stripe_cancel_url,
+                # Lets an operator trace a Stripe subscription back to a platform user.
+                # Proration on a *plan change* is the portal's job — this path only ever
+                # creates a first subscription, per the guard above.
+                "subscription_data": {"metadata": {"user_id": str(user.id)}},
+            }
+        )
     )
     if not session.url:
         raise BillingError("Stripe returned a checkout session with no URL.")
@@ -188,11 +214,13 @@ async def create_portal_session(user: User, settings: ApiSettings, return_url: s
         raise BillingError("This account has no billing profile yet — subscribe first.")
 
     client = _client(settings)
-    session = client.billing_portal.sessions.create(
-        params={
-            "customer": user.stripe_customer_id,
-            "return_url": return_url or settings.stripe_success_url,
-        }
+    session = await asyncio.to_thread(
+        lambda: client.billing_portal.sessions.create(
+            params={
+                "customer": user.stripe_customer_id,
+                "return_url": return_url or settings.stripe_success_url,
+            }
+        )
     )
     if not session.url:
         raise BillingError("Stripe returned a portal session with no URL.")
@@ -257,7 +285,12 @@ async def _record_event(
             user_id=user.id,
             stripe_event_id=event_id,
             event_type=event_type,
-            amount_cents=invoice.get("amount_paid") or invoice.get("amount_due"),
+            # Explicit None check, not ``or``: a fully-discounted invoice has
+            # ``amount_paid == 0``, and ``0 or amount_due`` would show the pre-discount
+            # figure as though it had been charged. Raised in review on PR #420.
+            amount_cents=(
+                invoice["amount_paid"] if invoice.get("amount_paid") is not None else invoice.get("amount_due")
+            ),
             currency=invoice.get("currency"),
             status=invoice.get("status"),
             description=invoice.get("description") or event_type,
@@ -281,16 +314,14 @@ async def handle_event(event: dict[str, Any]) -> str:
     event_id = event.get("id") or ""
     event_type = event.get("type") or ""
     obj = (event.get("data") or {}).get("object") or {}
+    # Stripe stamps every event; used below to reject a stale one that arrives late.
+    occurred_at = _timestamp(event.get("created"))
 
     if event_type == "checkout.session.completed":
         return await _handle_checkout_completed(event_id, event_type, obj)
-    if event_type in (
-        "customer.subscription.updated",
-        "customer.subscription.deleted",
-        "customer.subscription.created",
-    ):
-        return await _handle_subscription_change(event_id, event_type, obj)
-    if event_type in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed"):
+    if event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
+        return await _handle_subscription_change(event_id, event_type, obj, occurred_at)
+    if event_type in ("invoice.paid", "invoice.payment_failed"):
         return await _handle_invoice(event_id, event_type, obj)
 
     logger.info("billing: ignoring unhandled event type %s", event_type)
@@ -315,14 +346,46 @@ async def _handle_checkout_completed(event_id: str, event_type: str, session: di
     return "subscribed"
 
 
-async def _handle_subscription_change(event_id: str, event_type: str, subscription: dict[str, Any]) -> str:
-    """Mirror a subscription's current state, including its end (AC2) and downgrade."""
+async def _handle_subscription_change(
+    event_id: str,
+    event_type: str,
+    subscription: dict[str, Any],
+    occurred_at: datetime | None = None,
+) -> str:
+    """Mirror a subscription's current state, including its end (AC2) and downgrade.
+
+    **Stripe does not guarantee event ordering.** A redelivery or a slow first delivery
+    can land an *older* snapshot after a newer one, and since each carries its own event
+    id the idempotency guard does not catch it — so a stale ``incomplete`` or
+    ``past_due`` snapshot could overwrite a subscription that is now active and
+    downgrade a paying musician. The guard below drops anything older than the last
+    snapshot applied.
+
+    Raised in review on PR #420, where the concrete case was
+    ``customer.subscription.created`` (status ``incomplete`` while a 3DS card is
+    confirming) arriving after Pro had already been granted. That event type is no
+    longer handled at all — ``checkout.session.completed`` grants access and
+    ``updated``/``deleted`` carry every subsequent transition — but the ordering problem
+    is general, so it is fixed generally rather than by removing the one messenger.
+    """
     user = await _user_for_customer(subscription.get("customer"))
     if user is None:
         logger.warning("billing: subscription event for unknown customer %r", subscription.get("customer"))
         return "unknown_customer"
 
+    last_sync = _as_utc(user.subscription_synced_at)
+    if occurred_at and last_sync and occurred_at < last_sync:
+        logger.info(
+            "billing: dropping out-of-order %s (%s older than last sync %s)",
+            event_type,
+            occurred_at,
+            last_sync,
+        )
+        return "stale"
+
     fields = subscription_fields(subscription)
+    if occurred_at:
+        fields["subscription_synced_at"] = occurred_at
     if event_type == "customer.subscription.deleted":
         # Deletion is terminal whatever the payload's status says — the subscription is
         # gone, so the entitlement is too.

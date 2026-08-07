@@ -49,7 +49,7 @@ def _sign(payload: bytes, secret: str = WEBHOOK_SECRET, timestamp: int | None = 
     return f"t={timestamp},v1={digest}"
 
 
-def _event(event_type: str, obj: dict, event_id: str = "evt_test_1") -> bytes:
+def _event(event_type: str, obj: dict, event_id: str = "evt_test_1", created: int | None = None) -> bytes:
     """A Stripe event envelope.
 
     The top-level ``"object": "event"`` is not decoration — the SDK reads it to tell a
@@ -61,7 +61,7 @@ def _event(event_type: str, obj: dict, event_id: str = "evt_test_1") -> bytes:
             "id": event_id,
             "object": "event",
             "api_version": "2024-06-20",
-            "created": int(time.time()),
+            "created": created if created is not None else int(time.time()),
             "type": event_type,
             "data": {"object": obj},
         }
@@ -195,6 +195,16 @@ async def _subscriber(email: str) -> User:
 
 async def _post_event(client, event_type: str, obj: dict, event_id: str = "evt_test_1"):
     payload = _event(event_type, obj, event_id=event_id)
+    return await client.post(WEBHOOK_URL, content=payload, headers={"Stripe-Signature": _sign(payload)})
+
+
+async def _post_event_at(client, event_type: str, obj: dict, event_id: str, created: int):
+    """Post an event stamped at a specific time, to drive the out-of-order guard.
+
+    The *signature* timestamp stays current — only the event's own ``created`` moves,
+    which is exactly what Stripe does when it redelivers something generated an hour ago.
+    """
+    payload = _event(event_type, obj, event_id=event_id, created=created)
     return await client.post(WEBHOOK_URL, content=payload, headers={"Stripe-Signature": _sign(payload)})
 
 
@@ -503,6 +513,101 @@ class TestCheckoutSurface:
         monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
         resp = await client.post(CHECKOUT_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
+
+
+@pytest.mark.integration
+class TestOutOfOrderDelivery:
+    """Raised in review on PR #420. Stripe does not guarantee event ordering.
+
+    Each delivery carries its own event id, so the idempotency guard cannot catch a
+    late *older* snapshot — and an older snapshot overwriting a newer one downgrades a
+    musician who is paying.
+    """
+
+    async def test_a_stale_snapshot_cannot_downgrade_a_paying_subscriber(self, client) -> None:
+        user = await _subscriber("sub-ooo@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_ooo_checkout",
+        )
+        # A current snapshot lands and sets the sync watermark.
+        now = int(time.time())
+        await _post_event_at(client, "customer.subscription.updated", _subscription("active"), "evt_ooo_now", now)
+        assert (await User.get(user.id)).subscription_tier == "pro"
+
+        # An hour-old "incomplete" snapshot arrives late — the concrete case in review
+        # was subscription.created while a 3DS card was still confirming.
+        await _post_event_at(
+            client,
+            "customer.subscription.updated",
+            _subscription("incomplete"),
+            "evt_ooo_stale",
+            now - 3600,
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_tier == "pro", "a stale snapshot must not downgrade"
+        assert refreshed.subscription_status == "active"
+
+    async def test_a_newer_snapshot_still_applies(self, client) -> None:
+        # The guard must not freeze the read-model — a genuine later downgrade still lands.
+        user = await _subscriber("sub-ooo2@example.com")
+        now = int(time.time())
+        await _post_event_at(client, "customer.subscription.updated", _subscription("active"), "evt_ooo2_a", now - 60)
+        await _post_event_at(client, "customer.subscription.updated", _subscription("unpaid"), "evt_ooo2_b", now)
+        assert (await User.get(user.id)).subscription_tier == "free"
+
+    async def test_subscription_created_is_not_handled(self, client) -> None:
+        # checkout.session.completed grants access and updated/deleted carry every later
+        # transition, so `created` is noise that only ever arrives with a status too
+        # early to be meaningful.
+        user = await _subscriber("sub-created@example.com")
+        resp = await _post_event(
+            client, "customer.subscription.created", _subscription("incomplete"), event_id="evt_created"
+        )
+        assert resp.json()["status"] == "ignored"
+        assert (await User.get(user.id)).subscription_tier == "free"
+
+
+@pytest.mark.integration
+class TestInvoiceAmounts:
+    async def test_a_fully_discounted_invoice_shows_zero_not_the_list_price(self, client, settings) -> None:
+        # Raised in review on PR #420: `amount_paid or amount_due` evaluates 0 as falsy,
+        # so a 100%-coupon invoice displayed the pre-discount figure as though it had
+        # been charged.
+        user = await _subscriber("sub-free-month@example.com")
+        await _post_event(
+            client,
+            "invoice.paid",
+            {
+                "customer": CUSTOMER,
+                "amount_paid": 0,
+                "amount_due": 1200,
+                "currency": "usd",
+                "status": "paid",
+                "description": "Pro monthly (100% coupon)",
+            },
+            event_id="evt_zero",
+        )
+
+        entries = (await client.get(HISTORY_URL, headers=_auth_headers(user, settings))).json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["amount"] == 0.0, "a free month must not read as a $12 charge"
+
+    async def test_payment_succeeded_does_not_double_record_a_paid_invoice(self, client, settings) -> None:
+        # Raised in review on PR #420: Stripe fires both invoice.paid and
+        # invoice.payment_succeeded for the same successful invoice, with different
+        # event ids — so idempotency on the event id alone would not dedupe them, and
+        # the musician would see the same charge twice.
+        user = await _subscriber("sub-twoevents@example.com")
+        body = {"customer": CUSTOMER, "amount_paid": 1200, "currency": "usd", "status": "paid"}
+        await _post_event(client, "invoice.paid", body, event_id="evt_dbl_paid")
+        await _post_event(client, "invoice.payment_succeeded", body, event_id="evt_dbl_succeeded")
+
+        entries = (await client.get(HISTORY_URL, headers=_auth_headers(user, settings))).json()["entries"]
+        assert len(entries) == 1, "one charge, one row"
 
 
 @pytest.mark.integration
