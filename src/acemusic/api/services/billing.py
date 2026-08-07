@@ -434,6 +434,28 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
         logger.warning("billing: invoice for unknown customer %r", invoice.get("customer"))
         return "unknown_customer"
 
+    # Identity check, not just a tier check. Raised in review on PR #420: a customer who
+    # cancels and later resubscribes keeps the same Stripe customer but gets a NEW
+    # subscription id, so a delayed invoice event for the dead one would otherwise be
+    # applied to the live one — a false "we couldn't take your last payment" on a
+    # subscription that was never charged, or worse, a late ``invoice.paid`` clearing a
+    # *genuine* past_due and telling the musician a real problem is resolved.
+    #
+    # The ``subscription_synced_at`` watermark closes this for subscription events;
+    # invoices carry their own identity, so they get compared rather than timestamped.
+    # An invoice with no ``subscription`` is a one-off charge (credit top-ups, US-26.4)
+    # and is not about the subscription at all, so it passes through.
+    invoice_subscription = invoice.get("subscription")
+    if invoice_subscription and user.stripe_subscription_id and invoice_subscription != user.stripe_subscription_id:
+        logger.info(
+            "billing: invoice for superseded subscription %s (current %s) — recorded, not applied",
+            invoice_subscription,
+            user.stripe_subscription_id,
+        )
+        if not await _record_event(user, event_id, event_type, invoice=invoice):
+            return "duplicate"
+        return "superseded"
+
     if event_type == "invoice.payment_failed":
         # Only meaningful for someone who currently *has* the entitlement. A late failure
         # for a subscription that already ended must not resurrect a paid-looking status

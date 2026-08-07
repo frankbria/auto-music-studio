@@ -625,6 +625,91 @@ class TestChurnedSubscribers:
 
 
 @pytest.mark.integration
+class TestSupersededSubscriptionInvoices:
+    """Raised in review on PR #420: invoice events were not correlated to a subscription.
+
+    A musician who cancels and resubscribes keeps the same Stripe customer but gets a new
+    subscription id. A delayed invoice event for the dead subscription was being applied
+    to the live one — the sequence the earlier churn tests never reached, because they
+    stopped at the resubscribe rather than continuing past it.
+    """
+
+    async def _resubscribed(self, client, email: str) -> User:
+        user = await _subscriber(email)
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_old"},
+            event_id=f"{email}-1",
+        )
+        await _post_event(
+            client,
+            "customer.subscription.deleted",
+            _subscription("canceled", id="sub_old"),
+            event_id=f"{email}-2",
+        )
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_new"},
+            event_id=f"{email}-3",
+        )
+        refreshed = await User.get(user.id)
+        assert refreshed.stripe_subscription_id == "sub_new"
+        return refreshed
+
+    async def test_a_stale_failure_does_not_warn_about_a_healthy_subscription(self, client) -> None:
+        user = await self._resubscribed(client, "sub-super-fail@example.com")
+
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_old", "amount_due": 1200, "currency": "usd"},
+            event_id="evt_super_fail",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_status == "active", "the new subscription was never charged"
+        assert refreshed.subscription_tier == "pro"
+
+    async def test_a_stale_payment_does_not_clear_a_real_problem(self, client) -> None:
+        # The mirror case, and the more dangerous one: telling a musician a genuine
+        # payment failure is resolved when it is not.
+        user = await self._resubscribed(client, "sub-super-paid@example.com")
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_new", "amount_due": 1200},
+            event_id="evt_super_real_fail",
+        )
+        assert (await User.get(user.id)).subscription_status == "past_due"
+
+        await _post_event(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "subscription": "sub_old", "amount_paid": 1200, "currency": "usd"},
+            event_id="evt_super_stale_paid",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_status == "past_due", "a stale payment must not clear a real failure"
+
+    async def test_a_one_off_charge_still_applies(self, client, settings) -> None:
+        # An invoice with no `subscription` is a one-off (credit top-ups, US-26.4). It is
+        # not about the subscription, so the correlation check must not swallow it.
+        user = await _subscriber("sub-oneoff@example.com")
+        await _post_event(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "amount_paid": 500, "currency": "usd", "status": "paid"},
+            event_id="evt_oneoff",
+        )
+
+        entries = (await client.get(HISTORY_URL, headers=_auth_headers(user, settings))).json()["entries"]
+        assert len(entries) == 1 and entries[0]["amount"] == 5.0
+
+
+@pytest.mark.integration
 class TestOrderingWatermarkArmedAtCheckout:
     """Raised in review on PR #420: the ordering guard was a no-op for the first event.
 
