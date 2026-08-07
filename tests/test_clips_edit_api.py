@@ -90,8 +90,29 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+def _tier_for(operation: str) -> str:
+    """Which tier may perform ``operation`` (#403).
+
+    Crop and speed are free; remaster gates on ``mastering``. Parametrized cases run
+    across all three, so the fixture has to follow the operation rather than pick one
+    tier for the file — otherwise the free operations would be tested as Pro and stop
+    proving they are ungated.
+    """
+    return "pro" if operation == "remaster" else "free"
+
+
+async def _make_user(email: str, tier: str = "free"):
+    """Defaults to **free** on purpose (#403).
+
+    Crop and speed stay free operations, and a Pro-by-default helper would keep passing
+    if either were ever accidentally gated — the test would prove nothing. Only the
+    remaster cases opt into Pro, because remaster now gates on `mastering`.
+    """
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    if user.subscription_tier != tier:
+        user.subscription_tier = tier
+        await user.save()
+    return user
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:
@@ -130,8 +151,8 @@ async def _insert_clip(
     return clip
 
 
-async def _user_with_clip(email: str, **clip_kwargs):
-    user = await _make_user(email)
+async def _user_with_clip(email: str, tier: str = "free", **clip_kwargs):
+    user = await _make_user(email, tier=tier)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -146,7 +167,7 @@ async def _user_with_clip(email: str, **clip_kwargs):
 class TestClipNotFound:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_unknown_clip_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"edit-404-{operation}@example.com")
+        user = await _make_user(f"edit-404-{operation}@example.com", tier=_tier_for(operation))
         resp = await client.post(
             _edit_url(PydanticObjectId(), operation),
             json=VALID_BODIES[operation],
@@ -156,7 +177,7 @@ class TestClipNotFound:
 
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_malformed_id_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"edit-malformed-{operation}@example.com")
+        user = await _make_user(f"edit-malformed-{operation}@example.com", tier=_tier_for(operation))
         resp = await client.post(
             _edit_url("not-an-object-id", operation),
             json=VALID_BODIES[operation],
@@ -166,8 +187,8 @@ class TestClipNotFound:
 
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_other_users_clip_returns_404(self, client, settings, operation: str) -> None:
-        owner, _, clip = await _user_with_clip(f"edit-owner-{operation}@example.com")
-        other = await _make_user(f"edit-other-{operation}@example.com")
+        owner, _, clip = await _user_with_clip(f"edit-owner-{operation}@example.com", tier=_tier_for(operation))
+        other = await _make_user(f"edit-other-{operation}@example.com", tier=_tier_for(operation))
 
         resp = await client.post(
             _edit_url(clip.id, operation),
@@ -300,7 +321,9 @@ class TestFormatGate:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     @pytest.mark.parametrize("fmt", ["mp3", "aac", "opus", "flac"])
     async def test_non_wav_clip_returns_422(self, client, settings, operation: str, fmt: str) -> None:
-        user, _, clip = await _user_with_clip(f"edit-fmt-{operation}-{fmt}@example.com", fmt=fmt, bpm=120)
+        user, _, clip = await _user_with_clip(
+            f"edit-fmt-{operation}-{fmt}@example.com", tier=_tier_for(operation), fmt=fmt, bpm=120
+        )
         resp = await client.post(
             _edit_url(clip.id, operation),
             json=VALID_BODIES[operation],
@@ -314,7 +337,9 @@ class TestFormatGate:
     async def test_missing_format_falls_back_to_wav_suffix(self, client, settings, operation: str) -> None:
         # Legacy/imported clip documents may have format=None while file_path
         # still ends in .wav — the gate must use the suffix fallback, not 422.
-        user, _, clip = await _user_with_clip(f"edit-fmt-none-{operation}@example.com", fmt=None, bpm=120)
+        user, _, clip = await _user_with_clip(
+            f"edit-fmt-none-{operation}@example.com", tier=_tier_for(operation), fmt=None, bpm=120
+        )
         resp = await client.post(
             _edit_url(clip.id, operation),
             json=VALID_BODIES[operation],
@@ -330,7 +355,7 @@ class TestRemasterValidation:
     async def test_out_of_range_target_lufs_returns_422(self, client, settings, target_lufs: float) -> None:
         # Positive (or near-zero) loudness targets are physically nonsensical
         # and would only drive the pipeline into the true-peak limiter.
-        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-{target_lufs}@example.com")
+        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-{target_lufs}@example.com", tier="pro")
         resp = await client.post(
             _edit_url(clip.id, "remaster"),
             json={"target_lufs": target_lufs},
@@ -341,7 +366,7 @@ class TestRemasterValidation:
 
     @pytest.mark.parametrize("target_lufs", [-5.0, -14.0, -70.0])
     async def test_in_range_target_lufs_is_accepted(self, client, settings, target_lufs: float) -> None:
-        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-ok-{target_lufs}@example.com")
+        user, _, clip = await _user_with_clip(f"edit-remaster-lufs-ok-{target_lufs}@example.com", tier="pro")
         resp = await client.post(
             _edit_url(clip.id, "remaster"),
             json={"target_lufs": target_lufs},
@@ -350,7 +375,7 @@ class TestRemasterValidation:
         assert resp.status_code == 202
 
     async def test_extra_field_returns_422(self, client, settings) -> None:
-        user, _, clip = await _user_with_clip("edit-remaster-extra@example.com")
+        user, _, clip = await _user_with_clip("edit-remaster-extra@example.com", tier="pro")
         resp = await client.post(
             _edit_url(clip.id, "remaster"),
             json={"bogus": True},
@@ -477,7 +502,7 @@ class TestSpeedEnqueue:
 @pytest.mark.integration
 class TestRemasterEnqueue:
     async def test_returns_202_with_default_target_lufs(self, client, settings) -> None:
-        user, workspace, clip = await _user_with_clip("edit-remaster-202@example.com")
+        user, workspace, clip = await _user_with_clip("edit-remaster-202@example.com", tier="pro")
 
         resp = await client.post(_edit_url(clip.id, "remaster"), json={}, headers=_auth_headers(user, settings))
         assert resp.status_code == 202
@@ -492,7 +517,7 @@ class TestRemasterEnqueue:
         assert job.input_params == {"clip_id": str(clip.id), "target_lufs": -14.0}
 
     async def test_custom_target_lufs_is_persisted(self, client, settings) -> None:
-        user, _, clip = await _user_with_clip("edit-remaster-lufs@example.com")
+        user, _, clip = await _user_with_clip("edit-remaster-lufs@example.com", tier="pro")
 
         resp = await client.post(
             _edit_url(clip.id, "remaster"),
@@ -515,7 +540,9 @@ class TestEditJobStatus:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_status_reports_positive_estimate_for_edit_jobs(self, client, settings, operation: str) -> None:
         """GET /jobs/{id}/status must not choke on (or zero out) editing jobs."""
-        user, _, clip = await _user_with_clip(f"edit-status-{operation}@example.com", duration=10.0, bpm=120)
+        user, _, clip = await _user_with_clip(
+            f"edit-status-{operation}@example.com", tier=_tier_for(operation), duration=10.0, bpm=120
+        )
 
         bodies = {"crop": {"start": "1s", "end": "5s"}, "speed": {"multiplier": 1.5}, "remaster": {}}
         accepted = await client.post(
@@ -564,7 +591,7 @@ class TestEditLifecycleEndToEnd:
     ) -> None:
         from acemusic.api.tasks.processor import JobProcessor
 
-        user = await _make_user(f"edit-e2e-{operation}@example.com")
+        user = await _make_user(f"edit-e2e-{operation}@example.com", tier=_tier_for(operation))
         workspace = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)
