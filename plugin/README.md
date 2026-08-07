@@ -26,6 +26,18 @@ Progress:
 The Standalone build is a development convenience — it opens the same editor
 without a host, which is the quickest way to look at UI changes.
 
+## Licensing
+
+The plugin links JUCE under the **JUCE 8 EULA, Starter licence type** — free, no
+source-offer obligation, valid while annual revenue stays under **$20,000**. Not
+AGPLv3. `JUCE_DISPLAY_SPLASH_SCREEN=0` is permitted on this tier because JUCE 8
+removed the splash-screen requirement from Starter.
+
+The VST3 SDK is licensed separately by Steinberg and is **not** covered by that.
+
+Full terms, the upgrade trigger, and how the $20,000 is counted:
+**[plugin/LICENSE.md](LICENSE.md)**. Read it before bumping the JUCE tag off 8.x.
+
 ## Requirements
 
 - CMake 3.22+ and a C++17 compiler (MSVC 2022, Xcode 14+, or GCC 11+)

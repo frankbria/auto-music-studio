@@ -435,3 +435,17 @@ keys follow `{user_id}/{workspace_id}/clips/{clip_id}.{format}`. See
 ## Environment
 
 Copy `.env.example` to `.env` and fill in the required values before running.
+
+## Licensing
+
+This project has not published a licence for its own source. What is recorded here is
+the arm chosen for dependencies that are dual-licensed, where the choice constrains how
+we build and distribute.
+
+| Component | Arm chosen | Obligation it creates |
+| --- | --- | --- |
+| **JUCE 8.0.9** (`plugin/`) | JUCE 8 EULA, **Starter** tier — free, not AGPLv3 | Valid only while annual revenue is under **$20,000**; upgrade to Indie before crossing it. No source-offer obligation. |
+| **VST3 SDK** (`plugin/`) | **Undecided** | A VST3 binary needs its own Steinberg agreement (or the SDK's GPLv3 arm). Tracked in issue #406 — settle it before any public plugin build. |
+
+Details, the exact upgrade trigger, and how the $20,000 is counted for a company versus
+an individual: **[`plugin/LICENSE.md`](plugin/LICENSE.md)**.
