@@ -25,6 +25,7 @@ from .routers import (
     artwork,
     auth,
     batch,
+    billing,
     clips,
     compute,
     credits,
@@ -202,6 +203,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(artwork.router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
     app.include_router(credits.router, prefix=API_V1_PREFIX)
+    app.include_router(billing.router, prefix=API_V1_PREFIX)
     app.include_router(daw_export.router, prefix=API_V1_PREFIX)
     app.include_router(studio.router, prefix=API_V1_PREFIX)
     app.include_router(iterative.router, prefix=API_V1_PREFIX)
