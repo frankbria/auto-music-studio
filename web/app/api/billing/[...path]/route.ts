@@ -39,10 +39,24 @@ async function proxy(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
-  const res = await fetch(`${BACKEND_URL}/api/v1/billing/${segment}`, {
+  // The body has to be forwarded, not just the method and auth header. `topup` posts
+  // `{ pack_id }`, and dropping it made the backend reject the request as invalid
+  // instead of opening Stripe Checkout — the purchase was broken end-to-end while both
+  // the component tests (fetch stubbed in the browser) and the API tests (backend called
+  // directly) passed, because neither exercised this hop.
+  const init: RequestInit = {
     method,
     headers: { authorization: auth, accept: "application/json" },
-  })
+  }
+  if (method === "POST") {
+    const body = await request.text()
+    if (body) {
+      init.headers = { ...init.headers, "content-type": "application/json" }
+      init.body = body
+    }
+  }
+
+  const res = await fetch(`${BACKEND_URL}/api/v1/billing/${segment}`, init)
   const body = await res.json().catch(() => ({}))
   return NextResponse.json(body, { status: res.status })
 }

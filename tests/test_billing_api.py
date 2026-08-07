@@ -1066,6 +1066,40 @@ class TestCreditTopUp:
         assert second.json()["status"] == "duplicate"
         assert (await User.get(user.id)).purchased_credits == 50.0, "a redelivery is not a second sale"
 
+    async def test_a_redelivery_completes_a_grant_that_never_landed(self, client) -> None:
+        # Raised in review on PR #422. Recording before granting is what stops a
+        # redelivery double-crediting — but on its own it means a crash between the two
+        # leaves the musician charged with no credits, permanently, because the next
+        # delivery sees the row and reports "duplicate". The row now carries a settled
+        # marker so a redelivery can tell "done" from "started and abandoned".
+        user = await _subscriber("topup-repair@example.com")
+        await BillingEvent(
+            user_id=user.id,
+            stripe_event_id="evt_topup_crash",
+            event_type="checkout.session.completed",
+        ).insert()
+        assert (await User.get(user.id)).purchased_credits == 0.0
+
+        resp = await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "250"}},
+            event_id="evt_topup_crash",
+        )
+
+        assert resp.json()["status"] == "repaired"
+        assert (await User.get(user.id)).purchased_credits == 250.0
+
+    async def test_a_settled_grant_is_not_repeated_by_the_repair_path(self, client) -> None:
+        # The repair must not become a second way to double-credit.
+        user = await _subscriber("topup-settled@example.com")
+        body = {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "50"}}
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+
+        assert (await User.get(user.id)).purchased_credits == 50.0
+
     async def test_an_unknown_pack_grants_nothing(self, client) -> None:
         # A pack id that no longer exists (renamed, retired) must not guess an amount.
         user = await _subscriber("topup-unknown@example.com")

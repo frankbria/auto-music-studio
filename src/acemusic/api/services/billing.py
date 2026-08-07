@@ -496,11 +496,34 @@ async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str
         return "unknown_pack"
 
     if not await _record_event(user, event_id, event_type):
-        return "duplicate"
+        # Already recorded — but "recorded" is not "granted". Raised in review on PR
+        # #422: if the process died between the insert and the grant, a redelivery would
+        # report duplicate and the musician would stay charged with no credits. Finish
+        # the job instead of assuming it was done.
+        existing = await BillingEvent.find_one(BillingEvent.stripe_event_id == event_id)
+        if existing is None or existing.credits_granted_at is not None:
+            return "duplicate"
+        logger.warning("billing: repairing an ungranted top-up for %s (event %s)", user.id, event_id)
+        await _grant_and_mark(existing, user, pack["credits"])
+        return "repaired"
 
-    await credits_service.grant_purchased_credits(user.id, pack["credits"])
+    recorded = await BillingEvent.find_one(BillingEvent.stripe_event_id == event_id)
+    if recorded is not None:
+        await _grant_and_mark(recorded, user, pack["credits"])
     logger.info("billing: granted %s credits to %s (pack %s)", pack["credits"], user.id, pack_id)
     return "topped_up"
+
+
+async def _grant_and_mark(event: BillingEvent, user: User, credits: float) -> None:
+    """Credit the account, then mark the ledger row as settled.
+
+    Marking *after* the grant is what makes the repair path above correct: a crash
+    between the two leaves the flag unset, so the next delivery retries rather than
+    concluding the work was done.
+    """
+    await credits_service.grant_purchased_credits(user.id, credits)
+    event.credits_granted_at = datetime.now(timezone.utc)
+    await event.save()
 
 
 async def _handle_subscription_change(

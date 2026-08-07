@@ -221,3 +221,39 @@ class TestBalanceSurfaces:
                 if "credits_balance" in stripped and "spendable" not in stripped:
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
         assert not offenders, "routers must report spendable(), not the monthly bucket:\n" + "\n".join(offenders)
+
+
+@pytest.mark.integration
+class TestRefundDurability:
+    """Raised in review on PR #422: a refund must actually stay with the musician.
+
+    The monthly reset tops ``credits_balance`` *up to* the tier allocation, so a refund
+    parked there is absorbed by a correspondingly smaller grant next period — the
+    musician ends up exactly where they started. Only the purchased bucket survives.
+    """
+
+    async def test_a_refund_survives_the_next_monthly_reset(self) -> None:
+        user = await _user("refund-durable@example.com", monthly=10.0)
+
+        await credits_service.refund_credits(user.id, 5.0, action_type="song", job_id="job-1")
+        assert await _balance_of(user) == 15.0
+
+        # The anniversary comes round.
+        await User.get_pymongo_collection().update_one({"_id": user.id}, {"$set": {"credits_reset_at": _long_ago()}})
+        refreshed = await credits_service.apply_monthly_reset(await User.get(user.id))
+
+        # 50 monthly + the 5 that was refunded. Had the refund gone to credits_balance,
+        # this would be 50 — the reset would have granted 35 instead of 40 and quietly
+        # cancelled the refund out.
+        assert credits_service.spendable(refreshed) == 55.0
+        assert refreshed.purchased_credits == 5.0
+
+    async def test_a_refund_is_spendable_immediately(self) -> None:
+        # Durability must not come at the cost of usability now.
+        user = await _user("refund-now@example.com", monthly=0.0)
+        await credits_service.refund_credits(user.id, 2.0, action_type="song", job_id="job-2")
+        assert await credits_service.deduct_credits(user.id, 2.0) == 0.0
+
+
+async def _balance_of(user: User) -> float:
+    return credits_service.spendable(await User.get(user.id))
