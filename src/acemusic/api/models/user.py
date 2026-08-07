@@ -63,6 +63,10 @@ class User(Document):
     #: ``incomplete``/``past_due`` one and downgrade a paying musician. Events older
     #: than this are dropped.
     subscription_synced_at: datetime | None = None
+    #: Same idea for *invoice* events, kept separate on purpose. Sharing one watermark
+    #: would let an invoice advance it and then silently drop a legitimate subscription
+    #: event stamped a moment earlier — trading a cosmetic bug for an entitlement one.
+    invoice_synced_at: datetime | None = None
     # Profile fields (US-8.4). All optional so existing/OAuth-created users remain
     # valid; ``handle`` stays null until the user claims one.
     display_name: str | None = None

@@ -259,6 +259,17 @@ def verify_webhook(payload: bytes, signature: str | None, settings: ApiSettings)
     return json.loads(payload)
 
 
+def _is_stale_invoice(user: User, occurred_at: datetime | None) -> bool:
+    """Whether this invoice event predates the invoice state already applied.
+
+    A separate watermark from :func:`_is_stale`, deliberately. Sharing one would let an
+    invoice advance it and then drop a legitimate subscription event stamped a moment
+    earlier — trading this cosmetic bug for an entitlement one.
+    """
+    last = _as_utc(user.invoice_synced_at)
+    return bool(occurred_at and last and occurred_at < last)
+
+
 def _is_stale(user: User, occurred_at: datetime | None) -> bool:
     """Whether this event predates the state already applied for ``user``.
 
@@ -341,7 +352,7 @@ async def handle_event(event: dict[str, Any]) -> str:
     if event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
         return await _handle_subscription_change(event_id, event_type, obj, occurred_at)
     if event_type in ("invoice.paid", "invoice.payment_failed"):
-        return await _handle_invoice(event_id, event_type, obj)
+        return await _handle_invoice(event_id, event_type, obj, occurred_at)
 
     logger.info("billing: ignoring unhandled event type %s", event_type)
     return "ignored"
@@ -446,7 +457,12 @@ async def _handle_subscription_change(
     return fields["subscription_tier"]
 
 
-async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any]) -> str:
+async def _handle_invoice(
+    event_id: str,
+    event_type: str,
+    invoice: dict[str, Any],
+    occurred_at: datetime | None = None,
+) -> str:
     """Record a charge (AC4); mark the grace period on failure (AC3).
 
     A failure does **not** touch the tier. Stripe drives the downgrade through the
@@ -469,6 +485,19 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
     # invoices carry their own identity, so they get compared rather than timestamped.
     # An invoice with no ``subscription`` is a one-off charge (credit top-ups, US-26.4)
     # and is not about the subscription at all, so it passes through.
+    # Ordering guard, mirroring the subscription one. The correlation check below catches
+    # a *different* subscription; this catches reordering **within** the current one — an
+    # out-of-order ``payment_failed`` landing after a newer ``invoice.paid`` would
+    # otherwise leave "we couldn't take your last payment" on an account that is current.
+    # Raised in review on PR #420. The tier is unaffected either way (only subscription
+    # events move the entitlement), so this is a misleading banner rather than a money
+    # bug — but a banner telling someone to fix a card that is fine is still wrong.
+    if _is_stale_invoice(user, occurred_at):
+        logger.info("billing: dropping out-of-order %s for %s", event_type, user.id)
+        if not await _record_event(user, event_id, event_type, invoice=invoice):
+            return "duplicate"
+        return "stale"
+
     invoice_subscription = invoice.get("subscription")
     if invoice_subscription and user.stripe_subscription_id and invoice_subscription != user.stripe_subscription_id:
         logger.info(
@@ -492,6 +521,8 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
             return "not_subscribed"
 
         user.subscription_status = "past_due"
+        if occurred_at:
+            user.invoice_synced_at = occurred_at
         await user.save()
         if not await _record_event(user, event_id, event_type, invoice=invoice):
             return "duplicate"
@@ -500,6 +531,13 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
     # A successful charge clears a grace period that a previous failure set.
     if user.subscription_status == "past_due":
         user.subscription_status = "active"
+        if occurred_at:
+            user.invoice_synced_at = occurred_at
+        await user.save()
+    elif occurred_at:
+        # Nothing to change, but the watermark still advances so a later-arriving older
+        # failure cannot re-open a grace period this payment already settled.
+        user.invoice_synced_at = occurred_at
         await user.save()
 
     if not await _record_event(user, event_id, event_type, invoice=invoice):

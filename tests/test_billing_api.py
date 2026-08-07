@@ -782,6 +782,95 @@ class TestOrderingWatermarkArmedAtCheckout:
 
 
 @pytest.mark.integration
+class TestInvoiceOrdering:
+    """Raised in review on PR #420 and tracked across commits until closed here.
+
+    The correlation check catches an invoice for a *different* subscription; this catches
+    reordering **within** the current one. The tier is unaffected either way — only
+    subscription events move the entitlement — so this is a misleading banner rather than
+    a money bug, but a banner telling someone to fix a card that is fine is still wrong.
+    """
+
+    async def _pro(self, client, email: str, at: int | None = None) -> User:
+        """A subscribed user. ``at`` stamps the *subscription* watermark, which callers
+        below need to control — a checkout stamped "now" would legitimately make any
+        later-posted-but-earlier subscription event stale, for reasons unrelated to the
+        invoice watermark under test."""
+        user = await _subscriber(email)
+        payload = {"customer": CUSTOMER, "subscription": "sub_test_1"}
+        if at is None:
+            await _post_event(client, "checkout.session.completed", payload, event_id=f"{email}-sub")
+        else:
+            await _post_event_at(client, "checkout.session.completed", payload, f"{email}-sub", at)
+        return await User.get(user.id)
+
+    async def test_a_late_failure_does_not_reopen_a_settled_grace_period(self, client) -> None:
+        user = await self._pro(client, "sub-invord@example.com")
+        now = int(time.time())
+
+        await _post_event_at(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200, "currency": "usd"},
+            "evt_invord_paid",
+            now,
+        )
+        # The failed attempt that preceded that payment, arriving late.
+        await _post_event_at(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            "evt_invord_failed",
+            now - 300,
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_status == "active", "the card was charged; do not ask them to fix it"
+
+    async def test_a_genuinely_newer_failure_still_applies(self, client) -> None:
+        # The guard must not deafen us to a real problem.
+        user = await self._pro(client, "sub-invord2@example.com")
+        now = int(time.time())
+        await _post_event_at(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200},
+            "evt_invord2_paid",
+            now - 300,
+        )
+        await _post_event_at(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            "evt_invord2_failed",
+            now,
+        )
+        assert (await User.get(user.id)).subscription_status == "past_due"
+
+    async def test_the_invoice_watermark_does_not_block_subscription_events(self, client) -> None:
+        # The reason the two watermarks are separate. A shared one would let this invoice
+        # advance it and then drop the subscription event stamped a moment earlier —
+        # trading a cosmetic bug for an entitlement one.
+        now = int(time.time())
+        user = await self._pro(client, "sub-invord3@example.com", at=now - 600)
+        await _post_event_at(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200},
+            "evt_invord3_paid",
+            now,
+        )
+        await _post_event_at(
+            client,
+            "customer.subscription.deleted",
+            _subscription("canceled"),
+            "evt_invord3_deleted",
+            now - 10,
+        )
+        assert (await User.get(user.id)).subscription_tier == "free", "the cancellation must still land"
+
+
+@pytest.mark.integration
 class TestInvoiceAmounts:
     async def test_a_fully_discounted_invoice_shows_zero_not_the_list_price(self, client, settings) -> None:
         # Raised in review on PR #420: `amount_paid or amount_due` evaluates 0 as falsy,
