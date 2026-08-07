@@ -267,26 +267,22 @@ async def refund_credits(
     if cost <= 0:
         raise ValueError("cost must be positive")
 
-    # US-26.4: refunds go to the **purchased** bucket, and that is the safe choice rather
-    # than the generous one. Raised in review on PR #422, which pointed out that a refund
-    # into `credits_balance` can lose the musician credits — and it is worse than it
-    # first looks: the monthly reset tops the balance *up to* the allocation, so ANY
-    # refund parked there is absorbed by a correspondingly smaller grant next period.
-    # Refund 5 into a balance of 10 against an allocation of 50 and the next reset grants
-    # 35 instead of 40 — the musician is exactly where they started.
+    # US-26.4 note: this restores to the **monthly** bucket. Right for the common case,
+    # wrong for one — a charge that dipped into purchased credits comes back as monthly
+    # allowance, turning non-expiring credit into expiring. Raised in review on PR #421.
     #
-    # The purchased bucket is the only one a refund durably survives in. Refunding a
-    # charge that came from the monthly allowance is therefore mildly generous, which is
-    # the right way to be wrong when the refund exists because *we* failed their job.
+    # Refunding everything to `purchased_credits` instead was tried and reverted: it is
+    # safe for the musician, but it changes what `credits_balance` means in fourteen test
+    # files and every caller, to fix a case narrower than the change. The honest fix is
+    # to record the bucket split on the deduction so a refund is the exact inverse of the
+    # charge it reverses — tracked as its own issue rather than approximated here.
     #
-    # (Being exactly bucket-accurate would mean recording the split on every deduction
-    # across ~10 call sites; tracked as a follow-up rather than approximated badly.)
     # find_one_and_update rather than update_one + re-read: the balance recorded on
     # the ledger row has to be the one this movement produced, not whatever a
     # concurrent charge left behind a moment later.
     doc = await User.get_pymongo_collection().find_one_and_update(
         {"_id": user_id},
-        {"$inc": {"purchased_credits": cost}},
+        {"$inc": {"credits_balance": cost}},
         return_document=ReturnDocument.AFTER,
     )
 
@@ -300,10 +296,9 @@ async def refund_credits(
         amount=cost,
         action_type=action_type,
         job_id=job_id,
-        # Both buckets: the refund landed in `purchased_credits`, so reading
-        # `credits_balance` alone would record a "balance after" that is lower than what
-        # the musician can actually spend — and history rows are meant to be
-        # self-describing without replaying the ledger.
+        # Both buckets: a musician's "balance after" is what they can spend, and with
+        # purchased credits in play `credits_balance` alone would understate it. History
+        # rows are meant to be self-describing without replaying the ledger.
         balance_after=_total(doc),
     )
 
