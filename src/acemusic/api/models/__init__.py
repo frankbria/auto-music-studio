@@ -5,6 +5,7 @@
 
 from .artwork import ArtworkOption
 from .batch_job import BatchClipEntry, BatchJob
+from .billing_event import BillingEvent
 from .clip import Clip
 from .counter import Counter
 from .credit_transaction import CreditTransaction
@@ -28,6 +29,7 @@ ALL_MODELS = [
     Job,
     RefreshToken,
     Preset,
+    BillingEvent,
     CreditTransaction,
     BatchJob,
     ArtworkOption,
@@ -47,6 +49,7 @@ __all__ = [
     "Workspace",
     "Clip",
     "ArtworkOption",
+    "BillingEvent",
     "CreditTransaction",
     "Job",
     "JobStatus",
