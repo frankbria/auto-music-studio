@@ -12,7 +12,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Job, User, VisibilityState
+from acemusic.api.models import Clip, Job, Release, User, VisibilityState
 from acemusic.api.services import credits as credits_service, tiers, users as user_service
 from acemusic.api.settings import ApiSettings
 
@@ -100,6 +100,11 @@ def _pro_actions(clip_id: str) -> list[tuple[str, str, dict | None]]:
         ),
         ("studio mixdown", f"{API_V1_PREFIX}/studio/mixdown", {"tracks": []}),
         ("studio daw export", f"{API_V1_PREFIX}/studio/export/daw", {"tracks": []}),
+        # #403: loudness mastering by another route. Added to the shared table rather
+        # than tested in isolation, so it also inherits the "costs nothing when refused"
+        # and "Pro is not refused" cases — the two properties most likely to be missed
+        # when a gate is bolted onto an endpoint that already charges credits.
+        ("remaster", f"{API_V1_PREFIX}/clips/{clip_id}/remaster", {"target_lufs": -14.0}),
     ]
 
 
@@ -541,3 +546,75 @@ class TestBatchIsNotTheCheapWayIn:
         from acemusic.audio import EXPORT_FORMATS
 
         assert set(EXPORT_FORMATS) - LOSSLESS_EXPORT_FORMATS == {"mp3"}
+
+
+@pytest.mark.integration
+class TestReleaseBundlingIsPro:
+    """#403: release bundling is distribution, so the free tier does not get it.
+
+    "You publish it yourself, we assemble the bundle" is most of the value of the
+    feature. Gating only the SoundCloud upload would have left the free tier with almost
+    all of distribution while the gate guarded the convenience.
+    """
+
+    async def _release(self, user: User) -> str:
+        from datetime import datetime, timezone
+
+        clip = await _wav_clip(user)
+        release = Release(
+            clip_id=clip.id,
+            user_id=user.id,
+            title="Demo Release",
+            artist="Demo Artist",
+            genre="Electronic",
+            release_date=datetime(2026, 12, 1, tzinfo=timezone.utc),
+        )
+        await release.insert()
+        return str(release.id)
+
+    async def test_a_free_account_cannot_prepare_a_bundle(self, client, settings) -> None:
+        user = await _user("free-prepare")
+        release_id = await self._release(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/releases/{release_id}/prepare/distrokid",
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["capability"] == "distribution"
+
+    async def test_a_free_account_cannot_mark_a_release_submitted(self, client, settings) -> None:
+        # Gated with prepare: an account that cannot build a bundle has nothing to
+        # submit, and an open submit would let it mark a release distributed anyway.
+        user = await _user("free-submit")
+        release_id = await self._release(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/releases/{release_id}/submit/distrokid",
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code == 403
+
+    async def test_a_pro_account_is_not_refused(self, client, settings) -> None:
+        # The positive control — a gate that refuses everyone is not a gate.
+        user = await _user("pro-prepare", tier="pro")
+        release_id = await self._release(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/releases/{release_id}/prepare/distrokid",
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code != 403
+
+    async def test_reading_a_release_stays_open(self, client, settings) -> None:
+        # Only the distribution actions are gated; a free musician can still see the
+        # release they made.
+        user = await _user("free-read-release")
+        release_id = await self._release(user)
+
+        resp = await client.get(f"{API_V1_PREFIX}/releases/{release_id}", headers=_auth(user, settings))
+
+        assert resp.status_code == 200

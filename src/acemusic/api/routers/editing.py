@@ -22,9 +22,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from acemusic.audio import calculate_speed_multiplier
 from acemusic.utils import parse_time_string, snap_to_beat
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    require_existing_user,
+    require_tier_capability,
+)
 from ..models import Clip
 from ..services import clips as clip_service, credits as credits_service, editing as editing_service
+from ..services.tiers import Capability
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +227,18 @@ async def remaster_clip(
     request: RemasterRequest,
     current: CurrentUser = Depends(require_existing_user),
 ) -> EditJobResponse:
-    """Enqueue a remaster of ``clip_id`` to ``target_lufs``; the original is preserved."""
+    """Enqueue a remaster of ``clip_id`` to ``target_lufs``; the original is preserved.
+
+    Pro-only (#403). This is loudness mastering by another route — the ``mastering``
+    capability is described to musicians as "master your tracks to a professional loudness
+    target", which is exactly what this does, just locally instead of via Dolby/LANDR.
+    Leaving it open would have made the gate on ``/mastering/jobs`` a formality.
+
+    The gate runs **before** the credit charge in ``_enqueue``: refusing someone after
+    taking their credits would be worse than not offering the feature.
+    """
+    await require_tier_capability(current.user_id, Capability.MASTERING)
+
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     _require_wav(clip)
 
