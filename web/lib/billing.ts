@@ -22,6 +22,14 @@ export type BillingHistoryEntry = {
   created_at: string
 }
 
+export type CreditPack = {
+  id: string
+  credits: number
+  /** Major units (dollars), already divided by the API. */
+  price: number
+  currency: string
+}
+
 function authHeaders(token: string): HeadersInit {
   return { authorization: `Bearer ${token}` }
 }
@@ -47,6 +55,16 @@ export async function fetchBillingHistory(
   return body.entries ?? []
 }
 
+export async function fetchCreditPacks(token: string): Promise<CreditPack[]> {
+  const res = await fetch("/api/billing/packs", {
+    headers: authHeaders(token),
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error("Could not load credit packs.")
+  const body = (await res.json()) as { packs?: CreditPack[] }
+  return body.packs ?? []
+}
+
 /**
  * Start checkout or open the billing portal, returning the URL to navigate to.
  *
@@ -54,12 +72,16 @@ export async function fetchBillingHistory(
  * message on the page instead of a blank tab.
  */
 async function redirectUrl(
-  path: "checkout" | "portal",
-  token: string
+  path: "checkout" | "portal" | "topup",
+  token: string,
+  payload?: unknown
 ): Promise<string> {
   const res = await fetch(`/api/billing/${path}`, {
     method: "POST",
-    headers: authHeaders(token),
+    headers: payload
+      ? { ...authHeaders(token), "content-type": "application/json" }
+      : authHeaders(token),
+    body: payload ? JSON.stringify(payload) : undefined,
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -76,6 +98,9 @@ async function redirectUrl(
 
 export const startCheckout = (token: string) => redirectUrl("checkout", token)
 export const openPortal = (token: string) => redirectUrl("portal", token)
+/** Buy a credit pack — a one-off charge, available on every tier (US-26.4). */
+export const startTopUp = (token: string, packId: string) =>
+  redirectUrl("topup", token, { pack_id: packId })
 
 /** "$12.00" — Intl handles the currency symbol so this never hardcodes a locale. */
 export function formatAmount(

@@ -31,7 +31,7 @@ import stripe
 
 from ..models import BillingEvent, User
 from ..settings import ApiSettings
-from . import tiers
+from . import credits as credits_service, tiers
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,23 @@ class AlreadySubscribed(RuntimeError):
 #: Stripe is retrying, which is not the same as refusing to pay. ``unpaid`` is Stripe's
 #: state *after* the retries are exhausted, and that one downgrades.
 PAID_STATUSES = frozenset({"active", "trialing", "past_due"})
+
+
+#: Credit top-up packs (US-26.4). Priced per credit at 10c / 9c / 8c — a mild bulk
+#: discount, and deliberately dearer than the Pro plan's implied rate so a top-up never
+#: undercuts subscribing. Amounts are in cents, like everything Stripe reports.
+#:
+#: The price is defined here rather than read back from Stripe so a misconfigured Price
+#: cannot silently sell 250 credits for the 50-credit fee. Stripe is told the amount; it
+#: is not asked for it.
+CREDIT_PACKS = {
+    "50": {"credits": 50.0, "amount_cents": 500},
+    "100": {"credits": 100.0, "amount_cents": 900},
+    "250": {"credits": 250.0, "amount_cents": 2000},
+}
+
+#: Metadata key naming the pack on a one-off Checkout session, read back on the webhook.
+PACK_METADATA_KEY = "acemusic_credit_pack"
 
 
 def tier_for_status(status: str | None) -> str:
@@ -201,6 +218,54 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
                 # Proration on a *plan change* is the portal's job — this path only ever
                 # creates a first subscription, per the guard above.
                 "subscription_data": {"metadata": {"user_id": str(user.id)}},
+            }
+        )
+    )
+    if not session.url:
+        raise BillingError("Stripe returned a checkout session with no URL.")
+    return session.url
+
+
+async def create_topup_session(user: User, pack_id: str, settings: ApiSettings) -> str:
+    """Buy a credit pack: a **one-off** charge, not a subscription.
+
+    ``mode="payment"`` rather than ``"subscription"`` — a top-up must not create a
+    recurring charge, and it is available to free-tier musicians too, which is the point
+    of the story.
+
+    No ``AlreadySubscribed`` guard here: unlike the Pro checkout, buying a second pack is
+    a legitimate thing to want, and each purchase is independent.
+    """
+    pack = CREDIT_PACKS.get(pack_id)
+    if pack is None:
+        raise BillingError(f"Unknown credit pack {pack_id!r}.")
+
+    customer_id = await ensure_customer(user, settings)
+    client = _client(settings)
+    session = await asyncio.to_thread(
+        lambda: client.checkout.sessions.create(
+            params={
+                "mode": "payment",
+                "customer": customer_id,
+                "line_items": [
+                    {
+                        # Priced inline rather than by Price id, so the credits granted
+                        # and the money taken are defined in the same place and cannot
+                        # drift apart in a dashboard.
+                        "price_data": {
+                            "currency": "usd",
+                            "unit_amount": pack["amount_cents"],
+                            "product_data": {"name": f"{int(pack['credits'])} Auto Music Studio credits"},
+                        },
+                        "quantity": 1,
+                    }
+                ],
+                "success_url": settings.stripe_success_url,
+                "cancel_url": settings.stripe_cancel_url,
+                # Read back on checkout.session.completed. The webhook must not infer the
+                # pack from the amount — a coupon or a currency change would then grant
+                # the wrong number of credits.
+                "metadata": {PACK_METADATA_KEY: pack_id, "user_id": str(user.id)},
             }
         )
     )
@@ -378,6 +443,14 @@ async def _handle_checkout_completed(
         logger.warning("billing: checkout for unknown customer %r", session.get("customer"))
         return "unknown_customer"
 
+    # A credit top-up (US-26.4) rides the same event as a subscription checkout, so the
+    # metadata is what tells them apart. Branching on it FIRST matters: without this a
+    # paid credit pack would fall through and grant Pro, which is the most expensive
+    # possible way to misread a webhook.
+    pack_id = (session.get("metadata") or {}).get(PACK_METADATA_KEY)
+    if pack_id:
+        return await _handle_topup(event_id, event_type, user, pack_id)
+
     # Raised in review on PR #420. This handler stamped the watermark without reading it
     # back, which made it the one place the ordering guard did not protect — and the one
     # place that *grants* Pro. Because the state change deliberately runs before the
@@ -401,6 +474,58 @@ async def _handle_checkout_completed(
     if not await _record_event(user, event_id, event_type):
         return "duplicate"
     return "subscribed"
+
+
+async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str) -> str:
+    """Credit a paid top-up pack (US-26.4 AC1).
+
+    Ordering mirrors the subscription handlers: the grant lands **before** the ledger row,
+    so a crash between the two cannot lose a musician credits they paid for. Unlike a
+    tier flip, a grant is *not* naturally idempotent — crediting twice is a real gift — so
+    the ledger insert is what makes it once-only, and a redelivery that finds the row
+    already present must not grant again.
+
+    That is why the order is inverted here relative to the subscription path: correctness
+    demands the record decide, so the record is written first and the grant only follows
+    if it was genuinely new.
+    """
+    pack = CREDIT_PACKS.get(pack_id)
+    if pack is None:
+        logger.warning("billing: paid checkout names unknown pack %r for %s", pack_id, user.id)
+        await _record_event(user, event_id, event_type)
+        return "unknown_pack"
+
+    await _record_event(user, event_id, event_type)
+
+    # Claim the grant atomically. Recording and marking are two writes in two
+    # collections, so "look, then grant" is only safe sequentially — a redelivery landing
+    # while the first delivery is still inside grant_purchased_credits would read
+    # credits_granted_at as None and grant again. Raised in review on PR #421, and a real
+    # race under Stripe's at-least-once delivery rather than a hypothetical one.
+    #
+    # A conditional find_one_and_update is the claim: exactly one caller can move the row
+    # from unclaimed to claimed, whatever the concurrency, and only that one grants.
+    now = datetime.now(timezone.utc)
+    claimed = await BillingEvent.get_pymongo_collection().find_one_and_update(
+        {"stripe_event_id": event_id, "credits_granted_at": None},
+        {"$set": {"credits_granted_at": now}},
+    )
+    if claimed is None:
+        # Someone else already granted this event, or is granting it right now.
+        return "duplicate"
+
+    try:
+        await credits_service.grant_purchased_credits(user.id, pack["credits"])
+    except Exception:
+        # Release the claim so a redelivery can retry, rather than leaving the row
+        # looking settled while the credits never landed.
+        await BillingEvent.get_pymongo_collection().update_one(
+            {"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}}
+        )
+        raise
+
+    logger.info("billing: granted %s credits to %s (pack %s)", pack["credits"], user.id, pack_id)
+    return "topped_up"
 
 
 async def _handle_subscription_change(

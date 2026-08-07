@@ -30,6 +30,12 @@ class User(Document):
     # US-9.6: deducted atomically at job-queue time (see services/credits.py).
     # Documents predating the field load with the default starting balance.
     credits_balance: float = DEFAULT_CREDITS_BALANCE
+    # US-26.4: credits bought as a top-up pack. A SECOND bucket rather than a bigger
+    # number, because the monthly reset tops `credits_balance` *up to* the tier
+    # allocation rather than adding to it — so with one field, buying 100 and spending 60
+    # means the next monthly 50 never arrives (the balance is still above 50). Purchased
+    # credits are never reset and are spent only after the monthly bucket is empty.
+    purchased_credits: float = 0.0
     # US-26.2: when the monthly allocation was last applied. The reset is anchored to
     # ``created_at`` (the subscription anniversary) rather than the calendar month, so
     # nobody gains or loses a partial period by signing up on the 3rd. Null means it has
