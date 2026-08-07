@@ -572,6 +572,92 @@ class TestOutOfOrderDelivery:
 
 
 @pytest.mark.integration
+class TestChurnedSubscribers:
+    """Raised in review on PR #420: a lapsed musician was permanently locked out.
+
+    ``invoice.payment_failed`` used to set ``past_due`` unconditionally. That is a *paid*
+    status, so a late failure for a long-dead subscription made the checkout guard refuse
+    a free-tier account forever, waiting on a subscription event it would never generate
+    again. Two changes: the guard keys on the entitlement rather than the mirrored
+    status, and a failure for a non-subscriber no longer writes one.
+    """
+
+    async def test_a_late_failure_does_not_lock_out_a_lapsed_account(self, client, settings) -> None:
+        user = await _subscriber("sub-churned@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_churn_1",
+        )
+        await _post_event(client, "customer.subscription.deleted", _subscription("canceled"), event_id="evt_churn_2")
+        assert (await User.get(user.id)).subscription_tier == "free"
+
+        # Stripe finally gives up on the last invoice, long after the subscription ended.
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "amount_due": 1200, "currency": "usd"},
+            event_id="evt_churn_3",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_tier == "free"
+        assert refreshed.subscription_status != "past_due", "a dead subscription must not look paid"
+
+    async def test_a_lapsed_account_can_check_out_again(self, client, settings, monkeypatch) -> None:
+        user = await _subscriber("sub-return@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_ret_1",
+        )
+        await _post_event(client, "customer.subscription.deleted", _subscription("canceled"), event_id="evt_ret_2")
+        await _post_event(client, "invoice.payment_failed", {"customer": CUSTOMER}, event_id="evt_ret_3")
+
+        async def _fake_session(user_arg, settings_arg):
+            return "https://checkout.stripe.com/c/pay/welcome_back"
+
+        monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
+        resp = await client.post(CHECKOUT_URL, headers=_auth_headers(user, settings))
+        assert resp.status_code == 200, "a churned musician must be able to come back"
+
+
+@pytest.mark.integration
+class TestOrderingWatermarkArmedAtCheckout:
+    """Raised in review on PR #420: the ordering guard was a no-op for the first event.
+
+    ``_handle_checkout_completed`` granted Pro without stamping ``subscription_synced_at``,
+    so the first subscription event was compared against ``None`` and let through whatever
+    its timestamp said — leaving unguarded exactly the window in which someone has just paid.
+    """
+
+    async def test_a_snapshot_older_than_the_checkout_cannot_undo_it(self, client) -> None:
+        user = await _subscriber("sub-watermark@example.com")
+        now = int(time.time())
+        await _post_event_at(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            "evt_wm_checkout",
+            now,
+        )
+        assert (await User.get(user.id)).subscription_tier == "pro"
+
+        # An "incomplete" snapshot generated before the checkout completed, arriving after.
+        await _post_event_at(
+            client,
+            "customer.subscription.updated",
+            _subscription("incomplete"),
+            "evt_wm_stale",
+            now - 120,
+        )
+
+        assert (await User.get(user.id)).subscription_tier == "pro"
+
+
+@pytest.mark.integration
 class TestInvoiceAmounts:
     async def test_a_fully_discounted_invoice_shows_zero_not_the_list_price(self, client, settings) -> None:
         # Raised in review on PR #420: `amount_paid or amount_due` evaluates 0 as falsy,

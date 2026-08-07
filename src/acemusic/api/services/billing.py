@@ -176,9 +176,15 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
     paying twice. Changing an existing plan is the portal's job, and this is the only
     place in the platform that can cause a double charge.
     """
-    if user.stripe_subscription_id and user.subscription_status in PAID_STATUSES:
+    # Keyed on the **effective tier**, not on ``subscription_status``. Raised in review
+    # on PR #420: a late ``invoice.payment_failed`` for a long-dead subscription sets
+    # ``past_due``, which is a paid status — so a status-keyed guard would refuse a
+    # churned musician checkout forever, waiting on a subscription event they will never
+    # generate again. The tier is what they actually have, and it is what may not be
+    # paid for twice.
+    if user.stripe_subscription_id and tiers.normalise(user.subscription_tier) == tiers.PRO:
         raise AlreadySubscribed(
-            "This account already has an active subscription. " "Use the billing portal to change or cancel it."
+            "This account already has an active subscription. Use the billing portal to change or cancel it."
         )
 
     customer_id = await ensure_customer(user, settings)
@@ -318,7 +324,7 @@ async def handle_event(event: dict[str, Any]) -> str:
     occurred_at = _timestamp(event.get("created"))
 
     if event_type == "checkout.session.completed":
-        return await _handle_checkout_completed(event_id, event_type, obj)
+        return await _handle_checkout_completed(event_id, event_type, obj, occurred_at)
     if event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
         return await _handle_subscription_change(event_id, event_type, obj, occurred_at)
     if event_type in ("invoice.paid", "invoice.payment_failed"):
@@ -328,8 +334,21 @@ async def handle_event(event: dict[str, Any]) -> str:
     return "ignored"
 
 
-async def _handle_checkout_completed(event_id: str, event_type: str, session: dict[str, Any]) -> str:
-    """Checkout paid — link the subscription and grant Pro (AC1)."""
+async def _handle_checkout_completed(
+    event_id: str,
+    event_type: str,
+    session: dict[str, Any],
+    occurred_at: datetime | None = None,
+) -> str:
+    """Checkout paid — link the subscription and grant Pro (AC1).
+
+    Stamps the ordering watermark as well. Raised in review on PR #420: without it the
+    guard in :func:`_handle_subscription_change` compares the first subscription event
+    against ``None`` and lets it through whatever its timestamp says — so an
+    ``incomplete`` snapshot generated *before* this checkout could still land after it
+    and undo the grant. The window it protects is precisely the one where a musician has
+    just paid.
+    """
     user = await _user_for_customer(session.get("customer"))
     if user is None:
         logger.warning("billing: checkout for unknown customer %r", session.get("customer"))
@@ -339,6 +358,8 @@ async def _handle_checkout_completed(event_id: str, event_type: str, session: di
     user.subscription_tier = tiers.PRO
     user.subscription_status = "active"
     user.subscription_cancel_at_period_end = False
+    if occurred_at:
+        user.subscription_synced_at = occurred_at
     await user.save()
 
     if not await _record_event(user, event_id, event_type):
@@ -414,6 +435,16 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
         return "unknown_customer"
 
     if event_type == "invoice.payment_failed":
+        # Only meaningful for someone who currently *has* the entitlement. A late failure
+        # for a subscription that already ended must not resurrect a paid-looking status
+        # on a free account — that is the state that used to lock them out of
+        # resubscribing (see the guard in create_checkout_session).
+        if tiers.normalise(user.subscription_tier) != tiers.PRO:
+            logger.info("billing: ignoring payment failure for a non-subscriber %s", user.id)
+            if not await _record_event(user, event_id, event_type, invoice=invoice):
+                return "duplicate"
+            return "not_subscribed"
+
         user.subscription_status = "past_due"
         await user.save()
         if not await _record_event(user, event_id, event_type, invoice=invoice):
