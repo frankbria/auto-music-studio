@@ -4,6 +4,10 @@ The plugin links the **JUCE Framework**, which is dual-licensed. This file recor
 which arm this repository uses, because the two arms impose opposite obligations and
 the build configuration has to match the one we picked.
 
+> **Not legal advice.** This is a record of a decision and the clauses it rests on. The
+> clause numbers are cited so the reasoning can be checked against the agreement itself
+> rather than taken on trust — read the linked EULA before relying on any of it.
+
 ## The decision
 
 **JUCE 8 End User Licence Agreement — Starter licence type. Not AGPLv3.**
@@ -44,7 +48,7 @@ $20,000.** Exceeding the limit is not a grace period: EULA 1.2.1 and the clause 
 **or immediately ceasing development and distribution**. Breach exposes us to back-fees
 for the entire period plus audit costs of no less than £1,000 (EULA 3.6).
 
-Two details worth knowing before that threshold is near:
+Two details worth knowing well before that threshold is reached:
 
 - **How the $20,000 is counted depends on who holds the licence.** For an *individual*,
   it is only revenue arising from their use of the framework. For a *company*, it is the
