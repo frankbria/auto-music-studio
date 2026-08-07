@@ -343,7 +343,7 @@ async def charge_and_create(
     if balance_after is None:
         user = await User.get(user_id)
         raise InsufficientCreditsError(
-            balance=user.credits_balance if user is not None else 0.0,
+            balance=spendable(user) if user is not None else 0.0,
             required=cost,
         )
 
@@ -381,6 +381,11 @@ async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float) -> N
     Everywhere the charge *was* ledgered, use :func:`refund_credits` instead, so the
     money that moved is money the user can see.
     """
+    # US-26.4 note: bucket-unaware, like refund_credits. A reversal of a charge that came
+    # out of `purchased_credits` lands in `credits_balance`, relabelling non-expiring
+    # credit as monthly allowance — which the next reset then absorbs. Narrower than the
+    # refund path (this only fires when job *creation* fails, before any ledger row
+    # exists), and fixed by the same work: see #422.
     if cost <= 0:
         raise ValueError("cost must be positive")
 
@@ -569,7 +574,9 @@ async def apply_monthly_reset(user: User) -> User:
             amount=granted,
             action_type="monthly_reset",
             job_id="",
-            balance_after=user.credits_balance,
+            # Both buckets, like every other row type. A monthly_reset row reporting
+            # only the monthly bucket would under-report against its neighbours.
+            balance_after=spendable(user),
         )
     except Exception:  # pragma: no cover - a missing history row must not undo the grant
         logger.exception("Monthly reset applied for %s but its ledger row failed", user.id)

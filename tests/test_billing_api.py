@@ -1087,7 +1087,10 @@ class TestCreditTopUp:
             event_id="evt_topup_crash",
         )
 
-        assert resp.json()["status"] == "repaired"
+        # Asserts the *outcome*, not the label: the claim is now a conditional update on
+        # the ledger row, so a repair is indistinguishable from a first delivery — which
+        # is the point. What matters is that the credits landed.
+        assert resp.status_code == 200
         assert (await User.get(user.id)).purchased_credits == 250.0
 
     async def test_a_settled_grant_is_not_repeated_by_the_repair_path(self, client) -> None:
@@ -1150,3 +1153,28 @@ class TestPacksEndpoint:
 
     async def test_topup_requires_authentication(self, client) -> None:
         assert (await client.post(f"{API_V1_PREFIX}/billing/topup", json={"pack_id": "50"})).status_code == 401
+
+
+@pytest.mark.integration
+class TestTopUpConcurrency:
+    """Raised in review on PR #421: the ledger-row-decides invariant was sequential-only.
+
+    Recording the event and marking it granted are two writes in two collections, so a
+    redelivery landing while the first delivery is still inside ``grant_purchased_credits``
+    read ``credits_granted_at`` as ``None`` and granted again. Stripe's delivery contract
+    is at-least-once, so concurrent duplicates are traffic, not a hypothetical.
+    """
+
+    async def test_concurrent_deliveries_of_one_purchase_credit_once(self, client) -> None:
+        import asyncio
+
+        user = await _subscriber("topup-concurrent@example.com")
+        body = {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "100"}}
+
+        # Five simultaneous deliveries of the same event id.
+        await asyncio.gather(
+            *(_post_event(client, "checkout.session.completed", body, event_id="evt_concurrent") for _ in range(5))
+        )
+
+        assert (await User.get(user.id)).purchased_credits == 100.0, "one purchase, one grant"
+        assert await BillingEvent.find(BillingEvent.user_id == user.id).count() == 1

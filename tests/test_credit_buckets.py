@@ -206,18 +206,31 @@ class TestBalanceSurfaces:
         object.__setattr__(user, "purchased_credits", None)
         assert credits_service.spendable(user) == 30.0
 
-    async def test_every_router_reporting_a_balance_uses_it(self) -> None:
-        # A grep-shaped assertion on purpose: the failure mode is a *new* endpoint
+    async def test_nothing_reports_a_balance_from_the_monthly_bucket_alone(self) -> None:
+        # A grep-shaped assertion on purpose: the failure mode is a *new* call site
         # reading credits_balance directly and quietly under-reporting what a musician
         # paid for. This fails when that happens, which a per-endpoint test would not.
+        #
+        # Covers `services/` as well as `routers/`. Raised in review on PR #421: the
+        # original router-only version missed three service-layer sites building
+        # InsufficientCreditsError from the raw field — the same bug, one layer down,
+        # invisible to a test that only looked at routers.
         import pathlib
 
+        searched = [
+            *pathlib.Path("src/acemusic/api/routers").glob("*.py"),
+            *pathlib.Path("src/acemusic/api/services").glob("*.py"),
+        ]
         offenders = []
-        for path in pathlib.Path("src/acemusic/api/routers").glob("*.py"):
+        for path in searched:
             for lineno, line in enumerate(path.read_text().splitlines(), 1):
                 stripped = line.strip()
                 if stripped.startswith("#"):
                     continue
+                # `credits.py` owns the field, so its own reads and writes of the bucket
+                # are the implementation rather than a report of a balance.
+                if path.name == "credits.py":
+                    continue
                 if "credits_balance" in stripped and "spendable" not in stripped:
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
-        assert not offenders, "routers must report spendable(), not the monthly bucket:\n" + "\n".join(offenders)
+        assert not offenders, "report spendable(), not the monthly bucket alone:\n" + "\n".join(offenders)

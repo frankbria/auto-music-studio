@@ -495,35 +495,37 @@ async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str
         await _record_event(user, event_id, event_type)
         return "unknown_pack"
 
-    if not await _record_event(user, event_id, event_type):
-        # Already recorded — but "recorded" is not "granted". Raised in review on PR
-        # #422: if the process died between the insert and the grant, a redelivery would
-        # report duplicate and the musician would stay charged with no credits. Finish
-        # the job instead of assuming it was done.
-        existing = await BillingEvent.find_one(BillingEvent.stripe_event_id == event_id)
-        if existing is None or existing.credits_granted_at is not None:
-            return "duplicate"
-        logger.warning("billing: repairing an ungranted top-up for %s (event %s)", user.id, event_id)
-        await _grant_and_mark(existing, user, pack["credits"])
-        return "repaired"
+    await _record_event(user, event_id, event_type)
 
-    recorded = await BillingEvent.find_one(BillingEvent.stripe_event_id == event_id)
-    if recorded is not None:
-        await _grant_and_mark(recorded, user, pack["credits"])
+    # Claim the grant atomically. Recording and marking are two writes in two
+    # collections, so "look, then grant" is only safe sequentially — a redelivery landing
+    # while the first delivery is still inside grant_purchased_credits would read
+    # credits_granted_at as None and grant again. Raised in review on PR #421, and a real
+    # race under Stripe's at-least-once delivery rather than a hypothetical one.
+    #
+    # A conditional find_one_and_update is the claim: exactly one caller can move the row
+    # from unclaimed to claimed, whatever the concurrency, and only that one grants.
+    now = datetime.now(timezone.utc)
+    claimed = await BillingEvent.get_pymongo_collection().find_one_and_update(
+        {"stripe_event_id": event_id, "credits_granted_at": None},
+        {"$set": {"credits_granted_at": now}},
+    )
+    if claimed is None:
+        # Someone else already granted this event, or is granting it right now.
+        return "duplicate"
+
+    try:
+        await credits_service.grant_purchased_credits(user.id, pack["credits"])
+    except Exception:
+        # Release the claim so a redelivery can retry, rather than leaving the row
+        # looking settled while the credits never landed.
+        await BillingEvent.get_pymongo_collection().update_one(
+            {"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}}
+        )
+        raise
+
     logger.info("billing: granted %s credits to %s (pack %s)", pack["credits"], user.id, pack_id)
     return "topped_up"
-
-
-async def _grant_and_mark(event: BillingEvent, user: User, credits: float) -> None:
-    """Credit the account, then mark the ledger row as settled.
-
-    Marking *after* the grant is what makes the repair path above correct: a crash
-    between the two leaves the flag unset, so the next delivery retries rather than
-    concluding the work was done.
-    """
-    await credits_service.grant_purchased_credits(user.id, credits)
-    event.credits_granted_at = datetime.now(timezone.utc)
-    await event.save()
 
 
 async def _handle_subscription_change(
