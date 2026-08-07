@@ -16,6 +16,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # and no clone happens at all.
 # ---------------------------------------------------------------------------
 include(FetchContent)
+# The tag fixes which licence governs: JUCE 8 EULA, Starter tier (plugin/LICENSE.md).
+# JUCE 9 ships a different EULA, so moving this tag is a licensing change, not just a
+# version bump.
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
     GIT_TAG        8.0.9
@@ -77,6 +80,9 @@ set(ACEMUSIC_JUCE_DEFS
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=${ACEMUSIC_JUCE_CURL}
     JUCE_VST3_CAN_REPLACE_VST2=0
+    # Permitted: JUCE 8 removed the splash-screen requirement from the Starter tier,
+    # which is the arm this repo uses. Under JUCE 5-7 this needed a paid licence, so
+    # do not carry this line to a JUCE 9 bump without re-reading plugin/LICENSE.md.
     JUCE_DISPLAY_SPLASH_SCREEN=0
     # Checked by the platform panel, so a curl-less Linux build explains itself
     # instead of failing an https:// request with a socket error.
