@@ -609,6 +609,21 @@ class TestReleaseBundlingIsPro:
 
         assert resp.status_code != 403
 
+    async def test_a_pro_account_may_submit(self, client, settings) -> None:
+        # Raised in review on PR #424: `submit` had a refusal test but no positive
+        # control, so a gate that refused *everyone* would have passed. `prepare` and
+        # `remaster` get this for free from the shared _pro_actions table; `submit` takes
+        # a release id rather than a clip id, so it needs its own.
+        user = await _user("pro-submit", tier="pro")
+        release_id = await self._release(user)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/releases/{release_id}/submit/distrokid",
+            headers=_auth(user, settings),
+        )
+
+        assert resp.status_code != 403, "a Pro account must get past the gate"
+
     async def test_reading_a_release_stays_open(self, client, settings) -> None:
         # Only the distribution actions are gated; a free musician can still see the
         # release they made.
