@@ -43,6 +43,10 @@ class BillingError(RuntimeError):
     """Stripe rejected a request, or returned something unusable."""
 
 
+class AlreadySubscribed(RuntimeError):
+    """This account already has a live subscription, so a second checkout would double-bill."""
+
+
 #: Statuses the musician has effectively paid for.
 #:
 #: ``past_due`` is here on purpose and is the whole of AC3: the first charge failed and
@@ -141,7 +145,18 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
     ``checkout.session.completed`` arrives, because a session that is created is not a
     session that is paid — a musician who reaches the Stripe page and closes the tab
     must not come back to Pro.
+
+    Refuses outright if the account already has a live subscription. A subscription-mode
+    Checkout session creates a **new** subscription against the customer; it does not
+    update the existing one, so a stale tab or a direct POST would leave the musician
+    paying twice. Changing an existing plan is the portal's job, and this is the only
+    place in the platform that can cause a double charge.
     """
+    if user.stripe_subscription_id and user.subscription_status in PAID_STATUSES:
+        raise AlreadySubscribed(
+            "This account already has an active subscription. " "Use the billing portal to change or cancel it."
+        )
+
     customer_id = await ensure_customer(user, settings)
     client = _client(settings)
     session = client.checkout.sessions.create(
@@ -151,8 +166,9 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
             "line_items": [{"price": settings.stripe_price_id_pro, "quantity": 1}],
             "success_url": settings.stripe_success_url,
             "cancel_url": settings.stripe_cancel_url,
-            # Existing subscribers get a prorated switch rather than a second
-            # subscription (the issue asks for a prorated first month on upgrade).
+            # Lets an operator trace a Stripe subscription back to a platform user.
+            # Proration on a *plan change* is the portal's job — this path only ever
+            # creates a first subscription, per the guard above.
             "subscription_data": {"metadata": {"user_id": str(user.id)}},
         }
     )
@@ -226,6 +242,14 @@ async def _record_event(
     The unique index on ``stripe_event_id`` is the idempotency guard — Stripe's delivery
     contract is at-least-once, so a duplicate is expected traffic, not an error worth
     logging loudly.
+
+    **Called after the state change, never before.** Recording first would open a window
+    where a crash between the insert and ``user.save()`` loses the entitlement change
+    permanently: the redelivery would hit the unique index, report "duplicate", and skip
+    the mutation that never happened. Applying first is safe because every state change
+    here is idempotent — setting the tier to pro twice is setting it once — while this
+    insert is the thing that must happen at most once. (A transaction would also work,
+    but needs a replica set, which a single-node deployment does not have.)
     """
     invoice = invoice or {}
     try:
@@ -280,14 +304,14 @@ async def _handle_checkout_completed(event_id: str, event_type: str, session: di
         logger.warning("billing: checkout for unknown customer %r", session.get("customer"))
         return "unknown_customer"
 
-    if not await _record_event(user, event_id, event_type):
-        return "duplicate"
-
     user.stripe_subscription_id = session.get("subscription") or user.stripe_subscription_id
     user.subscription_tier = tiers.PRO
     user.subscription_status = "active"
     user.subscription_cancel_at_period_end = False
     await user.save()
+
+    if not await _record_event(user, event_id, event_type):
+        return "duplicate"
     return "subscribed"
 
 
@@ -297,9 +321,6 @@ async def _handle_subscription_change(event_id: str, event_type: str, subscripti
     if user is None:
         logger.warning("billing: subscription event for unknown customer %r", subscription.get("customer"))
         return "unknown_customer"
-
-    if not await _record_event(user, event_id, event_type):
-        return "duplicate"
 
     fields = subscription_fields(subscription)
     if event_type == "customer.subscription.deleted":
@@ -311,6 +332,9 @@ async def _handle_subscription_change(event_id: str, event_type: str, subscripti
     for key, value in fields.items():
         setattr(user, key, value)
     await user.save()
+
+    if not await _record_event(user, event_id, event_type):
+        return "duplicate"
     return fields["subscription_tier"]
 
 
@@ -326,16 +350,18 @@ async def _handle_invoice(event_id: str, event_type: str, invoice: dict[str, Any
         logger.warning("billing: invoice for unknown customer %r", invoice.get("customer"))
         return "unknown_customer"
 
-    if not await _record_event(user, event_id, event_type, invoice=invoice):
-        return "duplicate"
-
     if event_type == "invoice.payment_failed":
         user.subscription_status = "past_due"
         await user.save()
+        if not await _record_event(user, event_id, event_type, invoice=invoice):
+            return "duplicate"
         return "past_due"
 
     # A successful charge clears a grace period that a previous failure set.
     if user.subscription_status == "past_due":
         user.subscription_status = "active"
         await user.save()
+
+    if not await _record_event(user, event_id, event_type, invoice=invoice):
+        return "duplicate"
     return "paid"

@@ -350,9 +350,7 @@ class TestBillingHistory:
             {"customer": CUSTOMER, "subscription": "sub_test_1"},
             event_id="evt_noise_1",
         )
-        await _post_event(
-            client, "customer.subscription.updated", _subscription(), event_id="evt_noise_2"
-        )
+        await _post_event(client, "customer.subscription.updated", _subscription(), event_id="evt_noise_2")
         await _post_event(
             client,
             "invoice.paid",
@@ -471,3 +469,74 @@ class TestCheckoutSurface:
 
     async def test_it_requires_authentication(self, client) -> None:
         assert (await client.post(CHECKOUT_URL)).status_code == 401
+
+    async def test_an_existing_subscriber_cannot_start_a_second_one(self, client, settings) -> None:
+        # Raised in review on PR #420. A subscription-mode Checkout session creates a
+        # NEW subscription against the customer — it does not update the existing one —
+        # so a stale tab or a direct POST would leave the musician paying twice. This is
+        # the only endpoint in the platform whose failure mode is charging someone money.
+        user = await _subscriber("sub-double@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_double_1",
+        )
+
+        resp = await client.post(CHECKOUT_URL, headers=_auth_headers(user, settings))
+        assert resp.status_code == 409
+        assert "billing portal" in resp.json()["detail"]
+
+    async def test_a_lapsed_subscriber_may_subscribe_again(self, client, settings, monkeypatch) -> None:
+        # The guard must not strand someone whose subscription actually ended.
+        user = await _subscriber("sub-lapsed@example.com")
+        await _post_event(
+            client,
+            "customer.subscription.deleted",
+            _subscription("canceled"),
+            event_id="evt_lapsed",
+        )
+
+        async def _fake_session(user_arg, settings_arg):
+            return "https://checkout.stripe.com/c/pay/again"
+
+        monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
+        resp = await client.post(CHECKOUT_URL, headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+
+
+@pytest.mark.integration
+class TestWebhookCrashSafety:
+    """Raised in review on PR #420: recording the event before applying it loses updates.
+
+    If the idempotency row were written first and the process died before the user was
+    saved, Stripe's redelivery would hit the unique index, report "duplicate", and skip
+    an entitlement change that never happened — a musician who paid and stayed free.
+
+    The state change now goes first. That is safe because every one of them is
+    idempotent, while the ledger insert is the thing that must happen at most once.
+    """
+
+    async def test_a_redelivery_repairs_a_half_applied_event(self, client) -> None:
+        user = await _subscriber("sub-crash@example.com")
+
+        # Simulate the crash window directly: the event is on record, but the user was
+        # never updated — exactly the state the old ordering could leave behind.
+        await BillingEvent(
+            user_id=user.id,
+            stripe_event_id="evt_crash",
+            event_type="checkout.session.completed",
+        ).insert()
+        assert (await User.get(user.id)).subscription_tier == "free"
+
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_crash",
+        )
+
+        # The redelivery applies the change before it discovers the duplicate, so the
+        # musician ends up with what they paid for instead of silently staying free.
+        assert (await User.get(user.id)).subscription_tier == "pro"
+        assert await BillingEvent.find(BillingEvent.user_id == user.id).count() == 1

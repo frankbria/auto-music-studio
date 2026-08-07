@@ -98,6 +98,11 @@ async def start_checkout(
         url = await billing_service.create_checkout_session(user, settings)
     except billing_service.BillingNotConfigured as exc:
         raise _unavailable(exc) from exc
+    except billing_service.AlreadySubscribed as exc:
+        # 409, not 400: the request is well-formed, it conflicts with state the caller
+        # may not have known about (a stale tab, a second window). The only endpoint in
+        # the platform where getting this wrong charges someone twice.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except billing_service.BillingError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return CheckoutResponse(url=url)
