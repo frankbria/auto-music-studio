@@ -517,7 +517,7 @@ class TestRemasterEnqueue:
         assert job.input_params == {"clip_id": str(clip.id), "target_lufs": -14.0}
 
     async def test_custom_target_lufs_is_persisted(self, client, settings) -> None:
-        user, _, clip = await _user_with_clip("edit-remaster-lufs@example.com")
+        user, _, clip = await _user_with_clip("edit-remaster-lufs@example.com", tier="pro")
 
         resp = await client.post(
             _edit_url(clip.id, "remaster"),
@@ -540,7 +540,9 @@ class TestEditJobStatus:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_status_reports_positive_estimate_for_edit_jobs(self, client, settings, operation: str) -> None:
         """GET /jobs/{id}/status must not choke on (or zero out) editing jobs."""
-        user, _, clip = await _user_with_clip(f"edit-status-{operation}@example.com", duration=10.0, bpm=120)
+        user, _, clip = await _user_with_clip(
+            f"edit-status-{operation}@example.com", tier=_tier_for(operation), duration=10.0, bpm=120
+        )
 
         bodies = {"crop": {"start": "1s", "end": "5s"}, "speed": {"multiplier": 1.5}, "remaster": {}}
         accepted = await client.post(
@@ -589,7 +591,7 @@ class TestEditLifecycleEndToEnd:
     ) -> None:
         from acemusic.api.tasks.processor import JobProcessor
 
-        user = await _make_user(f"edit-e2e-{operation}@example.com")
+        user = await _make_user(f"edit-e2e-{operation}@example.com", tier=_tier_for(operation))
         workspace = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)
