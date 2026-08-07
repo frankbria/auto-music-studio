@@ -12,7 +12,17 @@ import { BACKEND_URL } from "@/lib/auth-server"
 // front risks a re-encoded body that fails verification, and it would expose an
 // unauthenticated mutation endpoint on the frontend origin for no benefit.
 
-const ALLOWED = new Set(["subscription", "history", "checkout", "portal"])
+// Must track the billing router. A new endpoint that is not listed here 404s at the
+// proxy with no sign of why — which is exactly what happened to `packs`/`topup` when
+// US-26.4 added them and this line was not touched.
+const ALLOWED = new Set([
+  "subscription",
+  "history",
+  "checkout",
+  "portal",
+  "packs",
+  "topup",
+])
 
 async function proxy(
   request: NextRequest,

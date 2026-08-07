@@ -15,11 +15,14 @@ import {
 } from "@/components/ui/card"
 import {
   fetchBillingHistory,
+  fetchCreditPacks,
   fetchSubscription,
   formatAmount,
   openPortal,
   startCheckout,
+  startTopUp,
   type BillingHistoryEntry,
+  type CreditPack,
   type Subscription,
 } from "@/lib/billing"
 import { PRO_BENEFITS } from "@/lib/tiers"
@@ -46,6 +49,7 @@ export function BillingSettings({
 }) {
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [history, setHistory] = useState<BillingHistoryEntry[]>([])
+  const [packs, setPacks] = useState<CreditPack[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -63,11 +67,13 @@ export function BillingSettings({
     Promise.all([
       fetchSubscription(accessToken),
       fetchBillingHistory(accessToken).catch(() => [] as BillingHistoryEntry[]),
+      fetchCreditPacks(accessToken).catch(() => [] as CreditPack[]),
     ])
-      .then(([sub, entries]) => {
+      .then(([sub, entries, creditPacks]) => {
         if (!active) return
         setSubscription(sub)
         setHistory(entries)
+        setPacks(creditPacks)
       })
       .catch(() => {
         if (active) setError("Could not load your billing details.")
@@ -175,6 +181,37 @@ export function BillingSettings({
           )}
         </CardContent>
       </Card>
+
+      {/* US-26.4: top-ups are available on every tier, so this sits outside the
+          free-tier branch. A Pro musician who burns 500 credits mid-project needs it
+          more than a free user does. */}
+      {packs.length > 0 && subscription?.billing_enabled !== false && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Buy credits</CardTitle>
+            <CardDescription>
+              One-off packs. Purchased credits never expire, and they are spent
+              only after your monthly allowance runs out.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-3">
+            {packs.map((pack) => (
+              <Button
+                key={pack.id}
+                variant="outline"
+                disabled={busy}
+                onClick={() => go((token) => startTopUp(token, pack.id))}
+                className="h-auto flex-col items-start gap-0.5 py-3"
+              >
+                <span className="font-medium">{pack.credits} credits</span>
+                <span className="text-xs text-muted-foreground">
+                  {formatAmount(pack.price, pack.currency)}
+                </span>
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
