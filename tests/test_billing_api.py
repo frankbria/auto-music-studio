@@ -277,7 +277,13 @@ class TestFailedPayment:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "amount_due": 1000, "currency": "usd", "status": "open"},
+            {
+                "customer": CUSTOMER,
+                "subscription": "sub_test_1",
+                "amount_due": 1000,
+                "currency": "usd",
+                "status": "open",
+            },
             event_id="evt_failed",
         )
 
@@ -291,7 +297,7 @@ class TestFailedPayment:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "amount_due": 1000, "currency": "usd"},
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1000, "currency": "usd"},
             event_id="evt_failed_2",
         )
         # Retries exhausted: Stripe moves the subscription itself to unpaid.
@@ -303,11 +309,22 @@ class TestFailedPayment:
     async def test_a_recovered_payment_clears_the_grace_flag(self, client) -> None:
         user = await _subscriber("sub-recovered@example.com")
         await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
-        await _post_event(client, "invoice.payment_failed", {"customer": CUSTOMER}, event_id="evt_f3")
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_f3",
+        )
         await _post_event(
             client,
             "invoice.paid",
-            {"customer": CUSTOMER, "amount_paid": 1000, "currency": "usd", "status": "paid"},
+            {
+                "customer": CUSTOMER,
+                "subscription": "sub_test_1",
+                "amount_paid": 1000,
+                "currency": "usd",
+                "status": "paid",
+            },
             event_id="evt_p3",
         )
 
@@ -693,6 +710,57 @@ class TestSupersededSubscriptionInvoices:
 
         refreshed = await User.get(user.id)
         assert refreshed.subscription_status == "past_due", "a stale payment must not clear a real failure"
+
+    async def test_a_paid_one_off_does_not_clear_a_real_payment_problem(self, client) -> None:
+        # Raised in review on PR #420, before US-26.4 could walk into it. A credit top-up
+        # is a one-off invoice with no `subscription`, so it fell past the identity check
+        # into the status logic — and a successful top-up would clear a genuine past_due,
+        # telling a musician their failing card is fine.
+        user = await _subscriber("sub-topup-clears@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_topup_sub",
+        )
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            event_id="evt_topup_fail",
+        )
+        assert (await User.get(user.id)).subscription_status == "past_due"
+
+        # The musician buys a credit pack — unrelated to the subscription.
+        await _post_event(
+            client,
+            "invoice.paid",
+            {"customer": CUSTOMER, "amount_paid": 500, "currency": "usd", "status": "paid"},
+            event_id="evt_topup_paid",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_status == "past_due", "a top-up says nothing about the card on file"
+
+    async def test_a_failed_one_off_does_not_flag_a_healthy_subscription(self, client) -> None:
+        user = await _subscriber("sub-topup-fails@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_topup2_sub",
+        )
+
+        await _post_event(
+            client,
+            "invoice.payment_failed",
+            {"customer": CUSTOMER, "amount_due": 500, "currency": "usd"},
+            event_id="evt_topup2_fail",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_status == "active", "a declined credit pack is not a subscription problem"
+        assert refreshed.subscription_tier == "pro"
 
     async def test_a_one_off_charge_still_applies(self, client, settings) -> None:
         # An invoice with no `subscription` is a one-off (credit top-ups, US-26.4). It is

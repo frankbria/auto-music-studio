@@ -499,6 +499,18 @@ async def _handle_invoice(
         return "stale"
 
     invoice_subscription = invoice.get("subscription")
+
+    # A one-off charge says nothing about the subscription. Credit top-ups (US-26.4, the
+    # next issue) are exactly this, and without the guard a paid top-up would clear a
+    # real ``past_due`` — telling a musician their failing card is fine — while a failed
+    # top-up would open a false one on a perfectly healthy subscription. Recorded either
+    # way: it is still a charge, and billing history is about charges.
+    # Raised in review on PR #420, before US-26.4 could walk into it.
+    if not invoice_subscription:
+        if not await _record_event(user, event_id, event_type, invoice=invoice):
+            return "duplicate"
+        return "one_off"
+
     if invoice_subscription and user.stripe_subscription_id and invoice_subscription != user.stripe_subscription_id:
         logger.info(
             "billing: invoice for superseded subscription %s (current %s) — recorded, not applied",
