@@ -40,12 +40,9 @@ async def _job(user: User, job_type: str = "generate", status: JobStatus = JobSt
 async def _balance(user: User) -> float:
     """What the musician can spend — both buckets (US-26.4).
 
-    Refunds now land in the *purchased* bucket, because the monthly reset tops the
-    balance up to the allocation and would therefore absorb any refund parked there: put
-    5 back into a balance of 10 against an allocation of 50 and the next reset grants 35
-    instead of 40, leaving the musician exactly where they started. Asserting on
-    ``credits_balance`` alone would now miss the refund entirely, so these tests ask the
-    question a musician would: how much can I spend?
+    Asks the question a musician would rather than reading one field, so these stay
+    correct whichever bucket a refund lands in. Refunds currently go to the **monthly**
+    bucket; making them land where the charge actually came from is #422.
     """
     fresh = await User.get(user.id)
     return credits_service.spendable(fresh)
