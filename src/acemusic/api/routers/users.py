@@ -180,7 +180,7 @@ async def get_my_credits(current: CurrentUser = Depends(get_current_user)) -> Cr
     user = await credits_service.apply_monthly_reset(user)
     transactions = await credits_service.get_recent_transactions(user.id)
     return CreditsResponse(
-        balance=user.credits_balance,
+        balance=credits_service.spendable(user),
         tier=user.subscription_tier,
         history=[CreditTransactionEntry.from_transaction(txn) for txn in transactions],
     )

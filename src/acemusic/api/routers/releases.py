@@ -20,7 +20,13 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from ..auth.dependencies import CurrentUser, get_current_user, get_settings, require_existing_user
+from ..auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_settings,
+    require_existing_user,
+    require_tier_capability,
+)
 from ..models import DistributionStatus, Release, ReleaseStatus, VisibilityState
 from ..models.distribution import GUIDED_CHANNELS, SOUNDCLOUD_CHANNEL
 from ..services import (
@@ -32,6 +38,7 @@ from ..services import (
 )
 from ..services.distribution import ChecklistItem, DistributionTarget
 from ..services.identifiers import validate_isrc_format, validate_upc_check_digit
+from ..services.tiers import Capability
 from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -286,7 +293,14 @@ async def prepare_release(
 
     Always returns the checklist; ``bundle_url`` is null when any item fails. An
     unknown target is rejected by FastAPI's enum path validation (422).
+
+    Pro-only (#403). "You publish it yourself, we assemble the bundle" is most of the
+    value of distribution, so leaving it free would have left the free tier with almost
+    the whole feature while the gated SoundCloud upload guarded only the convenience.
+    The free tier is specified as having no distribution; this is distribution.
     """
+    await require_tier_capability(current.user_id, Capability.DISTRIBUTION)
+
     release = await release_service.get_owned_release(release_id, current.user_id)
     checklist, bundle_url = await distribution_service.prepare_release(release, target)
     return PrepareResponse(
@@ -305,7 +319,14 @@ async def submit_release(
     target: DistributionTarget,
     current: CurrentUser = Depends(require_existing_user),
 ) -> ReleaseResponse:
-    """Confirm a manual submission to ``target`` — moves the release to ``submitted``."""
+    """Confirm a manual submission to ``target`` — moves the release to ``submitted``.
+
+    Gated with prepare (#403): a free account that could not build a bundle has nothing
+    to submit, and an ungated submit would let one mark a release distributed without
+    ever having been able to distribute it.
+    """
+    await require_tier_capability(current.user_id, Capability.DISTRIBUTION)
+
     release = await release_service.confirm_submission(release_id, current.user_id, target.value)
     return await _response_for(release)
 

@@ -48,7 +48,14 @@ class Capability(str, Enum):
 _DESCRIPTIONS = {
     Capability.STEMS: ("Stem separation", "split a track into vocals, drums, bass and other"),
     Capability.MIDI: ("MIDI extraction", "export melody, chords, drums and bass as MIDI"),
+    # #403: covers the hosted services (/mastering/jobs, Dolby/LANDR/Bakuage) AND the
+    # local loudness remaster on /clips/{id}/remaster. The description below is exactly
+    # what remaster does, just locally — leaving it open made the other gate a formality.
     Capability.MASTERING: ("Mastering", "master your tracks to a professional loudness target"),
+    # #403: covers both halves — "we publish it for you" (SoundCloud upload) and
+    # "you publish it yourself, we assemble the bundle" (release prepare/submit).
+    # Bundling is most of the value of distribution, so gating only the upload would
+    # have left the free tier with nearly the whole feature.
     Capability.DISTRIBUTION: ("Distribution", "publish your releases to streaming platforms"),
     Capability.VOICE_MODELS: ("Custom voice models", "train a voice and sing your songs in it"),
     Capability.STUDIO_EDITING: ("Studio editing", "arrange and mix in the multi-track Studio"),
