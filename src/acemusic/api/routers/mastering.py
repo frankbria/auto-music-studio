@@ -114,7 +114,7 @@ async def create_mastering_job(
         # Re-read the balance for the error payload: the copy on ``user`` was
         # loaded before the deduction attempt and may be stale under concurrency.
         fresh = await user_service.get_user_by_id(user.id)
-        balance = fresh.credits_balance if fresh is not None else 0.0
+        balance = credits_service.spendable(fresh) if fresh is not None else 0.0
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
