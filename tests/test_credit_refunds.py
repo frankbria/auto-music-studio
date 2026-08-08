@@ -38,8 +38,14 @@ async def _job(user: User, job_type: str = "generate", status: JobStatus = JobSt
 
 
 async def _balance(user: User) -> float:
+    """What the musician can spend — both buckets (US-26.4).
+
+    Asks the question a musician would rather than reading one field, so these stay
+    correct whichever bucket a refund lands in. Refunds currently go to the **monthly**
+    bucket; making them land where the charge actually came from is #422.
+    """
     fresh = await User.get(user.id)
-    return fresh.credits_balance
+    return credits_service.spendable(fresh)
 
 
 async def _rows(job: Job) -> list[CreditTransaction]:

@@ -38,9 +38,25 @@ This document defines user stories for the AI Music Platform organized into **28
 ### Development Methodology
 
 - **TDD:** Tests are written before implementation. Acceptance criteria map directly to test assertions.
-- **GitHub Issues:** Each user story becomes one or more GH issues when its stage is active. Issues are not pre-created for future stages.
+- **GitHub Issues:** Each user story becomes one or more GH issues when its stage is active. Issues are not pre-created for future stages. As of 2026-08-07 every story through Stage 28 — the last — has an issue, so the backlog is fully enumerated; new issues from here are follow-ups and post-launch work, not story creation.
 - **Feature branches:** Each story/issue is developed on a feature branch and merged via PR to `main`.
 - **Agile flexibility:** Stages define *intent*, not contracts. Stories may be added, modified, split, or deferred as learning happens during development.
+
+#### Issue titles: `PX.Y` for order, `US-X.Y` for identity
+
+They answer different questions, so both live in the title and neither replaces the other:
+
+```
+P1.1 US-26.3: Payment Integration
+P2.3 Settle the VST3 SDK (Steinberg) licence before any public plugin build
+```
+
+- **`PX.Y` — required on every issue.** *When* to do it. `P1` is the current focus; higher tiers are later. Sorted component-wise as integers, so `P1.2` precedes `P1.10`. Re-assigned freely as priorities move — the number carries no history.
+- **`US-X.Y` — only where a spec story exists.** *Which* story, per this document. Never changes, never renumbered. Follow-ups, tech debt, and post-launch work have no `US-` and don't get one invented; they say `(US-26.2 follow-up)` at the end of the title instead.
+
+A stage's stories usually share a tier (Stage 27 → `P3.x`), but that is a consequence of the roadmap order, not a rule — priority is free to cut across stages when something earns it.
+
+Since the spec ends at Stage 28, everything created from here is `PX.Y`-only.
 
 ---
 
