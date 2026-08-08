@@ -24,7 +24,10 @@ function subscription(overrides: Record<string, unknown> = {}) {
 
 /** Route each billing call to a canned response by path. */
 function stubApi(routes: Record<string, unknown>, status = 200) {
-  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+  // `init` is declared so callers can assert on the request body — the pack-id test
+  // needs it, and without the parameter the mock's tuple type has no index 1.
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    void init
     const url = String(input)
     const key = Object.keys(routes).find((k) => url.includes(k))
     return Promise.resolve(
@@ -195,5 +198,76 @@ describe("BillingSettings", () => {
     expect(
       screen.getByRole("button", { name: /upgrade to pro/i })
     ).toBeEnabled()
+  })
+})
+
+describe("BillingSettings — credit packs (US-26.4)", () => {
+  const PACKS = {
+    packs: [
+      { id: "50", credits: 50, price: 5, currency: "usd" },
+      { id: "100", credits: 100, price: 9, currency: "usd" },
+      { id: "250", credits: 250, price: 20, currency: "usd" },
+    ],
+  }
+
+  it("offers the packs with their prices (AC1 entry point)", async () => {
+    stubApi({
+      subscription: subscription(),
+      history: { entries: [] },
+      packs: PACKS,
+    })
+    render(<BillingSettings accessToken="tok" />)
+
+    expect(await screen.findByText("Buy credits")).toBeInTheDocument()
+    expect(screen.getByText("50 credits")).toBeInTheDocument()
+    expect(screen.getByText("$5.00")).toBeInTheDocument()
+    expect(screen.getByText("$20.00")).toBeInTheDocument()
+  })
+
+  it("sends the musician to Stripe for the pack they picked", async () => {
+    const fetchMock = stubApi({
+      subscription: subscription(),
+      history: { entries: [] },
+      packs: PACKS,
+      topup: { url: "https://checkout.stripe.com/c/pay/topup" },
+    })
+    const location = { href: "" }
+    vi.stubGlobal("location", location)
+
+    render(<BillingSettings accessToken="tok" />)
+    await userEvent.click(await screen.findByText("100 credits"))
+
+    await waitFor(() =>
+      expect(location.href).toBe("https://checkout.stripe.com/c/pay/topup")
+    )
+    // The pack id must reach the API — buying 100 and being charged for 50 is the
+    // failure this asserts against.
+    const topupCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).includes("topup")
+    )
+    expect(JSON.parse(String(topupCall?.[1]?.body))).toEqual({ pack_id: "100" })
+  })
+
+  it("offers packs to Pro users too", async () => {
+    // A Pro musician who burns 500 credits mid-project needs a top-up more than a free
+    // user does, so this sits outside the free-tier branch.
+    stubApi({
+      subscription: subscription({ tier: "pro", status: "active" }),
+      history: { entries: [] },
+      packs: PACKS,
+    })
+    render(<BillingSettings accessToken="tok" />)
+    expect(await screen.findByText("Buy credits")).toBeInTheDocument()
+  })
+
+  it("hides the pack picker where billing is not configured", async () => {
+    stubApi({
+      subscription: subscription({ billing_enabled: false }),
+      history: { entries: [] },
+      packs: PACKS,
+    })
+    render(<BillingSettings accessToken="tok" />)
+    await screen.findByText(/not configured on this deployment/i)
+    expect(screen.queryByText("Buy credits")).not.toBeInTheDocument()
   })
 })

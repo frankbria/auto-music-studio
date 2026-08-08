@@ -106,8 +106,20 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+async def _make_user(email: str, tier: str = "pro"):
+    """A musician who can actually distribute.
+
+    Pro by default since #403: release prepare/submit gate on the ``distribution``
+    capability, so a free account 403s before reaching any of the behaviour this file is
+    about. The gate itself is covered in ``tests/test_tier_enforcement_api.py``
+    (``TestReleaseBundlingIsPro``) — these tests are about what happens once you are
+    allowed through, and defaulting them to free would only re-test the gate 24 times.
+    """
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    if user.subscription_tier != tier:
+        user.subscription_tier = tier
+        await user.save()
+    return user
 
 
 _SEQ = itertools.count(1)

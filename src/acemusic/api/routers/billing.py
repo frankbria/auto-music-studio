@@ -39,6 +39,25 @@ class CheckoutResponse(BaseModel):
     url: str
 
 
+class CreditPack(BaseModel):
+    """One purchasable top-up pack."""
+
+    id: str
+    credits: float
+    #: Major units, divided once here at the edge like every other amount.
+    price: float
+    currency: str = "usd"
+
+
+class CreditPacksResponse(BaseModel):
+    packs: list[CreditPack]
+    billing_enabled: bool
+
+
+class TopUpRequest(BaseModel):
+    pack_id: str
+
+
 class SubscriptionResponse(BaseModel):
     """The subscription as this platform currently understands it."""
 
@@ -121,6 +140,44 @@ async def open_portal(
         raise _unavailable(exc) from exc
     except billing_service.BillingError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return CheckoutResponse(url=url)
+
+
+@router.get("/packs", response_model=CreditPacksResponse)
+async def get_packs(
+    _: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(get_settings),
+) -> CreditPacksResponse:
+    """The credit packs on offer.
+
+    Served rather than hardcoded in the client so pricing moves without a frontend
+    release, and so the amount shown is the amount charged — both come from one table.
+    """
+    return CreditPacksResponse(
+        packs=[
+            CreditPack(id=pack_id, credits=pack["credits"], price=pack["amount_cents"] / 100)
+            for pack_id, pack in billing_service.CREDIT_PACKS.items()
+        ],
+        billing_enabled=settings.stripe_enabled,
+    )
+
+
+@router.post("/topup", response_model=CheckoutResponse)
+async def start_topup(
+    body: TopUpRequest,
+    current: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(get_settings),
+) -> CheckoutResponse:
+    """Buy a credit pack — a one-off charge, available on every tier."""
+    user = await _current_user_doc(current)
+    try:
+        url = await billing_service.create_topup_session(user, body.pack_id, settings)
+    except billing_service.BillingNotConfigured as exc:
+        raise _unavailable(exc) from exc
+    except billing_service.BillingError as exc:
+        # An unknown pack id is the caller's mistake, not Stripe's.
+        code = status.HTTP_400_BAD_REQUEST if "Unknown credit pack" in str(exc) else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     return CheckoutResponse(url=url)
 
 

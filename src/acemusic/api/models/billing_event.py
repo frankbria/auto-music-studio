@@ -44,6 +44,13 @@ class BillingEvent(Document):
     #: Stripe-hosted invoice PDF/page, so history can link out rather than
     #: re-rendering an invoice we do not own.
     invoice_url: str | None = None
+    #: US-26.4: set once the credits for a top-up have actually landed. A grant is not
+    #: idempotent the way a tier flip is, so the ledger row has to be written first — but
+    #: that alone would lose the credits entirely if the process died between the insert
+    #: and the grant, because the redelivery would see the row and report "duplicate".
+    #: This flag lets a redelivery tell "already done" from "recorded but never
+    #: completed" and finish the job. Null for events that grant nothing.
+    credits_granted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:

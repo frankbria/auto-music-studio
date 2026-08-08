@@ -228,7 +228,7 @@ async def create_training_job(
     if deducted is None:
         user = await User.get(uid)
         raise InsufficientCreditsError(
-            balance=user.credits_balance if user is not None else 0.0,
+            balance=credits_service.spendable(user) if user is not None else 0.0,
             required=cost,
         )
 

@@ -1012,3 +1012,169 @@ class TestWebhookCrashSafety:
         # musician ends up with what they paid for instead of silently staying free.
         assert (await User.get(user.id)).subscription_tier == "pro"
         assert await BillingEvent.find(BillingEvent.user_id == user.id).count() == 1
+
+
+@pytest.mark.integration
+class TestCreditTopUp:
+    """US-26.4 AC1: buying a pack credits the account, exactly once.
+
+    A grant is *not* naturally idempotent the way a tier flip is — crediting twice is a
+    real gift — so these lean hard on the redelivery cases.
+    """
+
+    async def test_a_paid_pack_grants_its_credits(self, client) -> None:
+        user = await _subscriber("topup-grant@example.com")
+        before = (await User.get(user.id)).purchased_credits
+
+        resp = await _post_event(
+            client,
+            "checkout.session.completed",
+            {
+                "customer": CUSTOMER,
+                "metadata": {billing_service.PACK_METADATA_KEY: "100", "user_id": str(user.id)},
+            },
+            event_id="evt_topup_100",
+        )
+
+        assert resp.json()["status"] == "topped_up"
+        assert (await User.get(user.id)).purchased_credits == before + 100.0
+
+    async def test_a_top_up_does_not_grant_pro(self, client) -> None:
+        # The most expensive possible way to misread a webhook: a credit pack rides the
+        # same event type as a subscription checkout, and only the metadata tells them
+        # apart. Falling through would hand out Pro for the price of 50 credits.
+        user = await _subscriber("topup-nopro@example.com")
+
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "50"}},
+            event_id="evt_topup_nopro",
+        )
+
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_tier == "free"
+        assert refreshed.purchased_credits == 50.0
+
+    async def test_a_redelivered_top_up_credits_once(self, client) -> None:
+        user = await _subscriber("topup-dupe@example.com")
+        body = {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "50"}}
+
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_topup_same")
+        second = await _post_event(client, "checkout.session.completed", body, event_id="evt_topup_same")
+
+        assert second.json()["status"] == "duplicate"
+        assert (await User.get(user.id)).purchased_credits == 50.0, "a redelivery is not a second sale"
+
+    async def test_a_redelivery_completes_a_grant_that_never_landed(self, client) -> None:
+        # Raised in review on PR #422. Recording before granting is what stops a
+        # redelivery double-crediting — but on its own it means a crash between the two
+        # leaves the musician charged with no credits, permanently, because the next
+        # delivery sees the row and reports "duplicate". The row now carries a settled
+        # marker so a redelivery can tell "done" from "started and abandoned".
+        user = await _subscriber("topup-repair@example.com")
+        await BillingEvent(
+            user_id=user.id,
+            stripe_event_id="evt_topup_crash",
+            event_type="checkout.session.completed",
+        ).insert()
+        assert (await User.get(user.id)).purchased_credits == 0.0
+
+        resp = await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "250"}},
+            event_id="evt_topup_crash",
+        )
+
+        # Asserts the *outcome*, not the label: the claim is now a conditional update on
+        # the ledger row, so a repair is indistinguishable from a first delivery — which
+        # is the point. What matters is that the credits landed.
+        assert resp.status_code == 200
+        assert (await User.get(user.id)).purchased_credits == 250.0
+
+    async def test_a_settled_grant_is_not_repeated_by_the_repair_path(self, client) -> None:
+        # The repair must not become a second way to double-credit.
+        user = await _subscriber("topup-settled@example.com")
+        body = {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "50"}}
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_settled")
+
+        assert (await User.get(user.id)).purchased_credits == 50.0
+
+    async def test_an_unknown_pack_grants_nothing(self, client) -> None:
+        # A pack id that no longer exists (renamed, retired) must not guess an amount.
+        user = await _subscriber("topup-unknown@example.com")
+
+        resp = await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "9999"}},
+            event_id="evt_topup_unknown",
+        )
+
+        assert resp.json()["status"] == "unknown_pack"
+        assert (await User.get(user.id)).purchased_credits == 0.0
+
+    async def test_a_subscription_checkout_still_grants_pro(self, client) -> None:
+        # The negative control for the metadata branch: no pack means the old path.
+        user = await _subscriber("topup-control@example.com")
+        await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            event_id="evt_topup_control",
+        )
+        refreshed = await User.get(user.id)
+        assert refreshed.subscription_tier == "pro"
+        assert refreshed.purchased_credits == 0.0
+
+
+@pytest.mark.integration
+class TestPacksEndpoint:
+    async def test_it_lists_the_packs_with_prices(self, client, settings) -> None:
+        user = await _subscriber("topup-packs@example.com")
+        resp = await client.get(f"{API_V1_PREFIX}/billing/packs", headers=_auth_headers(user, settings))
+
+        packs = {p["id"]: p for p in resp.json()["packs"]}
+        assert packs["50"]["credits"] == 50.0 and packs["50"]["price"] == 5.00
+        assert packs["100"]["price"] == 9.00
+        assert packs["250"]["price"] == 20.00
+
+    async def test_an_unknown_pack_is_a_400(self, client, settings) -> None:
+        user = await _subscriber("topup-badpack@example.com")
+        resp = await client.post(
+            f"{API_V1_PREFIX}/billing/topup",
+            json={"pack_id": "not-a-pack"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 400
+
+    async def test_topup_requires_authentication(self, client) -> None:
+        assert (await client.post(f"{API_V1_PREFIX}/billing/topup", json={"pack_id": "50"})).status_code == 401
+
+
+@pytest.mark.integration
+class TestTopUpConcurrency:
+    """Raised in review on PR #421: the ledger-row-decides invariant was sequential-only.
+
+    Recording the event and marking it granted are two writes in two collections, so a
+    redelivery landing while the first delivery is still inside ``grant_purchased_credits``
+    read ``credits_granted_at`` as ``None`` and granted again. Stripe's delivery contract
+    is at-least-once, so concurrent duplicates are traffic, not a hypothetical.
+    """
+
+    async def test_concurrent_deliveries_of_one_purchase_credit_once(self, client) -> None:
+        import asyncio
+
+        user = await _subscriber("topup-concurrent@example.com")
+        body = {"customer": CUSTOMER, "metadata": {billing_service.PACK_METADATA_KEY: "100"}}
+
+        # Five simultaneous deliveries of the same event id.
+        await asyncio.gather(
+            *(_post_event(client, "checkout.session.completed", body, event_id="evt_concurrent") for _ in range(5))
+        )
+
+        assert (await User.get(user.id)).purchased_credits == 100.0, "one purchase, one grant"
+        assert await BillingEvent.find(BillingEvent.user_id == user.id).count() == 1
