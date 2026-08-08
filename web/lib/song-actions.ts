@@ -179,6 +179,12 @@ export const SONG_ACTION_GROUPS: SongActionGroup[] = [
         label: "Remaster",
         icon: MagicWand01Icon,
         workflow: "inline",
+        // #403: Pro. This is loudness mastering by another route, so the API gates it on
+        // the same `mastering` capability as Send to Mastering. Marked here too — a menu
+        // item that looks free and then 403s is the mirror of the "a menu is not a gate"
+        // problem US-26.2 exists to fix.
+        proOnly: true,
+        capability: "mastering",
       },
       {
         id: "replace-section",

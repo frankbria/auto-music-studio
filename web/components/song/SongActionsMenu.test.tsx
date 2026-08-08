@@ -108,11 +108,16 @@ describe("SongActionsMenu", () => {
 
     const editor = screen.getByRole("menuitem", { name: /open in editor/i })
     expect(editor).toHaveAttribute("data-locked", "true")
-    // Exactly the three top-level gated actions carry a badge: Open in Editor, Send to
-    // Mastering, Export to DAW. Create Music Video is deliberately not among them
-    // (US-26.2 — the free tier gets 720p, so the form stays reachable), and the gated
-    // downloads live in a submenu that is not open here.
-    expect(screen.getAllByText("Pro")).toHaveLength(3)
+    // Exactly the four top-level gated actions carry a badge: Open in Editor, Remaster,
+    // Send to Mastering, Export to DAW. Remaster joined them in #403 — it is loudness
+    // mastering by another route, gated on the same capability. Create Music Video is
+    // deliberately not among them (US-26.2 — the free tier gets 720p, so the form stays
+    // reachable), and the gated downloads live in a submenu that is not open here.
+    expect(screen.getAllByText("Pro")).toHaveLength(4)
+    expect(screen.getByRole("menuitem", { name: /remaster/i })).toHaveAttribute(
+      "data-locked",
+      "true"
+    )
   })
 
   it("still emits a locked action so the parent can prompt (US-26.2 AC2)", async () => {
@@ -135,7 +140,7 @@ describe("SongActionsMenu", () => {
 
     const editor = screen.getByRole("menuitem", { name: /open in editor/i })
     expect(editor).not.toHaveAttribute("data-locked")
-    expect(screen.getAllByText("Pro")).toHaveLength(3)
+    expect(screen.getAllByText("Pro")).toHaveLength(4)
   })
 
   it("supports keyboard navigation: arrows move focus, Escape closes", async () => {
