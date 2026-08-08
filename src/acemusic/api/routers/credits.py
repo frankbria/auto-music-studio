@@ -46,7 +46,7 @@ async def get_balance(current: CurrentUser = Depends(get_current_user)) -> Balan
     user = await credits_service.apply_monthly_reset(user)
 
     return BalanceResponse(
-        balance=user.credits_balance,
+        balance=credits_service.spendable(user),
         tier=user.subscription_tier,
         upgrade_url=credits_service.UPGRADE_URL,
     )

@@ -161,7 +161,7 @@ async def create_mastering_batch(
         if deducted is None:
             fresh = await User.get(uid)
             raise InsufficientCreditsError(
-                balance=fresh.credits_balance if fresh is not None else 0.0,
+                balance=credits_service.spendable(fresh) if fresh is not None else 0.0,
                 required=total_cost,
             )
         # Balance before the deduction; each successful charge decrements it.

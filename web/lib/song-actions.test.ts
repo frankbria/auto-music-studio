@@ -68,6 +68,8 @@ describe("SONG_ACTION_GROUPS", () => {
     const pro = allActions.filter((a) => a.proOnly).map((a) => a.id)
     // create-video is deliberately absent (US-26.2): the free tier gets 720p, so the
     // form must stay reachable and the Pro boundary is the resolution inside it.
+    // `remaster` joined the set in #403 — it is loudness mastering by another route, and
+    // the API gates it on the same `mastering` capability as send-mastering.
     expect(pro.sort()).toEqual(
       [
         "download-flac",
@@ -75,6 +77,7 @@ describe("SONG_ACTION_GROUPS", () => {
         "download-wav",
         "export-daw",
         "open-editor",
+        "remaster",
         "send-mastering",
       ].sort()
     )

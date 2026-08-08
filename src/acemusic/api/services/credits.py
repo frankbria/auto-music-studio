@@ -127,6 +127,87 @@ def get_mastering_cost(service: str) -> float:
         raise ValueError(f"Unknown mastering service: {service!r}") from None
 
 
+#: Both buckets, defaulted for documents written before either field existed.
+_MONTHLY = {"$ifNull": ["$credits_balance", DEFAULT_CREDITS_BALANCE]}
+_PURCHASED = {"$ifNull": ["$purchased_credits", 0.0]}
+
+
+def spendable(user: User) -> float:
+    """What this musician can actually spend — both buckets (US-26.4).
+
+    Every surface that shows "your balance" must use this. The split between monthly and
+    purchased credits is an implementation detail of *when they expire*; a musician
+    deciding whether they can afford a song cares only about the total, and showing them
+    the monthly bucket alone would under-report what they paid for.
+    """
+    return (user.credits_balance or 0.0) + (getattr(user, "purchased_credits", 0.0) or 0.0)
+
+
+def _total(doc: dict) -> float:
+    """Spendable credits across both buckets.
+
+    Callers get one number. A musician does not care which bucket paid for a song, and
+    every existing caller of :func:`deduct_credits` predates the split.
+    """
+    return float(doc.get("credits_balance", 0.0) or 0.0) + float(doc.get("purchased_credits", 0.0) or 0.0)
+
+
+def _affordable(cost: float) -> dict:
+    """Filter matching only users whose two buckets together cover ``cost``.
+
+    ``$expr`` rather than a plain range query because the comparison is between a
+    constant and a *sum of two fields*. ``$ifNull`` keeps documents predating either
+    field matchable — a range filter never matches an absent field, which is the bug the
+    backfill below exists to work around.
+    """
+    return {"_id": None, "$expr": {"$gte": [{"$add": [_MONTHLY, _PURCHASED]}, cost]}}
+
+
+def _spend_pipeline(cost: float) -> list[dict]:
+    """Take from the monthly bucket first, then the purchased one (US-26.4 AC2).
+
+    An aggregation-pipeline update so both decrements happen in **one** atomic operation.
+    Reading the balances and writing back would let two concurrent generations each see
+    enough credit and overdraw — the race the single ``find_one_and_update`` has always
+    prevented, and which the split must not reintroduce.
+
+    Every expression reads the *input* document, so ``take`` is consistent across both
+    assignments even though it is spelled out twice.
+    """
+    take = {"$min": [_MONTHLY, cost]}
+    return [
+        {
+            "$set": {
+                "credits_balance": {"$subtract": [_MONTHLY, take]},
+                "purchased_credits": {"$subtract": [_PURCHASED, {"$subtract": [cost, take]}]},
+            }
+        }
+    ]
+
+
+async def grant_purchased_credits(user_id: PydanticObjectId, amount: float) -> float | None:
+    """Add ``amount`` to the purchased bucket (US-26.4 AC1). Returns the new total.
+
+    Deliberately not the monthly bucket: the monthly reset tops that one *up to* the
+    tier allocation, so credits parked there would be silently swallowed by the next
+    reset — which is the whole reason the buckets are separate.
+    """
+    if amount <= 0:
+        raise ValueError("amount must be positive")
+    collection = User.get_pymongo_collection()
+    doc = await collection.find_one_and_update(
+        {"_id": user_id},
+        # Pipeline rather than $inc so a document predating the field starts from 0
+        # instead of failing; $inc on a missing field would work, but $ifNull keeps this
+        # symmetrical with the spend path and immune to a null (rather than absent) value.
+        [{"$set": {"purchased_credits": {"$add": [_PURCHASED, amount]}}}],
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is None:
+        return None
+    return _total(doc)
+
+
 async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None:
     """Atomically deduct ``cost`` from the user's balance.
 
@@ -136,15 +217,12 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
     Returns the balance *after* deduction, or ``None`` if the balance was
     insufficient (or the user does not exist).
     """
-    # A non-positive cost would invert the operation: the $gte filter always
-    # matches and the $inc would *grant* credits. Reject at the boundary.
+    # A non-positive cost would invert the operation: the filter always matches and the
+    # decrement would *grant* credits. Reject at the boundary.
     if cost <= 0:
         raise ValueError("cost must be positive")
     collection = User.get_pymongo_collection()
-    update = (
-        {"_id": user_id, "credits_balance": {"$gte": cost}},
-        {"$inc": {"credits_balance": -cost}},
-    )
+    update = ({**_affordable(cost), "_id": user_id}, _spend_pipeline(cost))
     doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
     if doc is None:
         # Documents predating US-9.6 have no credits_balance field, and a $gte
@@ -164,7 +242,7 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
         doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
     if doc is None:
         return None
-    return doc["credits_balance"]
+    return _total(doc)
 
 
 async def refund_credits(
@@ -189,6 +267,16 @@ async def refund_credits(
     if cost <= 0:
         raise ValueError("cost must be positive")
 
+    # US-26.4 note: this restores to the **monthly** bucket. Right for the common case,
+    # wrong for one — a charge that dipped into purchased credits comes back as monthly
+    # allowance, turning non-expiring credit into expiring. Raised in review on PR #421.
+    #
+    # Refunding everything to `purchased_credits` instead was tried and reverted: it is
+    # safe for the musician, but it changes what `credits_balance` means in fourteen test
+    # files and every caller, to fix a case narrower than the change. The honest fix is
+    # to record the bucket split on the deduction so a refund is the exact inverse of the
+    # charge it reverses — tracked as its own issue rather than approximated here.
+    #
     # find_one_and_update rather than update_one + re-read: the balance recorded on
     # the ledger row has to be the one this movement produced, not whatever a
     # concurrent charge left behind a moment later.
@@ -208,7 +296,10 @@ async def refund_credits(
         amount=cost,
         action_type=action_type,
         job_id=job_id,
-        balance_after=doc["credits_balance"],
+        # Both buckets: a musician's "balance after" is what they can spend, and with
+        # purchased credits in play `credits_balance` alone would understate it. History
+        # rows are meant to be self-describing without replaying the ledger.
+        balance_after=_total(doc),
     )
 
 
@@ -252,7 +343,7 @@ async def charge_and_create(
     if balance_after is None:
         user = await User.get(user_id)
         raise InsufficientCreditsError(
-            balance=user.credits_balance if user is not None else 0.0,
+            balance=spendable(user) if user is not None else 0.0,
             required=cost,
         )
 
@@ -290,6 +381,11 @@ async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float) -> N
     Everywhere the charge *was* ledgered, use :func:`refund_credits` instead, so the
     money that moved is money the user can see.
     """
+    # US-26.4 note: bucket-unaware, like refund_credits. A reversal of a charge that came
+    # out of `purchased_credits` lands in `credits_balance`, relabelling non-expiring
+    # credit as monthly allowance — which the next reset then absorbs. Narrower than the
+    # refund path (this only fires when job *creation* fails, before any ledger row
+    # exists), and fixed by the same work: see #422.
     if cost <= 0:
         raise ValueError("cost must be positive")
 
@@ -478,7 +574,9 @@ async def apply_monthly_reset(user: User) -> User:
             amount=granted,
             action_type="monthly_reset",
             job_id="",
-            balance_after=user.credits_balance,
+            # Both buckets, like every other row type. A monthly_reset row reporting
+            # only the monthly bucket would under-report against its neighbours.
+            balance_after=spendable(user),
         )
     except Exception:  # pragma: no cover - a missing history row must not undo the grant
         logger.exception("Monthly reset applied for %s but its ledger row failed", user.id)

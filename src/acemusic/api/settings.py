@@ -207,6 +207,33 @@ class ApiSettings(BaseSettings):
     # misconfiguration fails at startup rather than silently breaking that ceiling.
     compute_status_timeout: float = Field(default=3.0, gt=0, lt=5.0)
 
+    # Stripe subscription billing (US-26.3). Optional, like every other provider
+    # here: a deployment without them runs with billing disabled — ``stripe_enabled``
+    # is False, so the billing endpoints 503 with "not configured" rather than the app
+    # failing to boot. Everything *else* keeps working, which matters because the tier
+    # a user already has is read from their own document, not from Stripe.
+    #
+    # ``stripe_webhook_secret`` is deliberately part of the enabled check: without it
+    # the webhook cannot verify signatures, and an endpoint that mutates subscription
+    # tiers must never accept an unverified caller. Better refused than open.
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    #: The Stripe Price the Pro subscription checks out against (``price_...``).
+    stripe_price_id_pro: str | None = None
+    #: Where Stripe returns the musician after checkout. Frontend routes, not API ones.
+    stripe_success_url: str = "http://localhost:3000/settings/billing?checkout=success"
+    stripe_cancel_url: str = "http://localhost:3000/settings/billing?checkout=cancelled"
+
+    @property
+    def stripe_enabled(self) -> bool:
+        """True only when Stripe is configured well enough to be used *safely*.
+
+        Requires the price id as well as the credentials: a checkout session with no
+        price is a 400 from Stripe at click time, which is a worse failure than an
+        honest "billing is not configured" at the door.
+        """
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret and self.stripe_price_id_pro)
+
     @property
     def runpod_enabled(self) -> bool:
         """True only when both RunPod credentials are configured (remote routing is usable)."""

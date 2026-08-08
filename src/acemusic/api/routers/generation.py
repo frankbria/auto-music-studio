@@ -239,7 +239,7 @@ async def create_generation(
         # loaded before the deduction attempt and may be stale under
         # concurrent requests.
         fresh = await user_service.get_user_by_id(user.id)
-        balance = fresh.credits_balance if fresh is not None else 0.0
+        balance = credits_service.spendable(fresh) if fresh is not None else 0.0
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
