@@ -12,7 +12,17 @@ import { BACKEND_URL } from "@/lib/auth-server"
 // front risks a re-encoded body that fails verification, and it would expose an
 // unauthenticated mutation endpoint on the frontend origin for no benefit.
 
-const ALLOWED = new Set(["subscription", "history", "checkout", "portal"])
+// Must track the billing router. A new endpoint that is not listed here 404s at the
+// proxy with no sign of why — which is exactly what happened to `packs`/`topup` when
+// US-26.4 added them and this line was not touched.
+const ALLOWED = new Set([
+  "subscription",
+  "history",
+  "checkout",
+  "portal",
+  "packs",
+  "topup",
+])
 
 async function proxy(
   request: NextRequest,
@@ -29,10 +39,24 @@ async function proxy(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
-  const res = await fetch(`${BACKEND_URL}/api/v1/billing/${segment}`, {
+  // The body has to be forwarded, not just the method and auth header. `topup` posts
+  // `{ pack_id }`, and dropping it made the backend reject the request as invalid
+  // instead of opening Stripe Checkout — the purchase was broken end-to-end while both
+  // the component tests (fetch stubbed in the browser) and the API tests (backend called
+  // directly) passed, because neither exercised this hop.
+  const init: RequestInit = {
     method,
     headers: { authorization: auth, accept: "application/json" },
-  })
+  }
+  if (method === "POST") {
+    const body = await request.text()
+    if (body) {
+      init.headers = { ...init.headers, "content-type": "application/json" }
+      init.body = body
+    }
+  }
+
+  const res = await fetch(`${BACKEND_URL}/api/v1/billing/${segment}`, init)
   const body = await res.json().catch(() => ({}))
   return NextResponse.json(body, { status: res.status })
 }
