@@ -584,7 +584,7 @@ class TestExportAudio:
         """Real pydub WAV export: source tone → exported WAV is 48kHz, 24-bit PCM.
 
         Uses ffmpeg parameters for codec/rate control, so skip when ffmpeg is not
-        on PATH (CI runners without the system package).
+        on PATH (CI installs it; a bare developer machine may not have it).
 
         Read back with soundfile rather than the stdlib ``wave`` module: newer
         ffmpeg writes 24-bit WAV with a WAVE_FORMAT_EXTENSIBLE header, which

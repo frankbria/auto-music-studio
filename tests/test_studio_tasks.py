@@ -150,9 +150,7 @@ class TestMixdownHandler:
             "flac",  # libsndfile — runs everywhere, ffmpeg not needed
             pytest.param(
                 "mp3",
-                marks=pytest.mark.skipif(
-                    shutil.which("ffmpeg") is None, reason="mp3 conversion requires ffmpeg (not installed in CI)"
-                ),
+                marks=pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="mp3 conversion requires ffmpeg"),
             ),
         ],
     )

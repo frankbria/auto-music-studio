@@ -1,10 +1,12 @@
 """Tests for the free-tier video watermark (#401).
 
-Two layers. The first runs anywhere: the error contract — a missing or failing
-ffmpeg, or input that is not a video, must raise :class:`WatermarkError` rather
-than hand back unmarked bytes, because the caller turns that into a failed job.
-The second actually composites (``requires_ffmpeg``) and inspects the resulting
-pixels; CI has no ffmpeg, so it skips there and runs locally and in the demo.
+Two layers. The first needs nothing installed: the mark's arithmetic, and the
+part of the error contract that fires before ffmpeg is ever reached — every
+failure must raise :class:`WatermarkError` rather than hand back unmarked bytes,
+because the caller turns that into a failed job. The second actually composites
+(``requires_ffmpeg``) and inspects the resulting pixels. CI installs ffmpeg
+precisely so that second layer runs there too — without it a broken filter argv
+would pass green.
 """
 
 from __future__ import annotations
@@ -85,12 +87,12 @@ class TestMarkSize:
         mark_w, mark_h = _mark_size(1080)
         assert abs(mark_w / mark_h - native) < 0.02
 
-    def test_sized_by_height_not_width(self) -> None:
-        """A 9:16 render gets the same bug as a 16:9 one of the same height."""
-        assert _mark_size(1920) == _mark_size(1920)
-        assert _mark_size(2160)[1] > _mark_size(1080)[1]
+    def test_a_taller_frame_gets_a_bigger_mark(self) -> None:
+        assert _mark_size(2160)[1] > _mark_size(1080)[1] > _mark_size(720)[1]
 
-    def test_tiny_frame_still_produces_a_visible_mark(self) -> None:
+    def test_tiny_frame_does_not_produce_a_zero_sized_mark(self) -> None:
+        """Not "visible" — at this size it isn't. Only that the scale filter gets
+        dimensions it will accept, since ``scale=0:0`` would fail the job."""
         mark_w, mark_h = _mark_size(4)
         assert mark_w >= 1 and mark_h >= 1
 

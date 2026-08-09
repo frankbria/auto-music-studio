@@ -487,7 +487,7 @@ class TestBuildDawBundle:
     def test_non_wav_source_is_transcoded_for_full_mix(self, workspace, tmp_path):
         """A non-WAV source clip goes through export_audio (transcode), not a verbatim copy.
 
-        export_audio is mocked (it shells out to ffmpeg, which CI lacks) — the
+        export_audio is mocked (it shells out to ffmpeg) — the
         point is to prove the non-WAV branch is taken with the right arguments.
         """
         from acemusic.db import create_clip, get_clip
