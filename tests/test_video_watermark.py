@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from acemusic.video_watermark import WATERMARK_PATH, WatermarkError, _geometry, apply_watermark
+from acemusic.video_watermark import WATERMARK_PATH, WatermarkError, _mark_size, apply_watermark
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
 
@@ -66,34 +66,33 @@ class TestAsset:
         assert mark.getchannel("A").getextrema()[0] == 0
 
 
-class TestGeometry:
+class TestMarkSize:
     """Pure arithmetic — runs in CI, where there is no ffmpeg."""
 
-    def test_bug_sits_inside_the_bottom_right_corner(self) -> None:
-        mark_w, mark_h, x, y = _geometry(1280, 720)
+    def test_mark_fits_inside_the_frame(self) -> None:
+        mark_w, mark_h = _mark_size(720)
         assert 0 < mark_w < 1280 and 0 < mark_h < 720
-        assert x + mark_w < 1280 and y + mark_h < 720
-        assert x > 1280 // 2 and y > 720 // 2
 
     def test_same_fraction_of_the_frame_at_every_resolution(self) -> None:
-        ratios = {h: _geometry(w, h)[1] / h for w, h in ((1280, 720), (1920, 1080), (3840, 2160))}
-        assert max(ratios.values()) - min(ratios.values()) < 0.005
+        ratios = [_mark_size(h)[1] / h for h in (720, 1080, 2160)]
+        assert max(ratios) - min(ratios) < 0.005
 
     def test_aspect_ratio_preserved(self) -> None:
         from PIL import Image
 
         with Image.open(WATERMARK_PATH) as mark:
             native = mark.width / mark.height
-        mark_w, mark_h, _, _ = _geometry(1920, 1080)
+        mark_w, mark_h = _mark_size(1080)
         assert abs(mark_w / mark_h - native) < 0.02
 
-    def test_portrait_and_square_get_the_same_apparent_mark(self) -> None:
-        """Sized by height, so 9:16 and 1:1 renders are not given a giant bug."""
-        assert _geometry(1080, 1920)[1] == _geometry(1920, 1920)[1] == _geometry(3840, 1920)[1]
+    def test_sized_by_height_not_width(self) -> None:
+        """A 9:16 render gets the same bug as a 16:9 one of the same height."""
+        assert _mark_size(1920) == _mark_size(1920)
+        assert _mark_size(2160)[1] > _mark_size(1080)[1]
 
     def test_tiny_frame_still_produces_a_visible_mark(self) -> None:
-        mark_w, mark_h, x, y = _geometry(16, 16)
-        assert mark_w >= 1 and mark_h >= 1 and x >= 0 and y >= 0
+        mark_w, mark_h = _mark_size(4)
+        assert mark_w >= 1 and mark_h >= 1
 
 
 class TestFailureIsLoud:
@@ -118,6 +117,18 @@ class TestFailureIsLoud:
         with pytest.raises(WatermarkError):
             apply_watermark(b"")
 
+    @requires_ffmpeg
+    def test_audio_only_input_raises(self, tmp_path) -> None:
+        """A file with no video stream has no frame to mark — fail, don't pass it through."""
+        audio = tmp_path / "audio.m4a"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "anullsrc=r=44100:cl=stereo", "-t", "1", "-c:a", "aac", str(audio)],
+            check=True,
+        )  # fmt: skip
+        with pytest.raises(WatermarkError, match="dimensions"):
+            apply_watermark(audio.read_bytes())
+
 
 @requires_ffmpeg
 class TestComposite:
@@ -138,6 +149,20 @@ class TestComposite:
         # Top-left quadrant: the video itself must survive unmarked.
         elsewhere = (0, 0, width // 2, height // 2)
         assert after.crop(elsewhere).getextrema() == before.crop(elsewhere).getextrema()
+
+    def test_portrait_render_is_marked_on_screen(self, tmp_path) -> None:
+        """9:16 is a supported aspect ratio; the bug must not fall off its edge."""
+        source = _make_video(tmp_path, width=720, height=1280)
+        before = _frame(tmp_path, source, "portrait-before")
+        after = _frame(tmp_path, apply_watermark(source), "portrait-after")
+
+        from PIL import ImageChops
+
+        changed = ImageChops.difference(before, after).getbbox()
+        assert changed is not None, "no mark anywhere in the frame"
+        left, top, right, bottom = changed
+        assert right <= 720 and bottom <= 1280
+        assert left > 720 // 2 and top > 1280 // 2  # bottom-right corner
 
     def test_mark_scales_with_the_frame(self, tmp_path) -> None:
         """A 4k render gets a proportionally sized bug, not a 720p-sized speck."""

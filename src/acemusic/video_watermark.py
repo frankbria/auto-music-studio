@@ -22,6 +22,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from PIL import Image
+
 WATERMARK_PATH = Path(__file__).parent / "assets" / "watermark.png"
 
 #: Bug height as a fraction of the frame height, and its inset from both edges.
@@ -57,45 +59,40 @@ def _run(command: list[str], *, timeout: int, what: str) -> subprocess.Completed
     return result
 
 
-def _frame_size(source: Path, ffprobe: str) -> tuple[int, int]:
-    """The video stream's ``(width, height)`` in pixels.
+def _frame_height(source: Path, ffprobe: str) -> int:
+    """The video stream's height in pixels.
 
-    Probed rather than derived from an ffmpeg filter expression: the geometry is
-    then plain integer arithmetic here, testable and identical across ffmpeg
+    Probed rather than derived from an ffmpeg filter expression: the mark's size
+    is then plain integer arithmetic here, testable and identical across ffmpeg
     versions (``scale2ref``'s reference-size variables are not).
     """
     result = _run(
         [
             ffprobe, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(source),
+            "-show_entries", "stream=height", "-of", "csv=p=0", str(source),
         ],  # fmt: skip
         timeout=_PROBE_TIMEOUT_S,
         what="Probing the video",
     )
     try:
-        width, height = (int(part) for part in result.stdout.decode().strip().splitlines()[0].split("x"))
+        height = int(result.stdout.decode().strip().splitlines()[0])
     except (IndexError, ValueError) as exc:
         raise WatermarkError("Could not read the video's dimensions") from exc
-    if width <= 0 or height <= 0:
-        raise WatermarkError(f"Video reports a nonsensical size ({width}x{height})")
-    return width, height
+    if height <= 0:
+        raise WatermarkError(f"Video reports a nonsensical height ({height})")
+    return height
 
 
-def _geometry(width: int, height: int) -> tuple[int, int, int, int]:
-    """``(mark_w, mark_h, x, y)`` for the bug in the bottom-right corner.
+def _mark_size(frame_height: int) -> tuple[int, int]:
+    """``(width, height)`` for the bug on a frame of ``frame_height`` pixels.
 
-    Sized and inset by *height*, so a 16:9, 9:16 and 1:1 render at the same
-    resolution all get the same apparent mark, and 720p/1080p/4k all get the
-    same fraction of the frame.
+    Sized by *height*, so a 16:9, 9:16 and 1:1 render at the same resolution all
+    get the same apparent mark, and 720p/1080p/4k the same fraction of the frame.
     """
-    from PIL import Image
-
     with Image.open(WATERMARK_PATH) as mark:
         native_w, native_h = mark.size
-    mark_h = max(1, round(height * _MARK_HEIGHT_RATIO))
-    mark_w = max(1, round(mark_h * native_w / native_h))
-    margin = round(height * _MARGIN_RATIO)
-    return mark_w, mark_h, max(0, width - mark_w - margin), max(0, height - mark_h - margin)
+    mark_h = max(1, round(frame_height * _MARK_HEIGHT_RATIO))
+    return max(1, round(mark_h * native_w / native_h)), mark_h
 
 
 def apply_watermark(video: bytes, *, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe") -> bytes:
@@ -111,12 +108,20 @@ def apply_watermark(video: bytes, *, ffmpeg: str = "ffmpeg", ffprobe: str = "ffp
     with tempfile.TemporaryDirectory(prefix="watermark-") as tmp:
         source, marked = Path(tmp) / "in.mp4", Path(tmp) / "out.mp4"
         source.write_bytes(video)
-        mark_w, mark_h, x, y = _geometry(*_frame_size(source, ffprobe))
+        mark_w, mark_h = _mark_size(_frame_height(source, ffprobe))
+        # The corner is computed by ffmpeg (W/H are the frame's real dimensions,
+        # w/h the scaled mark's) rather than here: if the probed height ever
+        # disagrees with what the filter graph actually sees — display rotation
+        # is the realistic way that happens — a position computed from the probe
+        # could land off-screen, which is precisely the silent no-op #401 forbids.
+        # Getting the size slightly wrong is survivable; missing the frame is not.
         _run(
             [
                 ffmpeg, "-y", "-loglevel", "error", "-nostdin",
                 "-i", str(source), "-i", str(WATERMARK_PATH),
-                "-filter_complex", f"[1:v]scale={mark_w}:{mark_h}[mark];[0:v][mark]overlay={x}:{y}",
+                "-filter_complex",
+                f"[1:v]scale={mark_w}:{mark_h}[mark];"
+                f"[0:v][mark]overlay=W-w-H*{_MARGIN_RATIO}:H-h-H*{_MARGIN_RATIO}",
                 *_VIDEO_CODEC, "-c:a", "copy", "-movflags", "+faststart",
                 str(marked),
             ],  # fmt: skip
