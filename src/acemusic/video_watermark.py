@@ -53,6 +53,11 @@ def _run(command: list[str], *, timeout: int, what: str) -> subprocess.Completed
         raise WatermarkError(f"{command[0]!r} is not installed or not on PATH") from exc
     except subprocess.TimeoutExpired as exc:
         raise WatermarkError(f"{what} timed out after {timeout}s") from exc
+    except OSError as exc:
+        # Present but unusable — not executable, out of file descriptors, argv too
+        # long. Callers are promised WatermarkError for *every* failure, so a bare
+        # OSError escaping here would slip past `except WatermarkError`.
+        raise WatermarkError(f"{what} could not start {command[0]!r}: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
         raise WatermarkError(f"{what} failed: {detail[-1] if detail else 'no output'}")

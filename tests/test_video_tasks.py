@@ -10,6 +10,9 @@ tests need a local MongoDB (Beanie) and are ``integration``.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
 import pytest
 from beanie import PydanticObjectId
 
@@ -384,6 +387,32 @@ class TestProcessVideoEditJob:
 MARKED_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"WATERMARKED" * 8
 
 
+def _encode_test_video(tmp_path) -> bytes:
+    """A real 1s 720p clip, for the one case that runs the actual compositor."""
+    out = tmp_path / "provider.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "color=c=gray:s=1280x720:r=15:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)],
+        check=True,
+    )  # fmt: skip
+    return out.read_bytes()
+
+
+def _bottom_right_changed(tmp_path, before: bytes, after: bytes) -> bool:
+    """Whether the two clips' first frames differ in the bottom-right corner."""
+    from PIL import Image
+
+    frames = []
+    for name, data in (("before", before), ("after", after)):
+        mp4, png = tmp_path / f"{name}.mp4", tmp_path / f"{name}.png"
+        mp4.write_bytes(data)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp4), "-frames:v", "1", str(png)], check=True)
+        frames.append(Image.open(png).convert("RGB"))
+    width, height = frames[0].size
+    corner = (int(width * 0.6), int(height * 0.8), width, height)
+    return frames[0].crop(corner).tobytes() != frames[1].crop(corner).tobytes()
+
+
 def _fake_watermark(calls: list[bytes]):
     """A stand-in for ``apply_watermark`` that records what it was handed."""
 
@@ -467,6 +496,26 @@ class TestFreeTierWatermark:
         assert calls == [FAKE_MP4]
         assert storage.download(result["storage_path"]) == MARKED_MP4
 
+    async def test_tier_is_read_when_the_render_completes_not_at_enqueue(self, storage) -> None:
+        """A job queued while Pro is marked if the owner is free by the time it renders.
+
+        The policy is deliberate — the mark reflects the tier at the moment the
+        video is produced — so it deserves a test rather than only a docstring.
+        """
+        job, clip = await _make_job_and_clip(tier="pro")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        owner = await user_service.get_user_by_id(str(job.user_id))
+        owner.subscription_tier = "free"
+        await owner.save()
+        calls: list[bytes] = []
+
+        await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0,
+            watermark=_fake_watermark(calls),
+        )  # fmt: skip
+
+        assert calls == [FAKE_MP4]
+
     async def test_watermark_failure_fails_the_job(self, storage) -> None:
         """#401: never silently produce an unmarked video for a free account."""
         job, clip = await _make_job_and_clip(tier="free")
@@ -482,3 +531,22 @@ class TestFreeTierWatermark:
         path = f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
         with pytest.raises(FileNotFoundError):
             storage.download(path)
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
+    async def test_default_path_really_composites(self, storage, tmp_path) -> None:
+        """No injected double: the handler's own default marks a real MP4.
+
+        The other cases here inject a stand-in to keep them fast, which would let
+        a regression that kept the default but stopped calling it pass unnoticed.
+        """
+        rendered = _encode_test_video(tmp_path)
+        job, clip = await _make_job_and_clip(tier="free")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        client.download = lambda provider_job_id: rendered
+
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        stored = storage.download(result["storage_path"])
+        assert stored != rendered
+        assert _bottom_right_changed(tmp_path, rendered, stored), "no mark in the stored video"

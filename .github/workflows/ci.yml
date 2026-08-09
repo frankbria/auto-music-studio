@@ -38,6 +38,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
+      # ffmpeg is a runtime requirement for free-tier video watermarking (#401),
+      # so its absence here left the compositing untested — every ffmpeg-gated
+      # case skipped, and a broken filter argv would have passed CI green.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Install dependencies
         run: uv sync --extra dev
 

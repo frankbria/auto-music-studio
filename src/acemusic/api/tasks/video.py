@@ -44,7 +44,8 @@ POLL_INTERVAL_S = 5.0
 # process START, so a single-process deployment is safe (a restart killed the old
 # worker anyway); only a multi-process deployment starting a sibling mid-render
 # could re-queue a live job. Acceptable for now — revisit if video ever runs
-# multi-process (raise stale_after for this job type).
+# multi-process (raise stale_after for this job type). #401's watermarking pass
+# widens that worst case again by up to its own timeout; see #427.
 POLL_TIMEOUT_S = 600.0
 
 # One failed status poll must not kill a paid render that is still progressing on

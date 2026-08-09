@@ -381,10 +381,12 @@ depend on a provider feature.
   resolution and has no tier gate of its own, so leaving edits unmarked would have been a way
   around the mark). The tier is read from the database, never from token claims, and fails
   closed: an unknown tier, or a user that has since been deleted, is treated as free.
-- **On upgrade, existing videos keep their mark.** Upgrading to Pro does not re-render or
-  re-upload anything; only videos generated *while* the subscription is active come out
-  unmarked. Re-rendering a song as a Pro user produces a new, unmarked `Video` and leaves the
-  old marked one in place.
+- **The mark is decided per render, not per account, and it is never revisited.** Upgrading to
+  Pro does not re-render or re-upload anything: videos made while free keep their mark, and
+  re-rendering as a Pro user produces a *new*, unmarked `Video` beside the old marked one.
+  The same rule runs the other way — a video rendered during a paid period stays unmarked
+  after a downgrade, and delivery (`GET /videos/{id}/stream`) serves the stored bytes without
+  re-checking the tier. Only videos generated during the period of payment are unmarked.
 - **Failure is loud.** Watermarking runs through ffmpeg (**required on the API host** for
   free-tier video — like `flac`/`mp3` conversion elsewhere). If ffmpeg is missing, fails, or
   times out, the *job* fails; the free tier is never quietly handed the Pro deliverable.

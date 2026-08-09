@@ -102,6 +102,14 @@ class TestFailureIsLoud:
         with pytest.raises(WatermarkError, match="not installed"):
             apply_watermark(b"not-really-a-video", ffprobe=str(tmp_path / "no-such-ffprobe"))
 
+    def test_unusable_binary_raises_watermark_error(self, tmp_path) -> None:
+        """Present but not executable: callers only catch WatermarkError."""
+        not_executable = tmp_path / "ffprobe"
+        not_executable.write_text("#!/bin/sh\n")
+        not_executable.chmod(0o644)
+        with pytest.raises(WatermarkError, match="could not start"):
+            apply_watermark(b"not-really-a-video", ffprobe=str(not_executable))
+
     @requires_ffmpeg
     def test_missing_ffmpeg_raises(self, tmp_path) -> None:
         with pytest.raises(WatermarkError, match="not installed"):
