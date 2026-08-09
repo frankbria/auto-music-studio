@@ -33,9 +33,7 @@ from acemusic.api.utils.range_requests import (
 from acemusic.api.utils.rate_limit import FixedWindowRateLimiter, _client_key
 from acemusic.storage import get_storage_backend
 
-requires_ffmpeg = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None, reason="format conversion requires ffmpeg (not installed in CI)"
-)
+requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="format conversion requires ffmpeg")
 
 
 def _audio_url(clip_id: str) -> str:

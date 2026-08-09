@@ -10,6 +10,9 @@ tests need a local MongoDB (Beanie) and are ``integration``.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
 import pytest
 from beanie import PydanticObjectId
 
@@ -21,6 +24,7 @@ from acemusic.api.tasks import video as tasks
 from acemusic.api.tasks.common import JobProcessingError
 from acemusic.storage import LocalStorage
 from acemusic.video_client import VideoGenerationError, VideoJobUpdate
+from acemusic.video_watermark import WatermarkError
 
 FAKE_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 256
 FAKE_AUDIO = b"RIFF" + b"\x00" * 100
@@ -112,6 +116,14 @@ class TestProcessorWiring:
         assert await processor._run_video_handler(handler, None) == {"ok": True}
         assert seen == {"storage": fake_storage, "client": fake_client}
 
+    def test_default_watermark_is_the_real_compositor(self) -> None:
+        """#401: the injectable seam must default to the real thing, not a no-op."""
+        import inspect
+
+        from acemusic.video_watermark import apply_watermark
+
+        assert inspect.signature(tasks.process_video_job).parameters["watermark"].default is apply_watermark
+
 
 # ---------------------------------------------------------------------------
 # Handler — integration (local MongoDB)
@@ -123,8 +135,13 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
     return LocalStorage(tmp_path / "storage")
 
 
-async def _make_job_and_clip() -> tuple[Job, Clip]:
+async def _make_job_and_clip(*, tier: str = "pro") -> tuple[Job, Clip]:
+    # Pro by default: these tests assert the provider's bytes are stored verbatim,
+    # which is exactly the Pro deliverable. The free tier's watermarking (#401) has
+    # its own cases below.
     user = await user_service.get_or_create_user(email="v@e.com", provider="google", oauth_id="g-v", name="V")
+    user.subscription_tier = tier
+    await user.save()
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="song.wav", title="Song", duration=10.0)
@@ -269,9 +286,11 @@ class TestProcessVideoJob:
 # ---------------------------------------------------------------------------
 
 
-async def _make_edit_job_and_source(storage: LocalStorage) -> tuple[Job, Video]:
+async def _make_edit_job_and_source(storage: LocalStorage, *, tier: str = "pro") -> tuple[Job, Video]:
     """A source Video (its MP4 stored) plus a queued edit job referencing it."""
     user = await user_service.get_or_create_user(email="ve@e.com", provider="google", oauth_id="g-ve", name="VE")
+    user.subscription_tier = tier
+    await user.save()
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="song.wav", title="Song", duration=10.0)
@@ -359,3 +378,175 @@ class TestProcessVideoEditJob:
 
         with pytest.raises(JobProcessingError, match="not found"):
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+
+# ---------------------------------------------------------------------------
+# Free-tier watermarking (#401) — integration
+# ---------------------------------------------------------------------------
+
+MARKED_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"WATERMARKED" * 8
+
+
+def _encode_test_video(tmp_path) -> bytes:
+    """A real 1s 720p clip, for the one case that runs the actual compositor."""
+    out = tmp_path / "provider.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "color=c=gray:s=1280x720:r=15:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)],
+        check=True,
+    )  # fmt: skip
+    return out.read_bytes()
+
+
+def _bottom_right_changed(tmp_path, before: bytes, after: bytes) -> bool:
+    """Whether the two clips' first frames differ in the bottom-right corner."""
+    from PIL import Image
+
+    frames = []
+    for name, data in (("before", before), ("after", after)):
+        mp4, png = tmp_path / f"{name}.mp4", tmp_path / f"{name}.png"
+        mp4.write_bytes(data)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp4), "-frames:v", "1", str(png)], check=True)
+        frames.append(Image.open(png).convert("RGB"))
+    width, height = frames[0].size
+    corner = (int(width * 0.6), int(height * 0.8), width, height)
+    return frames[0].crop(corner).tobytes() != frames[1].crop(corner).tobytes()
+
+
+def _fake_watermark(calls: list[bytes]):
+    """A stand-in for ``apply_watermark`` that records what it was handed."""
+
+    def watermark(data: bytes) -> bytes:
+        calls.append(data)
+        return MARKED_MP4
+
+    return watermark
+
+
+def _exploding_watermark(data: bytes) -> bytes:
+    raise WatermarkError("ffmpeg is not installed or not on PATH")
+
+
+@pytest.mark.integration
+class TestFreeTierWatermark:
+    """US-26.2 sells the free tier as *watermarked* 720p; #401 is that half."""
+
+    async def test_free_account_render_is_watermarked(self, storage) -> None:
+        job, clip = await _make_job_and_clip(tier="free")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        calls: list[bytes] = []
+
+        result = await tasks.process_video_job(
+            job, storage=storage, client=client, poll_interval=0, watermark=_fake_watermark(calls)
+        )
+
+        assert calls == [FAKE_MP4]  # the provider's render went in...
+        assert storage.download(result["storage_path"]) == MARKED_MP4  # ...the marked one was stored
+
+    async def test_pro_account_render_is_untouched(self, storage) -> None:
+        job, clip = await _make_job_and_clip(tier="pro")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        calls: list[bytes] = []
+
+        result = await tasks.process_video_job(
+            job, storage=storage, client=client, poll_interval=0, watermark=_fake_watermark(calls)
+        )
+
+        assert calls == []
+        assert storage.download(result["storage_path"]) == FAKE_MP4
+
+    async def test_unknown_tier_is_watermarked(self, storage) -> None:
+        """A typo in the tier field must fail closed, as ``tiers.normalise`` does."""
+        job, clip = await _make_job_and_clip(tier="proo")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        calls: list[bytes] = []
+
+        await tasks.process_video_job(
+            job, storage=storage, client=client, poll_interval=0, watermark=_fake_watermark(calls)
+        )
+
+        assert calls == [FAKE_MP4]
+
+    async def test_deleted_user_is_watermarked(self, storage) -> None:
+        job, clip = await _make_job_and_clip(tier="pro")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        await (await user_service.get_user_by_id(str(job.user_id))).delete()
+        client = FakeVideoService(_updates_to_complete())
+        calls: list[bytes] = []
+
+        await tasks.process_video_job(
+            job, storage=storage, client=client, poll_interval=0, watermark=_fake_watermark(calls)
+        )
+
+        assert calls == [FAKE_MP4]
+
+    async def test_free_account_edit_is_watermarked(self, storage) -> None:
+        """An edit is a render too — it must not be a way around the mark."""
+        job, source = await _make_edit_job_and_source(storage, tier="free")
+        client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
+        calls: list[bytes] = []
+
+        result = await tasks.process_video_job(
+            job, storage=storage, client=client, poll_interval=0, watermark=_fake_watermark(calls)
+        )
+
+        assert calls == [FAKE_MP4]
+        assert storage.download(result["storage_path"]) == MARKED_MP4
+
+    async def test_tier_is_read_when_the_render_completes_not_at_enqueue(self, storage) -> None:
+        """A job queued while Pro is marked if the owner is free by the time it renders.
+
+        The policy is deliberate — the mark reflects the tier at the moment the
+        video is produced — so it deserves a test rather than only a docstring.
+        """
+        job, clip = await _make_job_and_clip(tier="pro")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        owner = await user_service.get_user_by_id(str(job.user_id))
+        owner.subscription_tier = "free"
+        await owner.save()
+        calls: list[bytes] = []
+
+        await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0,
+            watermark=_fake_watermark(calls),
+        )  # fmt: skip
+
+        assert calls == [FAKE_MP4]
+
+    async def test_watermark_failure_fails_the_job(self, storage) -> None:
+        """#401: never silently produce an unmarked video for a free account."""
+        job, clip = await _make_job_and_clip(tier="free")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+
+        with pytest.raises(JobProcessingError, match="[Ww]atermark"):
+            await tasks.process_video_job(
+                job, storage=storage, client=client, poll_interval=0, watermark=_exploding_watermark
+            )
+
+        assert await Video.find(Video.job_id == job.id).count() == 0
+        path = f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
+        with pytest.raises(FileNotFoundError):
+            storage.download(path)
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
+    async def test_default_path_really_composites(self, storage, tmp_path) -> None:
+        """No injected double: the handler's own default marks a real MP4.
+
+        The other cases here inject a stand-in to keep them fast, which would let
+        a regression that kept the default but stopped calling it pass unnoticed.
+        """
+        rendered = _encode_test_video(tmp_path)
+        job, clip = await _make_job_and_clip(tier="free")
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        client = FakeVideoService(_updates_to_complete())
+        client.download = lambda provider_job_id: rendered
+
+        result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
+
+        stored = storage.download(result["storage_path"])
+        assert stored != rendered
+        assert _bottom_right_changed(tmp_path, rendered, stored), "no mark in the stored video"

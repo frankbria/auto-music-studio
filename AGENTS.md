@@ -220,7 +220,11 @@ Configured in `.pre-commit-config.yaml`:
 `.github/workflows/ci.yml` — Python:
 - Triggers on push (all branches) and PR to `main`
 - Matrix: Python 3.11, 3.12
-- Steps: `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov`
+- Steps: install ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov`
+- **ffmpeg is installed in CI** (#401). It is a runtime requirement for free-tier video
+  watermarking, and its absence used to silently skip every ffmpeg-gated test — roughly ten
+  of them across audio export, clip conversion, batch transcode and studio mixdown. Assume
+  those now run: a test that only passes because ffmpeg is missing will fail CI.
 
 `.github/workflows/plugin.yml` — VST3 plugin (C++):
 - Path-filtered to `plugin/**`, so Python-only changes don't trigger a 3-OS C++ build

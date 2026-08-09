@@ -83,6 +83,10 @@ added later is locked by default rather than leaking.
 | `high_res_video` | `POST /videos/generate` when `resolution` is above 720p |
 | `lossless_export` | `GET /clips/{id}/audio` and `GET /clips/{id}/stream` when `format` converts to wav/flac, and `POST /batch/export` for any non-mp3 format |
 
+Not every restriction is a refusal. The free tier's video is *720p watermarked*, so
+`high_res_video` refuses anything above 720p and the 720p render it does allow comes back
+carrying the mark — see [Free-tier video watermark](#free-tier-video-watermark-401) below.
+
 A refused request returns **`403`** with the same shape as the credits `402` — what is
 locked, what it would do, and where to go:
 
@@ -358,6 +362,34 @@ Arrangement state has no backend persistence, so each request carries the full a
 | `GET /api/v1/videos/for-clip/{clip_id}` | The clip's published video (backs the song page's "Music video" section); 404 when none, or when the clip isn't viewable |
 
 The render runs on an external provider (Runway/Pika-class) configured by `ACEMUSIC_API_VIDEO_API_URL` + `ACEMUSIC_API_VIDEO_API_KEY` (leave blank to disable; see `.env.example`). The worker downloads the source song, submits it with the options, polls the provider (transient 5xx retried up to 3 times with backoff; a couple of consecutive failed polls are tolerated before the job fails), then stores the rendered MP4 (audio muxed by the provider) and records a `Video` document associating it with the song. **Delivery (US-22.3):** the creation page swaps in an in-browser player with an MP4 download and a Publish button once the render completes; a video is private to its owner until published, after which it streams to anyone who can view the song (visibility mirrors clip-audio streaming). A completed render notifies the musician even if they navigated away — an app-level watcher keeps polling in-flight jobs across navigation. **Social export (per-platform re-frames) is not yet implemented** (aspect ratio is chosen at render time).
+
+### Free-tier video watermark (#401)
+
+US-26.2 sells the free tier as "720p **watermarked** video". The resolution half is the
+`high_res_video` capability check in the router; the mark itself is composited by the worker
+in `src/acemusic/video_watermark.py`, after the provider returns the render and before the
+MP4 is stored — so an unmarked object never exists in storage, and the behaviour does not
+depend on a provider feature.
+
+- **What it looks like:** a corner bug — the app icon plus the wordmark *Cadenza* — in the
+  bottom-right, sized at 6% of the frame height with a 2.5% inset. Sizing by *height* means
+  16:9, 9:16 and 1:1 renders get the same apparent mark, and 720p/1080p/4k the same fraction
+  of the frame. The mark is a committed PNG (`src/acemusic/assets/watermark.png`); regenerate
+  it with `uv run python scripts/make_watermark.py`.
+- **Who gets it:** every render whose owner is on the free tier at the moment the render
+  completes — originals *and* edits (`POST /videos/{id}/edit` inherits its source's
+  resolution and has no tier gate of its own, so leaving edits unmarked would have been a way
+  around the mark). The tier is read from the database, never from token claims, and fails
+  closed: an unknown tier, or a user that has since been deleted, is treated as free.
+- **The mark is decided per render, not per account, and it is never revisited.** Upgrading to
+  Pro does not re-render or re-upload anything: videos made while free keep their mark, and
+  re-rendering as a Pro user produces a *new*, unmarked `Video` beside the old marked one.
+  The same rule runs the other way — a video rendered during a paid period stays unmarked
+  after a downgrade, and delivery (`GET /videos/{id}/stream`) serves the stored bytes without
+  re-checking the tier. Only videos generated during the period of payment are unmarked.
+- **Failure is loud.** Watermarking runs through ffmpeg (**required on the API host** for
+  free-tier video — like `flac`/`mp3` conversion elsewhere). If ffmpeg is missing, fails, or
+  times out, the *job* fails; the free tier is never quietly handed the Pro deliverable.
 
 ## Stem separation backends
 
