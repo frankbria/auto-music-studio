@@ -61,3 +61,6 @@ htmlcov/
 # Per-session planning scratch (local-only). Anchored to the repo root so it
 # does not also ignore source packages named "tasks" (e.g. acemusic/api/tasks).
 /tasks/
+
+# Scratch dir for downloaded build-time assets and local demo scripts.
+.cache/

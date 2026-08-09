@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from acemusic.storage import StorageBackend
 from acemusic.video_client import (
@@ -24,9 +24,10 @@ from acemusic.video_client import (
     VideoGenerationError,
     VideoGenerationService,
 )
+from acemusic.video_watermark import WatermarkError, apply_watermark
 
 from ..models import Job, Video
-from ..services import clips as clip_service
+from ..services import clips as clip_service, tiers, users as user_service
 from ..services.common import coerce_object_id
 from ..services.video import VIDEO_JOB_TYPE
 from .common import JobProcessingError, download_clip, load_source_clip
@@ -128,6 +129,19 @@ async def _await_provider_render(
         raise JobProcessingError(f"Video download failed: {exc}") from exc
 
 
+async def _is_free_tier(job: Job) -> bool:
+    """Whether this job's owner is on the free tier *right now* (#401).
+
+    Read at render time rather than stamped onto the job at enqueue: the tier
+    when the video is produced is what "generated during the period of payment"
+    means. Read from the database, like :func:`require_tier_capability` — never
+    from token claims. A user that has since vanished fails closed (marked),
+    matching :func:`tiers.normalise`'s rule that anything not exactly Pro is free.
+    """
+    user = await user_service.get_user_by_id(str(job.user_id))
+    return tiers.normalise(user.subscription_tier if user is not None else None) != tiers.PRO
+
+
 async def process_video_job(
     job: Job,
     *,
@@ -135,6 +149,7 @@ async def process_video_job(
     client: VideoGenerationService,
     poll_interval: float = POLL_INTERVAL_S,
     poll_timeout: float = POLL_TIMEOUT_S,
+    watermark: Callable[[bytes], bytes] = apply_watermark,
 ) -> dict[str, Any]:
     """Render (or edit) and store the song's music video.
 
@@ -142,8 +157,9 @@ async def process_video_job(
     *edit* (US-22.4, params carry ``source_video_id``) downloads the source
     rendered MP4 instead and submits it with the edit spec; the result is a new
     ``Video`` linked to the source via ``parent_video_id`` (the source is never
-    mutated). Returns ``{"video_ids": [<id>], "storage_path": <path>}``. Raises
-    :class:`JobProcessingError` on provider failure/timeout.
+    mutated). A free-tier render — original or edit — is watermarked before it is
+    stored (#401). Returns ``{"video_ids": [<id>], "storage_path": <path>}``.
+    Raises :class:`JobProcessingError` on provider failure/timeout.
     """
     params = dict(job.input_params or {})
     source_video_id = params.get("source_video_id")
@@ -193,6 +209,16 @@ async def process_video_job(
     data = await _await_provider_render(
         job, client, provider_job_id, poll_interval=poll_interval, poll_timeout=poll_timeout
     )
+
+    # US-26.2 / #401: the free tier's deliverable is *watermarked* video. Applied
+    # here, after the render and before the upload, so an unmarked object never
+    # exists in storage — and a watermarking failure fails the job rather than
+    # quietly shipping the Pro deliverable to a free account.
+    if await _is_free_tier(job):
+        try:
+            data = await asyncio.to_thread(watermark, data)
+        except WatermarkError as exc:
+            raise JobProcessingError(f"Watermarking the free-tier video failed: {exc}") from exc
 
     # Namespace by job id so re-rendering/editing the same song never overwrites
     # an earlier video (and a failed job's rollback only deletes its own object).
