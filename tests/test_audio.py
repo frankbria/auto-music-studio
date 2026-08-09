@@ -585,9 +585,15 @@ class TestExportAudio:
 
         Uses ffmpeg parameters for codec/rate control, so skip when ffmpeg is not
         on PATH (CI runners without the system package).
+
+        Read back with soundfile rather than the stdlib ``wave`` module: newer
+        ffmpeg writes 24-bit WAV with a WAVE_FORMAT_EXTENSIBLE header, which
+        ``wave`` rejects outright ("unknown format: 65534"). libsndfile reads
+        both, so the assertion tests the export instead of the header dialect.
         """
         import shutil
-        import wave
+
+        import soundfile as sf
 
         if shutil.which("ffmpeg") is None:
             pytest.skip("ffmpeg not installed; required for codec parameter override")
@@ -601,9 +607,9 @@ class TestExportAudio:
         export_audio(src, dest, "wav")
 
         assert dest.exists()
-        with wave.open(str(dest), "rb") as wf:
-            assert wf.getframerate() == 48000
-            assert wf.getsampwidth() == 3  # 24-bit = 3 bytes
+        info = sf.info(str(dest))
+        assert info.samplerate == 48000
+        assert info.subtype == "PCM_24"
 
     def test_export_flac_invokes_pydub_with_flac_format(self, tmp_path):
         from acemusic.audio import export_audio
