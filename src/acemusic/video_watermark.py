@@ -28,6 +28,10 @@ WATERMARK_PATH = Path(__file__).parent / "assets" / "watermark.png"
 
 #: Bug height as a fraction of the frame height, and its inset from both edges.
 #: Sized by *height* so a 16:9, 9:16 and 1:1 render all get the same apparent mark.
+#: The *horizontal* inset is also height-derived, which reads as a mistake but is
+#: not: it keeps the two margins visually equal. It holds for every aspect ratio
+#: the router accepts (16:9, 9:16, 1:1); on something far narrower than 9:16 the
+#: inset would grow relative to the frame width and crowd the mark leftward.
 _MARK_HEIGHT_RATIO = 0.06
 _MARGIN_RATIO = 0.025
 
@@ -94,8 +98,13 @@ def _mark_size(frame_height: int) -> tuple[int, int]:
     Sized by *height*, so a 16:9, 9:16 and 1:1 render at the same resolution all
     get the same apparent mark, and 720p/1080p/4k the same fraction of the frame.
     """
-    with Image.open(WATERMARK_PATH) as mark:
-        native_w, native_h = mark.size
+    try:
+        with Image.open(WATERMARK_PATH) as mark:
+            native_w, native_h = mark.size
+    except OSError as exc:
+        # Callers are promised WatermarkError for every failure; a corrupt or
+        # mid-call-deleted asset must not escape as a bare Pillow error.
+        raise WatermarkError(f"Watermark asset could not be read: {exc}") from exc
     mark_h = max(1, round(frame_height * _MARK_HEIGHT_RATIO))
     return max(1, round(mark_h * native_w / native_h)), mark_h
 

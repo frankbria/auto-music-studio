@@ -18,6 +18,7 @@ is not part of the test suite or the build.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import sys
 from pathlib import Path
@@ -35,6 +36,10 @@ FONT_URL = (
     "pe1mMImSLYBIv1o4X1M8ce2xCx3yop4tQpF_MeTm0lfGWVpNn64CL7U8upHZIbMV51Q42ptCp5F5bxqqtQ1yiU4GMS5ntA.ttf"
 )
 FONT_CACHE = REPO_ROOT / ".cache" / "NunitoSans-Bold.ttf"
+# Pinned so "the mark is byte-identical on every deployment" stays true even if
+# Google re-cuts the face behind that URL: a silently different font would
+# regenerate a silently different watermark.
+FONT_SHA256 = "ec2336c2beb651fb7f9fb968ef4e5b69e91af624c240331a239d3aefd6e41ef0"
 
 WORDMARK = "Cadenza"
 # Rendered at 4x the 1080p display size so the worker's downscale stays crisp at 4k.
@@ -47,10 +52,13 @@ SHADOW_ALPHA = 150
 
 
 def load_font() -> ImageFont.FreeTypeFont:
-    """Nunito Sans Bold, downloaded once into the gitignored .cache/."""
+    """Nunito Sans Bold, downloaded once into the gitignored .cache/ and hash-checked."""
     if not FONT_CACHE.exists():
         FONT_CACHE.parent.mkdir(parents=True, exist_ok=True)
         FONT_CACHE.write_bytes(httpx.get(FONT_URL, timeout=30.0, follow_redirects=True).raise_for_status().content)
+    digest = hashlib.sha256(FONT_CACHE.read_bytes()).hexdigest()
+    if digest != FONT_SHA256:
+        raise SystemExit(f"Font hash mismatch for {FONT_CACHE}\n  expected {FONT_SHA256}\n  got      {digest}")
     return ImageFont.truetype(str(FONT_CACHE), FONT_PX)
 
 
