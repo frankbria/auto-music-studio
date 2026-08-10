@@ -134,3 +134,10 @@ touching the workflow. Revisit if a bad deploy ever gets past the gate.
   the new container booting.
 - **The rollback restores images, not data.** It re-pins the previous SHA. Anything the bad
   release wrote to MongoDB stays written.
+- **`/data/voice-training` is a named volume, which a host-side ACE-Step cannot see.**
+  `voice_training_root` exists because the API and ACE-Step are supposed to share a
+  filesystem — the API writes reference audio there and hands ACE-Step the *path*. Inside
+  this stack that path is a Docker volume, so it is shared only with containers on this
+  host. Voice training therefore needs that volume bound to a path ACE-Step also mounts
+  (a bind mount to a shared directory, or a network filesystem) before it works against a
+  remote GPU host. Everything else in the stack is unaffected.
