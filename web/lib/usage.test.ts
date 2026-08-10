@@ -47,18 +47,29 @@ describe("buildUsageCsv", () => {
     const csv = buildUsageCsv(summary())
     const lines = csv.trim().split("\n")
 
-    expect(lines[0]).toBe("date,action,category,clip,credits,balance_after")
+    expect(lines[0]).toBe("date,action,category,clip,credits_used,balance_after")
     expect(lines).toHaveLength(2)
-    // Credits read as spent, matching the sign convention on screen — a charge is a
-    // positive number of credits used, not a negative balance movement.
+    // A charge is a positive number of credits used, not a negative balance movement.
     expect(lines[1]).toBe("2026-08-01T12:00:00Z,song,generation,,1.5,48.5")
   })
 
-  it("shows a refund as negative credits used", () => {
+  it("shows a refund as negative credits used, so the column sums to net spend", () => {
+    // Deliberately the opposite sign from the table, which shows `+1.5` because it is
+    // answering "what happened to my balance". The header says `credits_used` so the
+    // column stays summable in a spreadsheet.
     const csv = buildUsageCsv(
       summary({ history: [row({ action_type: "song_refund", amount: 1.5 })] })
     )
     expect(csv.trim().split("\n")[1]).toContain(",-1.5,")
+  })
+
+  it("defuses a clip title a spreadsheet would run as a formula", () => {
+    const csv = buildUsageCsv(
+      summary({ history: [row({ clip_title: "=1+1" })] })
+    )
+    expect(csv).toContain(",'=1+1,")
+    // The numeric columns must stay numeric — a refund's leading minus is arithmetic.
+    expect(csv).not.toContain("'-")
   })
 
   it("quotes and escapes titles containing commas or quotes", () => {
@@ -71,7 +82,7 @@ describe("buildUsageCsv", () => {
 
   it("still produces a header when there is nothing to export", () => {
     expect(buildUsageCsv(summary({ history: [] })).trim()).toBe(
-      "date,action,category,clip,credits,balance_after"
+      "date,action,category,clip,credits_used,balance_after"
     )
   })
 })

@@ -78,16 +78,28 @@ export async function fetchUsage(
   return body as UsageSummary
 }
 
-const CSV_HEADER = "date,action,category,clip,credits,balance_after"
+// `credits_used`, not `credits`: the column is signed as *spent*, so a refund is negative
+// and the column sums to the net spend a spreadsheet is opened to compute. That is the
+// opposite sign from the on-screen table, which shows a refund as `+4` because there the
+// question is "what happened to my balance". The header names the convention rather than
+// leaving the reader to infer it from a row.
+const CSV_HEADER = "date,action,category,clip,credits_used,balance_after"
 
 function csvCell(value: string | number | null): string {
-  const text = value === null ? "" : String(value)
-  // Only quote when it would otherwise break the row — a clip titled `Hey, "You"` shifts
-  // every later column in a spreadsheet if it goes out bare.
+  if (value === null) return ""
+  // Numbers go out bare — a refund's leading `-` is arithmetic, not an escape problem.
+  if (typeof value === "number") return String(value)
+
+  // Excel evaluates a cell opening with = + - @ as a formula, and clip titles are
+  // user-controlled text landing in a file the musician will double-click.
+  const text = /^[=+\-@]/.test(value) ? `'${value}` : value
+
+  // Quote only when it would otherwise break the row — a clip titled `Hey, "You"` shifts
+  // every later column if it goes out bare.
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
-/** The usage history as CSV, credits signed as *spent* to match what the table shows. */
+/** The usage history as CSV, credits signed as *spent* (a refund is negative). */
 export function buildUsageCsv(summary: UsageSummary): string {
   const rows = summary.history.map((row) =>
     [

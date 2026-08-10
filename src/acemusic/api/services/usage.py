@@ -69,8 +69,8 @@ CATEGORIES: dict[str, str] = {
     "monthly_reset": "grant",
 }
 
-#: Categories that add credit rather than consume it, excluded from the charts.
-GRANT_CATEGORIES = frozenset({"grant"})
+#: The one category that adds credit rather than consuming it, excluded from the charts.
+GRANT_CATEGORY = "grant"
 
 
 class DailyPoint(BaseModel):
@@ -154,7 +154,7 @@ async def build_usage_summary(user: User, *, days: int = DEFAULT_WINDOW_DAYS) ->
 
     for row in rows:
         category = category_for(row.action_type)
-        if category in GRANT_CATEGORIES:
+        if category == GRANT_CATEGORY:
             continue
         # Charges are negative in the ledger; the chart reads in credits spent, and a
         # refund's positive amount subtracts from that.
