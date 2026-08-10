@@ -105,8 +105,9 @@ services:
       retries: 5
     volumes:
       - mongo-data:/data/db
-    # Not published by default: on a shared VPS an exposed Mongo is the whole database.
-    # Set MONGO_PORT to reach it from the host for debugging.
+    # Loopback-bound by default: this Mongo has no authentication, so on a shared VPS an
+    # exposed port is the whole database. If you override MONGO_PORT for debugging, keep
+    # the `127.0.0.1:` prefix — a bare port number publishes on 0.0.0.0.
     ports:
       - "${MONGO_PORT:-127.0.0.1:27017}:27017"
 

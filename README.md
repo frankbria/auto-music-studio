@@ -5,9 +5,9 @@ AI-powered music generation platform built on ACE-Step-1.5.
 ## Running the platform
 
 ```bash
-cp .env.docker.example .env
-sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env
-docker compose up --build
+cp .env.docker.example .env.docker
+sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env.docker
+docker compose --env-file .env.docker up --build
 ```
 
 Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at `/docs`.

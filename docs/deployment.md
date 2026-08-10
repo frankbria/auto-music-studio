@@ -7,9 +7,9 @@ images and rolls them out; nobody SSHes anywhere.
 ## Run the whole stack locally
 
 ```bash
-cp .env.docker.example .env
-sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env
-docker compose up --build
+cp .env.docker.example .env.docker
+sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env.docker
+docker compose --env-file .env.docker up --build
 ```
 
 Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at `/docs`.
@@ -76,14 +76,32 @@ nothing, which is the failure mode this work exists to remove.
 | Kind | Name | Purpose |
 | --- | --- | --- |
 | Variable | `DEPLOY_ENABLED` | `true` turns the deploy job on |
-| Variable | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env` (default `/srv/acemusic`) |
+| Variable | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` (default `/srv/acemusic`) |
 | Variable | `PRODUCTION_HEALTH_URL` | Public health URL, checked independently after the rollout |
 | Variable | `DOCKERHUB_PUBLISH_ENABLED` | `true` re-enables the ACE-Step publish |
 | Secret (`production` env) | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` | SSH target |
 
-On the host: install Docker, create `DEPLOY_PATH`, and put a `.env` there built from
-`.env.docker.example` with production values. The workflow ships `compose.yaml` and
-`deploy.sh` on every deploy, so those are never edited in place.
+On the host: install Docker, create `DEPLOY_PATH`, and put a `.env.docker` there built
+from `.env.docker.example` with production values. (Named `.env.docker`, not `.env`,
+because a checkout already carries a `.env` holding the development configuration — a
+different schema entirely — and compose would silently load that one.) The workflow ships
+`compose.yaml` and `deploy.sh` on every deploy, so those are never edited in place.
+
+Three things that are easy to get wrong the first time:
+
+- **GHCR packages are private by default**, independent of whether the repository is
+  public. The deploy therefore logs the host into `ghcr.io` with the job's own
+  `GITHUB_TOKEN` before pulling — scoped to the run, so there is no long-lived PAT to
+  provision or rotate. If you would rather the host not authenticate at all, make the two
+  packages public once under *Packages → Package settings*.
+- **Compose version.** `compose.yaml` uses a nested default
+  (`${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-…}}`) so the worker's URL inherits the
+  probe's rather than silently diverging. Docker Compose **v2.20+** resolves this
+  correctly; it is verified on the version used to build this stack. On anything older,
+  set both variables explicitly in `.env.docker`.
+- **`build images` is not a required check yet.** Branch protection on `main` requires
+  `ci (3.11)` and `ci (3.12)` only, so a Dockerfile that fails to build shows red without
+  blocking the merge. Add `build images` to the required checks to close that.
 
 ## Decisions
 

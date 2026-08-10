@@ -14,7 +14,8 @@
 # successful deploy.
 #
 # Environment:
-#   DEPLOY_DIR       directory holding compose.yaml and .env  (default: repo root)
+#   DEPLOY_DIR       directory holding compose.yaml and .env.docker  (default: repo root)
+#   ENV_FILE         compose env file  (default: $DEPLOY_DIR/.env.docker)
 #   HEALTH_URL       API health endpoint  (default: http://localhost:8000/api/v1/health)
 #   HEALTH_TIMEOUT   seconds to wait for the new build  (default: 180)
 #   HEALTH_INTERVAL  seconds between probes  (default: 5)
@@ -28,6 +29,11 @@ HEALTH_URL="${HEALTH_URL:-http://localhost:8000/api/v1/health}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
 STATE_FILE="${STATE_FILE:-$DEPLOY_DIR/.deployed-tag}"
+# Named .env.docker rather than .env: a checkout already has a `.env` holding the
+# development configuration (a different schema entirely), and compose would silently
+# load that one. Passing it explicitly also means running this from a checkout cannot
+# clobber a developer's file.
+ENV_FILE="${ENV_FILE:-$DEPLOY_DIR/.env.docker}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 # $1 is the message and $2 the exit code — "$*" here would print the code as part of the
@@ -56,7 +62,9 @@ if [[ -z "${DEPLOY_LOCK_HELD:-}" ]]; then
 fi
 
 compose() {
-  IMAGE_TAG="$1" docker compose --project-directory "$DEPLOY_DIR" "${@:2}"
+  local env_args=()
+  [[ -f "$ENV_FILE" ]] && env_args=(--env-file "$ENV_FILE")
+  IMAGE_TAG="$1" docker compose --project-directory "$DEPLOY_DIR" "${env_args[@]}" "${@:2}"
 }
 
 # The SHA the API says it is running, or empty if it is not answering.

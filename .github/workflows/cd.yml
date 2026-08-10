@@ -96,6 +96,12 @@ jobs:
     # which is the failure mode docker-publish.yml has had since it was written.
     if: vars.DEPLOY_ENABLED == 'true'
     environment: production
+    permissions:
+      contents: read
+      # The host pulls from GHCR, and images published with GITHUB_TOKEN are private by
+      # default regardless of repo visibility. This scope lets the deploy hand the host a
+      # token for the length of the job instead of provisioning a long-lived PAT.
+      packages: read
     # One deploy at a time, and never cancel one mid-flight: an interrupted rollout can
     # leave the stack on a half-applied set of images.
     concurrency:
@@ -129,6 +135,15 @@ jobs:
 
           scp -i ~/.ssh/deploy_key compose.yaml scripts/deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+          # Authenticate the host to GHCR. Packages published with GITHUB_TOKEN are
+          # private by default — independent of whether the repository is public — so
+          # without this the very first `docker compose pull` on the host 401s. The token
+          # is scoped to this job and expires with it, which is why this is a login step
+          # rather than another secret to provision and rotate.
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -i ~/.ssh/deploy_key \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
 
           # deploy.sh owns the health gate, the rollback and the idempotence check; this
           # step only hands it a SHA. Its exit code is the deploy's verdict, so a rolled
