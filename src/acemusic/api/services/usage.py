@@ -168,11 +168,12 @@ async def build_usage_summary(user: User, *, days: int = DEFAULT_WINDOW_DAYS) ->
     history = rows[:MAX_HISTORY_ROWS]
     titles = await _clip_titles(user, {row.job_id for row in history if row.job_id})
     reset_at = _next_reset(user)
+    monthly, purchased = credits_service.buckets(user)
 
     return UsageSummary(
         tier=user.subscription_tier,
-        monthly_credits=user.credits_balance,
-        purchased_credits=user.purchased_credits,
+        monthly_credits=monthly,
+        purchased_credits=purchased,
         total_credits=credits_service.spendable(user),
         reset_at=reset_at,
         days_until_reset=None if reset_at is None else max(0, math.ceil((reset_at - now).total_seconds() / 86400)),

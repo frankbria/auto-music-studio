@@ -101,6 +101,29 @@ describe("UsageSettings", () => {
     expect(breakdown.getByText("Mastering")).toBeInTheDocument()
   })
 
+  it("draws no bar for a category that nets credit back", async () => {
+    // A refund inside the window whose charge fell outside it nets negative. A negative
+    // CSS width is invalid, so the browser drops it and the bar renders full-width —
+    // showing the biggest spend of the month where credit was actually returned.
+    stubUsage(
+      summary({
+        categories: [
+          { category: "generation", credits: 7 },
+          { category: "mastering", credits: -4 },
+        ],
+      })
+    )
+
+    render(<UsageSettings accessToken="tok" />)
+
+    const breakdown = await screen.findByTestId("category-breakdown")
+    const bars =
+      breakdown.querySelectorAll<HTMLElement>('[data-testid="category-bar"]')
+    expect(bars[0].style.width).toBe("100%")
+    expect(bars[1].style.width).toBe("0%")
+    expect(breakdown).toHaveTextContent("-4 credits")
+  })
+
   it("lists every credit movement, including grants", async () => {
     stubUsage(summary())
 

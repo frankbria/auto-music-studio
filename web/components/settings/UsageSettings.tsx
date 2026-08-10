@@ -218,9 +218,13 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
                     </span>
                   </div>
                   <div
+                    data-testid="category-bar"
                     className="h-2 rounded-full bg-primary"
                     style={{
-                      width: `${peakCategory > 0 ? (row.credits / peakCategory) * 100 : 0}%`,
+                      // Clamped at zero: a refund whose charge fell outside the window
+                      // nets negative, and a negative width is invalid CSS — the browser
+                      // drops it and the bar renders full-width, the opposite of the truth.
+                      width: `${peakCategory > 0 ? (Math.max(row.credits, 0) / peakCategory) * 100 : 0}%`,
                     }}
                   />
                 </li>

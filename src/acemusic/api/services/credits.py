@@ -143,6 +143,17 @@ def spendable(user: User) -> float:
     return (user.credits_balance or 0.0) + (getattr(user, "purchased_credits", 0.0) or 0.0)
 
 
+def buckets(user: User) -> tuple[float, float]:
+    """The monthly and purchased balances separately, for the one surface that needs both.
+
+    The usage dashboard (US-26.5) explains *when* credits expire, which is the one
+    question :func:`spendable` deliberately hides. It lives here rather than at the call
+    site so the monthly bucket still has exactly one reader — a surface that reached for
+    ``credits_balance`` directly would be back to under-reporting what someone paid for.
+    """
+    return (user.credits_balance or 0.0), (getattr(user, "purchased_credits", 0.0) or 0.0)
+
+
 def _total(doc: dict) -> float:
     """Spendable credits across both buckets.
 
