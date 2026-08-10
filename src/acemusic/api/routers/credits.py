@@ -8,11 +8,11 @@ polls something small; sending the last fifty ledger rows along with it would be
 waste on every navigation. Both read the same user document, so they cannot drift.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from ..auth.dependencies import CurrentUser, get_current_user
-from ..services import credits as credits_service, users as user_service
+from ..services import credits as credits_service, usage as usage_service, users as user_service
 
 router = APIRouter(prefix="/credits", tags=["credits"], dependencies=[Depends(get_current_user)])
 
@@ -50,3 +50,26 @@ async def get_balance(current: CurrentUser = Depends(get_current_user)) -> Balan
         tier=user.subscription_tier,
         upgrade_url=credits_service.UPGRADE_URL,
     )
+
+
+@router.get("/usage", response_model=usage_service.UsageSummary)
+async def get_usage(
+    days: int = Query(usage_service.DEFAULT_WINDOW_DAYS, ge=1, le=365),
+    current: CurrentUser = Depends(get_current_user),
+) -> usage_service.UsageSummary:
+    """Balance, reset date and ``days`` of usage history for the dashboard (US-26.5).
+
+    One response for the whole page: the daily series, the category breakdown and the
+    history table are three views of the same ledger window, and fetching them separately
+    would let them disagree with each other mid-render.
+    """
+    user = await user_service.get_user_by_id(current.user_id)
+
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    # Same lazy top-up as /balance — otherwise the dashboard reports a stale balance to
+    # precisely the people who opened it to check their credits.
+    user = await credits_service.apply_monthly_reset(user)
+
+    return await usage_service.build_usage_summary(user, days=days)
