@@ -30,14 +30,18 @@ services:
       # it is a separate CUDA image on a GPU host (docker/Dockerfile, RunPod) — so the
       # API has to be told where to find it, or every generation 503s on the availability
       # probe with the stack otherwise perfectly healthy.
-      ACEMUSIC_API_LOCAL_URL: ${ACEMUSIC_API_LOCAL_URL:-http://localhost:8001}
+      # host.docker.internal, not localhost: inside this container `localhost` is the API
+      # itself, so the documented default would have the availability probe call the API
+      # and conclude that ACE-Step is down. The extra_hosts entry below makes the name
+      # resolve on Linux, where Docker does not provide it automatically.
+      ACEMUSIC_API_LOCAL_URL: ${ACEMUSIC_API_LOCAL_URL:-http://host.docker.internal:8001}
       ACEMUSIC_API_COMPUTE_PREFERENCE: ${ACEMUSIC_API_COMPUTE_PREFERENCE:-local_first}
       # The same server, named twice, because two config systems reach it: the router's
       # availability probe reads ACEMUSIC_API_LOCAL_URL (ApiSettings, ACEMUSIC_API_ prefix)
       # while the job processor's client reads ACEMUSIC_BASE_URL (the CLI config, no _API_).
       # Setting only the first accepts every generation and then fails every one of them
       # with "ACE-Step base URL is not configured" — which is how this was found.
-      ACEMUSIC_BASE_URL: ${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-http://localhost:8001}}
+      ACEMUSIC_BASE_URL: ${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-http://host.docker.internal:8001}}
       ACEMUSIC_API_KEY: ${ACEMUSIC_API_KEY:-}
       # Reported by GET /api/v1/health, so "is the new commit actually running?" is a
       # question the deployment answers itself.
@@ -59,6 +63,10 @@ services:
       ACEMUSIC_API_RUNPOD_API_KEY: ${ACEMUSIC_API_RUNPOD_API_KEY:-}
       ACEMUSIC_API_RUNPOD_ENDPOINT_ID: ${ACEMUSIC_API_RUNPOD_ENDPOINT_ID:-}
       ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED: ${ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED:-false}
+    extra_hosts:
+      # Linux does not resolve host.docker.internal on its own; this is what lets the
+      # ACEMUSIC_API_LOCAL_URL default reach an ACE-Step server running on the host.
+      - "host.docker.internal:host-gateway"
     volumes:
       # Both paths are absolute in the image. Without these the clips and trained voices
       # live in the container's writable layer and vanish on the next `up -d`.

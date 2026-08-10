@@ -122,6 +122,39 @@ voice data survived: True
 
 `--force-recreate`, not `restart` — that is the motion a deploy performs.
 
+**This check was initially too weak, and review caught it.** Writing the training file by
+hand proved the volume mounts, not that the app uses it — and it did not. The setting was
+read by `ApiSettings` and never passed to `JobProcessor`, so the worker kept its own
+default relative to the working directory:
+
+```
+module default (was used) : ./acemusic-voice-training
+setting (now passed on)   : /data/voice-training
+wired in lifespan         : True
+
+# what the old behaviour would have done, as the non-root user:
+$ mkdir -p ./acemusic-voice-training
+mkdir: cannot create directory './acemusic-voice-training': Permission denied
+$ ls -ld /app
+drwxr-xr-x 1 root root /app
+```
+
+So voice training in a container would have failed outright, and a setting that is read
+and ignored looks configured. Fixed in `main.py`, pinned by
+`tests/test_processor_wiring.py`.
+
+### `host.docker.internal`, not `localhost`
+
+Also from review: inside the API container `localhost` **is** the API container, so the
+documented default would have the availability probe call the API and conclude ACE-Step is
+down. The default is now `host.docker.internal`, with an `extra_hosts: host-gateway` entry
+because Linux does not resolve that name on its own:
+
+```
+host.docker.internal resolves inside the container -> 172.17.0.1
+http://host.docker.internal:8013 -> 200
+```
+
 ---
 
 ## Delivery
