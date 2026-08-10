@@ -110,7 +110,12 @@ function AccountMenuItems() {
       <DropdownMenuItem asChild>
         <Link href="/settings">Account settings</Link>
       </DropdownMenuItem>
-      <DropdownMenuItem>Subscription</DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link href="/settings/usage">Usage</Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link href="/settings/billing">Subscription</Link>
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
         Log out

@@ -104,9 +104,22 @@ claims outlive a plan change by up to the token TTL, which would let a downgrade
 make someone who has just paid wait for it to expire.
 
 Credits reset to the tier allocation on the **signup anniversary**, applied lazily when a
-balance is read (`GET /credits/balance`, `GET /users/me/credits`) rather than by a scheduler.
-It does not claw back a balance above the allocation, does not pay for missed periods, and
-does not pay accounts that predate the field.
+balance is read (`GET /credits/balance`, `GET /credits/usage`, `GET /users/me/credits`) rather
+than by a scheduler. It does not claw back a balance above the allocation, does not pay for
+missed periods, and does not pay accounts that predate the field.
+
+### Usage dashboard (US-26.5)
+
+`GET /api/v1/credits/usage?days=30` (1–365) backs `/settings/usage` with one read: both credit
+buckets, the next reset date, a zero-filled daily series, a per-category breakdown, and the
+history rows — three views of the same ledger window, so they cannot disagree mid-render.
+Categories come from `services/usage.py`, which maps each `action_type` (and its `_refund`
+counterpart) onto generation / editing / mastering / video / extraction / voice, so a refunded
+job nets off the charge it reversed instead of inflating the breakdown. Monthly-vs-purchased is
+reported for the **remaining** balance only — the ledger records a combined `balance_after`, not
+which bucket paid (#421/#422) — and actions that cost nothing (crop, speed, export) write no
+ledger row, so "complete usage data" means complete *credit-moving* data. CSV export is built in
+the browser from the same payload.
 
 The OAuth `state` is bound to the initiating client to prevent login CSRF /
 session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
