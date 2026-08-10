@@ -8,8 +8,11 @@
 #   - DOCKERHUB_USERNAME  Docker Hub account name (e.g. frankbria)
 #   - DOCKERHUB_TOKEN     Docker Hub access token with read/write scope
 #
-# When those secrets are absent the job logs a warning and skips rather than failing, so
-# unrelated pushes to docker/ do not report a red build on main.
+# Publishing is gated on the repository variable DOCKERHUB_PUBLISH_ENABLED, so an
+# unconfigured repo renders this job as *Skipped* (#429). It used to warn-and-skip every
+# step instead, which reported success having built and pushed nothing — a green check
+# that proved the opposite of what it looked like. Skipping still keeps main out of the
+# red on an unrelated Dependabot bump, but it no longer claims to have published.
 name: Docker Publish
 
 on:
@@ -26,30 +29,28 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     # Only ever publish from main — a manual workflow_dispatch on a feature branch must
-    # not overwrite the public `latest` tag.
-    if: github.ref == 'refs/heads/main'
+    # not overwrite the public `latest` tag. The `vars` context (unlike `secrets`) is
+    # available in `if:`, so the whole job can be skipped rather than run empty.
+    if: github.ref == 'refs/heads/main' && vars.DOCKERHUB_PUBLISH_ENABLED == 'true'
     env:
-      # ponytail: collapsed to one flag in job env because the `secrets` context is not
-      # available in `if:` conditions, but `env` is. Both halves must be present — a
-      # username without a token fails login just as hard as neither being set.
+      # Both halves must be present — a username without a token fails login just as hard
+      # as neither being set.
       HAS_DOCKERHUB_CREDS: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
-      # Without credentials the publish cannot work, and every push touching docker/ or
-      # this file (e.g. a Dependabot action bump) turns main red. Warn and skip instead.
-      - name: Warn when Docker Hub credentials are missing
+      # Enabled but not credentialed is a misconfiguration, not a state to tiptoe around:
+      # somebody asked for a publish that cannot happen, and should be told loudly.
+      - name: Fail when publishing is enabled without credentials
         if: env.HAS_DOCKERHUB_CREDS != 'true'
         run: |
-          echo "::warning title=Docker publish skipped::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set. Add them under Settings → Secrets and variables → Actions to publish frankbria/ace-step."
+          echo "::error title=Docker publish misconfigured::DOCKERHUB_PUBLISH_ENABLED is true but DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set."
+          exit 1
 
       - uses: actions/checkout@v7
-        if: env.HAS_DOCKERHUB_CREDS == 'true'
 
       - name: Set up Docker Buildx
-        if: env.HAS_DOCKERHUB_CREDS == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        if: env.HAS_DOCKERHUB_CREDS == 'true'
         uses: docker/login-action@v4.5.1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -58,7 +59,6 @@ jobs:
       # Derive tags: `latest` for main plus the git SHA for traceability.
       - name: Derive image tags
         id: meta
-        if: env.HAS_DOCKERHUB_CREDS == 'true'
         uses: docker/metadata-action@v6
         with:
           images: frankbria/ace-step
@@ -67,7 +67,6 @@ jobs:
             type=sha,format=long
 
       - name: Build and push
-        if: env.HAS_DOCKERHUB_CREDS == 'true'
         uses: docker/build-push-action@v7.3.0
         with:
           context: docker

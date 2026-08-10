@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# The container stack's env template (#429) — a committed example, not a real env file.
+!.env.docker.example
 
 # Python
 __pycache__/

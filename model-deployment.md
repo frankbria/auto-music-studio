@@ -493,38 +493,19 @@ This means the plugin doesn't need to know about RunPod. The Platform API handle
 
 ### 5.1 Dockerfile
 
-```dockerfile
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+The ACE-Step worker image is **`docker/Dockerfile`** in this repo — read it there rather
+than from a copy. An inline duplicate used to live here and had already drifted (wrong
+base image tag, wrong pip install list) by the time anyone noticed, which is the argument
+against pasting it a second time.
 
-WORKDIR /app
+It builds on a CUDA/PyTorch base, clones ACE-Step-1.5, and ships `handler.py` for RunPod
+serverless. Model weights are **not** baked in — they come from the Network Volume mounted
+at `/workspace/models` (see §4).
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
-# Install uv
-RUN pip install uv
-
-# Clone ACE-Step (or copy from build context)
-RUN git clone https://github.com/frankbria/ACE-Step-1.5.git /app/ACE-Step-1.5
-
-WORKDIR /app/ACE-Step-1.5
-
-# Install Python dependencies
-RUN uv venv && uv sync
-
-# For serverless: install runpod SDK
-RUN pip install runpod requests
-
-# Copy handler for serverless mode
-COPY handler.py /app/handler.py
-
-# Expose API port
-EXPOSE 8001
-
-# Default: start API server directly (for pods)
-# For serverless: override CMD to run handler.py
-CMD ["uv", "run", "acestep-api"]
-```
+Note this is the *inference* image only. The platform API and web app have their own
+images (`Dockerfile`, `web/Dockerfile`) and their own registry — see
+[docs/deployment.md](docs/deployment.md). The two do not share a base, a registry, or a
+release cadence.
 
 ### 5.2 Build & Push
 

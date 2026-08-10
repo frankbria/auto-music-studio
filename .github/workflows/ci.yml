@@ -97,3 +97,36 @@ jobs:
       - name: Check the web lockfile is internally consistent
         working-directory: web
         run: npm ls --package-lock-only --all > /dev/null
+
+  # #429: the images are now the deploy artifact, so a Dockerfile that does not build is a
+  # broken deploy. Without this the first place `docker build` runs is CD, on main, after
+  # the merge that broke it. Build only — publishing is CD's job.
+  #
+  # The web build also runs `npm run typecheck` and `next build` inside the image, which
+  # is the first time either has run in automation. That is a side effect worth having,
+  # not a substitute for #426.
+  images:
+    name: build images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build the API image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the web image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

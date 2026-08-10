@@ -118,6 +118,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     concurrency=settings.job_concurrency,
                     poll_interval=settings.job_poll_interval,
                     poll_timeout=settings.job_poll_timeout,
+                    # #429: the setting existed and nothing passed it on, so the worker kept
+                    # writing to its own default relative to the process's working directory.
+                    # In a container that means bypassing the mounted volume entirely — and
+                    # a setting that is read but ignored is worse than a missing one,
+                    # because it looks configured.
+                    voice_training_root=settings.voice_training_root,
                     runpod_client_factory=runpod_factory,
                     runpod_timeout=settings.runpod_timeout,
                     runpod_poll_interval=settings.runpod_poll_interval,

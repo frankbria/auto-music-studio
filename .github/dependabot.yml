@@ -38,3 +38,22 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+
+  # The platform images (#429). Dependabot only watches the directories it is told about,
+  # so without these the API and web base images would never be bumped — the ACE-Step
+  # entry above covers /docker only.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
+
+  - package-ecosystem: "docker"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14

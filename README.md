@@ -2,7 +2,24 @@
 
 AI-powered music generation platform built on ACE-Step-1.5.
 
-## Bootstrap
+## Running the platform
+
+```bash
+cp .env.docker.example .env.docker
+sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env.docker
+docker compose --env-file .env.docker up --build
+```
+
+Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at `/docs`.
+This is the supported way to run the platform, and the same `compose.yaml` describes the
+production topology. Merging to `main` publishes SHA-tagged images and deploys them — see
+[docs/deployment.md](docs/deployment.md).
+
+The commands in the rest of this section run the components directly on your machine, for
+development. They skip the image, so they also skip what the image guarantees: ffmpeg
+present, and data paths that do not depend on the directory you started the process from.
+
+## Bootstrap (development)
 
 ```bash
 uv venv
@@ -16,7 +33,7 @@ uv run python -c "import acemusic"  # smoke test
 uv run pytest
 ```
 
-## Running the web app (Layer 3)
+## Running the web app (Layer 3, development)
 
 ```bash
 cd web && npm install && npm run dev
@@ -24,7 +41,7 @@ cd web && npm install && npm run dev
 
 Starts the Next.js dev server at `http://localhost:3000`.
 
-## Running the API (Layer 2)
+## Running the API (Layer 2, development)
 
 The platform API is a FastAPI app served under `/api/v1`:
 
@@ -33,7 +50,8 @@ uv run uvicorn acemusic.api.main:app --reload
 ```
 
 Then visit `http://127.0.0.1:8000/docs` for the interactive Swagger UI, or
-`GET /api/v1/health` for a liveness check. Allowed CORS origins are configured
+`GET /api/v1/health` for a liveness check — which also reports `build_sha`, the commit the
+running image was built from (`unknown` outside a built image). Allowed CORS origins are configured
 via `ACEMUSIC_API_CORS_ALLOW_ORIGINS` (comma-separated).
 
 The API requires **MongoDB** and fails fast on startup if it is unreachable.
@@ -465,7 +483,9 @@ Audio files are managed through a single storage interface
 `ACEMUSIC_STORAGE_BACKEND`:
 
 - `local` (default) — files on the local filesystem under
-  `ACEMUSIC_STORAGE_LOCAL_ROOT` (defaults to `./storage`).
+  `ACEMUSIC_STORAGE_LOCAL_ROOT`. Unset, it defaults to `./storage` **relative to the
+  working directory the process was started from**; the container images set it to the
+  absolute `/data/storage`, backed by a named volume, so clips survive a deploy.
 - `s3` — any S3-compatible bucket (AWS, MinIO, Backblaze B2) via the optional
   `s3` extra (`uv sync --extra s3`). Set `ACEMUSIC_S3_BUCKET` and, for non-AWS
   endpoints, `ACEMUSIC_S3_ENDPOINT_URL`. Credentials come from boto3's default
@@ -479,7 +499,9 @@ keys follow `{user_id}/{workspace_id}/clips/{clip_id}.{format}`. See
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill in the required values before running.
+For the container stack, copy `.env.docker.example` to `.env` — that file is the whole
+contract between the app and a host. For running components directly, copy `.env.example`
+to `.env` and fill in the required values before running.
 
 ## Licensing
 

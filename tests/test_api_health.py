@@ -52,6 +52,22 @@ class TestHealthEndpoint:
         assert isinstance(body["uptime_seconds"], (int, float))
         assert body["uptime_seconds"] >= 0
 
+    def test_health_reports_the_build_it_is_running(self, client, monkeypatch):
+        """The commit the running image was built from (#429).
+
+        Images are tagged by SHA, so without this the only way to answer "did the deploy
+        land?" is to trust the workflow that reported success. `version` cannot do it —
+        it is the static `0.1.0` from pyproject that nobody bumps.
+        """
+        monkeypatch.setenv("ACEMUSIC_BUILD_SHA", "abc123def456")
+        body = client.get("/api/v1/health").json()
+        assert body["build_sha"] == "abc123def456"
+
+    def test_build_sha_is_unknown_outside_a_built_image(self, client):
+        """Nothing sets it in a dev checkout, and that must not be an error."""
+        body = client.get("/api/v1/health").json()
+        assert body["build_sha"] == "unknown"
+
     def test_unversioned_health_is_not_exposed(self, client):
         """Health is only mounted under the v1 prefix."""
         assert client.get("/health").status_code == 404
@@ -84,7 +100,7 @@ class TestOpenApiDocs:
         ref = content["application/json"]["schema"]["$ref"]
         model_name = ref.rsplit("/", 1)[-1]
         properties = schema["components"]["schemas"][model_name]["properties"]
-        assert {"status", "version", "uptime_seconds"} <= set(properties)
+        assert {"status", "version", "uptime_seconds", "build_sha"} <= set(properties)
 
 
 class TestCors:
