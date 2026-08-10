@@ -1,0 +1,155 @@
+# Continuous deployment (#429): green CI on main → published images → rolled out.
+#
+# Triggered by `workflow_run` rather than `push` so the publish keys off CI's verdict
+# instead of re-deciding it. `main` already requires ci (3.11) and ci (3.12) with strict
+# up-to-date enforcement, so a merge is gated; this waits for that same run to finish.
+#
+# Registry is GHCR, authenticated with the built-in GITHUB_TOKEN. That is the whole reason
+# to prefer it over Docker Hub here: docker-publish.yml has never published anything
+# because its credentials were never set, and a pipeline that needs no new secrets cannot
+# fail that way. Docker Hub stays correct for the ACE-Step image, which RunPod pulls.
+#
+# To enable the rollout, set the repository variable DEPLOY_ENABLED=true and populate the
+# `production` environment with DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY. Until then the
+# deploy job is *skipped* — visibly inert, rather than green having done nothing.
+
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository }}-api
+  WEB_IMAGE: ghcr.io/${{ github.repository }}-web
+
+jobs:
+  publish:
+    name: Build and publish images
+    runs-on: ubuntu-latest
+    # A failed or cancelled CI run must not publish. workflow_dispatch has no upstream
+    # run to inspect, so it is allowed through for manual re-publishing.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Resolve the commit under test
+        id: commit
+        # workflow_run fires against the default branch, so the SHA has to come from the
+        # triggering run — otherwise a busy main publishes an image built from a later
+        # commit than the one CI actually passed on.
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.commit.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the API image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # SHA first: that is the deployable, traceable tag the rollout pins to. `latest`
+          # is a convenience for humans and must never be what a deploy resolves.
+          tags: |
+            ${{ env.API_IMAGE }}:${{ steps.commit.outputs.sha }}
+            ${{ env.API_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push the web image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ steps.commit.outputs.sha }}
+            ${{ env.WEB_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to production
+    needs: publish
+    runs-on: ubuntu-latest
+    # A repository *variable* (not a secret) so this can be evaluated at job level: an
+    # unconfigured deploy renders as Skipped instead of a green job that did nothing —
+    # which is the failure mode docker-publish.yml has had since it was written.
+    if: vars.DEPLOY_ENABLED == 'true'
+    environment: production
+    # One deploy at a time, and never cancel one mid-flight: an interrupted rollout can
+    # leave the stack on a half-applied set of images.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.publish.outputs.sha }}
+
+      - name: Ship the stack definition and roll forward
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/srv/acemusic' }}
+          IMAGE_TAG: ${{ needs.publish.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            if [[ -z "${!required}" ]]; then
+              echo "::error title=Deploy misconfigured::DEPLOY_ENABLED is true but $required is not set on the production environment."
+              exit 1
+            fi
+          done
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          scp -i ~/.ssh/deploy_key compose.yaml scripts/deploy.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+          # deploy.sh owns the health gate, the rollback and the idempotence check; this
+          # step only hands it a SHA. Its exit code is the deploy's verdict, so a rolled
+          # back deploy reports failure here rather than green.
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd $DEPLOY_PATH && chmod +x deploy.sh && \
+             API_IMAGE='${{ env.API_IMAGE }}' WEB_IMAGE='${{ env.WEB_IMAGE }}' \
+             DEPLOY_DIR='$DEPLOY_PATH' ./deploy.sh '$IMAGE_TAG'"
+
+      - name: Confirm the deployed commit
+        env:
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+          IMAGE_TAG: ${{ needs.publish.outputs.sha }}
+        # Independent of the host's own check: asks the public endpoint which commit it is
+        # serving. The workflow reporting success is not evidence that it did.
+        if: vars.PRODUCTION_HEALTH_URL != ''
+        run: |
+          set -euo pipefail
+          running="$(curl -fsS --max-time 10 "$HEALTH_URL" | sed -n 's/.*"build_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+          if [[ "$running" != "$IMAGE_TAG" ]]; then
+            echo "::error title=Deploy not live::$HEALTH_URL reports build_sha='$running', expected '$IMAGE_TAG'."
+            exit 1
+          fi
+          echo "$HEALTH_URL is serving $running"

@@ -1,0 +1,21 @@
+# Build context for the web image (#429). Same reasoning as the root .dockerignore:
+# web/.env.local is gitignored but nothing else keeps it out of an image layer.
+.env
+.env.*
+!.env.example
+
+node_modules/
+.next/
+out/
+
+.git/
+.gitignore
+
+# Tests run in CI, not in the image build
+**/*.test.ts
+**/*.test.tsx
+test/
+vitest.config.ts
+vitest.setup.ts
+
+*.md

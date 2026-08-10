@@ -217,14 +217,35 @@ Configured in `.pre-commit-config.yaml`:
 
 ## CI
 
-`.github/workflows/ci.yml` — Python:
+`.github/workflows/ci.yml` — three jobs:
 - Triggers on push (all branches) and PR to `main`
-- Matrix: Python 3.11, 3.12
-- Steps: install ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov`
+- `ci` — matrix Python 3.11, 3.12, with a `mongo:7` service container. Steps: install
+  ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov` →
+  `pytest -m integration` against the service Mongo. **These two are the required checks
+  on `main`** (`ci (3.11)`, `ci (3.12)`).
+- `web npm audit` — `npm audit --audit-level=high` plus a lockfile-consistency check.
+  Typecheck, lint, test and build for `web/` are still **not** run here (#426).
+- `build images` — builds the API and web images without pushing (#429), so a Dockerfile
+  that does not build fails the PR rather than the deploy. The web image build runs
+  `npm run typecheck` and `next build` as a side effect.
 - **ffmpeg is installed in CI** (#401). It is a runtime requirement for free-tier video
   watermarking, and its absence used to silently skip every ffmpeg-gated test — roughly ten
   of them across audio export, clip conversion, batch transcode and studio mixdown. Assume
   those now run: a test that only passes because ffmpeg is missing will fail CI.
+
+`.github/workflows/cd.yml` — deploy (#429):
+- Triggered by `workflow_run` when CI completes successfully on `main`, so it keys off
+  CI's verdict rather than re-deciding it
+- Publishes `ghcr.io/<repo>-api` and `-web`, tagged with the commit SHA and `latest`
+- Rolls out over SSH by handing `scripts/deploy.sh` a SHA; that script owns the health
+  gate, the automatic rollback and the idempotence check, and is tested in
+  `tests/test_deploy_script.py`
+- The deploy job is **skipped** until `DEPLOY_ENABLED=true` and the `production`
+  environment secrets exist. See `docs/deployment.md`.
+
+`.github/workflows/docker-publish.yml` — ACE-Step worker image to Docker Hub. Gated on the
+`DOCKERHUB_PUBLISH_ENABLED` variable, so an unconfigured repo shows it as *skipped* rather
+than green having published nothing.
 
 `.github/workflows/plugin.yml` — VST3 plugin (C++):
 - Path-filtered to `plugin/**`, so Python-only changes don't trigger a 3-OS C++ build
@@ -262,7 +283,12 @@ Package manager: `uv` with `hatchling` build backend
   same way will not notice (see `isAsciiOnly` in `ConnectionManagerTests.cpp`)
 - The plugin stores connection settings in `~/.config/AutoMusicStudio/` (Linux). It
   holds an optional API key in plaintext, chmod 0600
-- `web/` is the Next.js app (Stages 15–16 complete, Stage 17 in progress); run with `cd web && npm install && npm run dev`
+- `web/` is the Next.js app (Stages 15–16 complete, Stage 17 in progress); `docker compose up`
+  runs the whole platform, or `cd web && npm install && npm run dev` for the dev server alone
+- The platform runs as containers (#429): `Dockerfile` (API), `web/Dockerfile`, `compose.yaml`.
+  Data paths are absolute *in the image only* (`/data/storage`, `/data/voice-training`) —
+  the code defaults stay CWD-relative because `voice_training_root` is sent verbatim to
+  ACE-Step, which shares the filesystem
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions

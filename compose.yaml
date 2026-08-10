@@ -1,0 +1,108 @@
+# The whole platform: API + web + MongoDB (#429).
+#
+# This file is both the local stack (`docker compose up`) and the record of production
+# topology — the same services, with images pulled by tag instead of built. Anything a
+# host needs that is not in here or in the Dockerfiles is a bug in one of them.
+#
+# Every setting arrives as an environment variable, so deploying to a different host is a
+# different .env, not a different file. Copy .env.docker.example to .env to start.
+
+name: acemusic
+
+services:
+  api:
+    # IMAGE_TAG is set by the deploy (to a commit SHA); locally it is unset and the build
+    # below is used instead, so the same file serves both without a second copy to drift.
+    image: ${API_IMAGE:-acemusic-api}:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ACEMUSIC_API_MONGODB_URL: mongodb://mongo:27017
+      ACEMUSIC_API_MONGODB_DB_NAME: ${ACEMUSIC_API_MONGODB_DB_NAME:-acemusic}
+      # No default: the API mints tokens with this, and a shared fallback secret is worse
+      # than a loud failure. .env.docker.example generates one.
+      ACEMUSIC_API_JWT_SECRET_KEY: ${ACEMUSIC_API_JWT_SECRET_KEY:?set ACEMUSIC_API_JWT_SECRET_KEY (see .env.docker.example)}
+      ACEMUSIC_API_CORS_ALLOW_ORIGINS: ${ACEMUSIC_API_CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      ACEMUSIC_STORAGE_BACKEND: ${ACEMUSIC_STORAGE_BACKEND:-local}
+      # Where generation actually runs. The ACE-Step server is not part of this stack —
+      # it is a separate CUDA image on a GPU host (docker/Dockerfile, RunPod) — so the
+      # API has to be told where to find it, or every generation 503s on the availability
+      # probe with the stack otherwise perfectly healthy.
+      ACEMUSIC_API_LOCAL_URL: ${ACEMUSIC_API_LOCAL_URL:-http://localhost:8001}
+      ACEMUSIC_API_COMPUTE_PREFERENCE: ${ACEMUSIC_API_COMPUTE_PREFERENCE:-local_first}
+      # The same server, named twice, because two config systems reach it: the router's
+      # availability probe reads ACEMUSIC_API_LOCAL_URL (ApiSettings, ACEMUSIC_API_ prefix)
+      # while the job processor's client reads ACEMUSIC_BASE_URL (the CLI config, no _API_).
+      # Setting only the first accepts every generation and then fails every one of them
+      # with "ACE-Step base URL is not configured" — which is how this was found.
+      ACEMUSIC_BASE_URL: ${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-http://localhost:8001}}
+      ACEMUSIC_API_KEY: ${ACEMUSIC_API_KEY:-}
+      # Reported by GET /api/v1/health, so "is the new commit actually running?" is a
+      # question the deployment answers itself.
+      ACEMUSIC_BUILD_SHA: ${IMAGE_TAG:-local}
+      # OAuth, Stripe and provider credentials pass straight through when set. Unset means
+      # the feature is off, which is the correct default for a local stack.
+      ACEMUSIC_API_GOOGLE_CLIENT_ID: ${ACEMUSIC_API_GOOGLE_CLIENT_ID:-}
+      ACEMUSIC_API_GOOGLE_CLIENT_SECRET: ${ACEMUSIC_API_GOOGLE_CLIENT_SECRET:-}
+      ACEMUSIC_API_GOOGLE_REDIRECT_URI: ${ACEMUSIC_API_GOOGLE_REDIRECT_URI:-}
+      ACEMUSIC_API_DISCORD_CLIENT_ID: ${ACEMUSIC_API_DISCORD_CLIENT_ID:-}
+      ACEMUSIC_API_DISCORD_CLIENT_SECRET: ${ACEMUSIC_API_DISCORD_CLIENT_SECRET:-}
+      ACEMUSIC_API_DISCORD_REDIRECT_URI: ${ACEMUSIC_API_DISCORD_REDIRECT_URI:-}
+      ACEMUSIC_API_STRIPE_SECRET_KEY: ${ACEMUSIC_API_STRIPE_SECRET_KEY:-}
+      ACEMUSIC_API_STRIPE_WEBHOOK_SECRET: ${ACEMUSIC_API_STRIPE_WEBHOOK_SECRET:-}
+      ACEMUSIC_API_STRIPE_PRICE_ID_PRO: ${ACEMUSIC_API_STRIPE_PRICE_ID_PRO:-}
+      ACEMUSIC_API_OPENAI_API_KEY: ${ACEMUSIC_API_OPENAI_API_KEY:-}
+      ACEMUSIC_API_VIDEO_API_URL: ${ACEMUSIC_API_VIDEO_API_URL:-}
+      ACEMUSIC_API_VIDEO_API_KEY: ${ACEMUSIC_API_VIDEO_API_KEY:-}
+      ACEMUSIC_API_RUNPOD_API_KEY: ${ACEMUSIC_API_RUNPOD_API_KEY:-}
+      ACEMUSIC_API_RUNPOD_ENDPOINT_ID: ${ACEMUSIC_API_RUNPOD_ENDPOINT_ID:-}
+      ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED: ${ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED:-false}
+    volumes:
+      # Both paths are absolute in the image. Without these the clips and trained voices
+      # live in the container's writable layer and vanish on the next `up -d`.
+      - storage:/data/storage
+      - voice-training:/data/voice-training
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  web:
+    image: ${WEB_IMAGE:-acemusic-web}:${IMAGE_TAG:-local}
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Server-side only (the app has no NEXT_PUBLIC_* vars), so this is a runtime value
+      # and the image is portable across environments unchanged.
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    healthcheck:
+      # Same probe CI uses for its Mongo service, so local, CI and production agree on
+      # what "the database is up" means.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - mongo-data:/data/db
+    # Not published by default: on a shared VPS an exposed Mongo is the whole database.
+    # Set MONGO_PORT to reach it from the host for debugging.
+    ports:
+      - "${MONGO_PORT:-127.0.0.1:27017}:27017"
+
+volumes:
+  storage:
+  voice-training:
+  mongo-data:

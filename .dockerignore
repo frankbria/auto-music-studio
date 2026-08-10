@@ -1,0 +1,57 @@
+# Build context for the API image (#429).
+#
+# The first entries are the point of this file: `.env` and `.env.local` live at the repo
+# root and are gitignored, so nothing before this stopped a root-context build baking real
+# credentials into an image layer. .gitignore protects git; only this protects Docker.
+.env
+.env.*
+!.env.example
+
+# Secrets and local state
+.beads/
+*.pem
+*.key
+
+# Version control and CI
+.git/
+.github/
+.gitignore
+
+# Python build/test artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node — the API image never needs these, and web/ builds from its own context
+node_modules/
+web/node_modules/
+web/.next/
+
+# Runtime data that must come from a volume, never from a layer. acemusic-voice-training/
+# alone is ~47 model directories of nothing the image should carry.
+storage/
+acemusic-voice-training/
+
+# The C++ plugin and its vendored JUCE build tree
+plugin/build/
+plugin/Builds/
+
+# Docs, demos and stray media — pure build-context weight
+docs/
+tasks/
+user-stories/
+*.md
+!README.md
+*.mp3
+*.wav
+*.png
+*.jpg
