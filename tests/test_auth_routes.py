@@ -341,8 +341,14 @@ class TestCallback:
         # No account is created on an unverified address.
         assert await User.find_one(User.email == "unverified@example.com") is None
 
-    async def test_same_email_via_second_provider_rejected_409(self, client, settings, monkeypatch):
-        # First login via Google creates the account.
+    async def test_same_email_via_second_provider_links_to_one_account(self, client, settings, monkeypatch):
+        """#111: the second provider signs into the same account rather than being refused.
+
+        This asserted a 409 until multi-identity linking landed. The old behaviour was
+        deterministic and safe — no duplicate accounts, no 500 on the unique index — but it
+        meant someone with the same address on Google and Discord could only ever use
+        whichever they happened to sign up with.
+        """
         _fake_exchange(
             monkeypatch,
             OAuthUserInfo(
@@ -354,9 +360,7 @@ class TestCallback:
             json={"code": "c1", "state": _bind_state(client, "google", settings)},
         )
         assert first.status_code == 200
-        # Same email arrives via a second provider (Discord). The single-identity
-        # model can't link it yet, so it is rejected deterministically (409) —
-        # not 500'd on the unique index and not silently duplicated.
+
         _fake_exchange(
             monkeypatch,
             OAuthUserInfo(
@@ -367,11 +371,58 @@ class TestCallback:
             f"{API_V1_PREFIX}/auth/callback/discord",
             json={"code": "c2", "state": _bind_state(client, "discord", settings)},
         )
-        assert second.status_code == 409
-        # No duplicate account was created for the shared email.
+
+        assert second.status_code == 200
+        # One account, now reachable by either provider.
         users = await User.find(User.email == "shared@example.com").to_list()
         assert len(users) == 1
+        assert {(i.provider, i.oauth_id) for i in users[0].identities} == {
+            ("google", "g-shared"),
+            ("discord", "d-shared"),
+        }
+        # The primary identity does not move — the partial-unique index is built on it.
         assert users[0].oauth_provider == "google"
+        # Both logins mint a token for the same account — which is the point of linking.
+        # (The tokens themselves can be byte-identical: same claims, same second.)
+        import jwt as _jwt
+
+        claims = [
+            _jwt.decode(r.json()["access_token"], settings.jwt_secret_key, algorithms=["HS256"])
+            for r in (first, second)
+        ]
+        assert claims[0]["sub"] == claims[1]["sub"] == str(users[0].id)
+
+    async def test_an_unverified_second_provider_never_reaches_the_link(self, client, settings, monkeypatch):
+        """Linking hands a new provider control of an existing account.
+
+        The 403 gate is what keeps that from happening on an address nobody vouched for,
+        so it has to fire on a *collision* too — not only on a fresh signup.
+        """
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="google", oauth_id="g-own", email="owned@example.com", name="Owner", email_verified=True
+            ),
+        )
+        await client.post(
+            f"{API_V1_PREFIX}/auth/callback/google",
+            json={"code": "c1", "state": _bind_state(client, "google", settings)},
+        )
+
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="discord", oauth_id="d-imposter", email="owned@example.com", name="X", email_verified=False
+            ),
+        )
+        second = await client.post(
+            f"{API_V1_PREFIX}/auth/callback/discord",
+            json={"code": "c2", "state": _bind_state(client, "discord", settings)},
+        )
+
+        assert second.status_code == 403
+        users = await User.find(User.email == "owned@example.com").to_list()
+        assert [(i.provider, i.oauth_id) for i in users[0].identities] == [("google", "g-own")]
 
     async def test_existing_identity_email_change_to_owned_address_does_not_500(self, client, settings, monkeypatch):
         """If a provider reports an email already owned by another account, the

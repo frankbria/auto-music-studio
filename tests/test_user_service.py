@@ -63,7 +63,13 @@ class TestGetOrCreateUser:
         )
         assert again.id == first.id
 
-    async def test_raises_when_email_owned_by_different_provider(self, mongo_db):
+    async def test_raises_when_an_unvouched_email_is_owned_by_a_different_provider(self, mongo_db):
+        """#111 links a *verified* collision; without that assertion it is still a 409.
+
+        The default matters: linking transfers control of an account, so a caller that has
+        not thought about email verification gets the old, safe refusal rather than
+        silently handing the account to whoever asked.
+        """
         await user_service.get_or_create_user(
             email="shared@example.com", provider="google", oauth_id="g-1", name="Shared"
         )

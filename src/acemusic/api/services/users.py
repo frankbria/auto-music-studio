@@ -14,7 +14,7 @@ from bson.errors import InvalidId
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import EmailAlreadyRegisteredError, HandleConflictError
-from ..models import User
+from ..models import OAuthIdentity, User
 from ..models.common import utcnow
 
 HANDLE_MIN_LENGTH = 3
@@ -67,18 +67,81 @@ async def get_user_by_id(user_id: str | PydanticObjectId) -> User | None:
     return await User.get(oid)
 
 
-async def get_or_create_user(*, email: str, provider: str, oauth_id: str, name: str) -> User:
-    """Find the user for an OAuth identity, creating one on first login.
+async def _find_by_identity(provider: str, oauth_id: str) -> User | None:
+    """The account this OAuth identity signs into, linked or primary.
+
+    The ``$or`` is what keeps accounts written before #111 reachable: they have only the
+    legacy pair and no ``identities`` array, so a query against the new shape alone would
+    lock every existing user out of their own account.
+    """
+    return await User.find_one(
+        {
+            "$or": [
+                {"identities": {"$elemMatch": {"provider": provider, "oauth_id": oauth_id}}},
+                {"oauth_provider": provider, "oauth_id": oauth_id},
+            ]
+        }
+    )
+
+
+async def _persist_identities(user: User) -> None:
+    """Write a materialised ``identities`` list back for a pre-#111 document.
+
+    The validator derives it on read, but the linking lookup and the unique index both
+    query the *stored* array — so without this the new shape would never reach the
+    database. Conditional on the field still being absent and touching only that field:
+    the ``credits_reset_at`` backfill idiom, for the same reason. A full ``save()`` would
+    push a whole stale document back and could revert a concurrent write.
+    """
+    if not user.identities:
+        return
+
+    await User.get_pymongo_collection().update_one(
+        {"_id": user.id, "identities": {"$exists": False}},
+        {"$set": {"identities": [i.model_dump() for i in user.identities]}},
+    )
+
+
+async def _link_identity(user: User, provider: str, oauth_id: str) -> User:
+    """Attach a new OAuth identity to an existing account.
+
+    A single conditioned ``$push``: the filter excludes accounts that already carry the
+    identity, so concurrent logins converge on one entry instead of appending duplicates.
+    """
+    identity = OAuthIdentity(provider=provider, oauth_id=oauth_id, linked_at=utcnow())
+
+    await User.get_pymongo_collection().update_one(
+        {"_id": user.id, "identities": {"$not": {"$elemMatch": {"provider": provider, "oauth_id": oauth_id}}}},
+        {
+            # The caller persists a legacy document's materialised array first, so this
+            # only ever appends to an array that already carries the primary identity.
+            "$set": {"updated_at": utcnow()},
+            "$push": {"identities": identity.model_dump()},
+        },
+    )
+    return await User.get(user.id) or user
+
+
+async def get_or_create_user(
+    *, email: str, provider: str, oauth_id: str, name: str, email_verified: bool = False
+) -> User:
+    """Find the user for an OAuth identity, creating or linking one as needed.
 
     This is the canonical upsert US-8.3's callback invokes. On creation the
     profile ``display_name`` is seeded from the provider-reported ``name``.
 
-    Raises :class:`EmailAlreadyRegisteredError` when the verified email already
-    belongs to a *different* OAuth identity (single-identity model; linking is
-    future work).
+    ``email_verified`` says the provider vouched for the address, and it is what permits
+    a second provider to be **linked** onto an existing account (#111). It defaults to
+    False because linking transfers control of an account: every caller that has not
+    thought about verification keeps the old, safe behaviour of refusing the collision.
+    The OAuth callback opts in, having already rejected unverified emails with a 403.
+
+    Raises :class:`EmailAlreadyRegisteredError` when the email belongs to a different
+    identity and the caller cannot vouch for it.
     """
-    user = await User.find_one(User.oauth_provider == provider, User.oauth_id == oauth_id)
+    user = await _find_by_identity(provider, oauth_id)
     if user is not None:
+        await _persist_identities(user)
         # Known identity. The provider may report a changed email; only apply it
         # when the address is free (or already ours), otherwise keep our current
         # email so the user still logs into their own account without violating
@@ -96,17 +159,23 @@ async def get_or_create_user(*, email: str, provider: str, oauth_id: str, name: 
         # A concurrent first-login for the *same* identity may have inserted
         # this row between the identity lookup above and here — that's the
         # idempotent case, not a conflict (mirrors the DuplicateKeyError
-        # recovery below). Only a different identity owning the email is a 409.
-        if email_owner.oauth_provider == provider and email_owner.oauth_id == oauth_id:
+        # recovery below).
+        if any(i.provider == provider and i.oauth_id == oauth_id for i in email_owner.identities):
             return email_owner
-        raise EmailAlreadyRegisteredError(email)
+
+        # #111: a different identity owns the address. When the provider has verified it,
+        # that is the same person arriving by another door — link rather than refuse.
+        if not email_verified:
+            raise EmailAlreadyRegisteredError(email)
+
+        await _persist_identities(email_owner)
+        return await _link_identity(email_owner, provider, oauth_id)
 
     user = User(
         email=email,
         name=name,
         display_name=name,
-        oauth_provider=provider,
-        oauth_id=oauth_id,
+        identities=[OAuthIdentity(provider=provider, oauth_id=oauth_id)],
     )
     try:
         await user.insert()
@@ -117,9 +186,16 @@ async def get_or_create_user(*, email: str, provider: str, oauth_id: str, name: 
         # elsewhere, return that row (first-login is idempotent); if a different
         # identity claimed the email first, surface the same 409 as the non-race
         # path.
-        existing = await User.find_one(User.oauth_provider == provider, User.oauth_id == oauth_id)
+        existing = await _find_by_identity(provider, oauth_id)
         if existing is not None:
             return existing
+
+        # A different identity claimed the email first. Same fork as above: link when the
+        # provider vouched for the address, refuse when it did not.
+        loser_to = await User.find_one(User.email == email)
+        if loser_to is not None and email_verified:
+            await _persist_identities(loser_to)
+            return await _link_identity(loser_to, provider, oauth_id)
         raise EmailAlreadyRegisteredError(email) from None
     return user
 

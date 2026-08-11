@@ -11,10 +11,12 @@ class HandleConflictError(Exception):
 
 
 class EmailAlreadyRegisteredError(Exception):
-    """An OAuth identity's verified email already belongs to a different account.
+    """An email belongs to a different OAuth identity, and the caller cannot vouch for it.
 
-    The User model holds a single OAuth identity and email is unique-indexed, so a
-    second provider reporting an already-registered address cannot be linked yet.
+    Since #111 a *verified* collision is linked onto the existing account instead — the
+    same person arriving by another door. This is what remains: a caller that did not
+    assert the provider verified the address. Linking hands a provider control of an
+    existing account, so an unvouched collision is still refused (409).
     """
 
 

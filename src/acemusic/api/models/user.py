@@ -1,9 +1,10 @@
 """User document model (US-8.2)."""
 
 from datetime import datetime
+from typing import Any
 
 from beanie import Document
-from pydantic import EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from pymongo import ASCENDING, IndexModel
 
 from .common import utcnow
@@ -12,6 +13,18 @@ from .common import utcnow
 # purchase/subscription flow is Layer 4 (Stage 26) — so this is a provisional
 # free allowance: enough for 10 songs or 20 sounds.
 DEFAULT_CREDITS_BALANCE = 10.0
+
+
+class OAuthIdentity(BaseModel):
+    """One provider account that signs into a :class:`User` (#111)."""
+
+    provider: str
+    oauth_id: str
+    #: When this identity was attached. ``None`` for the identity an account was created
+    #: with, and for the ones materialised from the legacy fields — in neither case is
+    #: there a linking event to date, and inventing one would misreport provenance for
+    #: exactly the records where it matters.
+    linked_at: datetime | None = None
 
 
 class User(Document):
@@ -24,6 +37,18 @@ class User(Document):
 
     email: EmailStr
     name: str
+    #: Every OAuth identity that signs into this account (#111). Someone with the same
+    #: address on Google and Discord used to be able to use only whichever they signed up
+    #: with; a second provider reporting a verified, already-registered email now links
+    #: here instead of being refused.
+    identities: list[OAuthIdentity] = Field(default_factory=list)
+    #: The *primary* identity, denormalised from ``identities[0]``.
+    #:
+    #: Kept rather than replaced, for two reasons. The partial-unique index below is built
+    #: on these fields, and Beanie creates indexes at startup but never rebuilds one whose
+    #: spec changed — so on any long-lived database a redefined index would silently keep
+    #: its old definition. And documents written before ``identities`` existed have only
+    #: these, which is what makes the migration a validator rather than a batch job.
     oauth_provider: str | None = None
     oauth_id: str | None = None
     subscription_tier: str = "free"
@@ -87,6 +112,42 @@ class User(Document):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _materialise_identities_from_legacy_fields(cls, data: Any) -> Any:
+        """Give documents written before #111 an ``identities`` list on load.
+
+        Same idiom as ``Clip.visibility``'s backfill from ``is_public``: the new shape is
+        derived on read so no batch migration is needed, and the service persists it on
+        the way past. Without this, every account that existed before this change would
+        have an empty list and its owner would be locked out.
+        """
+        if not isinstance(data, dict) or data.get("identities"):
+            return data
+
+        provider, oauth_id = data.get("oauth_provider"), data.get("oauth_id")
+        if not (isinstance(provider, str) and isinstance(oauth_id, str)):
+            return data
+
+        data = dict(data)
+        data["identities"] = [{"provider": provider, "oauth_id": oauth_id}]
+        return data
+
+    @model_validator(mode="after")
+    def _sync_primary_identity(self) -> "User":
+        """Keep ``oauth_provider``/``oauth_id`` pointed at the first identity.
+
+        They are the denormalisation the partial-unique index is built on, so they must
+        never drift. Only the *primary* identity is mirrored — a linked second provider
+        deliberately does not repoint them, or linking would move an account out from
+        under the index entry that already guards it.
+        """
+        if self.identities:
+            primary = self.identities[0]
+            self.oauth_provider = primary.provider
+            self.oauth_id = primary.oauth_id
+        return self
+
     class Settings:
         name = "users"
         indexes = [
@@ -102,6 +163,20 @@ class User(Document):
                     "oauth_provider": {"$type": "string"},
                     "oauth_id": {"$type": "string"},
                 },
+            ),
+            # #111: the same guarantee for *linked* identities, over the array. Legal
+            # because only one of the two fields is an array path — MongoDB forbids a
+            # compound index spanning two arrays, not one array of subdocuments.
+            #
+            # Additive on purpose: the index above still guards primary identities and
+            # keeps its meaning, so no existing index has to be dropped or rebuilt. Beanie
+            # never rebuilds an index whose spec changed, which makes redefining one on a
+            # long-lived database a silent no-op.
+            IndexModel(
+                [("identities.provider", ASCENDING), ("identities.oauth_id", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"identities.provider": {"$type": "string"}},
+                name="identities_provider_oauth_id_unique",
             ),
             # Handles are globally unique. Partial (same reasoning as the OAuth
             # index): the many users with a null handle must not collide on a
