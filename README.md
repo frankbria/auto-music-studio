@@ -72,6 +72,25 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
 | `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
 
+**One account, several providers (#111).** A `User` carries a list of `identities`
+(`{provider, oauth_id}`), so the same person can sign in with Google or Discord and land
+in the same account. When a provider reports an email that already belongs to a different
+identity, that identity is **linked** rather than refused — but only because the callback
+has already rejected unverified addresses with a `403`. An unverified collision is still a
+`409`, and the service defaults to refusing: linking hands a provider control of an
+existing account, so a caller has to assert verification explicitly.
+
+The trust boundary is worth stating plainly: this treats "provider says the email is
+verified" as proof of the same human. That is the industry-standard trade, and it is a
+real one — Discord's `verified` only means Discord confirmed the address, and users can
+change their Discord email. Anyone who can get a supported provider to verify a victim's
+address can link into that account.
+
+`oauth_provider`/`oauth_id` remain on the document as the *primary* identity, kept in sync
+with `identities[0]`. They are what the existing partial-unique index is built on, and
+accounts created before the list existed have only them — which is what makes the change a
+read-time backfill rather than a migration.
+
 ### User profile
 
 | Endpoint | Purpose |

@@ -184,19 +184,28 @@ async def callback(provider: str, body: CallbackRequest, request: Request, respo
 
     # Upsert the user for this verified OAuth identity (US-8.4 owns the service;
     # it also seeds the profile display_name from the provider name on creation).
-    # The User model holds a single OAuth identity and email is unique-indexed, so
-    # an email already registered under another provider cannot be linked yet:
-    # reject deterministically (409) rather than 500 on the index or silently
-    # create a duplicate. Multi-identity linking is future work (see PR "Known
-    # limitations").
+    #
+    # #111: an email already registered under another provider is now *linked* onto that
+    # account rather than refused, so the same person can sign in with Google or Discord
+    # interchangeably. The 409 below survives for the case linking must not cover — a
+    # collision the provider has not verified — which this route never reaches, because
+    # the check above already turned it into a 403.
     try:
         user = await user_service.get_or_create_user(
             email=info.email,
             provider=info.provider,
             oauth_id=info.oauth_id,
             name=info.name,
+            # #111: what permits a second provider to be linked onto an existing account.
+            # Passed explicitly rather than assumed from the 403 gate above, so the
+            # service never has to infer that its caller checked — and so the gate and the
+            # permission move together if either is ever changed.
+            email_verified=info.email_verified,
         )
     except EmailAlreadyRegisteredError as exc:
+        # Unreachable from here while the 403 gate above stands, and kept deliberately:
+        # it is the failure the service guarantees, and a future caller that stops
+        # verifying should meet a 409 rather than an accidental account takeover.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This email is already registered with a different sign-in provider.",
