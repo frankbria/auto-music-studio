@@ -382,7 +382,7 @@ async def _record_event(
     logging loudly.
 
     **Called after the state change, never before.** Recording first would open a window
-    where a crash between the insert and ``user.save()`` loses the entitlement change
+    where a crash between the insert and the user write loses the entitlement change
     permanently: the redelivery would hit the unique index, report "duplicate", and skip
     the mutation that never happened. Applying first is safe because every state change
     here is idempotent — setting the tier to pro twice is setting it once — while this
