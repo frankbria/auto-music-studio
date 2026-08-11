@@ -102,6 +102,28 @@ async def _persist_identities(user: User) -> None:
     )
 
 
+async def _refresh_profile(user: User, *, email: str, name: str) -> None:
+    """Apply the provider's current email and display name to ``user``.
+
+    A targeted ``$set``, not ``save()``. Beanie replaces the whole document from the
+    in-memory model (no state management on ``User``), so this — which runs on *every*
+    login, not only when something changed — would write back whatever ``identities`` the
+    request happened to load and silently delete a link another request pushed in the
+    meantime. The user would just stop being able to sign in with that provider.
+
+    Raised in review on this PR. The principle was already written down two functions up
+    and simply not applied here.
+    """
+    now = utcnow()
+    await User.get_pymongo_collection().update_one(
+        {"_id": user.id}, {"$set": {"email": email, "name": name, "updated_at": now}}
+    )
+    # Keep the instance the caller is about to use consistent with what was stored.
+    user.email = email
+    user.name = name
+    user.updated_at = now
+
+
 async def _link_identity(user: User, provider: str, oauth_id: str) -> User:
     """Attach a new OAuth identity to an existing account.
 
@@ -148,10 +170,7 @@ async def get_or_create_user(
         # the unique index.
         email_owner = await User.find_one(User.email == email)
         if email_owner is None or email_owner.id == user.id:
-            user.email = email
-            user.name = name
-            user.updated_at = utcnow()
-            await user.save()
+            await _refresh_profile(user, email=email, name=name)
         return user
 
     email_owner = await User.find_one(User.email == email)
@@ -221,7 +240,14 @@ async def update_user_profile(user_id: str | PydanticObjectId, updates: dict) ->
     user.updated_at = utcnow()
 
     try:
-        await user.save()
+        # A targeted $set of the writable fields, for the same reason as
+        # _refresh_profile: Beanie's save() replaces the whole document, so a profile
+        # edit racing an OAuth login would write back a pre-link `identities` array and
+        # silently drop the linked provider. Narrower window than the login path, same
+        # silent loss.
+        await User.get_pymongo_collection().update_one(
+            {"_id": user.id}, {"$set": {**fields, "updated_at": user.updated_at}}
+        )
     except DuplicateKeyError as exc:
         # ``handle`` is the only writable field (see _UPDATABLE_FIELDS) that
         # carries a unique index, so a duplicate-key error on this path can only

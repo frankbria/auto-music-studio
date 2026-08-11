@@ -85,6 +85,31 @@ class TestLinking:
         with pytest.raises(EmailAlreadyRegisteredError):
             await _login("guard@example.com", "discord", "d-5", verified=False)
 
+    async def test_a_repeat_login_does_not_clobber_a_concurrently_linked_identity(self) -> None:
+        """The profile refresh on every login must not be a whole-document write.
+
+        Beanie's ``save()`` replaces the document from the in-memory model (no state
+        management on ``User``), so a login that loaded the account *before* a second
+        provider was linked would write the pre-link ``identities`` back and silently
+        delete the link. The user simply stops being able to sign in with that provider,
+        with no error anywhere.
+
+        Only reachable since this change added a concurrent ``$push`` writer — before it,
+        nothing else touched the array.
+        """
+        first = await _login("clobber@example.com", "google", "g-7")
+        # The document as a concurrent request would have loaded it: pre-link.
+        stale = await User.get(first.id)
+
+        await _login("clobber@example.com", "discord", "d-7")
+
+        # ...and now that first request finishes, writing its profile refresh back.
+        await user_service._refresh_profile(stale, email="clobber@example.com", name="Renamed")
+
+        refreshed = await User.get(first.id)
+        assert {(i.provider, i.oauth_id) for i in refreshed.identities} == {("google", "g-7"), ("discord", "d-7")}
+        assert refreshed.name == "Renamed"
+
     async def test_concurrent_links_of_the_same_identity_converge(self) -> None:
         await _login("race@example.com", "google", "g-6")
 
