@@ -142,6 +142,21 @@ def _client(settings: ApiSettings) -> stripe.StripeClient:
     return stripe.StripeClient(settings.stripe_secret_key)
 
 
+async def _persist_user_fields(user: User, **fields: Any) -> None:
+    """Write just the named fields of ``user`` back.
+
+    Not ``save()``: Beanie replaces the whole document from the in-memory model (no state
+    management on ``User``), and since #111 another request can be ``$push``ing an OAuth
+    identity onto that same document. A whole-document write here would revert the link and
+    silently lock the musician out of that sign-in provider.
+
+    :func:`ensure_customer` has the widest window — a Stripe round-trip sits between the
+    fetch and the write — but every handler in this module holds a ``User`` across at least
+    one ``await``.
+    """
+    await User.get_pymongo_collection().update_one({"_id": user.id}, {"$set": fields})
+
+
 async def ensure_customer(user: User, settings: ApiSettings) -> str:
     """This user's Stripe customer id, creating one on first use.
 
@@ -175,7 +190,7 @@ async def ensure_customer(user: User, settings: ApiSettings) -> str:
         )
     )
     user.stripe_customer_id = customer.id
-    await user.save()
+    await _persist_user_fields(user, stripe_customer_id=customer.id)
     return customer.id
 
 
@@ -467,9 +482,16 @@ async def _handle_checkout_completed(
     user.subscription_tier = tiers.PRO
     user.subscription_status = "active"
     user.subscription_cancel_at_period_end = False
+    changed: dict[str, Any] = {
+        "stripe_subscription_id": user.stripe_subscription_id,
+        "subscription_tier": user.subscription_tier,
+        "subscription_status": user.subscription_status,
+        "subscription_cancel_at_period_end": user.subscription_cancel_at_period_end,
+    }
     if occurred_at:
         user.subscription_synced_at = occurred_at
-    await user.save()
+        changed["subscription_synced_at"] = occurred_at
+    await _persist_user_fields(user, **changed)
 
     if not await _record_event(user, event_id, event_type):
         return "duplicate"
@@ -575,7 +597,7 @@ async def _handle_subscription_change(
 
     for key, value in fields.items():
         setattr(user, key, value)
-    await user.save()
+    await _persist_user_fields(user, **fields)
 
     if not await _record_event(user, event_id, event_type):
         return "duplicate"
@@ -658,9 +680,11 @@ async def _handle_invoice(
             return "not_subscribed"
 
         user.subscription_status = "past_due"
+        past_due: dict[str, Any] = {"subscription_status": "past_due"}
         if occurred_at:
             user.invoice_synced_at = occurred_at
-        await user.save()
+            past_due["invoice_synced_at"] = occurred_at
+        await _persist_user_fields(user, **past_due)
         if not await _record_event(user, event_id, event_type, invoice=invoice):
             return "duplicate"
         return "past_due"
@@ -668,14 +692,16 @@ async def _handle_invoice(
     # A successful charge clears a grace period that a previous failure set.
     if user.subscription_status == "past_due":
         user.subscription_status = "active"
+        cleared: dict[str, Any] = {"subscription_status": "active"}
         if occurred_at:
             user.invoice_synced_at = occurred_at
-        await user.save()
+            cleared["invoice_synced_at"] = occurred_at
+        await _persist_user_fields(user, **cleared)
     elif occurred_at:
         # Nothing to change, but the watermark still advances so a later-arriving older
         # failure cannot re-open a grace period this payment already settled.
         user.invoice_synced_at = occurred_at
-        await user.save()
+        await _persist_user_fields(user, invoice_synced_at=occurred_at)
 
     if not await _record_event(user, event_id, event_type, invoice=invoice):
         return "duplicate"

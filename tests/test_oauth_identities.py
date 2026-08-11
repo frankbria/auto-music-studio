@@ -110,6 +110,27 @@ class TestLinking:
         assert {(i.provider, i.oauth_id) for i in refreshed.identities} == {("google", "g-7"), ("discord", "d-7")}
         assert refreshed.name == "Renamed"
 
+    async def test_a_billing_write_does_not_clobber_a_concurrently_linked_identity(self) -> None:
+        """Same hazard as the login path, in the module with the widest window.
+
+        ``billing.ensure_customer`` holds a ``User`` across a Stripe round-trip — hundreds
+        of milliseconds to seconds — and every webhook handler holds one across at least
+        one ``await``. A whole-document write from any of them reverts a link made in that
+        window. Raised in review after the first fix, which had swept only ``users.py``.
+        """
+        from acemusic.api.services import billing as billing_service
+
+        first = await _login("billing-race@example.com", "google", "g-8")
+        stale = await User.get(first.id)  # as a billing call would be holding it
+
+        await _login("billing-race@example.com", "discord", "d-8")
+
+        await billing_service._persist_user_fields(stale, stripe_customer_id="cus_test123")
+
+        refreshed = await User.get(first.id)
+        assert {(i.provider, i.oauth_id) for i in refreshed.identities} == {("google", "g-8"), ("discord", "d-8")}
+        assert refreshed.stripe_customer_id == "cus_test123"
+
     async def test_concurrent_links_of_the_same_identity_converge(self) -> None:
         await _login("race@example.com", "google", "g-6")
 
