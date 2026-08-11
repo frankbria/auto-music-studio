@@ -312,6 +312,9 @@ void PlatformPanel::applyWorkspaces (const Platform::Result& result)
     if (! result.ok)
     {
         connected = false;
+
+        if (onVoiceModelsChanged != nullptr)
+            onVoiceModelsChanged ({});
         workspaceSelector.clear (juce::dontSendNotification);
         applyStatus (result.errorMessage, true);
         refresh();
@@ -327,6 +330,7 @@ void PlatformPanel::applyWorkspaces (const Platform::Result& result)
                                    i + 1);
 
     connected = true;
+    refreshVoiceModels();
 
     if (workspaces.isEmpty())
     {
@@ -519,6 +523,34 @@ void PlatformPanel::pushClip (const juce::File& clip)
 
             if (result.ok)
                 panel->refreshClips();
+        });
+    });
+}
+
+void PlatformPanel::refreshVoiceModels()
+{
+    if (onVoiceModelsChanged == nullptr)
+        return;
+
+    // Same shape as every other action here: snapshot the credentials on the message
+    // thread, do the blocking call on the queue, marshal back behind a WeakReference.
+    const auto url = getUrl();
+    const auto key = getApiKey();
+    juce::WeakReference<PlatformPanel> self (this);
+    auto* queuePtr = &queue;
+
+    queue.enqueue ([self, url, key, queuePtr]
+    {
+        const auto result = Platform::listVoiceModels (url, key, [queuePtr] { return queuePtr->isStopping(); });
+
+        queuePtr->callOnMessageThread ([self, result]
+        {
+            if (auto* panel = self.get(); panel != nullptr && panel->onVoiceModelsChanged != nullptr)
+                // A failed listing is reported as "no voices" rather than an error: the
+                // musician did not ask for voices, they asked to connect, and the
+                // workspace listing that did work is the thing they are looking at.
+                panel->onVoiceModelsChanged (result.ok ? result.voiceModels
+                                                       : juce::Array<Platform::VoiceModel>());
         });
     });
 }

@@ -19,6 +19,8 @@
 #include "GenerationManager.h"
 #include "GenerationRequest.h"
 #include "PlatformClient.h"
+#include "PluginEditor.h"
+#include "PluginProcessor.h"
 #include "StubAceStepServer.h"
 
 namespace
@@ -319,6 +321,123 @@ public:
             // near the local generation endpoint for a voiced run.
             expectEquals (server.getRequestCountFor ("/release_task"), localCallsBefore);
             expectEquals (generation.getClips().size(), 1);
+        }
+
+        beginTest ("AC: signed out hides the selector rather than showing an empty list");
+        {
+            // A musician who has not connected has no voices and cannot get any without
+            // connecting, so a control reading "None" is a question the plugin cannot
+            // answer. It is not shown at all.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            expect (! panel.getVoiceSelector().isVisible(), "the selector showed while signed out");
+            expect (panel.getSelectedVoiceModelId().isEmpty());
+            // And an unvoiced request is exactly what it always was.
+            expect (panel.buildRequest().voiceModelId.isEmpty());
+        }
+
+        beginTest ("AC: connecting offers the ready voices, and only those");
+        {
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            models.add ({ "vm-training", "Still Training", "training" });
+            panel.setVoiceModels (models);
+
+            expect (panel.getVoiceSelector().isVisible());
+            // "None" plus the one ready model — the trainee is not offered.
+            expectEquals (panel.getVoiceSelector().getNumItems(), 2);
+            expectEquals (panel.getVoiceSelector().getItemText (1), juce::String ("My Voice"));
+
+            // AC: selecting one puts it on the request, which is what routes the run.
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+            expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-ready"));
+            expectEquals (panel.buildRequest().voiceModelId, juce::String ("vm-ready"));
+
+            // AC: back to None and the request is unvoiced again.
+            panel.getVoiceSelector().setSelectedId (1, juce::sendNotificationSync);
+            expect (panel.buildRequest().voiceModelId.isEmpty());
+        }
+
+        beginTest ("signing out takes the selector away again");
+        {
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+
+            panel.setVoiceModels ({});
+
+            expect (! panel.getVoiceSelector().isVisible());
+            // And crucially the stale choice does not linger on the request.
+            expect (panel.buildRequest().voiceModelId.isEmpty());
+        }
+
+        beginTest ("a voice deleted on the web does not stay selected");
+        {
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> before;
+            before.add ({ "vm-a", "Voice A", "ready" });
+            before.add ({ "vm-b", "Voice B", "ready" });
+            panel.setVoiceModels (before);
+            panel.getVoiceSelector().setSelectedId (3, juce::sendNotificationSync);
+            expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-b"));
+
+            juce::Array<Platform::VoiceModel> after;
+            after.add ({ "vm-a", "Voice A", "ready" });
+            panel.setVoiceModels (after);
+
+            // Falls back to None rather than silently sliding onto Voice A.
+            expect (panel.getSelectedVoiceModelId().isEmpty(), "kept a deleted voice selected");
+        }
+
+        beginTest ("a surviving voice keeps its selection across a refresh");
+        {
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-a", "Voice A", "ready" });
+            models.add ({ "vm-b", "Voice B", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (3, juce::sendNotificationSync);
+
+            // A refresh that returns the same list in a different order must not move the
+            // musician's choice onto a different voice.
+            juce::Array<Platform::VoiceModel> reordered;
+            reordered.add ({ "vm-b", "Voice B", "ready" });
+            reordered.add ({ "vm-a", "Voice A", "ready" });
+            panel.setVoiceModels (reordered);
+
+            expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-b"));
         }
 
         beginTest ("running out of credits says so, with the numbers");
