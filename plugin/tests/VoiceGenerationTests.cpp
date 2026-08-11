@@ -1,0 +1,346 @@
+/*
+  Platform-routed generation for custom voices (#396).
+
+  A voice model lives on the platform and its LoRA adapter is loaded on the ACE-Step host
+  by the platform's own worker. So when a voice is chosen the plugin must not touch the
+  adapter itself — it hands the whole generation to the platform and lets the single
+  existing owner of that state run it. With no voice chosen nothing changes: generation
+  still goes straight to the local server, free and offline.
+
+  Served by a real loopback stub rather than a mocked client, for the reason
+  StubAceStepServer.h records: a mock would pass even with the transport broken.
+*/
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+#include "BackgroundTaskQueue.h"
+#include "ClipCache.h"
+#include "ConnectionManager.h"
+#include "GenerationManager.h"
+#include "GenerationRequest.h"
+#include "PlatformClient.h"
+#include "StubAceStepServer.h"
+
+namespace
+{
+/** Runs the message loop until `predicate` holds, as every other panel/manager suite here
+    does — the manager posts its state back through BackgroundTaskQueue::callOnMessageThread,
+    so nothing is observable without pumping. */
+bool pumpUntil (std::function<bool()> predicate, int timeoutMs)
+{
+    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+
+    while (juce::Time::getMillisecondCounter() < deadline)
+    {
+        if (predicate())
+            return true;
+
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+    }
+
+    return predicate();
+}
+
+/** A throwaway settings file with the clip cache pointed at a temp directory.
+
+    Emphatically not the default cache location: an earlier suite deleted the developer's
+    real generations by recursing the default directory. */
+struct ScopedClipCleanup
+{
+    ScopedClipCleanup()
+    {
+        root = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                   .getChildFile ("acemusic-voiceclips-"
+                                  + juce::String (juce::Random::getSystemRandom().nextInt (1 << 30)));
+        root.createDirectory();
+
+        juce::PropertiesFile::Options options;
+        options.applicationName = "VoiceTest";
+        options.filenameSuffix  = ".settings";
+        options.storageFormat   = juce::PropertiesFile::storeAsXML;
+
+        properties = std::make_unique<juce::PropertiesFile> (root.getChildFile ("VoiceTest.settings"), options);
+        properties->setValue (acemusic::ClipCache::cachePathKey, root.getChildFile ("clips").getFullPathName());
+        properties->saveIfNeeded();
+    }
+
+    ~ScopedClipCleanup()
+    {
+        properties.reset();
+        root.deleteRecursively();
+    }
+
+    juce::File root;
+    std::unique_ptr<juce::PropertiesFile> properties;
+};
+
+juce::String voiceModelsBody()
+{
+    // The platform returns a bare array, newest first, with mixed statuses.
+    return R"([
+        {"id": "vm-ready", "name": "My Voice", "status": "ready", "reference_count": 6},
+        {"id": "vm-training", "name": "Still Training", "status": "training", "reference_count": 3},
+        {"id": "vm-failed", "name": "Broken", "status": "failed", "reference_count": 1}
+    ])";
+}
+}
+
+class VoiceGenerationTests final : public juce::UnitTest
+{
+public:
+    VoiceGenerationTests() : juce::UnitTest ("VoiceGeneration", "acemusic") {}
+
+    void runTest() override
+    {
+        using namespace acemusic;
+
+        beginTest ("AC: an authenticated session lists the user's voice models");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/voice-models", voiceModelsBody());
+
+            const auto result = Platform::listVoiceModels (server.getBaseUrl(), "token", nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expectEquals (result.voiceModels.size(), 3);
+            expectEquals (result.voiceModels[0].id, juce::String ("vm-ready"));
+            expectEquals (result.voiceModels[0].name, juce::String ("My Voice"));
+            expectEquals (result.voiceModels[0].status, juce::String ("ready"));
+            // The bearer token actually went out — the endpoint is user-scoped.
+            expect (server.getLastRequest().contains ("Authorization: Bearer token"));
+        }
+
+        beginTest ("AC: only ready models are offered");
+        {
+            // Filtering is the client's job: a model still training cannot generate, and
+            // offering it would produce a 409 the musician did not ask for.
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "a", "Ready", "ready" });
+            models.add ({ "b", "Training", "training" });
+            models.add ({ "c", "Failed", "failed" });
+            models.add ({ "d", "Queued", "queued" });
+
+            const auto ready = Platform::readyVoiceModels (models);
+
+            expectEquals (ready.size(), 1);
+            expectEquals (ready[0].id, juce::String ("a"));
+        }
+
+        beginTest ("a voice list that is not a list fails rather than showing nothing");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/voice-models", R"({"detail": "Not authenticated"})");
+
+            const auto result = Platform::listVoiceModels (server.getBaseUrl(), "token", nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.isNotEmpty());
+        }
+
+        beginTest ("the platform payload is not the ACE-Step payload");
+        {
+            // POST /api/v1/generate rejects unknown keys outright (extra="forbid"), so the
+            // two serialisers cannot be shared. This pins the shape the platform accepts.
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+            request.durationSeconds = 45.0;
+            request.bpm = 120;
+
+            const auto payload = juce::JSON::parse (request.toPlatformPayloadJson());
+
+            expectEquals (payload.getProperty ("prompt", {}).toString(), juce::String ("a calm piano ballad"));
+            expectEquals (payload.getProperty ("voice_model_id", {}).toString(), juce::String ("vm-ready"));
+            expect (payload.hasProperty ("duration"));
+            // ACE-Step-only keys must not leak into a body that forbids extras.
+            expect (! payload.hasProperty ("audio_duration"));
+            expect (! payload.hasProperty ("task_type"));
+        }
+
+        beginTest ("an omitted voice leaves voice_model_id out entirely");
+        {
+            // Sending null would be a different request than sending nothing, and the
+            // no-voice path is meant to be untouched.
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+
+            const auto payload = juce::JSON::parse (request.toPlatformPayloadJson());
+
+            expect (! payload.hasProperty ("voice_model_id"));
+        }
+
+        beginTest ("AC: submitting returns the platform's job id");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"job_id": "job-123", "status": "queued", "estimated_time_seconds": 60})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expectEquals (result.jobId, juce::String ("job-123"));
+            expect (server.getBodyFor ("/api/v1/generate").contains ("vm-ready"));
+        }
+
+        beginTest ("job status maps onto the states the manager already has");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/jobs/job-123/status",
+                                   R"({"job_id": "job-123", "status": "completed",
+                                       "clip_ids": ["clip-a", "clip-b"],
+                                       "audio_urls": ["/data/storage/a.wav", "/data/storage/b.wav"]})");
+
+            const auto result = Platform::getJobStatus (server.getBaseUrl(), "token", "job-123", nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expect (result.jobComplete);
+            expect (! result.jobFailed);
+            expectEquals (result.clipIds.size(), 2);
+            expectEquals (result.clipIds[0], juce::String ("clip-a"));
+        }
+
+        beginTest ("a failed job carries the platform's own reason");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/jobs/job-9/status",
+                                   R"({"job_id": "job-9", "status": "failed", "error": "ACE-Step base URL is not configured"})");
+
+            const auto result = Platform::getJobStatus (server.getBaseUrl(), "token", "job-9", nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expect (result.jobFailed);
+            expect (result.errorMessage.contains ("ACE-Step base URL"));
+        }
+
+        beginTest ("a queued job is neither complete nor failed");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/jobs/job-1/status",
+                                   R"({"job_id": "job-1", "status": "queued", "progress": "waiting"})");
+
+            const auto result = Platform::getJobStatus (server.getBaseUrl(), "token", "job-1", nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expect (! result.jobComplete);
+            expect (! result.jobFailed);
+        }
+
+        beginTest ("the tier refusal reaches the musician instead of a bare status code");
+        {
+            // A free account naming a voice gets 403 from the platform. "API key rejected"
+            // would be a lie about what went wrong.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 403 Forbidden");
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"detail": {"error": "upgrade_required", "feature": "Custom voices",
+                                       "message": "Custom voices are a Pro feature."}})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.containsIgnoreCase ("Pro"), "got: " + result.errorMessage);
+        }
+
+        beginTest ("AC: a voiced run goes to the platform, an unvoiced one does not");
+        {
+            // The whole point of the hybrid. Both runs are driven through the real
+            // GenerationManager against one stub serving both APIs, and the assertion is
+            // which endpoints each one actually touched.
+            ScopedClipCleanup cleanup;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            server.setResponseFor ("/v1/stats", R"({"data":{"models":[{"name":"ace-step-1.5"}]},"code":200})");
+            server.setResponseFor ("/release_task", R"({"data":{"task_id":"t-1"},"code":200})");
+            server.setResponseFor ("/query_result",
+                                   R"({"data":[{"status":2,"result":"[{\"file\": \"/v1/audio?path=a.wav\"}]"}],"code":200})");
+            server.setResponseFor ("/v1/audio", "RIFFfake-wave-bytes-for-the-test");
+
+            cleanup.properties->setValue (acemusic::Platform::urlKey, server.getBaseUrl());
+            cleanup.properties->setValue (acemusic::Platform::apiKeyKey, "token");
+            cleanup.properties->saveIfNeeded();
+
+            BackgroundTaskQueue queue;
+            ConnectionManager connection (queue, nullptr);
+            GenerationManager generation (queue, connection, cleanup.properties.get());
+
+            ConnectionSettings settings;
+            settings.serverUrl = server.getBaseUrl();
+            connection.setSettings (settings);
+            connection.testConnection();
+            expect (pumpUntil ([&] { return connection.getStatus() == ConnectionManager::Status::Connected; }, 10000),
+                    "never connected: " + connection.getStatusMessage());
+
+            // 1. No voice: the local path, untouched.
+            GenerationRequest plain;
+            plain.prompt = "slow shoegaze wall of guitars";
+            generation.start (plain);
+            expect (pumpUntil ([&] { return ! generation.isBusy(); }, 20000),
+                    "unvoiced run never finished: " + generation.getStatusMessage());
+
+            expect (server.getRequestCountFor ("/release_task") > 0, "the local server was not used");
+            expectEquals (server.getRequestCountFor ("/api/v1/generate"), 0);
+
+            // 2. A voice: the platform path.
+            server.setResponseFor ("/api/v1/generate", R"({"job_id":"job-7","status":"queued"})");
+            server.setResponseFor ("/api/v1/jobs/job-7/status",
+                                   R"({"job_id":"job-7","status":"completed","clip_ids":["clip-a"]})");
+            server.setResponseFor ("/api/v1/clips/clip-a/audio", "RIFFfake-wave-bytes-for-the-test");
+
+            const auto localCallsBefore = server.getRequestCountFor ("/release_task");
+
+            GenerationRequest voiced;
+            voiced.prompt = "slow shoegaze wall of guitars";
+            voiced.voiceModelId = "vm-ready";
+            generation.start (voiced);
+            expect (pumpUntil ([&] { return ! generation.isBusy(); }, 20000),
+                    "voiced run never finished: " + generation.getStatusMessage());
+
+            expect (server.getRequestCountFor ("/api/v1/generate") > 0,
+                    "the platform was not used: " + generation.getStatusMessage());
+            // AC: only one component owns the LoRA state. The plugin must not have gone
+            // near the local generation endpoint for a voiced run.
+            expectEquals (server.getRequestCountFor ("/release_task"), localCallsBefore);
+            expectEquals (generation.getClips().size(), 1);
+        }
+
+        beginTest ("running out of credits says so, with the numbers");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 402 Payment Required");
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"detail": {"error": "insufficient_credits", "balance": 0.5, "required": 1.0,
+                                       "message": "This action needs 1.0 credits; balance is 0.5."}})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.containsIgnoreCase ("credits"), "got: " + result.errorMessage);
+        }
+    }
+};
+
+static VoiceGenerationTests voiceGenerationTests;

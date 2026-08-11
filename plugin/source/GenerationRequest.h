@@ -68,6 +68,15 @@ struct GenerationRequest
     Quality quality = Quality::standard;
     Mode mode = Mode::textToMusic;
 
+    /** The platform voice model to sing this, or empty for none (#396).
+
+        Empty is the whole default path: generation goes straight to the local ACE-Step
+        server exactly as it always has. Set, it routes the generation through the
+        platform instead — because the voice's LoRA adapter is loaded on the ACE-Step host
+        by the platform's own worker, and two components taking turns with that state is
+        the one thing the design has to avoid. */
+    juce::String voiceModelId;
+
     /** Server-side path to the source audio, for every mode but Text to Music. */
     juce::String sourceAudioPath;
 
@@ -121,6 +130,15 @@ struct GenerationRequest
 
     /** The payload as the JSON text that actually goes on the wire. */
     juce::String toPayloadJson() const;
+
+    /** The body for the platform's `POST /api/v1/generate`.
+
+        Deliberately not `toPayload()` with a few keys renamed: that endpoint rejects
+        unknown keys outright, so an ACE-Step-shaped body is a 422 rather than a
+        generation. Only the fields the platform actually accepts go out, and optional
+        ones are omitted rather than sent empty for the same reason as above. */
+    juce::var toPlatformPayload() const;
+    juce::String toPlatformPayloadJson() const;
 };
 
 } // namespace acemusic

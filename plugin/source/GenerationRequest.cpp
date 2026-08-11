@@ -208,4 +208,51 @@ juce::String GenerationRequest::toPayloadJson() const
     return juce::JSON::toString (toPayload(), true);
 }
 
+juce::var GenerationRequest::toPlatformPayload() const
+{
+    auto* payload = new juce::DynamicObject();
+
+    payload->setProperty ("prompt", prompt.trim());
+    payload->setProperty ("duration", static_cast<double> (durationSeconds));
+    payload->setProperty ("inference_steps", inferenceStepsFor (quality));
+    payload->setProperty ("format", "wav");
+
+    // Same rule as the ACE-Step payload — an absent key means "you choose" — but here it
+    // is also a hard requirement: the endpoint forbids extra keys and validates the ones
+    // it gets, so an empty string is a 422 rather than a default.
+    if (voiceModelId.isNotEmpty())
+        payload->setProperty ("voice_model_id", voiceModelId);
+
+    if (lyrics.trim().isNotEmpty())
+        payload->setProperty ("lyrics", lyrics);
+
+    if (vocalLanguage.isNotEmpty())
+        payload->setProperty ("vocal_language", vocalLanguage);
+
+    if (instrumental)
+        payload->setProperty ("instrumental", true);
+
+    if (bpm > 0)
+        payload->setProperty ("bpm", bpm);
+
+    if (key.isNotEmpty())
+        payload->setProperty ("key", key);
+
+    if (seed >= 0)
+        payload->setProperty ("seed", seed);
+
+    if (model.isNotEmpty())
+        payload->setProperty ("model", model);
+
+    // The plugin's other modes (cover, complete, repaint, lego) all need a source audio
+    // file that lives on this machine, and the platform has no way to reach it. Only
+    // text-to-music can be routed, which is also the only mode a voice makes sense in.
+    return juce::var (payload);
+}
+
+juce::String GenerationRequest::toPlatformPayloadJson() const
+{
+    return juce::JSON::toString (toPlatformPayload(), true);
+}
+
 } // namespace acemusic

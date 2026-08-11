@@ -5,6 +5,7 @@
 #include "BackgroundTaskQueue.h"
 #include "ConnectionManager.h"
 #include "GenerationRequest.h"
+#include "PlatformClient.h"
 
 #include <atomic>
 #include <memory>
@@ -121,7 +122,29 @@ private:
         std::shared_ptr<RunControl> control;
         juce::WeakReference<GenerationManager> owner;
         BackgroundTaskQueue* queue = nullptr;
+
+        /** Platform credentials, snapshotted like everything else (#396). Only used when
+            the request names a voice model; empty otherwise. */
+        juce::String platformUrl;
+        juce::String platformApiKey;
     };
+
+    /** What a submit-and-poll produced, whichever server ran it.
+
+        Exactly one of `audioUrls` (local ACE-Step) and `clipIds` (platform) is filled —
+        the two servers hand back different handles for the same thing, and the download
+        step branches on which one arrived. */
+    struct RunOutcome
+    {
+        bool cancelled = false;
+        bool failed = false;
+        juce::String errorMessage;
+        juce::StringArray audioUrls;
+        juce::StringArray clipIds;
+    };
+
+    static RunOutcome runOnAceStep (const RunContext&, const std::function<bool()>&);
+    static RunOutcome runOnPlatform (const RunContext&, const std::function<bool()>&);
 
     static void runGeneration (RunContext);
     static void applyState (const RunContext&, State, const juce::String& message);
@@ -130,6 +153,10 @@ private:
     BackgroundTaskQueue& queue;
     ConnectionManager& connection;
     ClipCache cache;
+
+    /** Where the platform URL/key live, for a voiced run. Null in tests that do not
+        need one; a voiced run without credentials is refused by findStartProblem. */
+    juce::PropertiesFile* settingsFile = nullptr;
 
     State state = State::idle;
     juce::String statusMessage { "Idle" };
