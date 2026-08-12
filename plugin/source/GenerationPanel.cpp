@@ -767,12 +767,10 @@ void GenerationPanel::setVoiceModels (const juce::Array<Platform::VoiceModel>& m
 
     voiceSelector.setSelectedId (restored, juce::dontSendNotification);
 
-    // Signed out, or signed in with no voices trained yet: there is nothing to choose, so
-    // the control is not shown at all rather than shown reading "None".
-    const auto hasVoices = ! voiceModels.isEmpty();
-    voiceSelector.setVisible (hasVoices);
-    voiceLabel.setVisible (hasVoices);
-    resized();
+    // Visibility is refresh()'s call: it also knows the mode, and a voice is only offered
+    // in Text to Music. Signed out or nothing trained yet means nothing to choose, so the
+    // control is not shown at all rather than shown reading "None".
+    refresh();
 }
 
 juce::String GenerationPanel::getSelectedVoiceModelId() const
@@ -938,6 +936,25 @@ void GenerationPanel::refresh()
     legoTrackSelector.setVisible (isLego);
     legoLabel.setVisible (isLego);
     legoTrackSelector.setEnabled (! busy);
+
+    // #396: a voice routes to the platform, which cannot reach this machine's source
+    // audio — so it is only offered in Text to Music. Hidden rather than disabled for the
+    // other modes, and reset to None, so a selection made in Text to Music cannot survive
+    // a mode switch and silently refuse the next Generate. findProblem() is still the
+    // backstop for a request built some other way.
+    const auto isTextToMusic = modeSelector.getSelectedId() - 1
+                                 == GenerationRequest::allModes().indexOf (GenerationRequest::Mode::textToMusic);
+    const auto offerVoice = isTextToMusic && ! voiceModels.isEmpty();
+
+    if (! offerVoice && voiceSelector.getSelectedId() != 1)
+        voiceSelector.setSelectedId (1, juce::dontSendNotification);
+
+    if (voiceSelector.isVisible() != offerVoice)
+    {
+        voiceSelector.setVisible (offerVoice);
+        voiceLabel.setVisible (offerVoice);
+        resized();
+    }
 
     if (isLego)
     {

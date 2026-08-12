@@ -140,6 +140,14 @@ juce::String GenerationRequest::findProblem() const
         return toString (mode) + " mode needs a source audio file";
     }
 
+    // #396: a voice routes the generation to the platform, and the platform cannot reach
+    // the source audio file this machine holds — so a voiced Cover/Complete/Repaint/Lego
+    // would arrive there as a plain text-to-music request with the source silently
+    // dropped. Refusing is the only honest answer; generating something the musician did
+    // not ask for is worse than not generating.
+    if (voiceModelId.isNotEmpty() && mode != Mode::textToMusic)
+        return "A custom voice only works in Text to Music mode";
+
     return {};
 }
 

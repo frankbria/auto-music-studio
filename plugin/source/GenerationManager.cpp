@@ -66,6 +66,20 @@ juce::String GenerationManager::findStartProblem (const GenerationRequest& reque
     if (isBusy())
         return "A generation is already running";
 
+    // #396: a voiced run goes to the platform, which does not use the local server at
+    // all — so requiring a local connection for it would refuse a generation that would
+    // have worked. It needs platform credentials instead.
+    if (request.voiceModelId.isNotEmpty())
+    {
+        const auto url = settingsFile != nullptr ? settingsFile->getValue (Platform::urlKey)
+                                                 : juce::String();
+
+        if (url.trim().isEmpty())
+            return "Connect to the platform to generate with a custom voice";
+
+        return request.findProblem();
+    }
+
     // AC: generation is unavailable unless the server is actually reachable. Starting
     // anyway would just fail slowly with a worse message.
     if (connection.getStatus() != ConnectionManager::Status::Connected)

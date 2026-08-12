@@ -73,14 +73,37 @@ across a refresh` failed, which is the only reason it is not in the branch as a 
 `a voice deleted on the web does not stay selected` covers the other direction: the
 selection falls back to None rather than sliding onto whichever model now occupies the slot.
 
+## A voice outside Text to Music is refused, not silently flattened
+
+Raised in cross-family review, and the sharper version of a limitation this branch had
+merely *commented*: the platform cannot reach the source audio file this machine holds, so
+a voiced Cover / Complete / Repaint / Lego would have arrived there as a plain
+text-to-music request with the source dropped — a generation the musician did not ask for.
+
+Two layers now:
+
+- `findProblem()` refuses it — `A custom voice only works in Text to Music mode` — which
+  covers a request built by a preset or by `applyRequest`, not just by clicking.
+- The panel prevents it: the selector is only offered in Text to Music, and switching mode
+  resets it to None, so a choice cannot survive the switch and then block Generate with a
+  message about a control that is no longer on screen.
+
+## A voiced run does not need the local ACE-Step server
+
+Also from review. The platform runs a voiced generation, so refusing it because the *local*
+server is offline would block a generation that would have worked. `findStartProblem` now
+asks for platform credentials on that path instead, and says which connection is missing.
+
 ## Layout
 
 The selector shares the Lego row rather than taking one of its own — the editor's minimum
 height is already tight, and every prior story's comment in `PluginEditor::resized` warns
-about squeezing the readouts. `the selector fits at the editor's minimum size without
-crushing its neighbour` holds that trade honest: at the configured minimum (560×990), in
-Lego mode, both selectors have non-zero width, they do not intersect, and the Lego readout
-is not crushed to nothing.
+about squeezing the readouts. Sharing is safe because the two are now **mutually
+exclusive**: a voice is only offered in Text to Music, where the Lego controls are hidden.
+
+That was not true when the test was first written — it asserted the two did not overlap,
+and the review fix above removed the contention entirely, so the test now checks what is
+actually true.
 
 ![The panel at the 560x990 minimum](us396-minimum-size.png)
 

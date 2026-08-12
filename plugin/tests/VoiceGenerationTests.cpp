@@ -465,12 +465,107 @@ public:
             expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-b"));
         }
 
-        beginTest ("the selector fits at the editor's minimum size without crushing its neighbour");
+        beginTest ("a voice outside Text to Music is refused, not silently flattened");
+        {
+            // The platform cannot reach this machine's source audio, so a voiced Cover /
+            // Complete / Repaint / Lego would arrive there as a plain text-to-music
+            // request with the source dropped — a generation the musician did not ask
+            // for. Raised in review: the code comment said "only text-to-music is routed"
+            // and nothing enforced it.
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+            request.sourceAudioPath = "/tmp/source.wav";
+            request.mode = GenerationRequest::Mode::cover;
+
+            const auto problem = request.findProblem();
+
+            expect (problem.isNotEmpty(), "a voiced cover was accepted");
+            expect (problem.containsIgnoreCase ("Text to Music"), "unhelpful message: " + problem);
+
+            // The same request without the voice is fine, and unchanged.
+            request.voiceModelId = {};
+            expect (request.findProblem().isEmpty());
+        }
+
+        beginTest ("switching away from Text to Music clears the voice");
+        {
+            // Prevention as well as refusal: a selection made in Text to Music must not
+            // survive a mode switch and then block Generate with a message about a
+            // control the musician can no longer see.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+            expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-ready"));
+
+            const auto coverIndex = GenerationRequest::allModes().indexOf (GenerationRequest::Mode::cover);
+            panel.getModeSelector().setSelectedId (coverIndex + 1, juce::sendNotificationSync);
+
+            expect (! panel.getVoiceSelector().isVisible(), "the selector stayed visible outside Text to Music");
+            expect (panel.getSelectedVoiceModelId().isEmpty(), "the voice survived the mode switch");
+            expect (panel.buildRequest().voiceModelId.isEmpty());
+        }
+
+        beginTest ("a voiced run does not need the local ACE-Step server");
+        {
+            // The platform runs it. Refusing because the *local* server is offline would
+            // block a generation that would have worked — raised in review.
+            ScopedClipCleanup cleanup;
+            cleanup.properties->setValue (acemusic::Platform::urlKey, "http://127.0.0.1:9");
+            cleanup.properties->saveIfNeeded();
+
+            BackgroundTaskQueue queue;
+            ConnectionManager connection (queue, nullptr);   // never connected
+            GenerationManager generation (queue, connection, cleanup.properties.get());
+
+            GenerationRequest voiced;
+            voiced.prompt = "a calm piano ballad";
+            voiced.voiceModelId = "vm-ready";
+
+            expect (generation.findStartProblem (voiced).isEmpty(),
+                    "voiced run refused: " + generation.findStartProblem (voiced));
+
+            // An unvoiced run still needs it, exactly as before.
+            GenerationRequest plain;
+            plain.prompt = "a calm piano ballad";
+            expect (generation.findStartProblem (plain).containsIgnoreCase ("ACE-Step"));
+        }
+
+        beginTest ("a voiced run with no platform configured says which connection is missing");
+        {
+            ScopedClipCleanup cleanup;   // no platform URL set
+
+            BackgroundTaskQueue queue;
+            ConnectionManager connection (queue, nullptr);
+            GenerationManager generation (queue, connection, cleanup.properties.get());
+
+            GenerationRequest voiced;
+            voiced.prompt = "a calm piano ballad";
+            voiced.voiceModelId = "vm-ready";
+
+            const auto problem = generation.findStartProblem (voiced);
+
+            expect (problem.containsIgnoreCase ("platform"), "unhelpful message: " + problem);
+        }
+
+        beginTest ("the selector fits at the editor's minimum size");
         {
             // It shares the Lego row rather than taking one of its own, because the
             // editor's minimum height is already tight and every prior story's comment in
-            // PluginEditor::resized warns about squeezing the readouts. That is only a
-            // sound trade if both controls are still usable at the smallest allowed size.
+            // PluginEditor::resized warns about squeezing the readouts.
+            //
+            // Sharing is safe because the two are now mutually exclusive: a voice is only
+            // offered in Text to Music, where the Lego controls are hidden. That was not
+            // true when this test was written — it asserted the two did not overlap, and
+            // the review fix for voiced non-text modes removed the contention entirely.
             ScopedClipCleanup cleanup;
             PluginProcessor processor (std::move (cleanup.properties), false);
             PluginEditor editor (processor);
@@ -482,18 +577,11 @@ public:
             models.add ({ "vm-ready", "A Very Long Voice Model Name Indeed", "ready" });
             panel.setVoiceModels (models);
 
-            // Lego mode is the crowded case: its label shares the row with the selector.
-            const auto legoIndex = GenerationRequest::allModes().indexOf (GenerationRequest::Mode::lego);
-            panel.getModeSelector().setSelectedId (legoIndex + 1, juce::sendNotificationSync);
-
-            const auto voiceBounds = panel.getVoiceSelector().getBounds();
-            const auto legoBounds  = panel.getLegoTrackSelector().getBounds();
-
-            expect (panel.getVoiceSelector().isVisible());
-            expect (voiceBounds.getWidth() > 0, "the voice selector collapsed");
-            expect (legoBounds.getWidth() > 0, "the lego selector collapsed");
-            expect (! voiceBounds.intersects (legoBounds), "the two controls overlap at minimum size");
-            expect (panel.getLegoLabel().getWidth() > 0, "the lego readout was crushed to nothing");
+            expect (panel.getVoiceSelector().isVisible(), "not offered in Text to Music");
+            expect (panel.getVoiceSelector().getWidth() > 0, "the voice selector collapsed");
+            expect (panel.getVoiceLabel().getWidth() > 0, "the caption collapsed");
+            expect (editor.getLocalBounds().contains (panel.getBounds()), "the panel escaped the editor");
+            expect (! panel.getLegoTrackSelector().isVisible(), "lego and voice were both visible");
             captureIfRequested (editor, "us396-minimum-size");
         }
 
