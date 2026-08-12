@@ -345,7 +345,31 @@ timeline (see the US-23.4 note), so the drop stays yours. **Push** uploads the m
 recent generated clip with its metadata.
 
 The API key persists in the same settings file as the ACE-Step key, with the same
-plaintext caveat.
+plaintext caveat. Note the platform authenticates with a **JWT access token**, not a
+long-lived API key, and that token expires — see issue #445.
+
+### Custom voices (#396)
+
+Connecting also fills a **Voice** selector in the Generation panel with the musician's
+trained voice models. Signed out, or with nothing trained yet, the selector is not shown
+at all: there is nothing to choose, and a control reading "None" would ask a question the
+plugin cannot answer.
+
+Picking a voice changes **where the generation runs**:
+
+| Voice | Path | Cost |
+| --- | --- | --- |
+| None | local ACE-Step, exactly as always | free, offline |
+| Selected | the platform's `POST /api/v1/generate` | credits, needs the session |
+
+That asymmetry is the point. The voice's LoRA adapter is loaded on the ACE-Step host by the
+*platform's own worker*, so a plugin that loaded it too would be a second, uncoordinated
+owner of that state — two components taking turns with one host's adapter. Handing the
+whole generation to the platform keeps exactly one owner. It also means the free, offline,
+no-account path stays untouched for everyone not using a custom voice.
+
+Only text-to-music is routed: the other modes need a source audio file on this machine that
+the platform cannot reach, and a voice is only meaningful in text-to-music anyway.
 
 ### HTTPS needs libcurl on Linux
 
