@@ -76,6 +76,28 @@ struct ScopedClipCleanup
     std::unique_ptr<juce::PropertiesFile> properties;
 };
 
+/** Writes a PNG of `component` when ACEMUSIC_DEMO_DIR is set, else does nothing.
+
+    The demo needs pictures of the real editor in the states the acceptance criteria
+    describe — and these tests already build exactly those states. Driving the standalone
+    app instead would mean clicking Connect, and there is no xdotool on this machine.
+    Snapshotting the same component tree the assertions run against is the more honest
+    evidence anyway: it cannot drift from what is tested. */
+void captureIfRequested (juce::Component& component, const juce::String& name)
+{
+    const auto dir = juce::SystemStats::getEnvironmentVariable ("ACEMUSIC_DEMO_DIR", {});
+
+    if (dir.isEmpty())
+        return;
+
+    const auto image = component.createComponentSnapshot (component.getLocalBounds(), true);
+    const auto file = juce::File (dir).getChildFile (name + ".png");
+    file.deleteFile();
+
+    if (auto stream = file.createOutputStream())
+        juce::PNGImageFormat().writeImageToStream (image, *stream);
+}
+
 juce::String voiceModelsBody()
 {
     // The platform returns a bare array, newest first, with mixed statuses.
@@ -337,6 +359,7 @@ public:
 
             expect (! panel.getVoiceSelector().isVisible(), "the selector showed while signed out");
             expect (panel.getSelectedVoiceModelId().isEmpty());
+            captureIfRequested (editor, "us396-signed-out");
             // And an unvoiced request is exactly what it always was.
             expect (panel.buildRequest().voiceModelId.isEmpty());
         }
@@ -364,6 +387,8 @@ public:
             panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
             expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-ready"));
             expectEquals (panel.buildRequest().voiceModelId, juce::String ("vm-ready"));
+
+            captureIfRequested (editor, "us396-voice-selected");
 
             // AC: back to None and the request is unvoiced again.
             panel.getVoiceSelector().setSelectedId (1, juce::sendNotificationSync);
@@ -438,6 +463,38 @@ public:
             panel.setVoiceModels (reordered);
 
             expectEquals (panel.getSelectedVoiceModelId(), juce::String ("vm-b"));
+        }
+
+        beginTest ("the selector fits at the editor's minimum size without crushing its neighbour");
+        {
+            // It shares the Lego row rather than taking one of its own, because the
+            // editor's minimum height is already tight and every prior story's comment in
+            // PluginEditor::resized warns about squeezing the readouts. That is only a
+            // sound trade if both controls are still usable at the smallest allowed size.
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (560, 990);   // the configured minimum
+
+            auto& panel = editor.getGenerationPanel();
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "A Very Long Voice Model Name Indeed", "ready" });
+            panel.setVoiceModels (models);
+
+            // Lego mode is the crowded case: its label shares the row with the selector.
+            const auto legoIndex = GenerationRequest::allModes().indexOf (GenerationRequest::Mode::lego);
+            panel.getModeSelector().setSelectedId (legoIndex + 1, juce::sendNotificationSync);
+
+            const auto voiceBounds = panel.getVoiceSelector().getBounds();
+            const auto legoBounds  = panel.getLegoTrackSelector().getBounds();
+
+            expect (panel.getVoiceSelector().isVisible());
+            expect (voiceBounds.getWidth() > 0, "the voice selector collapsed");
+            expect (legoBounds.getWidth() > 0, "the lego selector collapsed");
+            expect (! voiceBounds.intersects (legoBounds), "the two controls overlap at minimum size");
+            expect (panel.getLegoLabel().getWidth() > 0, "the lego readout was crushed to nothing");
+            captureIfRequested (editor, "us396-minimum-size");
         }
 
         beginTest ("running out of credits says so, with the numbers");
