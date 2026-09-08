@@ -49,6 +49,13 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+    ignore:
+      # The API image cannot move past python:3.12 while pyproject.toml caps numpy <2
+      # (basic-pitch -> tensorflow 2.14): numpy 1.x ships no CPython 3.13+ wheels, so
+      # `uv sync` fails at image build (#456). Lift together with the numpy cap, and move
+      # the CI matrix in the same change so the image never runs a Python CI does not test.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/web"
@@ -57,3 +64,10 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+    ignore:
+      # Dependabot proposes the newest node major, LTS or not (#457 offered 26 while it was
+      # still a Current release). The runtime major is chosen by hand, to an LTS line, and
+      # in one change with ci.yml's node-version and jsdom's Node floor so the image and CI
+      # never diverge. Patch/minor moves inside the chosen line are still welcome.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
