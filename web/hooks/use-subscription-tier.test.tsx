@@ -5,7 +5,9 @@ import type { ReactNode } from "react"
 import { AuthContext } from "@/contexts/auth-context"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 
-function makeAuthValue(overrides: Partial<{ accessToken: string | null }> = {}) {
+function makeAuthValue(
+  overrides: Partial<{ accessToken: string | null }> = {}
+) {
   return {
     user: { id: "u1", email: "a@b.co" },
     accessToken: "tok" as string | null,
@@ -52,9 +54,9 @@ describe("useSubscriptionTier", () => {
 
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/users/me")
-    expect(
-      (opts.headers as Record<string, string>).authorization
-    ).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
     // Bounded fetch: a hung profile request must not lock Pro items forever.
     expect(opts.signal).toBeInstanceOf(AbortSignal)
   })
@@ -80,6 +82,47 @@ describe("useSubscriptionTier", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false))
 
     expect(result.current.isFreeTier).toBe(true)
+  })
+
+  it("shares one profile request between hooks mounted together (#402)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(profileRes("pro"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    // Song detail mounts the hook twice in one commit: once for the menu badges
+    // and once inside useSongActions. That used to be two identical requests.
+    const { result } = renderHook(
+      () => [useSubscriptionTier(), useSubscriptionTier()] as const,
+      { wrapper: makeWrapper() }
+    )
+    await waitFor(() => expect(result.current[0].isLoading).toBe(false))
+    await waitFor(() => expect(result.current[1].isLoading).toBe(false))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.current[0].isFreeTier).toBe(false)
+    expect(result.current[1].isFreeTier).toBe(false)
+  })
+
+  it("asks again on a fresh mount, so a tier change shows without a reload", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(profileRes("free"))
+      .mockResolvedValueOnce(profileRes("pro"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const first = renderHook(() => useSubscriptionTier(), {
+      wrapper: makeWrapper(),
+    })
+    await waitFor(() => expect(first.result.current.isLoading).toBe(false))
+    expect(first.result.current.isFreeTier).toBe(true)
+    first.unmount()
+
+    // The musician upgraded in between; the next page must see it.
+    const second = renderHook(() => useSubscriptionTier(), {
+      wrapper: makeWrapper(),
+    })
+    await waitFor(() => expect(second.result.current.isLoading).toBe(false))
+    expect(second.result.current.isFreeTier).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it("defaults to free without fetching when unauthenticated", () => {
