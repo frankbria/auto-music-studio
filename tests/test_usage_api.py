@@ -115,8 +115,14 @@ class TestUsageEndpoint:
         # Same lazy top-up the sidebar's balance read performs. Without it the dashboard
         # would show a stale balance for exactly the people who came to check it.
         user = await _make_user("usage-api-reset@example.com", monthly=0.0)
-        user.created_at = datetime.now(timezone.utc) - timedelta(days=60)
-        user.credits_reset_at = datetime.now(timezone.utc) - timedelta(days=45)
+        # Anniversary and last reset on the same date: the next reset is then due one
+        # calendar month after the anchor (at most 31 days), so 45 days back is overdue on
+        # every day of the year. With created_at 60 days back and credits_reset_at 45 days
+        # back, the due date fell on created_at's day-of-month and landed in the future
+        # whenever the suite ran on roughly the 15th-29th, which failed CI half of each month.
+        anchor = datetime.now(timezone.utc) - timedelta(days=45)
+        user.created_at = anchor
+        user.credits_reset_at = anchor
         await user.save()
 
         resp = await client.get(USAGE_URL, headers=_auth_headers(user, settings))
