@@ -2,6 +2,44 @@
 
 Next.js 16 app built on the Shadcn Nova template (gray palette, Hugeicons, Nunito Sans). See the root [README](../README.md) for the full project.
 
+## Toolchain
+
+**Node 22, npm 10.9.8.** CI pins both (`.github/workflows/ci.yml`, the `web` job), and the
+`web/Dockerfile` builds on `node:22-slim`.
+
+The npm version matters specifically when you **regenerate `package-lock.json`**. npm 11
+drops the bundled nested `@emnapi/*` entries that npm 10 writes, which leaves declared
+dependencies with no corresponding package entry:
+
+```
+npm error missing: @emnapi/core@^1.11.1, required by @tailwindcss/oxide-wasm32-wasi@4.3.2
+npm error missing: @emnapi/runtime@^1.7.1, required by @napi-rs/wasm-runtime@1.1.4
+```
+
+That fails the lockfile check (`npm ls --package-lock-only --all`) in the `web npm audit`
+job, on a diff that otherwise looks fine. Before touching the lockfile:
+
+```bash
+npm install -g npm@10.9.8   # or: nvm use 22 && npm i -g npm@10.9.8
+npm -v                      # expect 10.9.8
+```
+
+Plain `npm ci` / `npm install` against the committed lockfile are unaffected — only
+regeneration is.
+
+### What CI runs
+
+The `web` job runs `npm ci`, then `typecheck`, `lint`, `test`, and `build`. Run the same
+four locally before pushing:
+
+```bash
+npm run typecheck && npm run lint && npm test && npm run build
+```
+
+`npm test` is the load-bearing one. A mismatched `react` / `react-dom` pair (both are
+pinned exactly) passes typecheck, lint, *and* `next build`, and fails only under vitest —
+that regression shipped once already, as PR #417.
+
 ## Application shell (US-15.2)
 
 The four-zone shell lives in `components/layout/` and wraps every route via
