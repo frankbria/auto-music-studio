@@ -18,6 +18,9 @@ env:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Longest job in the file at ~11m (integration suite included); 30 leaves headroom for
+    # a slow runner while still bounding a hang well under the 6h default.
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -102,7 +105,12 @@ jobs:
       # This job is the one that judges lockfile consistency, so it must not run on a
       # different npm than `web` — see the NPM_VERSION comment at the top of the file.
       - name: Pin npm
-        run: npm install -g "npm@${NPM_VERSION}"
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          # Assert, don't assume: a pin that silently did not take resurfaces later as
+          # unexplained lockfile drift rather than as a failed step.
+          test "$(npm -v)" = "${NPM_VERSION}" \
+            || { echo "npm pin failed: got $(npm -v), want ${NPM_VERSION}"; exit 1; }
 
       # `npm audit` reads the lockfile and does not need node_modules, so this skips
       # a full install. The advisory database is queried live, so a newly published
@@ -149,7 +157,12 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Pin npm
-        run: npm install -g "npm@${NPM_VERSION}"
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          # Assert, don't assume: a pin that silently did not take resurfaces later as
+          # unexplained lockfile drift rather than as a failed step.
+          test "$(npm -v)" = "${NPM_VERSION}" \
+            || { echo "npm pin failed: got $(npm -v), want ${NPM_VERSION}"; exit 1; }
 
       - name: Install web dependencies
         id: install
@@ -164,16 +177,19 @@ jobs:
         working-directory: web
         run: npm run lint
 
-      # Runs even when typecheck or lint failed, as long as the install succeeded. This is
-      # the step the whole job exists for — #417 passed typecheck, lint AND build — so a
-      # stray lint error must not hide it and cost a second round trip. Skipped when
-      # `npm ci` itself failed, where a test run would only produce noise.
+      # Test and Build run even when an earlier check failed, as long as the install
+      # succeeded, so one run reports the whole picture instead of one fault at a time.
+      # That matters most for Test: it is the step this job exists for — #417 passed
+      # typecheck, lint AND build — so a stray lint error must not hide it and cost a
+      # second round trip. Both are skipped when `npm ci` itself failed, where neither
+      # would produce anything but noise.
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: web
         run: npm test
 
       - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: web
         run: npm run build
 
@@ -188,6 +204,8 @@ jobs:
   images:
     name: build images
     runs-on: ubuntu-latest
+    # ~3m warm; 20 covers a cold cache without letting a hung docker build sit for hours.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
