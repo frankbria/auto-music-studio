@@ -281,6 +281,23 @@ describe("SongDetail full action menu (US-17.2)", () => {
     ).toHaveAttribute("data-locked", "true")
   })
 
+  it("fetches the profile once for the menu badges and the action dispatcher (#402)", async () => {
+    // SongDetailContent reads the tier for the menu and useSongActions reads it
+    // again for the lock check. Two hooks, one request.
+    const fetchMock = stubFetch({ clip: clip(), tier: "pro" })
+    renderDetail()
+    await openActions()
+    // The lock reflects the resolved tier, so both consumers have settled here.
+    expect(
+      screen.getByRole("menuitem", { name: /open in editor/i })
+    ).not.toHaveAttribute("data-locked", "true")
+
+    const profileCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/users/me")
+    )
+    expect(profileCalls).toHaveLength(1)
+  })
+
   it("opens an upgrade prompt when a free user picks a Pro action (US-26.2 AC2)", async () => {
     // The whole point of the change: this used to be a disabled item, so the click
     // did nothing and the musician was told nothing.
