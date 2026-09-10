@@ -15,8 +15,10 @@ RUN npm ci
 
 COPY . .
 
-# Fails the build on a type error, which is otherwise only caught locally — CI does not
-# run typecheck for web/ (#426). A broken frontend should not become an image.
+# Fails the image build on a type error. Since #426 the `web` CI job typechecks too, so
+# this is no longer the only automated check — but it is the one that governs the artifact
+# that actually ships. A broken frontend should not become an image even if someone
+# reorders or trims the CI job.
 RUN npm run typecheck && npm run build
 
 
