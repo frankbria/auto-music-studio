@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# Both Node jobs pin the same npm. `setup-node` cannot pin npm itself — it installs
+# whatever the Node 22 line happens to bundle — and the two jobs must agree, because
+# `web-audit` decides whether the lockfile is internally consistent and `web` consumes
+# that same lockfile via `npm ci`. If a future Node 22 point release ships a different
+# npm, an unpinned pair could disagree about what "consistent" means.
+# Keep this in step with the version documented in web/README.md.
+env:
+  NPM_VERSION: "10.9.8"
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -67,17 +76,19 @@ jobs:
   # accumulated unnoticed. This is the security gate specifically; #426 added the `web`
   # job below for typecheck/lint/test/build.
   #
-  # Kept separate from `web` on purpose. This job is lockfile-only and installs nothing,
-  # so it still reports when `npm ci` is broken — folding it into `web` would let an
-  # install failure mask the advisory result. Renaming it was also avoided: the job name
-  # is its status-check name, and silently renaming a check that may be required on main
-  # would leave that context permanently unreported.
+  # Kept separate from `web` on purpose: this job is lockfile-only and installs nothing, so
+  # it still reports when `npm ci` is broken. Folding the two together would let an install
+  # failure mask the advisory result entirely, and would serialise a 9s check behind a 4m
+  # one. Its name is also its status-check name, so renaming it is not free even though it
+  # is not currently required on main (AGENTS.md lists `ci (3.11)`/`ci (3.12)` as the
+  # required set).
   #
   # Its own job rather than a step in `ci`: it needs Node, not Python, and it must not
   # run once per Python version.
   web-audit:
     name: web npm audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -87,6 +98,11 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      # This job is the one that judges lockfile consistency, so it must not run on a
+      # different npm than `web` — see the NPM_VERSION comment at the top of the file.
+      - name: Pin npm
+        run: npm install -g "npm@${NPM_VERSION}"
 
       # `npm audit` reads the lockfile and does not need node_modules, so this skips
       # a full install. The advisory database is queried live, so a newly published
@@ -119,6 +135,9 @@ jobs:
   web:
     name: web
     runs-on: ubuntu-latest
+    # The full suite is ~2m and the job ~4m; 20 covers a slow runner without letting a hung
+    # vitest worker or `next build` sit on a runner for the 6h default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -129,15 +148,11 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      # Pinned, not left to whatever setup-node bundles. Regenerating web/package-lock.json
-      # with npm 11 drops the bundled nested @emnapi/* entries, which leaves declared
-      # dependencies with no package entry and fails the lockfile check in `web-audit`
-      # above. Contributors hit this depending on which npm they happen to have. If you
-      # change this version, change the one documented in web/README.md too.
       - name: Pin npm
-        run: npm install -g npm@10.9.8
+        run: npm install -g "npm@${NPM_VERSION}"
 
       - name: Install web dependencies
+        id: install
         working-directory: web
         run: npm ci
 
@@ -149,7 +164,12 @@ jobs:
         working-directory: web
         run: npm run lint
 
+      # Runs even when typecheck or lint failed, as long as the install succeeded. This is
+      # the step the whole job exists for — #417 passed typecheck, lint AND build — so a
+      # stray lint error must not hide it and cost a second round trip. Skipped when
+      # `npm ci` itself failed, where a test run would only produce noise.
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: web
         run: npm test
 

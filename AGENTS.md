@@ -217,14 +217,22 @@ Configured in `.pre-commit-config.yaml`:
 
 ## CI
 
-`.github/workflows/ci.yml` — three jobs:
+`.github/workflows/ci.yml` — four jobs:
 - Triggers on push (all branches) and PR to `main`
 - `ci` — matrix Python 3.11, 3.12, with a `mongo:7` service container. Steps: install
   ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov` →
-  `pytest -m integration` against the service Mongo. **These two are the required checks
+  `pytest -m integration` against the service Mongo. **These two are required checks
   on `main`** (`ci (3.11)`, `ci (3.12)`).
 - `web npm audit` — `npm audit --audit-level=high` plus a lockfile-consistency check.
-  Typecheck, lint, test and build for `web/` are still **not** run here (#426).
+  Installs nothing, so it still reports when `npm ci` is broken.
+- `web` — `npm ci` → `typecheck` → `lint` → `test` → `build` for `web/` (#426). **Should be
+  added to the required checks on `main`**; until someone with repo-admin ticks it, it
+  reports but does not gate. `test` is the load-bearing step: PR #417 shipped a
+  `react`/`react-dom` mismatch that passed typecheck, lint *and* `next build`, and failed
+  only under vitest — so it runs even when typecheck or lint failed.
+- Both Node jobs pin npm via the workflow-level `NPM_VERSION` (10.9.8). Regenerating
+  `web/package-lock.json` on npm 11 drops bundled nested `@emnapi/*` entries and fails the
+  lockfile check; see `web/README.md`.
 - `build images` — builds the API and web images without pushing (#429), so a Dockerfile
   that does not build fails the PR rather than the deploy. The web image build runs
   `npm run typecheck` and `next build` as a side effect.
