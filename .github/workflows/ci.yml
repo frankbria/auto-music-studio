@@ -6,9 +6,21 @@ on:
   pull_request:
     branches: [main]
 
+# Both Node jobs pin the same npm. `setup-node` cannot pin npm itself — it installs
+# whatever the Node 22 line happens to bundle — and the two jobs must agree, because
+# `web-audit` decides whether the lockfile is internally consistent and `web` consumes
+# that same lockfile via `npm ci`. If a future Node 22 point release ships a different
+# npm, an unpinned pair could disagree about what "consistent" means.
+# Keep this in step with the version documented in web/README.md.
+env:
+  NPM_VERSION: "10.9.8"
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Longest job in the file at ~11m (integration suite included); 30 leaves headroom for
+    # a slow runner while still bounding a hang well under the 6h default.
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -64,15 +76,22 @@ jobs:
           ACEMUSIC_TEST_MONGODB_URL: mongodb://localhost:27017
 
   # US-26.0: web/ had no CI at all, which is why eleven npm advisories (eight high)
-  # accumulated unnoticed. This is the security gate specifically — typecheck, lint,
-  # test and build are still local-only, deliberately (they carry branch-protection
-  # implications this change does not take on).
+  # accumulated unnoticed. This is the security gate specifically; #426 added the `web`
+  # job below for typecheck/lint/test/build.
+  #
+  # Kept separate from `web` on purpose: this job is lockfile-only and installs nothing, so
+  # it still reports when `npm ci` is broken. Folding the two together would let an install
+  # failure mask the advisory result entirely, and would serialise a 9s check behind a 4m
+  # one. Its name is also its status-check name, so renaming it is not free even though it
+  # is not currently required on main (AGENTS.md lists `ci (3.11)`/`ci (3.12)` as the
+  # required set).
   #
   # Its own job rather than a step in `ci`: it needs Node, not Python, and it must not
   # run once per Python version.
   web-audit:
     name: web npm audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -82,6 +101,16 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      # This job is the one that judges lockfile consistency, so it must not run on a
+      # different npm than `web` — see the NPM_VERSION comment at the top of the file.
+      - name: Pin npm
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          # Assert, don't assume: a pin that silently did not take resurfaces later as
+          # unexplained lockfile drift rather than as a failed step.
+          test "$(npm -v)" = "${NPM_VERSION}" \
+            || { echo "npm pin failed: got $(npm -v), want ${NPM_VERSION}"; exit 1; }
 
       # `npm audit` reads the lockfile and does not need node_modules, so this skips
       # a full install. The advisory database is queried live, so a newly published
@@ -98,16 +127,85 @@ jobs:
         working-directory: web
         run: npm ls --package-lock-only --all > /dev/null
 
+  # #426: nothing in CI executed a line of frontend code, so a change could break the whole
+  # web suite and still show green. PR #417 did exactly that — it bumped `react` and left
+  # `react-dom` behind, all 212 test files failed to load, and every check passed anyway.
+  #
+  # Measured against that regression, only one of these steps actually catches it:
+  #
+  #   npm audit / npm ls   pass    typecheck  pass    lint   pass    build  pass
+  #   test                 FAIL  <- the only gate that sees it
+  #
+  # React's version check lives in react-dom's runtime client module. `next build` never
+  # executes it; a jsdom test does, on import. So a build-only job would have shipped #417
+  # too, and the `images` job running typecheck+build inside Docker is not a substitute.
+  # Keep the test step even if this job is ever trimmed for time.
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    # The full suite is ~2m and the job ~4m; 20 covers a slow runner without letting a hung
+    # vitest worker or `next build` sit on a runner for the 6h default.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Pin npm
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          # Assert, don't assume: a pin that silently did not take resurfaces later as
+          # unexplained lockfile drift rather than as a failed step.
+          test "$(npm -v)" = "${NPM_VERSION}" \
+            || { echo "npm pin failed: got $(npm -v), want ${NPM_VERSION}"; exit 1; }
+
+      - name: Install web dependencies
+        id: install
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      # Test and Build run even when an earlier check failed, as long as the install
+      # succeeded, so one run reports the whole picture instead of one fault at a time.
+      # That matters most for Test: it is the step this job exists for — #417 passed
+      # typecheck, lint AND build — so a stray lint error must not hide it and cost a
+      # second round trip. Both are skipped when `npm ci` itself failed, where neither
+      # would produce anything but noise.
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: npm test
+
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: web
+        run: npm run build
+
   # #429: the images are now the deploy artifact, so a Dockerfile that does not build is a
   # broken deploy. Without this the first place `docker build` runs is CD, on main, after
   # the merge that broke it. Build only — publishing is CD's job.
   #
-  # The web build also runs `npm run typecheck` and `next build` inside the image, which
-  # is the first time either has run in automation. That is a side effect worth having,
-  # not a substitute for #426.
+  # The web build also runs `npm run typecheck` and `next build` inside the image. That
+  # overlaps the `web` job above but is not redundant: this one proves the *image* builds,
+  # which is what actually ships. It was never a substitute for #426 — see the table in
+  # the `web` job for why typecheck+build alone miss the regression that motivated it.
   images:
     name: build images
     runs-on: ubuntu-latest
+    # ~3m warm; 20 covers a cold cache without letting a hung docker build sit for hours.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
