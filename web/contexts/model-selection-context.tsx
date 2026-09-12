@@ -11,7 +11,7 @@ import {
 
 import { useAuth } from "@/hooks/use-auth"
 import { DEFAULT_MODEL_KEY, fetchModels, type ModelInfo } from "@/lib/models"
-import type { UserProfile } from "@/lib/profile"
+import { fetchCurrentProfile } from "@/lib/profile-request"
 
 // Session-scoped model selection (US-16.4). Mounted at the Create page so the
 // chosen model persists across the Simple/Advanced/Sounds tabs (the selector
@@ -89,17 +89,15 @@ export function ModelSelectionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (authLoading || !tokenRef.current) return
     let active = true
-    // Bound the fetch: isLoading is gated on seedResolved (set in .finally), so a
-    // hung profile request would otherwise leave the Create buttons permanently
-    // disabled. On abort, .catch keeps the default model/free tier and .finally
-    // still resolves the seed.
-    fetch("/api/users/me", {
-      headers: { authorization: `Bearer ${tokenRef.current}` },
-      signal: AbortSignal.timeout(5000),
-    })
-      .then(async (res) => (res.ok ? ((await res.json()) as UserProfile) : null))
+    // The shared request is bounded (see profile-request): isLoading is gated on
+    // seedResolved (set in .finally), so a hung profile request would otherwise
+    // leave the Create buttons permanently disabled. On abort or a non-OK
+    // status, .catch keeps the default model/free tier and .finally still
+    // resolves the seed. Shared with useSubscriptionTier (#402), so the
+    // workspace panel on the same page does not fetch the profile a second time.
+    fetchCurrentProfile(tokenRef.current)
       .then((profile) => {
-        if (!active || !profile) return
+        if (!active) return
         setSubscriptionTier(profile.subscription_tier)
         if (!userTouched.current && profile.default_model) {
           setSelectedModelState(profile.default_model)
