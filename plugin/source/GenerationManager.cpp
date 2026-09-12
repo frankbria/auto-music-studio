@@ -8,7 +8,8 @@ GenerationManager::GenerationManager (BackgroundTaskQueue& queueToUse,
                                       juce::PropertiesFile* settings)
     : queue (queueToUse),
       connection (connectionToUse),
-      cache (settings)
+      cache (settings),
+      settingsFile (settings)
 {
 }
 
@@ -65,6 +66,20 @@ juce::String GenerationManager::findStartProblem (const GenerationRequest& reque
     if (isBusy())
         return "A generation is already running";
 
+    // #396: a voiced run goes to the platform, which does not use the local server at
+    // all — so requiring a local connection for it would refuse a generation that would
+    // have worked. It needs platform credentials instead.
+    if (request.voiceModelId.isNotEmpty())
+    {
+        const auto url = settingsFile != nullptr ? settingsFile->getValue (Platform::urlKey)
+                                                 : juce::String();
+
+        if (url.trim().isEmpty())
+            return "Connect to the platform to generate with a custom voice";
+
+        return request.findProblem();
+    }
+
     // AC: generation is unavailable unless the server is actually reachable. Starting
     // anyway would just fail slowly with a worse message.
     if (connection.getStatus() != ConnectionManager::Status::Connected)
@@ -96,6 +111,14 @@ void GenerationManager::start (const GenerationRequest& request)
     context.control        = std::make_shared<RunControl>();
     context.owner          = this;
     context.queue          = &queue;
+
+    // #396: a voiced run goes to the platform instead, so it needs those credentials —
+    // read here, on the message thread, for the same reason as everything else above.
+    if (settingsFile != nullptr)
+    {
+        context.platformUrl    = settingsFile->getValue (Platform::urlKey);
+        context.platformApiKey = settingsFile->getValue (Platform::apiKeyKey);
+    }
 
     activeControl = context.control;
 
@@ -180,18 +203,11 @@ void GenerationManager::applyClips (const RunContext& context, const juce::Array
     });
 }
 
-void GenerationManager::runGeneration (RunContext context)
+GenerationManager::RunOutcome GenerationManager::runOnAceStep (const RunContext& context,
+                                                               const std::function<bool()>& shouldStop)
 {
-    // Everything this needs is in `context`. It never dereferences the manager — the
-    // only way back is applyState/applyClips, which hop to the message thread and
-    // check the WeakReference there.
-    const auto shouldStop = [&context]
-    {
-        return context.control->stopped.load()
-            || (context.queue != nullptr && context.queue->isStopping());
-    };
+    RunOutcome outcome;
 
-    //==============================================================================
     const auto submitted = submitGeneration (context.serverUrl,
                                              context.apiKey,
                                              context.request.toPayloadJson(),
@@ -199,19 +215,19 @@ void GenerationManager::runGeneration (RunContext context)
 
     if (submitted.cancelled || shouldStop())
     {
-        applyState (context, State::cancelled, {});
-        return;
+        outcome.cancelled = true;
+        return outcome;
     }
 
     if (! submitted.ok)
     {
-        applyState (context, State::failed, submitted.errorMessage);
-        return;
+        outcome.failed = true;
+        outcome.errorMessage = submitted.errorMessage;
+        return outcome;
     }
 
     applyState (context, State::queued, {});
 
-    //==============================================================================
     TaskStatus status;
     auto sawRunning = false;
 
@@ -222,8 +238,8 @@ void GenerationManager::runGeneration (RunContext context)
         {
             if (shouldStop())
             {
-                applyState (context, State::cancelled, {});
-                return;
+                outcome.cancelled = true;
+                return outcome;
             }
 
             juce::Thread::sleep (100);
@@ -233,14 +249,15 @@ void GenerationManager::runGeneration (RunContext context)
 
         if (status.cancelled || shouldStop())
         {
-            applyState (context, State::cancelled, {});
-            return;
+            outcome.cancelled = true;
+            return outcome;
         }
 
         if (! status.ok || status.state == TaskStatus::State::failed)
         {
-            applyState (context, State::failed, status.errorMessage);
-            return;
+            outcome.failed = true;
+            outcome.errorMessage = status.errorMessage;
+            return outcome;
         }
 
         if (status.state == TaskStatus::State::completed)
@@ -255,8 +272,128 @@ void GenerationManager::runGeneration (RunContext context)
         }
     }
 
+    outcome.audioUrls = status.audioUrls;
+    return outcome;
+}
+
+GenerationManager::RunOutcome GenerationManager::runOnPlatform (const RunContext& context,
+                                                                const std::function<bool()>& shouldStop)
+{
+    // The same submit-poll-collect shape as the ACE-Step path, against the platform's
+    // endpoints. It exists because the voice's LoRA adapter is loaded on the ACE-Step host
+    // by the platform's *own* worker: routing the generation there keeps one owner of that
+    // state, which is what the plugin doing it itself would break.
+    RunOutcome outcome;
+
+    const auto submitted = Platform::submitGeneration (context.platformUrl,
+                                                       context.platformApiKey,
+                                                       context.request.toPlatformPayloadJson(),
+                                                       shouldStop);
+
+    if (submitted.cancelled || shouldStop())
+    {
+        outcome.cancelled = true;
+        return outcome;
+    }
+
+    if (! submitted.ok)
+    {
+        outcome.failed = true;
+        outcome.errorMessage = submitted.errorMessage;
+        return outcome;
+    }
+
+    applyState (context, State::queued, {});
+
+    auto sawRunning = false;
+
+    for (;;)
+    {
+        for (int waited = 0; waited < pollIntervalMs; waited += 100)
+        {
+            if (shouldStop())
+            {
+                outcome.cancelled = true;
+                return outcome;
+            }
+
+            juce::Thread::sleep (100);
+        }
+
+        const auto status = Platform::getJobStatus (context.platformUrl, context.platformApiKey,
+                                                    submitted.jobId, shouldStop);
+
+        if (status.cancelled || shouldStop())
+        {
+            outcome.cancelled = true;
+            return outcome;
+        }
+
+        if (! status.ok)
+        {
+            outcome.failed = true;
+            outcome.errorMessage = status.errorMessage;
+            return outcome;
+        }
+
+        if (status.jobFailed)
+        {
+            outcome.failed = true;
+            // The job's own reason, not a transport error — the platform knows why.
+            outcome.errorMessage = status.errorMessage.isNotEmpty()
+                                     ? status.errorMessage
+                                     : juce::String ("The platform reported the job failed");
+            return outcome;
+        }
+
+        if (status.jobComplete)
+        {
+            outcome.clipIds = status.clipIds;
+            break;
+        }
+
+        if (! sawRunning)
+        {
+            sawRunning = true;
+            applyState (context, State::running, {});
+        }
+    }
+
+    return outcome;
+}
+
+void GenerationManager::runGeneration (RunContext context)
+{
+    // Everything this needs is in `context`. It never dereferences the manager — the
+    // only way back is applyState/applyClips, which hop to the message thread and
+    // check the WeakReference there.
+    const auto shouldStop = [&context]
+    {
+        return context.control->stopped.load()
+            || (context.queue != nullptr && context.queue->isStopping());
+    };
+
     //==============================================================================
-    if (status.audioUrls.isEmpty())
+    // #396: a named voice is the only thing that changes where this runs. Without one
+    // the generation is exactly what it has always been — local, free, offline.
+    const auto usePlatform = context.request.voiceModelId.isNotEmpty();
+    const auto outcome = usePlatform ? runOnPlatform (context, shouldStop)
+                                     : runOnAceStep (context, shouldStop);
+
+    if (outcome.cancelled || shouldStop())
+    {
+        applyState (context, State::cancelled, {});
+        return;
+    }
+
+    if (outcome.failed)
+    {
+        applyState (context, State::failed, outcome.errorMessage);
+        return;
+    }
+
+    //==============================================================================
+    if (outcome.audioUrls.isEmpty() && outcome.clipIds.isEmpty())
     {
         applyState (context, State::failed, "The server finished but returned no audio");
         return;
@@ -280,7 +417,12 @@ void GenerationManager::runGeneration (RunContext context)
 
     juce::Array<juce::File> downloaded;
 
-    for (int i = 0; i < status.audioUrls.size(); ++i)
+    // The platform hands back clip ids, ACE-Step hands back URLs. Ids are preferred where
+    // both exist: with local-disk storage the platform's `audio_urls` can be filesystem
+    // paths on the *server*, which are not fetchable from here.
+    const auto count = outcome.clipIds.isEmpty() ? outcome.audioUrls.size() : outcome.clipIds.size();
+
+    for (int i = 0; i < count; ++i)
     {
         if (shouldStop())
         {
@@ -289,7 +431,26 @@ void GenerationManager::runGeneration (RunContext context)
         }
 
         const auto destination = directory.getChildFile ("clip-" + juce::String (i + 1) + ".wav");
-        const auto error = downloadAudio (status.audioUrls[i], context.apiKey, destination, shouldStop);
+        juce::String error;
+
+        if (outcome.clipIds.isEmpty())
+        {
+            error = downloadAudio (outcome.audioUrls[i], context.apiKey, destination, shouldStop);
+        }
+        else
+        {
+            const auto fetched = Platform::downloadClip (context.platformUrl, context.platformApiKey,
+                                                         outcome.clipIds[i], destination, shouldStop);
+
+            if (fetched.cancelled)
+            {
+                applyState (context, State::cancelled, {});
+                return;
+            }
+
+            if (! fetched.ok)
+                error = fetched.errorMessage;
+        }
 
         if (error.isNotEmpty())
         {

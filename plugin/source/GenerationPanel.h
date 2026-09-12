@@ -67,6 +67,20 @@ public:
     juce::Label&        getCaptureLabel() noexcept         { return captureLabel; }
     juce::ComboBox&     getLegoTrackSelector() noexcept    { return legoTrackSelector; }
     juce::Label&        getLegoLabel() noexcept            { return legoLabel; }
+    juce::ComboBox&     getVoiceSelector() noexcept        { return voiceSelector; }
+    juce::Label&        getVoiceLabel() noexcept           { return voiceLabel; }
+
+    /** Offer these voice models, or hide the selector entirely when the list is empty
+        (#396).
+
+        Hidden rather than shown-and-empty: a signed-out musician has no voices and never
+        will until they connect, so an always-present control reading "None" is a question
+        the plugin cannot answer. The editor calls this when the platform panel connects
+        or disconnects. */
+    void setVoiceModels (const juce::Array<Platform::VoiceModel>&);
+
+    /** The voice the controls currently name, or empty for none. */
+    juce::String getSelectedVoiceModelId() const;
 
     /** The layers built so far in Lego mode. */
     LegoStack& getLegoStack() noexcept                    { return legoStack; }
@@ -205,6 +219,12 @@ private:
     juce::Label      legoTrackLabel;
     juce::ComboBox   legoTrackSelector;
     juce::Label      legoLabel;
+    juce::Label      voiceLabel;
+    juce::ComboBox   voiceSelector;
+
+    /** Parallel to the selector's items 2..n; item 1 is always "None". An id alone cannot
+        carry a model id, and a display name is not unique enough to look one up by. */
+    juce::Array<Platform::VoiceModel> voiceModels;
 
     juce::ToggleButton midiRecordToggle { "Record MIDI" };
     juce::ToggleButton sidechainRecordToggle { "Capture sidechain" };

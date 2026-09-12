@@ -54,6 +54,15 @@ namespace Platform
         juce::String createdAt;
     };
 
+    /** One custom voice model the signed-in musician owns (#396). */
+    struct VoiceModel
+    {
+        juce::String id;
+        juce::String name;
+        /** "queued" | "training" | "ready" | "failed". Only "ready" can generate. */
+        juce::String status;
+    };
+
     /** What every call reports back. `ok` false always carries an `errorMessage` the
         panel can show verbatim. */
     struct Result
@@ -66,6 +75,13 @@ namespace Platform
 
         juce::Array<Workspace> workspaces;
         juce::Array<Clip> clips;
+        juce::Array<VoiceModel> voiceModels;
+
+        /** The job a platform-routed generation created, and what it is doing. */
+        juce::String jobId;
+        bool jobComplete = false;
+        bool jobFailed = false;
+        juce::StringArray clipIds;
 
         /** Total matches, for paging. */
         int total = 0;
@@ -118,10 +134,50 @@ namespace Platform
                        std::function<bool()> shouldCancel = nullptr,
                        int timeoutMs = 120000);
 
+    /** The voice models this musician owns, newest first (#396).
+
+        Every status is returned; call `readyVoiceModels` to get the ones that can
+        actually generate. Keeping them separate means the panel can say "still training"
+        rather than silently showing a shorter list than the web app does. */
+    Result listVoiceModels (const juce::String& baseUrl,
+                            const juce::String& apiKey,
+                            std::function<bool()> shouldCancel = nullptr,
+                            int timeoutMs = 10000);
+
+    /** Just the models whose adapter has finished training. */
+    juce::Array<VoiceModel> readyVoiceModels (const juce::Array<VoiceModel>&);
+
+    /** Start a generation on the platform: `POST /api/v1/generate`, returns `jobId`.
+
+        `payloadJson` comes from `GenerationRequest::toPlatformPayloadJson()` — the
+        endpoint forbids unknown keys, so the ACE-Step body will not do.
+
+        Failures carry the platform's own message where it sends one (a Pro-only refusal,
+        a credit shortfall), because "API key rejected by the server" would misdescribe
+        both. */
+    Result submitGeneration (const juce::String& baseUrl,
+                             const juce::String& apiKey,
+                             const juce::String& payloadJson,
+                             std::function<bool()> shouldCancel = nullptr,
+                             int timeoutMs = 30000);
+
+    /** Poll `GET /api/v1/jobs/{id}/status`.
+
+        `ok` means the poll itself worked; `jobFailed` with `errorMessage` is the job
+        failing, which is a different thing and must not be reported as a network error.
+        Completed jobs carry `clipIds` — preferred over the response's `audio_urls`, which
+        for local-disk storage can be filesystem paths rather than anything fetchable. */
+    Result getJobStatus (const juce::String& baseUrl,
+                         const juce::String& apiKey,
+                         const juce::String& jobId,
+                         std::function<bool()> shouldCancel = nullptr,
+                         int timeoutMs = 10000);
+
     /** Settings keys, so the panel and the settings file agree on one spelling. */
     constexpr const char* urlKey = "platformUrl";
     constexpr const char* apiKeyKey = "platformApiKey";
     constexpr const char* workspaceKey = "platformWorkspaceId";
+    constexpr const char* voiceModelKey = "platformVoiceModelId";
 
     /** Where the platform lives by default. */
     constexpr const char* defaultUrl = "https://api.acemusic.ai";

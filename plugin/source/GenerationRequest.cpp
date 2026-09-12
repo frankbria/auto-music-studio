@@ -140,6 +140,14 @@ juce::String GenerationRequest::findProblem() const
         return toString (mode) + " mode needs a source audio file";
     }
 
+    // #396: a voice routes the generation to the platform, and the platform cannot reach
+    // the source audio file this machine holds — so a voiced Cover/Complete/Repaint/Lego
+    // would arrive there as a plain text-to-music request with the source silently
+    // dropped. Refusing is the only honest answer; generating something the musician did
+    // not ask for is worse than not generating.
+    if (voiceModelId.isNotEmpty() && mode != Mode::textToMusic)
+        return "A custom voice only works in Text to Music mode";
+
     return {};
 }
 
@@ -206,6 +214,53 @@ juce::var GenerationRequest::toPayload() const
 juce::String GenerationRequest::toPayloadJson() const
 {
     return juce::JSON::toString (toPayload(), true);
+}
+
+juce::var GenerationRequest::toPlatformPayload() const
+{
+    auto* payload = new juce::DynamicObject();
+
+    payload->setProperty ("prompt", prompt.trim());
+    payload->setProperty ("duration", static_cast<double> (durationSeconds));
+    payload->setProperty ("inference_steps", inferenceStepsFor (quality));
+    payload->setProperty ("format", "wav");
+
+    // Same rule as the ACE-Step payload — an absent key means "you choose" — but here it
+    // is also a hard requirement: the endpoint forbids extra keys and validates the ones
+    // it gets, so an empty string is a 422 rather than a default.
+    if (voiceModelId.isNotEmpty())
+        payload->setProperty ("voice_model_id", voiceModelId);
+
+    if (lyrics.trim().isNotEmpty())
+        payload->setProperty ("lyrics", lyrics);
+
+    if (vocalLanguage.isNotEmpty())
+        payload->setProperty ("vocal_language", vocalLanguage);
+
+    if (instrumental)
+        payload->setProperty ("instrumental", true);
+
+    if (bpm > 0)
+        payload->setProperty ("bpm", bpm);
+
+    if (key.isNotEmpty())
+        payload->setProperty ("key", key);
+
+    if (seed >= 0)
+        payload->setProperty ("seed", seed);
+
+    if (model.isNotEmpty())
+        payload->setProperty ("model", model);
+
+    // The plugin's other modes (cover, complete, repaint, lego) all need a source audio
+    // file that lives on this machine, and the platform has no way to reach it. Only
+    // text-to-music can be routed, which is also the only mode a voice makes sense in.
+    return juce::var (payload);
+}
+
+juce::String GenerationRequest::toPlatformPayloadJson() const
+{
+    return juce::JSON::toString (toPlatformPayload(), true);
 }
 
 } // namespace acemusic

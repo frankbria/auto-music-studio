@@ -182,7 +182,8 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/PlatformPanelTests.cpp
     tests/PluginProcessorTests.cpp
     tests/ResultsPanelTests.cpp
-    tests/TimeStretchTests.cpp)
+    tests/TimeStretchTests.cpp
+    tests/VoiceGenerationTests.cpp)
 
 target_include_directories(AceMusicPluginTests PRIVATE source tests)
 
