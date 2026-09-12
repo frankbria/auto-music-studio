@@ -73,7 +73,7 @@ api = [
     "uvicorn[standard]>=0.52.4",
 ]
 s3 = [
-    "boto3>=1.43.79",
+    "boto3>=1.43.82",
 ]
 
 [tool.hatch.build.targets.wheel]
