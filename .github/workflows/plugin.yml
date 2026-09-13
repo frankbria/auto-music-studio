@@ -23,6 +23,9 @@ env:
   # Acceptance criterion for US-23.1 (#315): installed VST3 under 25MB.
   MAX_VST3_KB: 25600
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.name }}
