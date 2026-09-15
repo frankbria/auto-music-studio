@@ -238,6 +238,15 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     legoLabel.setColour (juce::Label::textColourId, genColours::textDim);
     addAndMakeVisible (legoLabel);
 
+    // Custom voice (#396). Item 1 is "None" and means omit, the same convention the
+    // language and key selectors use. Hidden until the platform hands over a list.
+    styleCaption (voiceLabel, "Voice");
+    addChildComponent (voiceLabel);
+    styleCombo (voiceSelector);
+    voiceSelector.addItem ("None", 1);
+    voiceSelector.setSelectedId (1, juce::dontSendNotification);
+    addChildComponent (voiceSelector);
+
     captureLabel.setFont (juce::FontOptions (12.0f));
     captureLabel.setColour (juce::Label::textColourId, genColours::textDim);
     addAndMakeVisible (captureLabel);
@@ -363,6 +372,18 @@ void GenerationPanel::resized()
     // few pixels wide at the editor's minimum size, which made both unreadable — and a
     // readout nobody can read is not a feature.
     auto legoRow = area.removeFromBottom (22);
+
+    if (voiceSelector.isVisible())
+    {
+        // The voice selector takes the right of this row. It shares rather than adding a
+        // row of its own because the editor's minimum height is already tight, and every
+        // prior story's comment here warns about squeezing the readouts.
+        voiceSelector.setBounds (legoRow.removeFromRight (150));
+        legoRow.removeFromRight (6);
+        voiceLabel.setBounds (legoRow.removeFromRight (42));
+        legoRow.removeFromRight (8);
+    }
+
     legoTrackLabel.setBounds (legoRow.removeFromLeft (46));
     legoTrackSelector.setBounds (legoRow.removeFromLeft (130));
     legoRow.removeFromLeft (8);
@@ -719,6 +740,47 @@ juce::String GenerationPanel::getSyncStatusText() const
     return "Sync: host " + juce::String (juce::roundToInt (snapshot.bpm)) + " BPM";
 }
 
+void GenerationPanel::setVoiceModels (const juce::Array<Platform::VoiceModel>& models)
+{
+    // Read the current choice BEFORE replacing the list it is an index into — otherwise
+    // the old selected id resolves against the new array and a refresh that merely
+    // reordered the voices silently moves the musician onto a different one.
+    const auto previous = getSelectedVoiceModelId();
+
+    // Only trained adapters can generate; offering one that is still training would earn
+    // the musician a 409 they did not ask for.
+    voiceModels = Platform::readyVoiceModels (models);
+
+    voiceSelector.clear (juce::dontSendNotification);
+    voiceSelector.addItem ("None", 1);
+
+    for (int i = 0; i < voiceModels.size(); ++i)
+        voiceSelector.addItem (voiceModels[i].name, i + 2);
+
+    // Keep the musician's choice across a refresh, but only if it still exists — a voice
+    // deleted on the web should not stay selected here.
+    auto restored = 1;
+
+    for (int i = 0; i < voiceModels.size(); ++i)
+        if (voiceModels[i].id == previous)
+            restored = i + 2;
+
+    voiceSelector.setSelectedId (restored, juce::dontSendNotification);
+
+    // Visibility is refresh()'s call: it also knows the mode, and a voice is only offered
+    // in Text to Music. Signed out or nothing trained yet means nothing to choose, so the
+    // control is not shown at all rather than shown reading "None".
+    refresh();
+}
+
+juce::String GenerationPanel::getSelectedVoiceModelId() const
+{
+    const auto index = voiceSelector.getSelectedId() - 2;
+
+    return juce::isPositiveAndBelow (index, voiceModels.size()) ? voiceModels[index].id
+                                                                : juce::String();
+}
+
 GenerationRequest GenerationPanel::buildRequest() const
 {
     GenerationRequest request;
@@ -796,6 +858,9 @@ GenerationRequest GenerationPanel::buildRequest() const
         request.sourceAudioPath = getCaptureFileFor (request.mode).getFullPathName();
     }
 
+    // #396: the one field that decides where this generation runs.
+    request.voiceModelId = getSelectedVoiceModelId();
+
     return request;
 }
 
@@ -872,6 +937,25 @@ void GenerationPanel::refresh()
     legoLabel.setVisible (isLego);
     legoTrackSelector.setEnabled (! busy);
 
+    // #396: a voice routes to the platform, which cannot reach this machine's source
+    // audio — so it is only offered in Text to Music. Hidden rather than disabled for the
+    // other modes, and reset to None, so a selection made in Text to Music cannot survive
+    // a mode switch and silently refuse the next Generate. findProblem() is still the
+    // backstop for a request built some other way.
+    const auto isTextToMusic = modeSelector.getSelectedId() - 1
+                                 == GenerationRequest::allModes().indexOf (GenerationRequest::Mode::textToMusic);
+    const auto offerVoice = isTextToMusic && ! voiceModels.isEmpty();
+
+    if (! offerVoice && voiceSelector.getSelectedId() != 1)
+        voiceSelector.setSelectedId (1, juce::dontSendNotification);
+
+    if (voiceSelector.isVisible() != offerVoice)
+    {
+        voiceSelector.setVisible (offerVoice);
+        voiceLabel.setVisible (offerVoice);
+        resized();
+    }
+
     if (isLego)
     {
         const auto legoText = getLegoText();
@@ -885,7 +969,8 @@ void GenerationPanel::refresh()
 
     for (auto* control : std::initializer_list<juce::Component*> {
              &promptEditor, &lyricsEditor, &lyricsToggle, &languageSelector, &instrumentalToggle,
-             &bpmEditor, &keySelector, &durationEditor, &seedEditor, &qualitySelector, &modeSelector })
+             &bpmEditor, &keySelector, &durationEditor, &seedEditor, &qualitySelector, &modeSelector,
+             &voiceSelector })
     {
         control->setEnabled (! busy);
     }
