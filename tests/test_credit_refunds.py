@@ -529,6 +529,19 @@ class TestRefundBuckets:
         assert await _buckets(user) == (1.0, 10.0)
         assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
 
+    @pytest.mark.parametrize("amount, purchased", [(-3.0, 2.0), (3.0, -2.0), (-3.0, -4.0)])
+    async def test_a_row_with_an_inconsistent_split_is_refused(self, mongo_db, amount: float, purchased: float) -> None:
+        # The sign convention is the one thing a new call site can get wrong silently.
+        with pytest.raises(ValueError):
+            await credits_service.record_transaction(
+                user_id=PydanticObjectId(),
+                amount=amount,
+                action_type="x",
+                job_id="",
+                balance_after=0.0,
+                purchased_amount=purchased,
+            )
+
     async def test_charge_and_create_ledgers_the_split(self, mongo_db) -> None:
         user = await _split_user("bucket-cac@example.com", monthly=1.0, purchased=10.0)
 

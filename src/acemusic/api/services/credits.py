@@ -513,8 +513,12 @@ async def record_transaction(
     """Append one movement to the credit ledger.
 
     ``purchased_amount`` is the signed part of ``amount`` that moved the purchased bucket
-    (#422); a charge passes ``-from_purchased`` from :func:`deduct_credits_split`.
+    (#422); a charge passes ``-from_purchased`` from :func:`deduct_credits_split`. The sign
+    is easy to get backwards at a new call site, so a row whose purchased part points the
+    other way, or exceeds the whole, is refused rather than ledgered.
     """
+    if purchased_amount * amount < 0 or abs(purchased_amount) > abs(amount):
+        raise ValueError("purchased_amount must have the sign of amount and not exceed it")
     txn = CreditTransaction(
         user_id=user_id,
         amount=amount,
