@@ -34,18 +34,24 @@ async def _user() -> User:
 
 async def _show(label: str) -> None:
     user = await _user()
-    print(f"{label:<28} monthly={user.credits_balance:g}  purchased={user.purchased_credits:g}  spendable={cs.spendable(user):g}")
+    print(
+        f"{label:<28} monthly={user.credits_balance:g}  purchased={user.purchased_credits:g}  spendable={cs.spendable(user):g}"
+    )
 
 
 async def _ledger(job_id: str) -> None:
     rows = await CreditTransaction.find(CreditTransaction.job_id == job_id).sort("+created_at").to_list()
     print("ledger rows for this job (amount / purchased_amount):")
     for r in rows:
-        print(f"  {r.action_type:<14} amount={r.amount:+g}  purchased_amount={r.purchased_amount:+g}  balance_after={r.balance_after:g}")
+        print(
+            f"  {r.action_type:<14} amount={r.amount:+g}  purchased_amount={r.purchased_amount:+g}  balance_after={r.balance_after:g}"
+        )
 
 
 async def _job(job_type: str = "song") -> Job:
-    job = Job(user_id=(await _user()).id, workspace_id=PydanticObjectId(), job_type=job_type, input_params={"prompt": "demo"})
+    job = Job(
+        user_id=(await _user()).id, workspace_id=PydanticObjectId(), job_type=job_type, input_params={"prompt": "demo"}
+    )
     await job.insert()
     return job
 
@@ -116,7 +122,9 @@ async def step(name: str) -> None:
         elif name == "partial":
             await _set(1.0, 10.0)
             user = await _user()
-            job = await cs.charge_and_create(user_id=user.id, cost=3.0, action_type="full_song", create=lambda: _job("full_song"))
+            job = await cs.charge_and_create(
+                user_id=user.id, cost=3.0, action_type="full_song", create=lambda: _job("full_song")
+            )
             await _show("after 3-credit charge")
             await cs.refund_credits(user.id, 1.5, action_type="full_song_refund", job_id=str(job.id))
             await _show("after refunding half")
@@ -125,7 +133,9 @@ async def step(name: str) -> None:
         elif name == "no-double-refund":
             await _set(1.0, 10.0)
             user = await _user()
-            job = await cs.charge_and_create(user_id=user.id, cost=4.0, action_type="full_song", create=lambda: _job("full_song"))
+            job = await cs.charge_and_create(
+                user_id=user.id, cost=4.0, action_type="full_song", create=lambda: _job("full_song")
+            )
             await _show("after 4-credit charge")
             await cs.refund_credits(user.id, 2.0, action_type="full_song_refund", job_id=str(job.id))
             await _show("handler refunded 2")
