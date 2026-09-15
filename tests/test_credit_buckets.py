@@ -81,6 +81,18 @@ class TestSpendOrder:
         assert await credits_service.deduct_credits(user.id, 3.0) == 2.0
         assert (await User.get(user.id)).purchased_credits == 2.0
 
+    async def test_the_split_variant_reports_what_came_from_purchases(self) -> None:
+        # #422: refunds need to know how much of a charge dipped into the purchased bucket.
+        user = await _user("buckets-split@example.com", monthly=10.0, purchased=100.0)
+
+        assert await credits_service.deduct_credits_split(user.id, 30.0) == (80.0, 20.0)
+        assert await credits_service.deduct_credits_split(user.id, 5.0) == (75.0, 5.0)
+
+    async def test_the_split_variant_reports_zero_within_the_monthly_bucket(self) -> None:
+        user = await _user("buckets-split-monthly@example.com", monthly=50.0, purchased=100.0)
+
+        assert await credits_service.deduct_credits_split(user.id, 20.0) == (130.0, 0.0)
+
     async def test_an_unaffordable_deduction_changes_nothing(self) -> None:
         user = await _user("buckets-broke@example.com", monthly=1.0, purchased=1.0)
 

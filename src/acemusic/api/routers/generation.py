@@ -233,8 +233,8 @@ async def create_generation(
     # balance-conditioned deduction is the concurrency guard — two requests
     # racing over the last credit cannot both pass.
     cost = credits_service.get_cost(request.mode)
-    balance_after = await credits_service.deduct_credits(user.id, cost)
-    if balance_after is None:
+    deducted = await credits_service.deduct_credits_split(user.id, cost)
+    if deducted is None:
         # Re-read the balance for the error payload: the copy on ``user`` was
         # loaded before the deduction attempt and may be stale under
         # concurrent requests.
@@ -244,6 +244,7 @@ async def create_generation(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
         )
+    balance_after, from_purchased = deducted
     try:
         job = await generation_service.create_generation_job(
             user_id=user.id,
@@ -254,7 +255,7 @@ async def create_generation(
         # The deduction already landed but no job exists — give the credit back
         # rather than charging for work that will never run. BaseException (not
         # Exception) on purpose: asyncio.CancelledError must also compensate.
-        await credits_service.reverse_unrecorded_charge(user.id, cost)
+        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
         raise
     try:
         await credits_service.record_transaction(
@@ -263,6 +264,7 @@ async def create_generation(
             action_type=request.mode,
             job_id=str(job.id),
             balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except Exception:
         # The charge is taken and the job is dispatched (possibly already

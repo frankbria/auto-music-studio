@@ -41,8 +41,7 @@ async def _balance(user: User) -> float:
     """What the musician can spend — both buckets (US-26.4).
 
     Asks the question a musician would rather than reading one field, so these stay
-    correct whichever bucket a refund lands in. Refunds currently go to the **monthly**
-    bucket; making them land where the charge actually came from is #422.
+    correct whichever bucket a refund lands in (which bucket is ``TestRefundBuckets``).
     """
     fresh = await User.get(user.id)
     return credits_service.spendable(fresh)
@@ -396,3 +395,147 @@ class TestChargeAndCreate:
 
         assert await _balance(user) == 10.0
         assert await _rows(job) == []
+
+
+async def _buckets(user: User) -> tuple[float, float]:
+    fresh = await User.get(user.id)
+    return credits_service.buckets(fresh)
+
+
+async def _split_user(email: str, *, monthly: float, purchased: float) -> User:
+    user = await _user(email, credits=monthly)
+    user.purchased_credits = purchased
+    await user.save()
+    return user
+
+
+async def _charge_split(user: User, job: Job, amount: float) -> None:
+    """Charge the way a router does after #422: the ledger row carries the bucket split."""
+    deducted = await credits_service.deduct_credits_split(user.id, amount)
+    assert deducted is not None
+    balance_after, from_purchased = deducted
+    await credits_service.record_transaction(
+        user_id=user.id,
+        amount=-amount,
+        action_type="song",
+        job_id=str(job.id),
+        balance_after=balance_after,
+        purchased_amount=-from_purchased,
+    )
+
+
+class TestRefundBuckets:
+    """#422: a refund is the inverse of the charge it reverses, bucket for bucket.
+
+    The monthly reset tops ``credits_balance`` *up to* the allocation, so purchased credit
+    refunded as monthly would suppress the next grants — the musician loses what they paid
+    for, one month at a time.
+    """
+
+    async def test_a_charge_from_the_monthly_bucket_refunds_as_monthly(self, mongo_db) -> None:
+        # AC2. Purchased credit must not be minted by a refund of allowance.
+        user = await _split_user("bucket-monthly@example.com", monthly=50.0, purchased=100.0)
+        job = await _job(user, status=JobStatus.FAILED)
+        await _charge_split(user, job, 20.0)
+        assert await _buckets(user) == (30.0, 100.0)
+
+        await credits_service.refund_failed_job(job)
+
+        assert await _buckets(user) == (50.0, 100.0)
+
+    async def test_a_charge_spanning_both_buckets_refunds_each(self, mongo_db) -> None:
+        # AC1, the scenario from the issue: free tier 50/month, bought the 100-pack, spent 120.
+        user = await _split_user("bucket-both@example.com", monthly=50.0, purchased=100.0)
+        job = await _job(user, status=JobStatus.FAILED)
+        await _charge_split(user, job, 120.0)
+        assert await _buckets(user) == (0.0, 30.0)
+
+        await credits_service.refund_failed_job(job)
+
+        # Not (120, 30): that would swallow the next three monthly grants.
+        assert await _buckets(user) == (50.0, 100.0)
+
+    async def test_a_partial_refund_is_proportional_to_the_charge(self, mongo_db) -> None:
+        # AC3. 3 charged: 1 monthly, 2 purchased. Half back -> 0.5 monthly, 1.0 purchased.
+        user = await _split_user("bucket-partial@example.com", monthly=1.0, purchased=10.0)
+        job = await _job(user, job_type="full_song", status=JobStatus.FAILED)
+        await _charge_split(user, job, 3.0)
+        assert await _buckets(user) == (0.0, 8.0)
+
+        await credits_service.refund_credits(user.id, 1.5, action_type="full_song_refund", job_id=str(job.id))
+
+        assert await _buckets(user) == (0.5, 9.0)
+
+    async def test_the_purchased_bucket_is_not_refunded_twice(self, mongo_db) -> None:
+        # AC4. A handler partial refund, then the generic failed-job refund: the purchased
+        # share comes back exactly once across both.
+        user = await _split_user("bucket-twice@example.com", monthly=1.0, purchased=10.0)
+        job = await _job(user, job_type="full_song", status=JobStatus.FAILED)
+        await _charge_split(user, job, 4.0)
+        await credits_service.refund_credits(user.id, 2.0, action_type="full_song_refund", job_id=str(job.id))
+
+        await credits_service.refund_failed_job(job)
+        await credits_service.refund_failed_job(job)
+
+        assert await _buckets(user) == (1.0, 10.0)
+
+    async def test_an_explicit_split_overrides_the_ledger(self, mongo_db) -> None:
+        user = await _split_user("bucket-explicit@example.com", monthly=5.0, purchased=5.0)
+
+        await credits_service.refund_credits(user.id, 4.0, action_type="song_refund", job_id="", purchased_amount=3.0)
+
+        assert await _buckets(user) == (6.0, 8.0)
+        [row] = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        assert (row.amount, row.purchased_amount) == (4.0, 3.0)
+
+    async def test_a_refund_with_no_job_goes_to_the_monthly_bucket(self, mongo_db) -> None:
+        # Nothing to derive a split from, so the pre-#422 behaviour is kept.
+        user = await _split_user("bucket-nojob@example.com", monthly=5.0, purchased=5.0)
+
+        await credits_service.refund_credits(user.id, 4.0, action_type="song_refund", job_id="")
+
+        assert await _buckets(user) == (9.0, 5.0)
+
+    async def test_a_charge_row_predating_the_split_refunds_as_monthly(self, mongo_db) -> None:
+        # Rows written before #422 carry no split; the only honest reading is all-monthly,
+        # which is exactly what those refunds did before.
+        user = await _split_user("bucket-legacy@example.com", monthly=5.0, purchased=5.0)
+        job = await _job(user, status=JobStatus.FAILED)
+        await _charge(user, job, 8.0)  # the pre-#422 router shape: no purchased_amount
+        assert await _buckets(user) == (0.0, 2.0)
+
+        await credits_service.refund_failed_job(job)
+
+        assert await _buckets(user) == (8.0, 2.0)
+
+    async def test_the_refund_row_records_its_split(self, mongo_db) -> None:
+        user = await _split_user("bucket-row@example.com", monthly=1.0, purchased=10.0)
+        job = await _job(user, status=JobStatus.FAILED)
+        await _charge_split(user, job, 3.0)
+
+        await credits_service.refund_failed_job(job)
+
+        charge, refund = sorted(await _rows(job), key=lambda r: r.amount)
+        assert (charge.amount, charge.purchased_amount) == (-3.0, -2.0)
+        assert (refund.amount, refund.purchased_amount) == (3.0, 2.0)
+
+    async def test_reversing_an_unrecorded_charge_restores_the_split(self, mongo_db) -> None:
+        user = await _split_user("bucket-reverse@example.com", monthly=1.0, purchased=10.0)
+        deducted = await credits_service.deduct_credits_split(user.id, 3.0)
+        assert deducted == (8.0, 2.0)
+
+        await credits_service.reverse_unrecorded_charge(user.id, 3.0, purchased_amount=2.0)
+
+        assert await _buckets(user) == (1.0, 10.0)
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+
+    async def test_charge_and_create_ledgers_the_split(self, mongo_db) -> None:
+        user = await _split_user("bucket-cac@example.com", monthly=1.0, purchased=10.0)
+
+        async def create() -> Job:
+            return await _job(user, job_type="stems")
+
+        job = await credits_service.charge_and_create(user_id=user.id, cost=3.0, action_type="stems", create=create)
+
+        [row] = await _rows(job)
+        assert (row.amount, row.purchased_amount) == (-3.0, -2.0)

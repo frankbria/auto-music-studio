@@ -224,13 +224,14 @@ async def create_training_job(
     uid = PydanticObjectId(user_id)
     cost = credits_service.VOICE_TRAINING_COST
 
-    deducted = await credits_service.deduct_credits(uid, cost)
+    deducted = await credits_service.deduct_credits_split(uid, cost)
     if deducted is None:
         user = await User.get(uid)
         raise InsufficientCreditsError(
             balance=credits_service.spendable(user) if user is not None else 0.0,
             required=cost,
         )
+    balance_after, from_purchased = deducted
 
     model = VoiceModel(
         user_id=uid,
@@ -272,12 +273,13 @@ async def create_training_job(
             amount=-cost,
             action_type="voice_training",
             job_id=str(job.id),
-            balance_after=deducted,
+            balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except BaseException:
         # BaseException, not Exception: a shutdown CancelledError must also give
         # the credits back rather than leaving the musician charged for nothing.
-        await credits_service.reverse_unrecorded_charge(uid, cost)
+        await credits_service.reverse_unrecorded_charge(uid, cost, purchased_amount=from_purchased)
         await _cleanup_partial(storage, model)
         raise
 

@@ -219,14 +219,28 @@ async def grant_purchased_credits(user_id: PydanticObjectId, amount: float) -> f
     return _total(doc)
 
 
-async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None:
-    """Atomically deduct ``cost`` from the user's balance.
+def _before_buckets(doc: dict) -> tuple[float, float]:
+    """The two buckets as the spend pipeline reads them, defaults for absent fields included."""
+    monthly = doc.get("credits_balance")
+    purchased = doc.get("purchased_credits")
+    return (
+        DEFAULT_CREDITS_BALANCE if monthly is None else float(monthly),
+        0.0 if purchased is None else float(purchased),
+    )
 
-    A single ``find_one_and_update`` filtered on ``credits_balance >= cost``,
+
+async def deduct_credits_split(user_id: PydanticObjectId, cost: float) -> tuple[float, float] | None:
+    """Atomically deduct ``cost``; return ``(balance_after, from_purchased)``.
+
+    A single ``find_one_and_update`` filtered on the balance covering ``cost``,
     so two concurrent requests racing over the last credit are serialised by
     MongoDB — exactly one matches and decrements; the loser matches nothing.
-    Returns the balance *after* deduction, or ``None`` if the balance was
-    insufficient (or the user does not exist).
+    Returns ``None`` if the balance was insufficient (or the user does not exist).
+
+    ``from_purchased`` is the part of ``cost`` the monthly bucket could not cover, so
+    the ledger can record it and a refund can put it back where it came from (#422).
+    It is computed from the document *before* the update with the same arithmetic as
+    the pipeline, so the two cannot disagree.
     """
     # A non-positive cost would invert the operation: the filter always matches and the
     # decrement would *grant* credits. Reject at the boundary.
@@ -234,7 +248,7 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
         raise ValueError("cost must be positive")
     collection = User.get_pymongo_collection()
     update = ({**_affordable(cost), "_id": user_id}, _spend_pipeline(cost))
-    doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
+    doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.BEFORE)
     if doc is None:
         # Documents predating US-9.6 have no credits_balance field, and a $gte
         # range filter never matches an absent field — without a backfill every
@@ -250,10 +264,22 @@ async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None
         # (our update matched nothing), yet the now-present balance can still
         # cover this deduction. A genuinely insufficient balance just fails the
         # retry the same way it failed the first attempt.
-        doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.AFTER)
+        doc = await collection.find_one_and_update(*update, return_document=ReturnDocument.BEFORE)
     if doc is None:
         return None
-    return _total(doc)
+    monthly, purchased = _before_buckets(doc)
+    take = min(monthly, cost)
+    return (monthly - take) + (purchased - (cost - take)), cost - take
+
+
+async def deduct_credits(user_id: PydanticObjectId, cost: float) -> float | None:
+    """Atomically deduct ``cost``; return the balance after, or ``None`` if unaffordable.
+
+    The one-number form of :func:`deduct_credits_split`, for callers that do not ledger
+    the charge themselves.
+    """
+    deducted = await deduct_credits_split(user_id, cost)
+    return None if deducted is None else deducted[0]
 
 
 async def refund_credits(
@@ -262,8 +288,9 @@ async def refund_credits(
     *,
     action_type: str,
     job_id: str,
+    purchased_amount: float | None = None,
 ) -> None:
-    """Compensating credit for a deduction, ledgered (US-26.1).
+    """Compensating credit for a deduction, ledgered (US-26.1), bucket for bucket (#422).
 
     ``action_type`` and ``job_id`` are keyword-*required* on purpose. This used to
     move the balance and write nothing, so most refunds were invisible in the
@@ -273,27 +300,30 @@ async def refund_credits(
 
     ``job_id`` may be ``""``: the request paths refund when job creation itself
     failed, so there is no id to attribute the movement to.
+
+    ``purchased_amount`` is how much of ``cost`` returns to the purchased bucket. Left
+    ``None``, it is read off the job's ledger: each bucket gets back the share it still
+    has outstanding, so a full refund is the exact inverse of the charge and a partial
+    one is a proportional slice — never more purchased credit than the job still owes,
+    so two partial refunds cannot return it twice. The monthly reset tops ``credits_balance``
+    *up to* the allocation, so purchased credit refunded as monthly would silently eat the
+    next grants. With no ``job_id`` there is nothing to read, and the credit goes to the
+    monthly bucket as it always did.
     """
     # Symmetric guard: a non-positive "refund" would silently deduct.
     if cost <= 0:
         raise ValueError("cost must be positive")
+    if purchased_amount is None:
+        purchased_amount = await _purchased_share(job_id, cost)
+    if not 0 <= purchased_amount <= cost:
+        raise ValueError("purchased_amount must be between 0 and cost")
 
-    # US-26.4 note: this restores to the **monthly** bucket. Right for the common case,
-    # wrong for one — a charge that dipped into purchased credits comes back as monthly
-    # allowance, turning non-expiring credit into expiring. Raised in review on PR #421.
-    #
-    # Refunding everything to `purchased_credits` instead was tried and reverted: it is
-    # safe for the musician, but it changes what `credits_balance` means in fourteen test
-    # files and every caller, to fix a case narrower than the change. The honest fix is
-    # to record the bucket split on the deduction so a refund is the exact inverse of the
-    # charge it reverses — tracked as its own issue rather than approximated here.
-    #
     # find_one_and_update rather than update_one + re-read: the balance recorded on
     # the ledger row has to be the one this movement produced, not whatever a
     # concurrent charge left behind a moment later.
     doc = await User.get_pymongo_collection().find_one_and_update(
         {"_id": user_id},
-        {"$inc": {"credits_balance": cost}},
+        {"$inc": {"credits_balance": cost - purchased_amount, "purchased_credits": purchased_amount}},
         return_document=ReturnDocument.AFTER,
     )
 
@@ -311,7 +341,16 @@ async def refund_credits(
         # purchased credits in play `credits_balance` alone would understate it. History
         # rows are meant to be self-describing without replaying the ledger.
         balance_after=_total(doc),
+        purchased_amount=purchased_amount,
     )
+
+
+async def _purchased_share(job_id: str, cost: float) -> float:
+    """How much of a ``cost`` refund belongs to the purchased bucket, per the job's ledger."""
+    owed, owed_purchased = await _owed_for_job(job_id)
+    if owed <= 0:
+        return 0.0
+    return min(owed_purchased, cost * owed_purchased / owed)
 
 
 class InsufficientCreditsError(Exception):
@@ -349,21 +388,22 @@ async def charge_and_create(
     if cost <= 0:
         return await create()
 
-    balance_after = await deduct_credits(user_id, cost)
+    deducted = await deduct_credits_split(user_id, cost)
 
-    if balance_after is None:
+    if deducted is None:
         user = await User.get(user_id)
         raise InsufficientCreditsError(
             balance=spendable(user) if user is not None else 0.0,
             required=cost,
         )
+    balance_after, from_purchased = deducted
 
     try:
         job = await create()
     except BaseException:
         # Not yet ledgered, so this reversal must not be either — see
         # reverse_unrecorded_charge.
-        await reverse_unrecorded_charge(user_id, cost)
+        await reverse_unrecorded_charge(user_id, cost, purchased_amount=from_purchased)
         raise
 
     try:
@@ -373,6 +413,7 @@ async def charge_and_create(
             action_type=action_type,
             job_id=str(job.id),
             balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except Exception:
         logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user_id)
@@ -380,7 +421,7 @@ async def charge_and_create(
     return job
 
 
-async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float) -> None:
+async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float, *, purchased_amount: float = 0.0) -> None:
     """Undo a deduction whose ledger row was never written — balance only, no row.
 
     The request paths deduct, create the job, and ledger the charge **last**. So when
@@ -391,31 +432,43 @@ async def reverse_unrecorded_charge(user_id: PydanticObjectId, cost: float) -> N
 
     Everywhere the charge *was* ledgered, use :func:`refund_credits` instead, so the
     money that moved is money the user can see.
+
+    ``purchased_amount`` is the ``from_purchased`` the deduction reported: there is no
+    ledger row to derive it from, so the caller has to hand it back (#422).
     """
-    # US-26.4 note: bucket-unaware, like refund_credits. A reversal of a charge that came
-    # out of `purchased_credits` lands in `credits_balance`, relabelling non-expiring
-    # credit as monthly allowance — which the next reset then absorbs. Narrower than the
-    # refund path (this only fires when job *creation* fails, before any ledger row
-    # exists), and fixed by the same work: see #422.
     if cost <= 0:
         raise ValueError("cost must be positive")
+    if not 0 <= purchased_amount <= cost:
+        raise ValueError("purchased_amount must be between 0 and cost")
 
-    await User.get_pymongo_collection().update_one({"_id": user_id}, {"$inc": {"credits_balance": cost}})
+    await User.get_pymongo_collection().update_one(
+        {"_id": user_id},
+        {"$inc": {"credits_balance": cost - purchased_amount, "purchased_credits": purchased_amount}},
+    )
+
+
+async def _owed_for_job(job_id: str) -> tuple[float, float]:
+    """``(owed, owed_purchased)``: what is still owed back for ``job_id``, and how much of
+    that came from the purchased bucket.
+
+    Charges are negative and refunds positive in the ledger, so each sum is the net
+    movement and its negation the outstanding debt. Clamped at zero — a job refunded
+    past what it was charged owes nothing, and feeding a negative back into
+    :func:`refund_credits` would charge the user instead. The purchased part is also
+    clamped to the whole: a refund row predating the split reduces the total without
+    reducing the purchased figure.
+    """
+    if not job_id:
+        return 0.0, 0.0
+
+    rows = await CreditTransaction.find(CreditTransaction.job_id == job_id).to_list()
+    owed = max(0.0, -sum(row.amount for row in rows))
+    return owed, min(owed, max(0.0, -sum(row.purchased_amount for row in rows)))
 
 
 async def amount_owed_for_job(job_id: str) -> float:
-    """What is still owed back for ``job_id``: charges taken, less refunds already made.
-
-    Charges are negative and refunds positive in the ledger, so the sum is the net
-    movement and its negation is the outstanding debt. Clamped at zero — a job
-    refunded past what it was charged owes nothing, and feeding a negative back into
-    :func:`refund_credits` would charge the user instead.
-    """
-    if not job_id:
-        return 0.0
-
-    rows = await CreditTransaction.find(CreditTransaction.job_id == job_id).to_list()
-    return max(0.0, -sum(row.amount for row in rows))
+    """What is still owed back for ``job_id``: charges taken, less refunds already made."""
+    return (await _owed_for_job(job_id))[0]
 
 
 async def refund_failed_job(job) -> None:
@@ -434,12 +487,18 @@ async def refund_failed_job(job) -> None:
         # than trust the caller wired this to the right lifecycle transition.
         raise ValueError(f"refund_failed_job called for a {job.status.value} job ({job.id})")
 
-    owed = await amount_owed_for_job(str(job.id))
+    owed, owed_purchased = await _owed_for_job(str(job.id))
 
     if owed <= 0:
         return
 
-    await refund_credits(job.user_id, owed, action_type=f"{job.job_type}_refund", job_id=str(job.id))
+    await refund_credits(
+        job.user_id,
+        owed,
+        action_type=f"{job.job_type}_refund",
+        job_id=str(job.id),
+        purchased_amount=owed_purchased,
+    )
 
 
 async def record_transaction(
@@ -449,14 +508,20 @@ async def record_transaction(
     action_type: str,
     job_id: str,
     balance_after: float,
+    purchased_amount: float = 0.0,
 ) -> CreditTransaction:
-    """Append one movement to the credit ledger."""
+    """Append one movement to the credit ledger.
+
+    ``purchased_amount`` is the signed part of ``amount`` that moved the purchased bucket
+    (#422); a charge passes ``-from_purchased`` from :func:`deduct_credits_split`.
+    """
     txn = CreditTransaction(
         user_id=user_id,
         amount=amount,
         action_type=action_type,
         job_id=job_id,
         balance_after=balance_after,
+        purchased_amount=purchased_amount,
     )
     await txn.insert()
     return txn

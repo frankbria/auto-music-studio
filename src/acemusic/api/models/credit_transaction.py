@@ -25,6 +25,10 @@ class CreditTransaction(Document):
     # Balance immediately after this movement, denormalised from the atomic
     # update so history rows are self-describing without replaying the ledger.
     balance_after: float
+    # #422: the signed part of ``amount`` that moved ``purchased_credits``; the rest moved
+    # the monthly bucket. Refunds read it back so they return credit where it came from.
+    # Rows predating the field default to 0 — all-monthly, which is what they were.
+    purchased_amount: float = 0.0
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:
