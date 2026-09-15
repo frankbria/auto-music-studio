@@ -15,9 +15,9 @@ Two shaping rules carry the meaning:
   balance jumped and the table has to say why) but not in the "what did I spend it on"
   chart.
 
-Not derivable here: which *bucket* paid for a given row. The ledger records only the
-combined ``balance_after`` (see #421/#422), so the monthly-vs-purchased split is reported
-for the remaining balance only.
+Not surfaced here: which *bucket* paid for a given row. Each row carries it as
+``purchased_amount`` (#422), but the dashboard reports the monthly-vs-purchased split for
+the remaining balance only.
 """
 
 import math

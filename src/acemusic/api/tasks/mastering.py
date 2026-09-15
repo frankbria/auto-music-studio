@@ -95,8 +95,8 @@ async def _reconcile_fallback_credits(job: Job, requested_service: str, actual_s
         return
     try:
         if diff > 0:
-            balance_after = await credits_service.deduct_credits(job.user_id, diff)
-            if balance_after is None:
+            deducted = await credits_service.deduct_credits_split(job.user_id, diff)
+            if deducted is None:
                 logger.warning(
                     "Mastering job %s fell back to pricier %s (+%.1f credits) but the user has "
                     "insufficient balance for the top-up; result retained.",
@@ -105,6 +105,7 @@ async def _reconcile_fallback_credits(job: Job, requested_service: str, actual_s
                     diff,
                 )
                 return
+            balance_after, from_purchased = deducted
             # Only the top-up needs its own ledger row; the refund branch below is
             # ledgered by refund_credits itself (US-26.1). Writing one here too would
             # double-count the movement and make amount_owed_for_job under-report.
@@ -114,6 +115,7 @@ async def _reconcile_fallback_credits(job: Job, requested_service: str, actual_s
                 action_type=MASTERING_JOB_TYPE,
                 job_id=str(job.id),
                 balance_after=balance_after,
+                purchased_amount=-from_purchased,
             )
         else:
             await credits_service.refund_credits(

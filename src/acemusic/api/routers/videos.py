@@ -176,8 +176,8 @@ async def create_video_job(
     clip = await clip_service.get_owned_clip(request.clip_id, current.user_id)
 
     cost = credits_service.get_video_cost(request.resolution, clip.duration)
-    balance_after = await credits_service.deduct_credits(user.id, cost)
-    if balance_after is None:
+    deducted = await credits_service.deduct_credits_split(user.id, cost)
+    if deducted is None:
         # Re-read the balance for the error payload: the copy on ``user`` was
         # loaded before the deduction attempt and may be stale under concurrency.
         fresh = await user_service.get_user_by_id(user.id)
@@ -187,6 +187,7 @@ async def create_video_job(
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
         )
 
+    balance_after, from_purchased = deducted
     try:
         params = {
             "clip_id": str(clip.id),
@@ -207,7 +208,7 @@ async def create_video_job(
     except BaseException:
         # The deduction already landed but no job exists — give the credit back.
         # BaseException (not Exception): asyncio.CancelledError must also refund.
-        await credits_service.reverse_unrecorded_charge(user.id, cost)
+        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
         raise
     try:
         await credits_service.record_transaction(
@@ -216,6 +217,7 @@ async def create_video_job(
             action_type=video_service.VIDEO_JOB_TYPE,
             job_id=str(job.id),
             balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except Exception:
         # The charge is taken and the job dispatched; failing here would invite a
@@ -509,8 +511,8 @@ async def edit_video(
     # tier if the source predates resolution tracking, so pricing never raises.
     resolution = source.resolution if source.resolution in _KNOWN_RESOLUTIONS else "720p"
     cost = credits_service.get_video_cost(resolution, clip.duration)
-    balance_after = await credits_service.deduct_credits(user.id, cost)
-    if balance_after is None:
+    deducted = await credits_service.deduct_credits_split(user.id, cost)
+    if deducted is None:
         fresh = await user_service.get_user_by_id(user.id)
         balance = credits_service.spendable(fresh) if fresh is not None else 0.0
         raise HTTPException(
@@ -518,6 +520,7 @@ async def edit_video(
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
         )
 
+    balance_after, from_purchased = deducted
     try:
         params = {
             "clip_id": str(source.clip_id),
@@ -532,7 +535,7 @@ async def edit_video(
             params=params,
         )
     except BaseException:
-        await credits_service.reverse_unrecorded_charge(user.id, cost)
+        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
         raise
     try:
         await credits_service.record_transaction(
@@ -541,6 +544,7 @@ async def edit_video(
             action_type=video_service.VIDEO_JOB_TYPE,
             job_id=str(job.id),
             balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except Exception:
         logger.exception("Credit ledger write failed for edit job %s (user %s)", job.id, user.id)

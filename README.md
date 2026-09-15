@@ -153,10 +153,16 @@ history rows — three views of the same ledger window, so they cannot disagree 
 Categories come from `services/usage.py`, which maps each `action_type` (and its `_refund`
 counterpart) onto generation / editing / mastering / video / extraction / voice, so a refunded
 job nets off the charge it reversed instead of inflating the breakdown. Monthly-vs-purchased is
-reported for the **remaining** balance only — the ledger records a combined `balance_after`, not
-which bucket paid (#421/#422) — and actions that cost nothing (crop, speed, export) write no
-ledger row, so "complete usage data" means complete *credit-moving* data. CSV export is built in
-the browser from the same payload.
+reported for the **remaining** balance only — each ledger row records a combined `balance_after`
+plus `purchased_amount`, the signed part of the movement that touched the purchased bucket
+(#422), but the dashboard does not break usage down by bucket — and actions that cost nothing
+(crop, speed, export) write no ledger row, so "complete usage data" means complete
+*credit-moving* data. CSV export is built in the browser from the same payload.
+
+Refunds are bucket-aware (#422): a charge is spent monthly-first, its row records how much came
+from purchased credit, and a refund returns each bucket its outstanding share — the exact inverse
+for a full refund, a proportional slice for a partial one, never more purchased credit than the
+job still owes. Rows written before the field existed refund as monthly, which is what they did.
 
 The OAuth `state` is bound to the initiating client to prevent login CSRF /
 session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
