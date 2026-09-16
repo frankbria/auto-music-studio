@@ -16,9 +16,7 @@ echo; echo "API test files calling get_or_create_user directly: $(grep -l "get_o
 
 ```output
 main:   40 files define a user-creating helper
-branch: 6 files still do:
-tests/test_clips_full_song_api.py:94:async def _make_user(email: str, *, balance: float | None = None):
-tests/test_clips_iterative_api.py:115:async def _make_user(email: str, *, balance: float | None = None):
+branch: 4 files still do:
 tests/test_credit_reset.py:50:    async def _user(self, label: str, *, tier: str, balance: float, created: datetime, last_reset=None) -> User:
 tests/test_tier_enforcement_api.py:51:async def _user(label: str, tier: str = "free", credits: float = 500.0) -> User:
 tests/test_usage_api.py:53:async def _make_user(email: str, *, monthly: float = 0.0, purchased: float = 0.0):
@@ -128,7 +126,7 @@ test_tier_enforcement_api.py::TestBatchIsNotTheCheapWayIn::test_a_free_account_m
 test_tier_enforcement_api.py::TestBatchIsNotTheCheapWayIn::test_a_free_account_is_refused_a_per_clip_daw_export PASSED
 test_tier_enforcement_api.py::TestReleaseBundlingIsPro::test_a_free_account_cannot_prepare_a_bundle PASSED
 test_tier_enforcement_api.py::TestReleaseBundlingIsPro::test_a_free_account_cannot_mark_a_release_submitted PASSED
-================ 21 passed, 35 deselected, 1 warning in 39.01s =================
+================ 21 passed, 35 deselected, 1 warning in 52.07s =================
 ```
 
 Acceptance criterion 4: the test conventions say which fixture to reach for and why free is the default.
