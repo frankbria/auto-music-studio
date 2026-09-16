@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.clips import CLIP_UPLOAD_MAX_BYTES, sniff_audio_format
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 UPLOAD_URL = f"{API_V1_PREFIX}/clips/upload"
 
@@ -120,10 +120,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -133,7 +129,7 @@ async def _make_workspace(user, name: str = "WS") -> Workspace:
 @pytest.mark.integration
 class TestUpload:
     async def test_pushes_a_clip_into_the_workspace_with_its_metadata(self, client, settings, local_storage) -> None:
-        user = await _make_user("push@example.com")
+        user = await make_user("push@example.com")
         workspace = await _make_workspace(user)
         audio = _wav(b"\x01\x02" * 512)
 
@@ -179,7 +175,7 @@ class TestUpload:
         assert [c["id"] for c in listed.json()["clips"]] == [body["id"]]
 
     async def test_a_non_audio_body_is_refused(self, client, settings, local_storage) -> None:
-        user = await _make_user("nonaudio@example.com")
+        user = await make_user("nonaudio@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(
@@ -194,7 +190,7 @@ class TestUpload:
         assert await Clip.find_all().count() == 0
 
     async def test_an_empty_file_is_refused(self, client, settings, local_storage) -> None:
-        user = await _make_user("empty@example.com")
+        user = await make_user("empty@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(
@@ -207,8 +203,8 @@ class TestUpload:
         assert await Clip.find_all().count() == 0
 
     async def test_cannot_push_into_another_users_workspace(self, client, settings, local_storage) -> None:
-        owner = await _make_user("owner@example.com")
-        intruder = await _make_user("intruder@example.com")
+        owner = await make_user("owner@example.com")
+        intruder = await make_user("intruder@example.com")
         workspace = await _make_workspace(owner)
 
         resp = await client.post(
@@ -223,7 +219,7 @@ class TestUpload:
         assert await Clip.find_all().count() == 0
 
     async def test_an_unknown_workspace_is_refused(self, client, settings, local_storage) -> None:
-        user = await _make_user("noworkspace@example.com")
+        user = await make_user("noworkspace@example.com")
 
         resp = await client.post(
             UPLOAD_URL,
@@ -234,7 +230,7 @@ class TestUpload:
         assert resp.status_code == 404
 
     async def test_oversized_audio_is_refused(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("big@example.com")
+        user = await make_user("big@example.com")
         workspace = await _make_workspace(user)
 
         # Lowered rather than actually sending 200MB through the test transport.
@@ -254,7 +250,7 @@ class TestUpload:
     async def test_the_upload_route_is_not_shadowed_by_the_clip_id_route(self, client, settings, local_storage) -> None:
         # `/clips/upload` sits alongside `/clips/{clip_id}`. Mounted in the wrong
         # order, "upload" is parsed as a clip id and the POST 404s or 405s.
-        user = await _make_user("routing@example.com")
+        user = await make_user("routing@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(
@@ -274,7 +270,7 @@ class TestUpload:
     ) -> None:
         # A direct caller could otherwise persist bpm=-120 onto the Clip, and it would
         # then surface in every listing and in the plugin's browser.
-        user = await _make_user(f"bounds-{field}-{value}@example.com")
+        user = await make_user(f"bounds-{field}-{value}@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(
@@ -288,7 +284,7 @@ class TestUpload:
         assert await Clip.find_all().count() == 0
 
     async def test_metadata_at_the_bounds_is_accepted(self, client, settings, local_storage) -> None:
-        user = await _make_user("atbounds@example.com")
+        user = await make_user("atbounds@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(
@@ -302,7 +298,7 @@ class TestUpload:
 
     async def test_a_clip_with_no_metadata_still_uploads(self, client, settings, local_storage) -> None:
         # The plugin may know nothing but the audio; that must not be an error.
-        user = await _make_user("bare@example.com")
+        user = await make_user("bare@example.com")
         workspace = await _make_workspace(user)
 
         resp = await client.post(

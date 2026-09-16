@@ -22,10 +22,10 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 JOBS_URL = f"{API_V1_PREFIX}/jobs"
@@ -88,15 +88,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    # Pro: MIDI extraction is a Pro capability since US-26.2, and this file tests how MIDI
-    # behaves, not who may ask for it. The refusal is tested in test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -132,7 +123,7 @@ async def _insert_clip(
 
 
 async def _user_with_clip(email: str, **clip_kwargs):
-    user = await _make_user(email)
+    user = await make_user(email, tier=PRO)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -147,20 +138,20 @@ async def _user_with_clip(email: str, **clip_kwargs):
 class TestClipNotFound:
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_unknown_clip_returns_404(self, client, settings, method: str) -> None:
-        user = await _make_user(f"midi-404-{method}@example.com")
+        user = await make_user(f"midi-404-{method}@example.com", tier=PRO)
         resp = await getattr(client, method)(_midi_url(PydanticObjectId()), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_malformed_id_returns_404(self, client, settings, method: str) -> None:
-        user = await _make_user(f"midi-malformed-{method}@example.com")
+        user = await make_user(f"midi-malformed-{method}@example.com", tier=PRO)
         resp = await getattr(client, method)(_midi_url("not-an-object-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_other_users_clip_returns_404(self, client, settings, method: str) -> None:
         _, _, clip = await _user_with_clip(f"midi-owner-{method}@example.com")
-        other = await _make_user(f"midi-other-{method}@example.com")
+        other = await make_user(f"midi-other-{method}@example.com", tier=PRO)
         resp = await getattr(client, method)(_midi_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 404
         assert await Job.count() == 0
@@ -336,7 +327,7 @@ class TestMidiLifecycleEndToEnd:
 
         monkeypatch.setattr(extraction_tasks, "MidiClient", _FakeMidiClient)
 
-        user = await _make_user("midi-e2e@example.com")
+        user = await make_user("midi-e2e@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)

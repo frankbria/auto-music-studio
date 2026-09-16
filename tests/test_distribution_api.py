@@ -18,10 +18,11 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Release, SoundCloudConnection
 from acemusic.api.routers import distribution as dist
-from acemusic.api.services import soundcloud as sc, users as user_service
+from acemusic.api.services import soundcloud as sc
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -69,14 +70,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    # Pro: distribution is a Pro capability since US-26.2, and this file tests how
-    # publishing behaves, not who may ask for it. The refusal is tested in
-    # test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    await user.save()
-    return user
+# Pro: distribution is a Pro capability since US-26.2, and this file tests how
+# publishing behaves, not who may ask for it. The refusal is tested in
+# test_tier_enforcement_api.py.
 
 
 async def _make_clip(
@@ -129,7 +125,7 @@ async def _make_connection(user, *, expires_in_seconds: int = 3600) -> SoundClou
 # --- connect ----------------------------------------------------------------
 class TestConnect:
     async def test_returns_authorization_url_and_sets_cookies(self, client, settings) -> None:
-        user = await _make_user("connect@example.com")
+        user = await make_user("connect@example.com", tier=PRO)
         resp = await client.post(_url("/soundcloud/connect"), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json()["authorization_url"].startswith(sc.SOUNDCLOUD_AUTHORIZE_URL)
@@ -141,7 +137,7 @@ class TestConnect:
         # Rebuild the app without SoundCloud credentials.
         bare = settings.model_copy(update={"soundcloud_client_id": None})
         async with _async_client(create_app(bare)) as ac:
-            user = await _make_user("connect-503@example.com")
+            user = await make_user("connect-503@example.com", tier=PRO)
             resp = await ac.post(_url("/soundcloud/connect"), headers=_auth_headers(user, bare))
         assert resp.status_code == 503
 
@@ -153,7 +149,7 @@ class TestConnect:
 # --- callback (AC: OAuth completes and stores tokens) -----------------------
 class TestCallback:
     async def test_completes_flow_and_persists_connection(self, client, settings, monkeypatch) -> None:
-        user = await _make_user("cb@example.com")
+        user = await make_user("cb@example.com", tier=PRO)
         headers = _auth_headers(user, settings)
 
         # Start the flow so the client holds the nonce/verifier cookies, then
@@ -185,7 +181,7 @@ class TestCallback:
         assert stored.refresh_token == "rt"
 
     async def test_bad_state_returns_400(self, client, settings) -> None:
-        user = await _make_user("cb-bad@example.com")
+        user = await make_user("cb-bad@example.com", tier=PRO)
         resp = await client.post(
             _url("/soundcloud/callback"),
             headers=_auth_headers(user, settings),
@@ -197,7 +193,7 @@ class TestCallback:
 # --- status -----------------------------------------------------------------
 class TestStatus:
     async def test_not_connected(self, client, settings) -> None:
-        user = await _make_user("status-off@example.com")
+        user = await make_user("status-off@example.com", tier=PRO)
         resp = await client.get(_url("/soundcloud/status"), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json() == {
@@ -208,7 +204,7 @@ class TestStatus:
         }
 
     async def test_connected_reports_username_and_token_valid(self, client, settings) -> None:
-        user = await _make_user("status-on@example.com")
+        user = await make_user("status-on@example.com", tier=PRO)
         await _make_connection(user)
         resp = await client.get(_url("/soundcloud/status"), headers=_auth_headers(user, settings))
         body = resp.json()
@@ -220,7 +216,7 @@ class TestStatus:
 # --- upload (AC: creates track, sets metadata, cover art, token refresh) -----
 class TestUpload:
     async def test_happy_path_uploads_with_merged_metadata(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up@example.com")
+        user = await make_user("up@example.com", tier=PRO)
         clip = await _make_clip(user, b"RIFFaudio")
         await _make_connection(user)
 
@@ -249,7 +245,7 @@ class TestUpload:
     async def test_untitled_clip_falls_back_to_clip_id_as_title(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("up-untitled@example.com")
+        user = await make_user("up-untitled@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio", title=None)
         await _make_connection(user)
 
@@ -267,7 +263,7 @@ class TestUpload:
         assert captured["metadata"]["title"] == str(clip.id)  # never empty for SoundCloud
 
     async def test_clip_artwork_uploaded_by_default(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up-defaultart@example.com")
+        user = await make_user("up-defaultart@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio", artwork=b"COVERPNG")
         await _make_connection(user)
 
@@ -287,7 +283,7 @@ class TestUpload:
     async def test_transient_refresh_failure_preserves_connection(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("up-transient@example.com")
+        user = await make_user("up-transient@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio")
         await _make_connection(user, expires_in_seconds=-10)  # expired → triggers refresh
 
@@ -305,7 +301,7 @@ class TestUpload:
     async def test_revoked_refresh_token_unlinks_and_returns_401(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("up-revoked@example.com")
+        user = await make_user("up-revoked@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio")
         await _make_connection(user, expires_in_seconds=-10)
 
@@ -321,7 +317,7 @@ class TestUpload:
 
     async def test_unknown_override_field_rejected(self, client, settings, local_storage) -> None:
         # ``artwork_url`` was removed; extra keys are forbidden by the schema.
-        user = await _make_user("up-extra@example.com")
+        user = await make_user("up-extra@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio")
         await _make_connection(user)
         resp = await client.post(
@@ -332,7 +328,7 @@ class TestUpload:
         assert resp.status_code == 422
 
     async def test_token_refreshed_when_expired(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up-refresh@example.com")
+        user = await make_user("up-refresh@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio")
         await _make_connection(user, expires_in_seconds=-10)  # already expired
 
@@ -361,8 +357,8 @@ class TestUpload:
         assert stored.refresh_token == "fresh-rt"
 
     async def test_not_owned_clip_returns_404(self, client, settings, local_storage, monkeypatch) -> None:
-        owner = await _make_user("up-owner@example.com")
-        other = await _make_user("up-other@example.com")
+        owner = await make_user("up-owner@example.com", tier=PRO)
+        other = await make_user("up-other@example.com", tier=PRO)
         clip = await _make_clip(owner, b"audio")
         await _make_connection(other)
 
@@ -379,7 +375,7 @@ class TestUpload:
         assert resp.status_code == 404
 
     async def test_not_connected_returns_400(self, client, settings, local_storage) -> None:
-        user = await _make_user("up-noconn@example.com")
+        user = await make_user("up-noconn@example.com", tier=PRO)
         clip = await _make_clip(user, b"audio")
         resp = await client.post(
             _url("/soundcloud/upload"),
@@ -389,7 +385,7 @@ class TestUpload:
         assert resp.status_code == 400
 
     async def test_oversized_audio_returns_413(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up-big@example.com")
+        user = await make_user("up-big@example.com", tier=PRO)
         clip = await _make_clip(user, b"x" * 100)
         await _make_connection(user)
         monkeypatch.setattr(sc, "MAX_UPLOAD_BYTES", 10)  # shrink the cap to trip the guard
@@ -404,7 +400,7 @@ class TestUpload:
 # --- disconnect -------------------------------------------------------------
 class TestDisconnect:
     async def test_deletes_connection_and_is_idempotent(self, client, settings) -> None:
-        user = await _make_user("disc@example.com")
+        user = await make_user("disc@example.com", tier=PRO)
         await _make_connection(user)
         headers = _auth_headers(user, settings)
 
@@ -425,7 +421,7 @@ class TestRelink:
         same update the DuplicateKeyError race fallback runs) against a real DB —
         the unique ``user_id`` index means no second row is created.
         """
-        user = await _make_user("relink@example.com")
+        user = await make_user("relink@example.com", tier=PRO)
         updated = await dist._upsert_connection(
             str(user.id),
             {"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600},
@@ -452,7 +448,7 @@ class TestRelink:
         leaves ``find_one``/``save`` real, so the fallback's re-resolve + update run
         against the actual DB.
         """
-        user = await _make_user("upsert-race@example.com")
+        user = await make_user("upsert-race@example.com", tier=PRO)
         real_insert = SoundCloudConnection.insert
         fired = {"done": False}
 
@@ -502,7 +498,7 @@ class TestUploadReleaseAssociation:
     async def test_upload_with_release_id_records_track_and_starts_channel(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("up-assoc@example.com")
+        user = await make_user("up-assoc@example.com", tier=PRO)
         clip = await _make_clip(user, b"RIFFaudio")
         release = await _make_release(user, clip)
         await _make_connection(user)
@@ -523,7 +519,7 @@ class TestUploadReleaseAssociation:
         assert stored.channel_statuses["soundcloud"].value == "submitted"
 
     async def test_release_id_mismatched_clip_returns_400(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("up-assoc-mismatch@example.com")
+        user = await make_user("up-assoc-mismatch@example.com", tier=PRO)
         clip = await _make_clip(user, b"RIFFaudio")
         other_clip = await _make_clip(user, b"RIFFaudio2")
         release = await _make_release(user, other_clip)  # release of a different clip
@@ -542,8 +538,8 @@ class TestUploadReleaseAssociation:
         assert resp.status_code == 400
 
     async def test_other_users_release_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("up-assoc-owner@example.com")
-        intruder = await _make_user("up-assoc-intruder@example.com")
+        user = await make_user("up-assoc-owner@example.com", tier=PRO)
+        intruder = await make_user("up-assoc-intruder@example.com", tier=PRO)
         clip = await _make_clip(user, b"RIFFaudio")
         release = await _make_release(user, clip)
         await _make_connection(intruder)

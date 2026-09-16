@@ -13,8 +13,8 @@ from beanie import PydanticObjectId
 
 from acemusic.api.models import NotificationEvent, Release, Workspace
 from acemusic.api.models.distribution import DistributionStatus
-from acemusic.api.services import users as user_service
 from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -24,10 +24,6 @@ _SEQ = itertools.count(1)
 class _Conn:
     def __init__(self, token: str = "tok") -> None:
         self.access_token = token
-
-
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
 
 
 async def _make_release(user, sc_status: DistributionStatus | None, *, track_id: str | None = "t1") -> Release:
@@ -64,7 +60,7 @@ def _poller(settings, *, track: dict, getter=None):
 
 class TestPollOnce:
     async def test_advances_processing_to_in_review(self, mongo_db, mongo_settings) -> None:
-        user = await _make_user("poll-proc@example.com")
+        user = await make_user("poll-proc@example.com")
         release = await _make_release(user, DistributionStatus.SUBMITTED)
         poller = _poller(mongo_settings, track={"state": "processing"})
 
@@ -75,7 +71,7 @@ class TestPollOnce:
         assert stored.soundcloud_last_polled is not None
 
     async def test_finished_public_goes_live_and_notifies(self, mongo_db, mongo_settings) -> None:
-        user = await _make_user("poll-live@example.com")
+        user = await make_user("poll-live@example.com")
         release = await _make_release(user, DistributionStatus.IN_REVIEW)
         poller = _poller(mongo_settings, track={"state": "finished", "sharing": "public"})
 
@@ -90,7 +86,7 @@ class TestPollOnce:
         assert events[0].channel == "soundcloud"
 
     async def test_terminal_release_is_not_polled(self, mongo_db, mongo_settings) -> None:
-        user = await _make_user("poll-terminal@example.com")
+        user = await make_user("poll-terminal@example.com")
         await _make_release(user, DistributionStatus.LIVE)
         fetched: list[str] = []
 
@@ -107,7 +103,7 @@ class TestPollOnce:
         assert fetched == []  # terminal releases are excluded from the batch
 
     async def test_no_change_still_stamps_last_polled(self, mongo_db, mongo_settings) -> None:
-        user = await _make_user("poll-nochange@example.com")
+        user = await make_user("poll-nochange@example.com")
         release = await _make_release(user, DistributionStatus.SUBMITTED)
         poller = _poller(mongo_settings, track={})  # unknown state → no mapping
 
@@ -118,8 +114,8 @@ class TestPollOnce:
         assert stored.soundcloud_last_polled is not None
 
     async def test_one_failure_does_not_stop_the_batch(self, mongo_db, mongo_settings) -> None:
-        good = await _make_user("poll-good@example.com")
-        bad = await _make_user("poll-bad@example.com")
+        good = await make_user("poll-good@example.com")
+        bad = await make_user("poll-bad@example.com")
         good_release = await _make_release(good, DistributionStatus.SUBMITTED)
         await _make_release(bad, DistributionStatus.SUBMITTED)
 

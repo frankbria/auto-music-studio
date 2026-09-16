@@ -12,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from acemusic.api.models import Clip, CreditTransaction, Job, User
-from acemusic.api.services import credits as credits_service, usage, users as user_service
+from acemusic.api.services import credits as credits_service, usage
+from tests.users import make_user
 
 
 @pytest.fixture(autouse=True)
@@ -22,18 +23,16 @@ def _db(mongo_db):
 
 
 async def _user(email: str, *, monthly: float = 0.0, purchased: float = 0.0) -> User:
-    user = await user_service.get_or_create_user(
-        email=email, provider="google", oauth_id=f"g-{email}", name="Test User"
-    )
-    user.credits_balance = monthly
-    user.purchased_credits = purchased
     # Anniversary and last reset on the same date, so "one month from the last reset" is
     # a fixed offset regardless of which day of the month the suite happens to run on.
     anchor = datetime.now(timezone.utc) - timedelta(days=5)
-    user.created_at = anchor
-    user.credits_reset_at = anchor
-    await user.save()
-    return user
+    return await make_user(
+        email,
+        credits_balance=monthly,
+        purchased_credits=purchased,
+        created_at=anchor,
+        credits_reset_at=anchor,
+    )
 
 
 async def _txn(user: User, *, amount: float, action_type: str, days_ago: float = 0, job_id: str = "") -> None:

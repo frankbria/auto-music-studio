@@ -19,9 +19,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -91,10 +91,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -146,8 +142,8 @@ async def _insert_clip(
 @pytest.mark.integration
 class TestListClips:
     async def test_lists_only_own_clips_newest_first(self, client, settings) -> None:
-        user = await _make_user("clips-list@example.com")
-        other = await _make_user("clips-list-other@example.com")
+        user = await make_user("clips-list@example.com")
+        other = await make_user("clips-list-other@example.com")
         workspace = await _make_workspace(user)
         other_ws = await _make_workspace(other)
         first = await _insert_clip(user, workspace, title="first")
@@ -161,7 +157,7 @@ class TestListClips:
         assert [c["id"] for c in body["clips"]] == [str(second.id), str(first.id)]
 
     async def test_sort_oldest_reverses_order(self, client, settings) -> None:
-        user = await _make_user("clips-sort@example.com")
+        user = await make_user("clips-sort@example.com")
         workspace = await _make_workspace(user)
         first = await _insert_clip(user, workspace)
         second = await _insert_clip(user, workspace)
@@ -170,12 +166,12 @@ class TestListClips:
         assert [c["id"] for c in resp.json()["clips"]] == [str(first.id), str(second.id)]
 
     async def test_invalid_sort_returns_422(self, client, settings) -> None:
-        user = await _make_user("clips-sort-bad@example.com")
+        user = await make_user("clips-sort-bad@example.com")
         resp = await client.get(CLIPS_URL, params={"sort": "loudest"}, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
     async def test_pagination_metadata_and_page_slices(self, client, settings) -> None:
-        user = await _make_user("clips-page@example.com")
+        user = await make_user("clips-page@example.com")
         workspace = await _make_workspace(user)
         clips = [await _insert_clip(user, workspace) for _ in range(5)]
         newest_first = [str(c.id) for c in reversed(clips)]
@@ -198,13 +194,13 @@ class TestListClips:
 
     @pytest.mark.parametrize("params", [{"page": 0}, {"per_page": 0}, {"per_page": 101}])
     async def test_pagination_bounds_return_422(self, client, settings, params: dict) -> None:
-        user = await _make_user("clips-page-bad@example.com")
+        user = await make_user("clips-page-bad@example.com")
         resp = await client.get(CLIPS_URL, params=params, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
     async def test_blank_search_and_style_filters_are_ignored(self, client, settings) -> None:
         """`?search=` / `?style=` must behave as "no filter", not as a match-all regex."""
-        user = await _make_user("clips-blank-filter@example.com")
+        user = await make_user("clips-blank-filter@example.com")
         workspace = await _make_workspace(user)
         await _insert_clip(user, workspace, title="Has Title", style_tags=["lofi"])
         await _insert_clip(user, workspace)  # no title, no tags
@@ -215,14 +211,14 @@ class TestListClips:
         assert blank["total"] == plain["total"] == 2
 
     async def test_inverted_bpm_range_returns_422(self, client, settings) -> None:
-        user = await _make_user("clips-bpm-inverted@example.com")
+        user = await make_user("clips-bpm-inverted@example.com")
         resp = await client.get(
             CLIPS_URL, params={"bpm_min": 200, "bpm_max": 100}, headers=_auth_headers(user, settings)
         )
         assert resp.status_code == 422
 
     async def test_filter_by_workspace(self, client, settings) -> None:
-        user = await _make_user("clips-ws@example.com")
+        user = await make_user("clips-ws@example.com")
         ws_a = await _make_workspace(user, "A")
         ws_b = await _make_workspace(user, "B")
         clip_a = await _insert_clip(user, ws_a)
@@ -234,8 +230,8 @@ class TestListClips:
         assert body["clips"][0]["id"] == str(clip_a.id)
 
     async def test_other_users_workspace_filter_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-ws-404@example.com")
-        other = await _make_user("clips-ws-404-other@example.com")
+        user = await make_user("clips-ws-404@example.com")
+        other = await make_user("clips-ws-404-other@example.com")
         their_ws = await _make_workspace(other)
 
         resp = await client.get(
@@ -244,14 +240,14 @@ class TestListClips:
         assert resp.status_code == 404
 
     async def test_malformed_workspace_filter_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-ws-malformed@example.com")
+        user = await make_user("clips-ws-malformed@example.com")
         resp = await client.get(
             CLIPS_URL, params={"workspace_id": "not-an-object-id"}, headers=_auth_headers(user, settings)
         )
         assert resp.status_code == 404
 
     async def test_filter_by_style_substring(self, client, settings) -> None:
-        user = await _make_user("clips-style@example.com")
+        user = await make_user("clips-style@example.com")
         workspace = await _make_workspace(user)
         lofi = await _insert_clip(user, workspace, style_tags=["Lofi-HipHop", "chill"])
         await _insert_clip(user, workspace, style_tags=["rock"])
@@ -262,7 +258,7 @@ class TestListClips:
         assert body["clips"][0]["id"] == str(lofi.id)
 
     async def test_filter_by_bpm_range(self, client, settings) -> None:
-        user = await _make_user("clips-bpm@example.com")
+        user = await make_user("clips-bpm@example.com")
         workspace = await _make_workspace(user)
         await _insert_clip(user, workspace, bpm=80)
         mid = await _insert_clip(user, workspace, bpm=120)
@@ -276,7 +272,7 @@ class TestListClips:
         assert body["clips"][0]["id"] == str(mid.id)
 
     async def test_filter_by_key_and_model_exact(self, client, settings) -> None:
-        user = await _make_user("clips-key@example.com")
+        user = await make_user("clips-key@example.com")
         workspace = await _make_workspace(user)
         target = await _insert_clip(user, workspace, key="C minor", model="ace-step-v1")
         await _insert_clip(user, workspace, key="C major", model="ace-step-v1")
@@ -291,7 +287,7 @@ class TestListClips:
         assert both["clips"][0]["id"] == str(target.id)
 
     async def test_search_matches_title_and_style_case_insensitive(self, client, settings) -> None:
-        user = await _make_user("clips-search@example.com")
+        user = await make_user("clips-search@example.com")
         workspace = await _make_workspace(user)
         by_title = await _insert_clip(user, workspace, title="Midnight Drive")
         by_style = await _insert_clip(user, workspace, title="Untitled", style_tags=["midnight-jazz"])
@@ -303,7 +299,7 @@ class TestListClips:
         assert {c["id"] for c in body["clips"]} == {str(by_title.id), str(by_style.id)}
 
     async def test_search_with_regex_metacharacters_is_literal(self, client, settings) -> None:
-        user = await _make_user("clips-search-regex@example.com")
+        user = await make_user("clips-search-regex@example.com")
         workspace = await _make_workspace(user)
         literal = await _insert_clip(user, workspace, title="beat (v2)")
         await _insert_clip(user, workspace, title="beat v2")
@@ -339,7 +335,7 @@ class TestMissingUser:
 @pytest.mark.integration
 class TestGetClip:
     async def test_get_own_clip_returns_full_metadata(self, client, settings) -> None:
-        user = await _make_user("clips-get@example.com")
+        user = await make_user("clips-get@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(
             user, workspace, title="Mine", style_tags=["lofi"], bpm=90, key="A minor", model="ace-step-v1"
@@ -361,18 +357,18 @@ class TestGetClip:
         assert "file_path" not in body
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-get-unknown@example.com")
+        user = await make_user("clips-get-unknown@example.com")
         resp = await client.get(f"{CLIPS_URL}/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_malformed_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-get-malformed@example.com")
+        user = await make_user("clips-get-malformed@example.com")
         resp = await client.get(f"{CLIPS_URL}/not-an-object-id", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404_even_when_public(self, client, settings) -> None:
-        owner = await _make_user("clips-get-owner@example.com")
-        other = await _make_user("clips-get-other@example.com")
+        owner = await make_user("clips-get-owner@example.com")
+        other = await make_user("clips-get-other@example.com")
         workspace = await _make_workspace(owner)
         private = await _insert_clip(owner, workspace, is_public=False)
         public = await _insert_clip(owner, workspace, is_public=True)
@@ -390,7 +386,7 @@ class TestGetClip:
 @pytest.mark.integration
 class TestUpdateClip:
     async def test_update_title_returns_updated_clip(self, client, settings) -> None:
-        user = await _make_user("clips-patch@example.com")
+        user = await make_user("clips-patch@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Old Title")
 
@@ -404,7 +400,7 @@ class TestUpdateClip:
         assert fetched.title == "New Title"
 
     async def test_empty_body_is_noop_but_explicit_null_title_returns_422(self, client, settings) -> None:
-        user = await _make_user("clips-patch-null@example.com")
+        user = await make_user("clips-patch-null@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Keep")
         headers = _auth_headers(user, settings)
@@ -419,7 +415,7 @@ class TestUpdateClip:
 
     @pytest.mark.parametrize("payload", [{"title": ""}, {"title": "   "}, {"bpm": 90}, {"file_path": "x"}])
     async def test_blank_title_or_non_title_fields_return_422(self, client, settings, payload: dict) -> None:
-        user = await _make_user("clips-patch-bad@example.com")
+        user = await make_user("clips-patch-bad@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Keep")
 
@@ -428,15 +424,15 @@ class TestUpdateClip:
         assert (await Clip.get(clip.id)).title == "Keep"
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-patch-unknown@example.com")
+        user = await make_user("clips-patch-unknown@example.com")
         resp = await client.patch(
             f"{CLIPS_URL}/{PydanticObjectId()}", json={"title": "X"}, headers=_auth_headers(user, settings)
         )
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("clips-patch-owner@example.com")
-        other = await _make_user("clips-patch-other@example.com")
+        owner = await make_user("clips-patch-owner@example.com")
+        other = await make_user("clips-patch-other@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace, title="Theirs")
 
@@ -455,7 +451,7 @@ class TestPublishClip:
     Unpublishing is never guarded."""
 
     async def test_publish_persists_when_title_and_style_tags_present(self, client, settings) -> None:
-        user = await _make_user("clips-publish@example.com")
+        user = await make_user("clips-publish@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Ready", style_tags=["lofi"], is_public=False)
         headers = _auth_headers(user, settings)
@@ -474,7 +470,7 @@ class TestPublishClip:
         [(None, ["lofi"]), ("   ", ["lofi"]), ("Ready", [])],
     )
     async def test_publish_without_title_or_style_tags_returns_422(self, client, settings, title, style_tags) -> None:
-        user = await _make_user(f"clips-publish-guard-{next(_SEQ)}@example.com")
+        user = await make_user(f"clips-publish-guard-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title=title, style_tags=style_tags, is_public=False)
 
@@ -488,7 +484,7 @@ class TestPublishClip:
     async def test_unpublish_is_never_guarded(self, client, settings) -> None:
         # A clip may have gone public before losing its title/tags; unpublishing
         # it must always work so it can't get stuck public.
-        user = await _make_user("clips-unpublish@example.com")
+        user = await make_user("clips-unpublish@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title=None, style_tags=[], is_public=True)
 
@@ -501,7 +497,7 @@ class TestPublishClip:
 
     async def test_rename_and_publish_in_one_request_uses_the_new_title(self, client, settings) -> None:
         # The title supplied in the same PATCH satisfies the publish guard.
-        user = await _make_user("clips-rename-publish@example.com")
+        user = await make_user("clips-rename-publish@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title=None, style_tags=["ambient"], is_public=False)
 
@@ -519,7 +515,7 @@ class TestPublishClip:
 @pytest.mark.integration
 class TestDeleteClip:
     async def test_delete_removes_record_and_stored_audio(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-del@example.com")
+        user = await make_user("clips-del@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, store_bytes=b"abc")
         stored_file = local_storage / clip.file_path
@@ -531,7 +527,7 @@ class TestDeleteClip:
         assert not stored_file.exists()
 
     async def test_delete_with_missing_audio_object_still_succeeds(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-del-missing@example.com")
+        user = await make_user("clips-del-missing@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)  # no stored bytes
 
@@ -540,13 +536,13 @@ class TestDeleteClip:
         assert await Clip.get(clip.id) is None
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("clips-del-unknown@example.com")
+        user = await make_user("clips-del-unknown@example.com")
         resp = await client.delete(f"{CLIPS_URL}/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("clips-del-owner@example.com")
-        other = await _make_user("clips-del-other@example.com")
+        owner = await make_user("clips-del-owner@example.com")
+        other = await make_user("clips-del-other@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace)
 

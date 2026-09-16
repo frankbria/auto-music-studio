@@ -20,7 +20,6 @@ from PIL import Image
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Release, ReleaseStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.distribution import (
     TARGET_CONFIGS,
     ChecklistItem,
@@ -29,8 +28,10 @@ from acemusic.api.services.distribution import (
     is_release_ready,
 )
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 RELEASES_URL = f"{API_V1_PREFIX}/releases"
 
@@ -106,22 +107,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, tier: str = "pro"):
-    """A musician who can actually distribute.
-
-    Pro by default since #403: release prepare/submit gate on the ``distribution``
-    capability, so a free account 403s before reaching any of the behaviour this file is
-    about. The gate itself is covered in ``tests/test_tier_enforcement_api.py``
-    (``TestReleaseBundlingIsPro``) — these tests are about what happens once you are
-    allowed through, and defaulting them to free would only re-test the gate 24 times.
-    """
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    if user.subscription_tier != tier:
-        user.subscription_tier = tier
-        await user.save()
-    return user
-
-
 _SEQ = itertools.count(1)
 
 
@@ -161,18 +146,20 @@ async def _create_release(client, user, settings, clip, **overrides) -> httpx.Re
     return await client.post(RELEASES_URL, json=payload, headers=_auth_headers(user, settings))
 
 
-async def _new_release(client, settings, *, email, **clip_kwargs):
-    user = await _make_user(email)
+async def _new_release(client, settings, user, **clip_kwargs):
     clip = await _insert_clip(user, **clip_kwargs)
     resp = await _create_release(client, user=user, settings=settings, clip=clip)
     assert resp.status_code == 201, resp.text
     return user, resp.json()
 
 
+# Pro throughout: prepare/submit gate on ``distribution`` (#403), and the gate itself is covered in
+# tests/test_tier_enforcement_api.py. These tests are about what happens once you are let through,
+# so even the intruder is Pro — a free intruder would 403 at the gate and never reach the 404.
 @pytest.mark.integration
 class TestPrepare:
-    async def test_compliant_release_passes_and_returns_bundle(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-ok@example.com")
+    async def test_compliant_release_passes_and_returns_bundle(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user)
         resp = await client.post(f"{RELEASES_URL}/{release['id']}/prepare/landr", headers=_auth_headers(user, settings))
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -187,8 +174,10 @@ class TestPrepare:
             names = {n.split("/", 1)[1] for n in zf.namelist()}
         assert names == {"audio.wav", "cover.png", "metadata.json", "README.txt"}
 
-    async def test_mp3_audio_flagged_non_compliant_and_no_bundle(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-mp3@example.com", fmt="mp3")
+    async def test_mp3_audio_flagged_non_compliant_and_no_bundle(
+        self, client, settings, local_storage, pro_user
+    ) -> None:
+        user, release = await _new_release(client, settings, pro_user, fmt="mp3")
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/prepare/distrokid", headers=_auth_headers(user, settings)
         )
@@ -199,8 +188,8 @@ class TestPrepare:
         audio_fmt = next(i for i in body["checklist"] if i["item"] == "Audio format")
         assert audio_fmt["passed"] is False
 
-    async def test_missing_cover_art_flagged(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-noart@example.com", artwork=False)
+    async def test_missing_cover_art_flagged(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user, artwork=False)
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/prepare/tunecore", headers=_auth_headers(user, settings)
         )
@@ -209,16 +198,16 @@ class TestPrepare:
         cover = next(i for i in body["checklist"] if i["item"] == "Cover art")
         assert cover["passed"] is False
 
-    async def test_low_resolution_cover_art_flagged(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-smallart@example.com", art_size=512)
+    async def test_low_resolution_cover_art_flagged(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user, art_size=512)
         resp = await client.post(f"{RELEASES_URL}/{release['id']}/prepare/landr", headers=_auth_headers(user, settings))
         body = resp.json()
         cover = next(i for i in body["checklist"] if i["item"] == "Cover art")
         assert cover["passed"] is False
         assert "512x512" in cover["message"]
 
-    async def test_missing_upc_flagged(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-noupc@example.com")
+    async def test_missing_upc_flagged(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user)
         # Clear the UPC via PATCH, then prepare should flag it.
         await client.patch(f"{RELEASES_URL}/{release['id']}", json={"upc": None}, headers=_auth_headers(user, settings))
         resp = await client.post(f"{RELEASES_URL}/{release['id']}/prepare/landr", headers=_auth_headers(user, settings))
@@ -227,16 +216,16 @@ class TestPrepare:
         assert upc["passed"] is False
         assert body["all_checks_passed"] is False
 
-    async def test_invalid_target_returns_422(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="prep-bad@example.com")
+    async def test_invalid_target_returns_422(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user)
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/prepare/spotify", headers=_auth_headers(user, settings)
         )
         assert resp.status_code == 422
 
-    async def test_other_users_release_is_404(self, client, settings, local_storage) -> None:
-        _owner, release = await _new_release(client, settings, email="prep-owner@example.com")
-        intruder = await _make_user("prep-intruder@example.com")
+    async def test_other_users_release_is_404(self, client, settings, local_storage, pro_user) -> None:
+        _owner, release = await _new_release(client, settings, pro_user)
+        intruder = await make_user("prep-intruder@example.com", tier=PRO)
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/prepare/landr", headers=_auth_headers(intruder, settings)
         )
@@ -246,9 +235,9 @@ class TestPrepare:
 @pytest.mark.integration
 class TestSubmit:
     async def test_confirm_moves_release_to_submitted_and_records_channel(
-        self, client, settings, local_storage
+        self, client, settings, local_storage, pro_user
     ) -> None:
-        user, release = await _new_release(client, settings, email="submit-ok@example.com")
+        user, release = await _new_release(client, settings, pro_user)
         resp = await client.post(f"{RELEASES_URL}/{release['id']}/submit/landr", headers=_auth_headers(user, settings))
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -258,8 +247,8 @@ class TestSubmit:
         stored = await Release.get(PydanticObjectId(release["id"]))
         assert stored.status is ReleaseStatus.SUBMITTED
 
-    async def test_confirm_second_target_appends_channel(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="submit-two@example.com")
+    async def test_confirm_second_target_appends_channel(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user)
         headers = _auth_headers(user, settings)
         await client.post(f"{RELEASES_URL}/{release['id']}/submit/landr", headers=headers)
         # Re-confirm the same target (dedup) then a second target.
@@ -267,16 +256,16 @@ class TestSubmit:
         resp = await client.post(f"{RELEASES_URL}/{release['id']}/submit/distrokid", headers=headers)
         assert resp.json()["submitted_channels"] == ["landr", "distrokid"]
 
-    async def test_other_users_release_is_404(self, client, settings, local_storage) -> None:
-        _owner, release = await _new_release(client, settings, email="submit-owner@example.com")
-        intruder = await _make_user("submit-intruder@example.com")
+    async def test_other_users_release_is_404(self, client, settings, local_storage, pro_user) -> None:
+        _owner, release = await _new_release(client, settings, pro_user)
+        intruder = await make_user("submit-intruder@example.com", tier=PRO)
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/submit/landr", headers=_auth_headers(intruder, settings)
         )
         assert resp.status_code == 404
 
-    async def test_invalid_target_returns_422(self, client, settings, local_storage) -> None:
-        user, release = await _new_release(client, settings, email="submit-bad@example.com")
+    async def test_invalid_target_returns_422(self, client, settings, local_storage, pro_user) -> None:
+        user, release = await _new_release(client, settings, pro_user)
         resp = await client.post(
             f"{RELEASES_URL}/{release['id']}/submit/bandcamp", headers=_auth_headers(user, settings)
         )

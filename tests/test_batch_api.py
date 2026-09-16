@@ -25,10 +25,10 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import BatchJob, Clip, Job, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 BATCH_URL = f"{API_V1_PREFIX}/batch"
 STEM_LABELS = ["drums", "bass", "other", "vocals"]
@@ -157,16 +157,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    # Pro: batch stems and lossless batch export are Pro capabilities since US-26.2, and
-    # this file tests how batching behaves, not who may ask for it. The refusal is tested
-    # in test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -211,7 +201,7 @@ async def _poll_batch(client, batch_id, headers, *, until=("completed", "failed"
 @pytest.mark.integration
 class TestBatchStemsEnqueue:
     async def test_returns_202_with_a_subjob_per_clip(self, client, settings) -> None:
-        user = await _make_user("batch-stems-202@example.com")
+        user = await make_user("batch-stems-202@example.com", tier=PRO)
         ws = await _make_workspace(user)
         clips = [await _insert_clip(user, ws) for _ in range(3)]
         ids = [str(c.id) for c in clips]
@@ -231,7 +221,7 @@ class TestBatchStemsEnqueue:
 
     async def test_unknown_clip_becomes_failed_entry_without_aborting(self, client, settings) -> None:
         # AC: individual failures do not halt the batch.
-        user = await _make_user("batch-stems-mixed@example.com")
+        user = await make_user("batch-stems-mixed@example.com", tier=PRO)
         ws = await _make_workspace(user)
         good = await _insert_clip(user, ws)
         bogus = str(PydanticObjectId())
@@ -250,7 +240,7 @@ class TestBatchStemsEnqueue:
         assert by_clip[str(good.id)]["status"] in {"queued", "processing"}
 
     async def test_non_wav_clip_becomes_failed_entry(self, client, settings) -> None:
-        user = await _make_user("batch-stems-nonwav@example.com")
+        user = await make_user("batch-stems-nonwav@example.com", tier=PRO)
         ws = await _make_workspace(user)
         mp3 = await _insert_clip(user, ws, fmt="mp3")
 
@@ -265,7 +255,7 @@ class TestBatchStemsEnqueue:
         # The 50-clip boundary is allowed (51 is rejected by validation, tested
         # in CI). Unknown ids become failed entries, so this also exercises the
         # all-unknown path returning 202 rather than erroring.
-        user = await _make_user("batch-stems-50@example.com")
+        user = await make_user("batch-stems-50@example.com", tier=PRO)
         ids = [str(PydanticObjectId()) for _ in range(50)]
         resp = await client.post(_stems_url(), json={"clip_ids": ids}, headers=_auth_headers(user, settings))
         assert resp.status_code == 202
@@ -282,7 +272,7 @@ class TestBatchStemsEnqueue:
 
         monkeypatch.setattr(batch_service, "create_extraction_job", _boom)
 
-        user = await _make_user("batch-stems-enqueue-fail@example.com")
+        user = await make_user("batch-stems-enqueue-fail@example.com", tier=PRO)
         ws = await _make_workspace(user)
         clip = await _insert_clip(user, ws)
         headers = _auth_headers(user, settings)
@@ -303,17 +293,17 @@ class TestBatchStemsEnqueue:
 @pytest.mark.integration
 class TestBatchStatusOwnership:
     async def test_unknown_batch_returns_404(self, client, settings) -> None:
-        user = await _make_user("batch-status-404@example.com")
+        user = await make_user("batch-status-404@example.com", tier=PRO)
         resp = await client.get(_status_url(PydanticObjectId()), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_malformed_batch_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("batch-status-malformed@example.com")
+        user = await make_user("batch-status-malformed@example.com", tier=PRO)
         resp = await client.get(_status_url("not-an-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_batch_returns_404(self, client, settings) -> None:
-        owner = await _make_user("batch-owner@example.com")
+        owner = await make_user("batch-owner@example.com", tier=PRO)
         ws = await _make_workspace(owner)
         clip = await _insert_clip(owner, ws)
         created = await client.post(
@@ -321,7 +311,7 @@ class TestBatchStatusOwnership:
         )
         batch_id = created.json()["batch_job_id"]
 
-        other = await _make_user("batch-intruder@example.com")
+        other = await make_user("batch-intruder@example.com", tier=PRO)
         resp = await client.get(_status_url(batch_id), headers=_auth_headers(other, settings))
         assert resp.status_code == 404
 
@@ -361,7 +351,7 @@ class TestBatchStemsLifecycle:
 
         monkeypatch.setattr(extraction_tasks, "StemsClient", _FakeStemsClient)
 
-        user = await _make_user("batch-stems-partial@example.com")
+        user = await make_user("batch-stems-partial@example.com", tier=PRO)
         ws = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)
@@ -403,7 +393,7 @@ class TestBatchExportLifecycle:
 
         monkeypatch.setattr(export_tasks, "export_audio", _fake_export_audio)
 
-        user = await _make_user("batch-export-e2e@example.com")
+        user = await make_user("batch-export-e2e@example.com", tier=PRO)
         ws = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)
@@ -432,7 +422,7 @@ class TestBatchExportLifecycle:
     async def test_non_wav_clip_is_queued_for_export(self, client, settings) -> None:
         # Unlike stems (wav-only), export transcodes any generated format, so an
         # mp3 clip is queued — not recorded as a failed entry.
-        user = await _make_user("batch-export-nonwav@example.com")
+        user = await make_user("batch-export-nonwav@example.com", tier=PRO)
         ws = await _make_workspace(user)
         mp3 = await _insert_clip(user, ws, fmt="mp3")
 
@@ -455,7 +445,7 @@ class TestBatchExportLifecycle:
 
         from pydub import AudioSegment
 
-        user = await _make_user("batch-export-real-mp3@example.com")
+        user = await make_user("batch-export-real-mp3@example.com", tier=PRO)
         ws = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=1.0)

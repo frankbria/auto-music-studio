@@ -14,6 +14,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Job, JobStatus, Workspace
 from acemusic.api.services import routing, users as user_service
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -79,13 +80,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, name: str = "Test User"):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name=name)
-
-
 class TestSuccessfulGeneration:
     async def test_minimal_song_returns_202_with_job_id(self, client, settings):
-        user = await _make_user("gen-min@example.com")
+        user = await make_user("gen-min@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},
@@ -98,7 +95,7 @@ class TestSuccessfulGeneration:
         assert isinstance(body["estimated_time_seconds"], int)
 
     async def test_full_song_parameter_set_returns_202(self, client, settings):
-        user = await _make_user("gen-full@example.com")
+        user = await make_user("gen-full@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={
@@ -123,7 +120,7 @@ class TestSuccessfulGeneration:
         assert resp.status_code == 202
 
     async def test_sound_one_shot_returns_202(self, client, settings):
-        user = await _make_user("gen-oneshot@example.com")
+        user = await make_user("gen-oneshot@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "punchy kick drum", "mode": "sound", "sound_type": "one-shot"},
@@ -132,7 +129,7 @@ class TestSuccessfulGeneration:
         assert resp.status_code == 202
 
     async def test_sound_loop_with_bpm_returns_202(self, client, settings):
-        user = await _make_user("gen-loop@example.com")
+        user = await make_user("gen-loop@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "house loop", "mode": "sound", "sound_type": "loop", "bpm": 124, "key": "A minor"},
@@ -143,7 +140,7 @@ class TestSuccessfulGeneration:
 
 class TestJobPersistence:
     async def test_job_record_created_as_queued(self, client, settings):
-        user = await _make_user("gen-persist@example.com")
+        user = await make_user("gen-persist@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "lofi beat", "model": "turbo", "bpm": 90},
@@ -163,7 +160,7 @@ class TestJobPersistence:
         assert job.workspace_id is not None
 
     async def test_default_workspace_created_and_reused(self, client, settings):
-        user = await _make_user("gen-ws@example.com")
+        user = await make_user("gen-ws@example.com")
         headers = _auth_headers(user, settings)
         first = await client.post(GENERATE_URL, json={"prompt": "one"}, headers=headers)
         second = await client.post(GENERATE_URL, json={"prompt": "two"}, headers=headers)
@@ -192,7 +189,7 @@ class TestWorkspaceRace:
 
         from acemusic.api.services import generation as gen_service
 
-        user = await _make_user("gen-race@example.com")
+        user = await make_user("gen-race@example.com")
         a, b = await asyncio.gather(
             gen_service.get_or_create_default_workspace(user.id),
             gen_service.get_or_create_default_workspace(user.id),
@@ -204,7 +201,7 @@ class TestWorkspaceRace:
 
 class TestValidationErrors:
     async def test_bpm_out_of_range_returns_422(self, client, settings):
-        user = await _make_user("gen-bpm@example.com")
+        user = await make_user("gen-bpm@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "x", "bpm": 999},
@@ -215,7 +212,7 @@ class TestValidationErrors:
         assert any("bpm" in str(d.get("loc", "")) for d in detail)
 
     async def test_sound_without_sound_type_returns_422(self, client, settings):
-        user = await _make_user("gen-missing-type@example.com")
+        user = await make_user("gen-missing-type@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "x", "mode": "sound"},
@@ -224,7 +221,7 @@ class TestValidationErrors:
         assert resp.status_code == 422
 
     async def test_invalid_format_returns_422(self, client, settings):
-        user = await _make_user("gen-fmt@example.com")
+        user = await make_user("gen-fmt@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "x", "format": "mp4"},
@@ -308,7 +305,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=False)
         s = settings.model_copy(update={"compute_preference": "local_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-lf-local@example.com")
+            user = await make_user("route-lf-local@example.com")
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 202
             job = await Job.get(resp.json()["job_id"])
@@ -318,7 +315,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=False, remote=True)
         s = settings.model_copy(update={"compute_preference": "local_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-lf-remote@example.com")
+            user = await make_user("route-lf-remote@example.com")
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 202
             job = await Job.get(resp.json()["job_id"])
@@ -328,7 +325,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=True)
         s = settings.model_copy(update={"compute_preference": "remote_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-rf-remote@example.com")
+            user = await make_user("route-rf-remote@example.com")
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 202
             job = await Job.get(resp.json()["job_id"])
@@ -338,7 +335,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=False)
         s = settings.model_copy(update={"compute_preference": "remote_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-rf-local@example.com")
+            user = await make_user("route-rf-local@example.com")
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 202
             job = await Job.get(resp.json()["job_id"])
@@ -348,7 +345,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=False, remote=True)
         s = settings.model_copy(update={"compute_preference": "local_only"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-local-only@example.com")
+            user = await make_user("route-local-only@example.com")
             before = user.credits_balance
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 503
@@ -362,7 +359,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=False)
         s = settings.model_copy(update={"compute_preference": "remote_only"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-remote-only@example.com")
+            user = await make_user("route-remote-only@example.com")
             resp = await client.post(GENERATE_URL, json={"prompt": "x"}, headers=_auth_headers(user, s))
             assert resp.status_code == 503
             assert "remote" in resp.json()["detail"]
@@ -371,7 +368,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=True)
         s = settings.model_copy(update={"compute_preference": "remote_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-override-local@example.com")
+            user = await make_user("route-override-local@example.com")
             resp = await client.post(
                 GENERATE_URL,
                 json={"prompt": "x", "compute_target": "local"},
@@ -385,7 +382,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=False, remote=True)
         s = settings.model_copy(update={"compute_preference": "local_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-override-local-down@example.com")
+            user = await make_user("route-override-local-down@example.com")
             resp = await client.post(
                 GENERATE_URL,
                 json={"prompt": "x", "compute_target": "local"},
@@ -399,7 +396,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=False)
         s = settings.model_copy(update={"compute_preference": "local_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-status@example.com")
+            user = await make_user("route-status@example.com")
             headers = _auth_headers(user, s)
             job_id = (await client.post(GENERATE_URL, json={"prompt": "x"}, headers=headers)).json()["job_id"]
             status_resp = await client.get(f"{JOBS_URL}/{job_id}/status", headers=headers)
@@ -412,7 +409,7 @@ class TestComputeRouting:
         _set_availability(monkeypatch, local=True, remote=True)
         s = settings.model_copy(update={"compute_preference": "remote_first"})
         async with await self._client_for(s) as client:
-            user = await _make_user("route-no-leak@example.com")
+            user = await make_user("route-no-leak@example.com")
             resp = await client.post(
                 GENERATE_URL,
                 json={"prompt": "x", "compute_target": "local"},

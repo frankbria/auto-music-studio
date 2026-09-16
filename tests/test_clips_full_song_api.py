@@ -24,11 +24,11 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, User, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.iterative import JobProcessingError
 from acemusic.song_structure import SONG_STRUCTURE
 from acemusic.storage import LocalStorage, get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -91,14 +91,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    if balance is not None:
-        user.credits_balance = balance
-        await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -123,7 +115,7 @@ async def _insert_clip(user, workspace, *, duration=10.0, bpm=120, key="C", fmt=
 
 
 async def _user_with_clip(email: str, *, balance: float = 10.0, **clip_kwargs):
-    user = await _make_user(email, balance=balance)
+    user = await make_user(email, credits_balance=balance)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -141,19 +133,19 @@ async def _reload_user(user) -> User:
 @pytest.mark.integration
 class TestClipNotFound:
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("fs-404@example.com", balance=10.0)
+        user = await make_user("fs-404@example.com", credits_balance=10.0)
         resp = await client.post(_url(PydanticObjectId()), json={}, headers=_auth_headers(user, settings))
         assert resp.status_code == 404
         assert await Job.count() == 0
 
     async def test_malformed_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("fs-malformed@example.com", balance=10.0)
+        user = await make_user("fs-malformed@example.com", credits_balance=10.0)
         resp = await client.post(_url("not-an-object-id"), json={}, headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
         _, _, clip = await _user_with_clip("fs-owner@example.com")
-        other = await _make_user("fs-other@example.com", balance=10.0)
+        other = await make_user("fs-other@example.com", credits_balance=10.0)
         resp = await client.post(_url(clip.id), json={}, headers=_auth_headers(other, settings))
         assert resp.status_code == 404
         assert (await _reload_user(other)).credits_balance == 10.0
@@ -320,7 +312,7 @@ class TestCredits:
 @pytest.mark.integration
 class TestProgressSurfaced:
     async def test_status_endpoint_returns_progress_while_processing(self, client, settings) -> None:
-        user = await _make_user("fs-progress@example.com", balance=10.0)
+        user = await make_user("fs-progress@example.com", credits_balance=10.0)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -336,7 +328,7 @@ class TestProgressSurfaced:
         assert resp.json()["progress"] == "Processing section 3 of 7"
 
     async def test_progress_dropped_once_completed(self, client, settings) -> None:
-        user = await _make_user("fs-progress-done@example.com", balance=10.0)
+        user = await make_user("fs-progress-done@example.com", credits_balance=10.0)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -355,7 +347,7 @@ class TestProgressSurfaced:
     async def test_progress_dropped_once_failed(self, client, settings) -> None:
         # A mid-chain failure may leave a stale progress string in the document;
         # the status endpoint must not surface it once the job is terminal.
-        user = await _make_user("fs-progress-failed@example.com", balance=10.0)
+        user = await make_user("fs-progress-failed@example.com", credits_balance=10.0)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -452,7 +444,7 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
 @pytest.mark.integration
 class TestFullSongHandler:
     async def _seed(self, storage: LocalStorage, *, duration=10.0, style_tags=None):
-        user = await _make_user(f"fs-handler-{PydanticObjectId()}@example.com", balance=50.0)
+        user = await make_user(f"fs-handler-{PydanticObjectId()}@example.com", credits_balance=50.0)
         workspace = await _make_workspace(user)
         clip_id = PydanticObjectId()
         file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.wav"
@@ -608,7 +600,7 @@ class TestLifecycleEndToEnd:
     async def test_full_song_runs_to_completed_via_status_endpoint(self, client, settings, local_storage) -> None:
         from acemusic.api.tasks.processor import JobProcessor
 
-        user = await _make_user("fs-e2e@example.com", balance=20.0)
+        user = await make_user("fs-e2e@example.com", credits_balance=20.0)
         workspace = await _make_workspace(user)
         clip_id = PydanticObjectId()
         file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.wav"

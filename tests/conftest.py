@@ -298,3 +298,25 @@ def write_tone():
         sf.write(str(path), stereo, sample_rate)
 
     return _writer
+
+
+# ---------------------------------------------------------------------------
+# Test users (#423) — the tier a test needs is stated, not inherited
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def free_user(mongo_db):
+    """What a real signup gets. Reach for this unless the endpoint under test is Pro-gated."""
+    from tests.users import make_user
+
+    return await make_user("free@example.com")
+
+
+@pytest.fixture
+async def pro_user(mongo_db):
+    """A subscriber. Use it only for behaviour *behind* a gate; the gate itself is tested as free."""
+    from acemusic.api.services.tiers import PRO
+    from tests.users import make_user
+
+    return await make_user("pro@example.com", tier=PRO)

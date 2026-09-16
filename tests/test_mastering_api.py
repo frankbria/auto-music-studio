@@ -19,6 +19,7 @@ from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Workspa
 from acemusic.api.services import mastering as mastering_service, users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 MASTERING_URL = f"{API_V1_PREFIX}/mastering/jobs"
 
@@ -73,17 +74,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
-    # Pro: mastering is a Pro capability since US-26.2, and this file tests how mastering
-    # behaves, not who may ask for it. The refusal is tested in test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    if balance is not None:
-        user.credits_balance = balance
-    await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -105,7 +95,9 @@ async def _insert_clip(user, workspace: Workspace, *, fmt: str | None = "wav") -
 
 
 async def _user_with_clip(email: str, *, balance: float | None = None):
-    user = await _make_user(email, balance=balance)
+    # Pro: mastering is a Pro capability since US-26.2, and this file tests how mastering
+    # behaves, not who may ask for it. The refusal is tested in test_tier_enforcement_api.py.
+    user = await make_user(email, tier=PRO, credits_balance=balance)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace)
     return user, workspace, clip
@@ -289,7 +281,7 @@ class TestInsufficientCredits:
 @pytest.mark.integration
 class TestClipOwnership:
     async def test_unknown_clip_returns_404_and_no_charge(self, client, settings) -> None:
-        user = await _make_user("master-noclip@example.com", balance=10.0)
+        user = await make_user("master-noclip@example.com", tier=PRO, credits_balance=10.0)
         resp = await client.post(
             MASTERING_URL,
             json={"clip_id": str(PydanticObjectId()), "profile": "streaming"},
@@ -300,7 +292,7 @@ class TestClipOwnership:
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
         owner, _ws, clip = await _user_with_clip("master-owner@example.com")
-        intruder = await _make_user("master-intruder@example.com", balance=10.0)
+        intruder = await make_user("master-intruder@example.com", tier=PRO, credits_balance=10.0)
         resp = await client.post(
             MASTERING_URL,
             json={"clip_id": str(clip.id), "profile": "streaming"},
@@ -468,13 +460,13 @@ class TestPreviewAuthGate:
 @pytest.mark.integration
 class TestMasteringJobDetail:
     async def test_unknown_job_returns_404(self, client, settings) -> None:
-        user = await _make_user("m124-detail-unknown@example.com")
+        user = await make_user("m124-detail-unknown@example.com", tier=PRO)
         resp = await client.get(_detail_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_job_returns_404(self, client, settings) -> None:
-        owner = await _make_user("m124-detail-owner@example.com")
-        other = await _make_user("m124-detail-other@example.com")
+        owner = await make_user("m124-detail-owner@example.com", tier=PRO)
+        other = await make_user("m124-detail-other@example.com", tier=PRO)
         job = await _insert_mastering_job(
             owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
         )
@@ -482,7 +474,7 @@ class TestMasteringJobDetail:
         assert resp.status_code == 404
 
     async def test_non_mastering_job_returns_404(self, client, settings) -> None:
-        user = await _make_user("m124-detail-wrongtype@example.com")
+        user = await make_user("m124-detail-wrongtype@example.com", tier=PRO)
         job = await _insert_mastering_job(
             user, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId(), job_type="generate"
         )
@@ -490,7 +482,7 @@ class TestMasteringJobDetail:
         assert resp.status_code == 404
 
     async def test_queued_job_is_minimal(self, client, settings) -> None:
-        user = await _make_user("m124-detail-queued@example.com")
+        user = await make_user("m124-detail-queued@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         job = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, status=JobStatus.QUEUED)
@@ -504,7 +496,7 @@ class TestMasteringJobDetail:
         assert "mastered_clip_id" not in body
 
     async def test_completed_job_has_metrics_and_mastered_clip(self, client, settings) -> None:
-        user = await _make_user("m124-detail-done@example.com")
+        user = await make_user("m124-detail-done@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -521,8 +513,8 @@ class TestMasteringJobDetail:
 @pytest.mark.integration
 class TestMasteringPreviews:
     async def test_unowned_job_returns_404(self, client, settings) -> None:
-        owner = await _make_user("m124-prev-owner@example.com")
-        other = await _make_user("m124-prev-other@example.com")
+        owner = await make_user("m124-prev-owner@example.com", tier=PRO)
+        other = await make_user("m124-prev-other@example.com", tier=PRO)
         job = await _insert_mastering_job(
             owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
         )
@@ -530,7 +522,7 @@ class TestMasteringPreviews:
         assert resp.status_code == 404
 
     async def test_returns_original_and_candidate_metrics(self, client, settings, local_storage) -> None:
-        user = await _make_user("m124-prev-ab@example.com")
+        user = await make_user("m124-prev-ab@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -552,7 +544,7 @@ class TestMasteringPreviews:
     async def test_missing_source_audio_degrades_without_500(self, client, settings, local_storage) -> None:
         # Source clip exists in the DB but its audio object was never stored: loudness
         # can't be measured, so original_metrics degrades to None rather than a 500.
-        user = await _make_user("m124-prev-noaudio@example.com")
+        user = await make_user("m124-prev-noaudio@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)  # no store_bytes
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -564,7 +556,7 @@ class TestMasteringPreviews:
         assert len(body["previews"]) == 1
 
     async def test_caps_displayed_previews_at_five(self, client, settings, local_storage) -> None:
-        user = await _make_user("m124-prev-cap@example.com")
+        user = await make_user("m124-prev-cap@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
         last_job = None
@@ -579,7 +571,7 @@ class TestMasteringPreviews:
         assert len(resp.json()["previews"]) == 5
 
     async def test_aggregates_multiple_candidates_for_one_source(self, client, settings, local_storage) -> None:
-        user = await _make_user("m124-prev-multi@example.com")
+        user = await make_user("m124-prev-multi@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws, store_bytes=_wav_bytes())
         m1 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -599,8 +591,8 @@ class TestMasteringPreviews:
 @pytest.mark.integration
 class TestMasteringApprove:
     async def test_unowned_job_returns_404(self, client, settings) -> None:
-        owner = await _make_user("m124-appr-owner@example.com")
-        other = await _make_user("m124-appr-other@example.com")
+        owner = await make_user("m124-appr-owner@example.com", tier=PRO)
+        other = await make_user("m124-appr-other@example.com", tier=PRO)
         job = await _insert_mastering_job(
             owner, source_clip_id=str(PydanticObjectId()), workspace_id=PydanticObjectId()
         )
@@ -612,7 +604,7 @@ class TestMasteringApprove:
         assert resp.status_code == 404
 
     async def test_invalid_preview_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("m124-appr-bad@example.com")
+        user = await make_user("m124-appr-bad@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -625,7 +617,7 @@ class TestMasteringApprove:
         assert resp.status_code == 404
 
     async def test_approve_promotes_clip(self, client, settings, local_storage) -> None:
-        user = await _make_user("m124-appr-ok@example.com")
+        user = await make_user("m124-appr-ok@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -645,7 +637,7 @@ class TestMasteringApprove:
         assert refreshed.parent_clip_ids == [src.id]
 
     async def test_approve_is_idempotent(self, client, settings, local_storage) -> None:
-        user = await _make_user("m124-appr-idem@example.com")
+        user = await make_user("m124-appr-idem@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         mastered = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
@@ -659,7 +651,7 @@ class TestMasteringApprove:
 
     async def test_approving_a_second_candidate_moves_the_master(self, client, settings, local_storage) -> None:
         # Exactly one final master per source: approving m2 demotes m1 back to a candidate.
-        user = await _make_user("m124-appr-exclusive@example.com")
+        user = await make_user("m124-appr-exclusive@example.com", tier=PRO)
         ws = PydanticObjectId()
         src = await _insert_clip_doc(user, ws)
         m1 = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])

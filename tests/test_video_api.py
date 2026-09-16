@@ -18,9 +18,11 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Video, VisibilityState, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.services.video import VIDEO_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 GENERATE_URL = f"{API_V1_PREFIX}/videos/generate"
 
@@ -112,16 +114,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None, tier: str = "pro"):
-    # Pro by default: US-26.2 makes 1080p/4K a Pro capability, and several cases here
-    # submit those resolutions. The tier gate itself is covered in
-    # tests/test_tier_enforcement_api.py; these cases are about cost and persistence.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = tier
-    if balance is not None:
-        user.credits_balance = balance
-    await user.save()
-    return user
+# Pro by default: US-26.2 makes 1080p/4K a Pro capability, and several cases here
+# submit those resolutions. The tier gate itself is covered in
+# tests/test_tier_enforcement_api.py; these cases are about cost and persistence.
 
 
 async def _insert_clip(user, workspace: Workspace, *, duration: float = 10.0) -> Clip:
@@ -139,7 +134,7 @@ async def _insert_clip(user, workspace: Workspace, *, duration: float = 10.0) ->
 
 
 async def _user_with_clip(email: str, *, balance: float | None = None, duration: float = 10.0):
-    user = await _make_user(email, balance=balance)
+    user = await make_user(email, tier=PRO, credits_balance=balance)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = await _insert_clip(user, workspace, duration=duration)
@@ -336,7 +331,7 @@ class TestInsufficientCredits:
 @pytest.mark.integration
 class TestClipOwnership:
     async def test_unknown_clip_returns_404_and_no_charge(self, client, settings) -> None:
-        user = await _make_user("video-noclip@example.com", balance=10.0)
+        user = await make_user("video-noclip@example.com", tier=PRO, credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
             json={"clip_id": str(PydanticObjectId()), "prompt": "neon"},
@@ -347,7 +342,7 @@ class TestClipOwnership:
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
         _owner, _ws, clip = await _user_with_clip("video-owner@example.com", balance=10.0)
-        thief = await _make_user("video-thief@example.com", balance=10.0)
+        thief = await make_user("video-thief@example.com", tier=PRO, credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip),
@@ -440,7 +435,7 @@ class TestStatusEndpoint:
     async def test_unowned_job_returns_404(self, client, settings) -> None:
         user, _ws, clip = await _user_with_clip("video-st-own@example.com", balance=10.0)
         job_id = await _submit(client, settings, user, clip)
-        other = await _make_user("video-st-other@example.com")
+        other = await make_user("video-st-other@example.com", tier=PRO)
         resp = await client.get(_status_url(job_id), headers=_auth_headers(other, settings))
         assert resp.status_code == 404
 
@@ -452,7 +447,7 @@ class TestStatusEndpoint:
         assert resp.status_code == 404
 
     async def test_malformed_job_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("video-st-bad@example.com")
+        user = await make_user("video-st-bad@example.com", tier=PRO)
         resp = await client.get(_status_url("not-an-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
@@ -543,14 +538,14 @@ class TestPublish:
 
     async def test_other_users_video_returns_404_and_stays_private(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-pub-owner@example.com")
-        thief = await _make_user("video-pub-thief@example.com")
+        thief = await make_user("video-pub-thief@example.com", tier=PRO)
         video = await _insert_video(owner, clip, published=False)
         resp = await client.post(_publish_url(str(video.id)), headers=_auth_headers(thief, settings))
         assert resp.status_code == 404
         assert (await Video.get(video.id)).published is False
 
     async def test_unknown_video_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("video-pub-unknown@example.com")
+        user = await make_user("video-pub-unknown@example.com", tier=PRO)
         resp = await client.post(_publish_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
@@ -570,7 +565,7 @@ class TestVideoDetail:
 
     async def test_stranger_cannot_read_unpublished_video(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-det-owner@example.com")
-        stranger = await _make_user("video-det-stranger@example.com")
+        stranger = await make_user("video-det-stranger@example.com", tier=PRO)
         video = await _insert_video(owner, clip, published=False)
         resp = await client.get(_video_url(str(video.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 404
@@ -620,7 +615,7 @@ class TestVideoStream:
 
     async def test_stranger_cannot_stream_unpublished(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-str-owner@example.com")
-        stranger = await _make_user("video-str-stranger@example.com")
+        stranger = await make_user("video-str-stranger@example.com", tier=PRO)
         video = await _insert_video(owner, clip, published=False)
         resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 404
@@ -629,7 +624,7 @@ class TestVideoStream:
         # Published but the source clip stays private: strangers still get 403
         # (the clip's own visibility governs a published video's reach).
         owner, _ws, clip = await _user_with_clip("video-str-privclip@example.com")
-        stranger = await _make_user("video-str-privclip-other@example.com")
+        stranger = await make_user("video-str-privclip-other@example.com", tier=PRO)
         video = await _insert_video(owner, clip, published=True)
         resp = await client.get(_stream_url(str(video.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 403
@@ -649,7 +644,7 @@ class TestVideoStream:
         assert resp.status_code == 404
 
     async def test_malformed_video_id_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("video-str-bad@example.com")
+        user = await make_user("video-str-bad@example.com", tier=PRO)
         resp = await client.get(_stream_url("not-an-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
@@ -705,7 +700,7 @@ class TestForClip:
 
     async def test_private_clip_hidden_from_stranger(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-fc-priv@example.com")
-        stranger = await _make_user("video-fc-priv-other@example.com")
+        stranger = await make_user("video-fc-priv-other@example.com", tier=PRO)
         await _insert_video(owner, clip, published=True)
         resp = await client.get(_for_clip_url(str(clip.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 403
@@ -835,7 +830,7 @@ class TestVideoEdit:
         assert within.status_code == 202
 
     async def test_unknown_video_returns_404_no_charge(self, client, settings, local_storage) -> None:
-        user = await _make_user("video-edit-unknown@example.com", balance=100)
+        user = await make_user("video-edit-unknown@example.com", tier=PRO, credits_balance=100)
         resp = await client.post(
             _edit_url(str(PydanticObjectId())),
             json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
@@ -846,7 +841,7 @@ class TestVideoEdit:
 
     async def test_other_users_video_returns_404(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-edit-owner@example.com")
-        thief = await _make_user("video-edit-thief@example.com", balance=100)
+        thief = await make_user("video-edit-thief@example.com", tier=PRO, credits_balance=100)
         source = await _insert_video(owner, clip)
         resp = await client.post(
             _edit_url(str(source.id)),
@@ -941,13 +936,13 @@ class TestVideoVersions:
         assert {i["id"] for i in resp.json()} == {str(original.id), str(edited.id)}
 
     async def test_unknown_video_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("video-ver-unknown@example.com")
+        user = await make_user("video-ver-unknown@example.com", tier=PRO)
         resp = await client.get(_versions_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_video_returns_404(self, client, settings, local_storage) -> None:
         owner, _ws, clip = await _user_with_clip("video-ver-owner@example.com")
-        stranger = await _make_user("video-ver-stranger@example.com")
+        stranger = await make_user("video-ver-stranger@example.com", tier=PRO)
         source = await _insert_video(owner, clip)
         resp = await client.get(_versions_url(str(source.id)), headers=_auth_headers(stranger, settings))
         assert resp.status_code == 404
