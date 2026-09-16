@@ -133,7 +133,7 @@ src/acemusic/
   workspace.py      # Workspace CRUD — create, list, switch, rename, delete
 
 tests/
-  conftest.py       # Fixtures: ace_server (session-scoped lifecycle), integration_url
+  conftest.py       # Fixtures: ace_server, integration_url, mongo_settings/mongo_db (throwaway DB), free_user/pro_user
   test_cli.py       # CLI entry point tests
   test_client.py    # AceStepClient unit tests (mocked HTTP)
   test_generate.py  # Generate command tests (unit + integration)
@@ -207,6 +207,16 @@ Environment variables (see `.env.example`):
 - Integration tests marked `@pytest.mark.integration` (excluded by default)
 - Integration tests require a live ACE-Step server (auto-started via `ACESTEP_API_CMD` env var, or skipped)
 - Test config: `testpaths = ["tests"]`, `bdd_features_base_dir = "tests/features"`
+- **Test users (#423)**: create them with the `free_user` / `pro_user` fixtures (`tests/conftest.py`), or
+  `tests.users.make_user(email, tier=..., **fields)` when a test needs several accounts. Never write a
+  per-file `_make_user`; `tests/test_user_fixtures.py` fails if an API test file calls
+  `get_or_create_user` directly.
+  - **Free is the default** because it is what a real signup gets. A Pro-by-default helper keeps passing
+    when an ungated endpoint is accidentally gated, so it proves nothing about the gate.
+  - Say `tier=PRO` at the call site that needs it, never as a file-level default. Tests parametrized by
+    capability derive it from the parameter (`_tier_for(operation)` in `tests/test_clips_edit_api.py`).
+  - Use `pro_user` only for behaviour *behind* a gate; the gate itself is tested as free in
+    `tests/test_tier_enforcement_api.py`.
 
 ## Pre-commit Hooks
 

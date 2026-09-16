@@ -20,9 +20,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 JOBS_URL = f"{API_V1_PREFIX}/jobs"
@@ -101,20 +101,6 @@ def _tier_for(operation: str) -> str:
     return "pro" if operation == "remaster" else "free"
 
 
-async def _make_user(email: str, tier: str = "free"):
-    """Defaults to **free** on purpose (#403).
-
-    Crop and speed stay free operations, and a Pro-by-default helper would keep passing
-    if either were ever accidentally gated — the test would prove nothing. Only the
-    remaster cases opt into Pro, because remaster now gates on `mastering`.
-    """
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    if user.subscription_tier != tier:
-        user.subscription_tier = tier
-        await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -152,7 +138,7 @@ async def _insert_clip(
 
 
 async def _user_with_clip(email: str, tier: str = "free", **clip_kwargs):
-    user = await _make_user(email, tier=tier)
+    user = await make_user(email, tier=tier)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -167,7 +153,7 @@ async def _user_with_clip(email: str, tier: str = "free", **clip_kwargs):
 class TestClipNotFound:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_unknown_clip_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"edit-404-{operation}@example.com", tier=_tier_for(operation))
+        user = await make_user(f"edit-404-{operation}@example.com", tier=_tier_for(operation))
         resp = await client.post(
             _edit_url(PydanticObjectId(), operation),
             json=VALID_BODIES[operation],
@@ -177,7 +163,7 @@ class TestClipNotFound:
 
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_malformed_id_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"edit-malformed-{operation}@example.com", tier=_tier_for(operation))
+        user = await make_user(f"edit-malformed-{operation}@example.com", tier=_tier_for(operation))
         resp = await client.post(
             _edit_url("not-an-object-id", operation),
             json=VALID_BODIES[operation],
@@ -188,7 +174,7 @@ class TestClipNotFound:
     @pytest.mark.parametrize("operation", ["crop", "speed", "remaster"])
     async def test_other_users_clip_returns_404(self, client, settings, operation: str) -> None:
         owner, _, clip = await _user_with_clip(f"edit-owner-{operation}@example.com", tier=_tier_for(operation))
-        other = await _make_user(f"edit-other-{operation}@example.com", tier=_tier_for(operation))
+        other = await make_user(f"edit-other-{operation}@example.com", tier=_tier_for(operation))
 
         resp = await client.post(
             _edit_url(clip.id, operation),
@@ -591,7 +577,7 @@ class TestEditLifecycleEndToEnd:
     ) -> None:
         from acemusic.api.tasks.processor import JobProcessor
 
-        user = await _make_user(f"edit-e2e-{operation}@example.com", tier=_tier_for(operation))
+        user = await make_user(f"edit-e2e-{operation}@example.com", tier=_tier_for(operation))
         workspace = await _make_workspace(user)
         tone_path = local_storage / "tone.wav"
         write_tone(tone_path, duration_s=2.0)
