@@ -15,9 +15,10 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, NotificationEvent, Release, SoundCloudConnection, Workspace
-from acemusic.api.services import soundcloud as sc, users as user_service
+from acemusic.api.services import soundcloud as sc
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 RELEASES_URL = f"{API_V1_PREFIX}/releases"
 
@@ -86,10 +87,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 _SEQ = itertools.count(1)
 
 
@@ -130,7 +127,7 @@ async def _patch_channel(client, user, settings, release_id, channel, status) ->
 @pytest.mark.integration
 class TestListingAndStatus:
     async def test_listing_includes_channel_statuses_and_visibility(self, client, settings) -> None:
-        user = await _make_user("ds-list@example.com")
+        user = await make_user("ds-list@example.com")
         created = await _create_release(client, user, settings)
         # Default state: no channels engaged, private.
         assert created["channel_statuses"] == {}
@@ -142,7 +139,7 @@ class TestListingAndStatus:
         assert body["visibility"] == "private"
 
     async def test_status_endpoint_returns_channels(self, client, settings) -> None:
-        user = await _make_user("ds-status@example.com")
+        user = await make_user("ds-status@example.com")
         created = await _create_release(client, user, settings)
         await _patch_channel(client, user, settings, created["id"], "landr", "ready")
 
@@ -154,8 +151,8 @@ class TestListingAndStatus:
         assert {"channel": "landr", "status": "ready"} in body["channels"]
 
     async def test_status_other_users_release_returns_404(self, client, settings) -> None:
-        owner = await _make_user("ds-status-owner@example.com")
-        intruder = await _make_user("ds-status-intruder@example.com")
+        owner = await make_user("ds-status-owner@example.com")
+        intruder = await make_user("ds-status-intruder@example.com")
         created = await _create_release(client, owner, settings)
         resp = await client.get(f"{RELEASES_URL}/{created['id']}/status", headers=_auth_headers(intruder, settings))
         assert resp.status_code == 404
@@ -164,7 +161,7 @@ class TestListingAndStatus:
 @pytest.mark.integration
 class TestManualChannelStatus:
     async def test_valid_transition_is_stored(self, client, settings) -> None:
-        user = await _make_user("ds-manual-ok@example.com")
+        user = await make_user("ds-manual-ok@example.com")
         created = await _create_release(client, user, settings)
         resp = await _patch_channel(client, user, settings, created["id"], "distrokid", "ready")
         assert resp.status_code == 200
@@ -174,33 +171,33 @@ class TestManualChannelStatus:
         assert stored.channel_statuses["distrokid"].value == "ready"
 
     async def test_skip_transition_returns_409(self, client, settings) -> None:
-        user = await _make_user("ds-manual-skip@example.com")
+        user = await make_user("ds-manual-skip@example.com")
         created = await _create_release(client, user, settings)
         # draft (implicit) → live is a skip.
         resp = await _patch_channel(client, user, settings, created["id"], "landr", "live")
         assert resp.status_code == 409
 
     async def test_soundcloud_channel_rejected_with_400(self, client, settings) -> None:
-        user = await _make_user("ds-manual-sc@example.com")
+        user = await make_user("ds-manual-sc@example.com")
         created = await _create_release(client, user, settings)
         resp = await _patch_channel(client, user, settings, created["id"], "soundcloud", "ready")
         assert resp.status_code == 400
         assert "automatically" in resp.json()["detail"].lower()
 
     async def test_unknown_channel_returns_400(self, client, settings) -> None:
-        user = await _make_user("ds-manual-unknown@example.com")
+        user = await make_user("ds-manual-unknown@example.com")
         created = await _create_release(client, user, settings)
         resp = await _patch_channel(client, user, settings, created["id"], "bandcamp", "ready")
         assert resp.status_code == 400
 
     async def test_invalid_status_value_returns_422(self, client, settings) -> None:
-        user = await _make_user("ds-manual-422@example.com")
+        user = await make_user("ds-manual-422@example.com")
         created = await _create_release(client, user, settings)
         resp = await _patch_channel(client, user, settings, created["id"], "landr", "banana")
         assert resp.status_code == 422
 
     async def test_reaching_live_records_notification(self, client, settings) -> None:
-        user = await _make_user("ds-manual-notify@example.com")
+        user = await make_user("ds-manual-notify@example.com")
         created = await _create_release(client, user, settings)
         # Walk the full sequence to a terminal state.
         for step in ("ready", "submitted", "in_review", "live"):
@@ -217,7 +214,7 @@ class TestManualChannelStatus:
 @pytest.mark.integration
 class TestVisibility:
     async def test_update_visibility_persists(self, client, settings) -> None:
-        user = await _make_user("ds-vis@example.com")
+        user = await make_user("ds-vis@example.com")
         created = await _create_release(client, user, settings)
         resp = await client.patch(
             f"{RELEASES_URL}/{created['id']}/visibility",
@@ -231,7 +228,7 @@ class TestVisibility:
     async def test_public_visibility_publishes_source_clip(self, client, settings) -> None:
         # The AC requires visibility to update the clip's sharing state — clip
         # audio access is gated by Clip.is_public.
-        user = await _make_user("ds-vis-clip@example.com")
+        user = await make_user("ds-vis-clip@example.com")
         created = await _create_release(client, user, settings)
         clip_id = PydanticObjectId(created["clip_id"])
         assert (await Clip.get(clip_id)).is_public is False  # default
@@ -251,7 +248,7 @@ class TestVisibility:
         assert (await Clip.get(clip_id)).is_public is False
 
     async def test_visibility_syncs_soundcloud_sharing(self, client, settings, monkeypatch) -> None:
-        user = await _make_user("ds-vis-sc@example.com")
+        user = await make_user("ds-vis-sc@example.com")
         created = await _create_release(client, user, settings)
         # Put the release on SoundCloud and give the user a live connection.
         release = await Release.get(PydanticObjectId(created["id"]))
@@ -282,7 +279,7 @@ class TestVisibility:
         assert calls == [("tok", "789", "public")]
 
     async def test_visibility_unaffected_by_soundcloud_failure(self, client, settings, monkeypatch) -> None:
-        user = await _make_user("ds-vis-scfail@example.com")
+        user = await make_user("ds-vis-scfail@example.com")
         created = await _create_release(client, user, settings)
         release = await Release.get(PydanticObjectId(created["id"]))
         release.soundcloud_track_id = "789"
@@ -297,8 +294,8 @@ class TestVisibility:
         assert resp.json()["visibility"] == "unlisted"
 
     async def test_visibility_other_users_release_returns_404(self, client, settings) -> None:
-        owner = await _make_user("ds-vis-owner@example.com")
-        intruder = await _make_user("ds-vis-intruder@example.com")
+        owner = await make_user("ds-vis-owner@example.com")
+        intruder = await make_user("ds-vis-intruder@example.com")
         created = await _create_release(client, owner, settings)
         resp = await client.patch(
             f"{RELEASES_URL}/{created['id']}/visibility",

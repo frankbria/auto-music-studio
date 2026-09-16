@@ -11,8 +11,8 @@ import pytest
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -44,13 +44,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, name: str = "Test User"):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name=name)
-
-
 class TestGetProfile:
     async def test_returns_full_profile(self, client, settings):
-        user = await _make_user("get-me@example.com", name="Getter")
+        user = await make_user("get-me@example.com", name="Getter")
         resp = await client.get(f"{API_V1_PREFIX}/users/me", headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
@@ -66,7 +62,7 @@ class TestGetProfile:
 
 class TestUpdateProfile:
     async def test_updates_fields_and_returns_updated_profile(self, client, settings):
-        user = await _make_user("patch-me@example.com")
+        user = await make_user("patch-me@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"display_name": "Patched", "handle": "patched-one", "bio": "b", "style_tags": ["edm"]},
@@ -80,13 +76,13 @@ class TestUpdateProfile:
         assert body["style_tags"] == ["edm"]
 
     async def test_default_model_defaults_to_null(self, client, settings):
-        user = await _make_user("dm-default@example.com")
+        user = await make_user("dm-default@example.com")
         resp = await client.get(f"{API_V1_PREFIX}/users/me", headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json()["default_model"] is None
 
     async def test_updates_default_model(self, client, settings):
-        user = await _make_user("dm-set@example.com")
+        user = await make_user("dm-set@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"default_model": "xl-base"},
@@ -96,7 +92,7 @@ class TestUpdateProfile:
         assert resp.json()["default_model"] == "xl-base"
 
     async def test_invalid_default_model_returns_422(self, client, settings):
-        user = await _make_user("dm-bad@example.com")
+        user = await make_user("dm-bad@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"default_model": "not-a-real-model"},
@@ -105,7 +101,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_default_model_can_be_cleared(self, client, settings):
-        user = await _make_user("dm-clear@example.com")
+        user = await make_user("dm-clear@example.com")
         await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"default_model": "turbo"},
@@ -120,7 +116,7 @@ class TestUpdateProfile:
         assert resp.json()["default_model"] is None
 
     async def test_invalid_handle_returns_422(self, client, settings):
-        user = await _make_user("bad-handle@example.com")
+        user = await make_user("bad-handle@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"handle": "no spaces"},
@@ -132,7 +128,7 @@ class TestUpdateProfile:
         assert any("letters" in str(d).lower() or "hyphen" in str(d).lower() for d in detail)
 
     async def test_too_short_handle_returns_422(self, client, settings):
-        user = await _make_user("short-handle@example.com")
+        user = await make_user("short-handle@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"handle": "ab"},
@@ -141,7 +137,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_oversized_bio_returns_422(self, client, settings):
-        user = await _make_user("big-bio@example.com")
+        user = await make_user("big-bio@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"bio": "x" * 501},
@@ -150,7 +146,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_too_many_style_tags_returns_422(self, client, settings):
-        user = await _make_user("many-tags@example.com")
+        user = await make_user("many-tags@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"style_tags": [f"tag{i}" for i in range(21)]},
@@ -160,7 +156,7 @@ class TestUpdateProfile:
 
     @pytest.mark.parametrize("handle", ["-lead", "trail-", "---"])
     async def test_leading_or_trailing_hyphen_returns_422(self, client, settings, handle):
-        user = await _make_user(f"hyphen-{handle}@example.com")
+        user = await make_user(f"hyphen-{handle}@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"handle": handle},
@@ -169,7 +165,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_empty_display_name_returns_422(self, client, settings):
-        user = await _make_user("empty-name@example.com")
+        user = await make_user("empty-name@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"display_name": ""},
@@ -178,7 +174,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_style_tags_are_stripped(self, client, settings):
-        user = await _make_user("strip-tags@example.com")
+        user = await make_user("strip-tags@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"style_tags": ["  lofi  ", "edm "]},
@@ -188,7 +184,7 @@ class TestUpdateProfile:
         assert resp.json()["style_tags"] == ["lofi", "edm"]
 
     async def test_blank_style_tag_returns_422(self, client, settings):
-        user = await _make_user("blank-tag@example.com")
+        user = await make_user("blank-tag@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"style_tags": ["ok", "   "]},
@@ -197,7 +193,7 @@ class TestUpdateProfile:
         assert resp.status_code == 422
 
     async def test_null_style_tags_clears_to_empty_list(self, client, settings):
-        user = await _make_user("null-tags@example.com")
+        user = await make_user("null-tags@example.com")
         await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"style_tags": ["lofi"]},
@@ -212,8 +208,8 @@ class TestUpdateProfile:
         assert resp.json()["style_tags"] == []
 
     async def test_duplicate_handle_returns_409(self, client, settings):
-        owner = await _make_user("owner@example.com")
-        other = await _make_user("other@example.com")
+        owner = await make_user("owner@example.com")
+        other = await make_user("other@example.com")
         first = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"handle": "the-one"},
@@ -228,13 +224,13 @@ class TestUpdateProfile:
         assert clash.status_code == 409
 
     async def test_empty_body_returns_current_profile(self, client, settings):
-        user = await _make_user("noop@example.com", name="NoOp")
+        user = await make_user("noop@example.com", name="NoOp")
         resp = await client.patch(f"{API_V1_PREFIX}/users/me", json={}, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json()["display_name"] == "NoOp"
 
     async def test_handle_can_be_cleared(self, client, settings):
-        user = await _make_user("clear@example.com")
+        user = await make_user("clear@example.com")
         await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"handle": "to-clear"},
@@ -249,7 +245,7 @@ class TestUpdateProfile:
         assert resp.json()["handle"] is None
 
     async def test_unknown_field_rejected(self, client, settings):
-        user = await _make_user("strict@example.com")
+        user = await make_user("strict@example.com")
         resp = await client.patch(
             f"{API_V1_PREFIX}/users/me",
             json={"subscription_tier": "pro"},

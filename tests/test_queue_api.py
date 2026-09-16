@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 QUEUE_URL = f"{API_V1_PREFIX}/queue"
 
@@ -83,10 +83,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 def _ids(n: int) -> list[str]:
     return [str(PydanticObjectId()) for _ in range(n)]
 
@@ -97,7 +93,7 @@ def _ids(n: int) -> list[str]:
 @pytest.mark.integration
 class TestBasicOperations:
     async def test_add_clips_returns_queue(self, client, settings) -> None:
-        user = await _make_user("q-add@example.com")
+        user = await make_user("q-add@example.com")
         clips = _ids(3)
         resp = await client.post(QUEUE_URL, json={"clip_ids": clips}, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
@@ -107,7 +103,7 @@ class TestBasicOperations:
         assert body["current_clip_id"] == clips[0]
 
     async def test_add_persists_across_requests(self, client, settings) -> None:
-        user = await _make_user("q-persist@example.com")
+        user = await make_user("q-persist@example.com")
         clips = _ids(2)
         await client.post(QUEUE_URL, json={"clip_ids": clips}, headers=_auth_headers(user, settings))
         resp = await client.get(QUEUE_URL, headers=_auth_headers(user, settings))
@@ -115,7 +111,7 @@ class TestBasicOperations:
         assert resp.json()["clips"] == clips
 
     async def test_add_at_position_inserts(self, client, settings) -> None:
-        user = await _make_user("q-pos@example.com")
+        user = await make_user("q-pos@example.com")
         headers = _auth_headers(user, settings)
         a, b = _ids(2)
         c = str(PydanticObjectId())
@@ -124,7 +120,7 @@ class TestBasicOperations:
         assert resp.json()["clips"] == [a, c, b]
 
     async def test_get_empty_queue_for_new_user(self, client, settings) -> None:
-        user = await _make_user("q-empty@example.com")
+        user = await make_user("q-empty@example.com")
         resp = await client.get(QUEUE_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
@@ -135,7 +131,7 @@ class TestBasicOperations:
         assert body["shuffle_enabled"] is False
 
     async def test_remove_clip_adjusts_current_index(self, client, settings) -> None:
-        user = await _make_user("q-remove@example.com")
+        user = await make_user("q-remove@example.com")
         headers = _auth_headers(user, settings)
         clips = _ids(3)
         await client.post(QUEUE_URL, json={"clip_ids": clips}, headers=headers)
@@ -147,14 +143,14 @@ class TestBasicOperations:
         assert body["current_index"] == 0  # shifted down from 1
 
     async def test_remove_clip_not_in_queue_returns_404(self, client, settings) -> None:
-        user = await _make_user("q-remove404@example.com")
+        user = await make_user("q-remove404@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(1)}, headers=headers)
         resp = await client.request("DELETE", f"{QUEUE_URL}/{PydanticObjectId()}", headers=headers)
         assert resp.status_code == 404
 
     async def test_clear_queue_returns_204(self, client, settings) -> None:
-        user = await _make_user("q-clear@example.com")
+        user = await make_user("q-clear@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(2)}, headers=headers)
         resp = await client.request("DELETE", QUEUE_URL, headers=headers)
@@ -166,7 +162,7 @@ class TestBasicOperations:
     async def test_add_to_stopped_queue_does_not_restart(self, client, settings) -> None:
         # Play to the end under repeat=none (current_index -> None), then add a
         # clip: playback stays stopped rather than silently jumping back to 0.
-        user = await _make_user("q-stopped@example.com")
+        user = await make_user("q-stopped@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(1)}, headers=headers)
         resp = await client.post(f"{QUEUE_URL}/next", headers=headers)
@@ -175,12 +171,12 @@ class TestBasicOperations:
         assert added.json()["current_index"] is None
 
     async def test_add_empty_clip_ids_returns_422(self, client, settings) -> None:
-        user = await _make_user("q-emptyadd@example.com")
+        user = await make_user("q-emptyadd@example.com")
         resp = await client.post(QUEUE_URL, json={"clip_ids": []}, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
     async def test_invalid_clip_id_returns_400(self, client, settings) -> None:
-        user = await _make_user("q-badid@example.com")
+        user = await make_user("q-badid@example.com")
         resp = await client.post(QUEUE_URL, json={"clip_ids": ["not-an-id"]}, headers=_auth_headers(user, settings))
         assert resp.status_code == 400
 
@@ -191,14 +187,14 @@ class TestBasicOperations:
 @pytest.mark.integration
 class TestNavigation:
     async def test_next_advances(self, client, settings) -> None:
-        user = await _make_user("q-next@example.com")
+        user = await make_user("q-next@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(3)}, headers=headers)
         resp = await client.post(f"{QUEUE_URL}/next", headers=headers)
         assert resp.json()["current_index"] == 1
 
     async def test_previous_decrements(self, client, settings) -> None:
-        user = await _make_user("q-prev@example.com")
+        user = await make_user("q-prev@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(3)}, headers=headers)
         await client.post(f"{QUEUE_URL}/next", headers=headers)
@@ -206,7 +202,7 @@ class TestNavigation:
         assert resp.json()["current_index"] == 0
 
     async def test_repeat_one_keeps_position(self, client, settings) -> None:
-        user = await _make_user("q-repeatone@example.com")
+        user = await make_user("q-repeatone@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(3)}, headers=headers)
         await client.post(f"{QUEUE_URL}/next", headers=headers)  # -> 1
@@ -215,7 +211,7 @@ class TestNavigation:
         assert resp.json()["current_index"] == 1
 
     async def test_repeat_all_wraps_at_end(self, client, settings) -> None:
-        user = await _make_user("q-repeatall@example.com")
+        user = await make_user("q-repeatall@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(2)}, headers=headers)
         await client.patch(QUEUE_URL, json={"repeat_mode": "all"}, headers=headers)
@@ -224,7 +220,7 @@ class TestNavigation:
         assert resp.json()["current_index"] == 0
 
     async def test_repeat_none_stops_at_end(self, client, settings) -> None:
-        user = await _make_user("q-repeatnone@example.com")
+        user = await make_user("q-repeatnone@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(2)}, headers=headers)
         await client.post(f"{QUEUE_URL}/next", headers=headers)  # -> 1
@@ -234,7 +230,7 @@ class TestNavigation:
         assert body["current_clip_id"] is None
 
     async def test_shuffle_picks_from_remaining(self, client, settings) -> None:
-        user = await _make_user("q-shuffle@example.com")
+        user = await make_user("q-shuffle@example.com")
         headers = _auth_headers(user, settings)
         clips = _ids(5)
         await client.post(QUEUE_URL, json={"clip_ids": clips}, headers=headers)
@@ -248,7 +244,7 @@ class TestNavigation:
         assert seen == set(range(5))
 
     async def test_shuffle_previous_returns_to_last_played(self, client, settings) -> None:
-        user = await _make_user("q-shuffleprev@example.com")
+        user = await make_user("q-shuffleprev@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(4)}, headers=headers)
         await client.patch(QUEUE_URL, json={"shuffle_enabled": True}, headers=headers)
@@ -257,7 +253,7 @@ class TestNavigation:
         assert resp.json()["current_index"] == 0
 
     async def test_navigation_on_empty_queue_is_noop(self, client, settings) -> None:
-        user = await _make_user("q-navempty@example.com")
+        user = await make_user("q-navempty@example.com")
         headers = _auth_headers(user, settings)
         resp = await client.post(f"{QUEUE_URL}/next", headers=headers)
         assert resp.status_code == 200
@@ -270,7 +266,7 @@ class TestNavigation:
 @pytest.mark.integration
 class TestReorder:
     async def test_reorder_moves_clip(self, client, settings) -> None:
-        user = await _make_user("q-reorder@example.com")
+        user = await make_user("q-reorder@example.com")
         headers = _auth_headers(user, settings)
         a, b, c = _ids(3)
         await client.post(QUEUE_URL, json={"clip_ids": [a, b, c]}, headers=headers)
@@ -278,7 +274,7 @@ class TestReorder:
         assert resp.json()["clips"] == [c, a, b]
 
     async def test_reorder_adjusts_current_index(self, client, settings) -> None:
-        user = await _make_user("q-reorderidx@example.com")
+        user = await make_user("q-reorderidx@example.com")
         headers = _auth_headers(user, settings)
         a, b, c = _ids(3)
         await client.post(QUEUE_URL, json={"clip_ids": [a, b, c]}, headers=headers)
@@ -290,7 +286,7 @@ class TestReorder:
         assert body["current_clip_id"] == a
 
     async def test_reorder_missing_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("q-reorder404@example.com")
+        user = await make_user("q-reorder404@example.com")
         headers = _auth_headers(user, settings)
         await client.post(QUEUE_URL, json={"clip_ids": _ids(2)}, headers=headers)
         resp = await client.put(
@@ -307,8 +303,8 @@ class TestReorder:
 @pytest.mark.integration
 class TestUserIsolation:
     async def test_queue_is_per_user(self, client, settings) -> None:
-        alice = await _make_user("q-alice@example.com")
-        bob = await _make_user("q-bob@example.com")
+        alice = await make_user("q-alice@example.com")
+        bob = await make_user("q-bob@example.com")
         alice_clips = _ids(2)
         await client.post(QUEUE_URL, json={"clip_ids": alice_clips}, headers=_auth_headers(alice, settings))
         # Bob sees his own (empty) queue, not Alice's.
@@ -316,8 +312,8 @@ class TestUserIsolation:
         assert resp.json()["clips"] == []
 
     async def test_user_cannot_remove_from_another_queue(self, client, settings) -> None:
-        alice = await _make_user("q-alice2@example.com")
-        bob = await _make_user("q-bob2@example.com")
+        alice = await make_user("q-alice2@example.com")
+        bob = await make_user("q-bob2@example.com")
         alice_clips = _ids(2)
         await client.post(QUEUE_URL, json={"clip_ids": alice_clips}, headers=_auth_headers(alice, settings))
         # Bob removing one of Alice's clip ids hits his own empty queue -> 404.

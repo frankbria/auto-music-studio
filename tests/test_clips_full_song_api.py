@@ -24,11 +24,11 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, User, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.iterative import JobProcessingError
 from acemusic.song_structure import SONG_STRUCTURE
 from acemusic.storage import LocalStorage, get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -92,11 +92,7 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str, *, balance: float | None = None):
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    if balance is not None:
-        user.credits_balance = balance
-        await user.save()
-    return user
+    return await make_user(email, credits_balance=balance)
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:

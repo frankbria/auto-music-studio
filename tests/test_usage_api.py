@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import CreditTransaction
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 USAGE_URL = f"{API_V1_PREFIX}/credits/usage"
 
@@ -51,14 +51,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 
 async def _make_user(email: str, *, monthly: float = 0.0, purchased: float = 0.0):
-    user = await user_service.get_or_create_user(
-        email=email, provider="google", oauth_id=f"g-{email}", name="Test User"
+    return await make_user(
+        email, credits_balance=monthly, purchased_credits=purchased, credits_reset_at=datetime.now(timezone.utc)
     )
-    user.credits_balance = monthly
-    user.purchased_credits = purchased
-    user.credits_reset_at = datetime.now(timezone.utc)
-    await user.save()
-    return user
 
 
 @pytest.mark.integration

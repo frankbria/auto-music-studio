@@ -20,8 +20,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import CreditTransaction, Job, User
-from acemusic.api.services import credits as credits_service, routing, users as user_service
+from acemusic.api.services import credits as credits_service, routing
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
 CREDITS_URL = f"{API_V1_PREFIX}/users/me/credits"
@@ -148,16 +149,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
-    user = await user_service.get_or_create_user(
-        email=email, provider="google", oauth_id=f"g-{email}", name="Test User"
-    )
-    if balance is not None:
-        user.credits_balance = balance
-        await user.save()
-    return user
-
-
 async def _reload(user) -> User:
     return await User.get(user.id)
 
@@ -165,7 +156,7 @@ async def _reload(user) -> User:
 @pytest.mark.integration
 class TestGenerationDeductsCredits:
     async def test_song_deducts_one_credit(self, client, settings):
-        user = await _make_user("credits-song@example.com", balance=10.0)
+        user = await make_user("credits-song@example.com", credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},
@@ -175,7 +166,7 @@ class TestGenerationDeductsCredits:
         assert (await _reload(user)).credits_balance == 9.0
 
     async def test_sound_deducts_half_credit(self, client, settings):
-        user = await _make_user("credits-sound@example.com", balance=10.0)
+        user = await make_user("credits-sound@example.com", credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "punchy kick", "mode": "sound", "sound_type": "one-shot"},
@@ -185,7 +176,7 @@ class TestGenerationDeductsCredits:
         assert (await _reload(user)).credits_balance == 9.5
 
     async def test_deduction_recorded_as_transaction(self, client, settings):
-        user = await _make_user("credits-txn@example.com", balance=10.0)
+        user = await make_user("credits-txn@example.com", credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},
@@ -205,7 +196,7 @@ class TestGenerationDeductsCredits:
 @pytest.mark.integration
 class TestInsufficientCredits:
     async def test_returns_402_with_balance_payload(self, client, settings):
-        user = await _make_user("credits-poor@example.com", balance=0.25)
+        user = await make_user("credits-poor@example.com", credits_balance=0.25)
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},
@@ -218,7 +209,7 @@ class TestInsufficientCredits:
         assert detail["required"] == 1.0
 
     async def test_balance_unchanged_and_no_job_created(self, client, settings):
-        user = await _make_user("credits-nojob@example.com", balance=0.25)
+        user = await make_user("credits-nojob@example.com", credits_balance=0.25)
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},
@@ -231,7 +222,7 @@ class TestInsufficientCredits:
 
     async def test_sound_allowed_when_song_is_not(self, client, settings):
         # 0.5 ≤ balance < 1.0: enough for a sound, not for a song.
-        user = await _make_user("credits-half@example.com", balance=0.5)
+        user = await make_user("credits-half@example.com", credits_balance=0.5)
         headers = _auth_headers(user, settings)
         song = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
         assert song.status_code == 402
@@ -249,7 +240,7 @@ class TestConcurrentDeduction:
     async def test_no_double_deduction_when_budget_covers_one(self, client, settings):
         # Budget for exactly one song: of two concurrent requests, exactly one
         # may win the atomic deduction; the loser gets 402 and no job.
-        user = await _make_user("credits-race@example.com", balance=1.0)
+        user = await make_user("credits-race@example.com", credits_balance=1.0)
         headers = _auth_headers(user, settings)
         body = {"prompt": "a calm piano ballad"}
         first, second = await asyncio.gather(
@@ -269,7 +260,7 @@ class TestRefundOnJobCreationFailure:
             raise RuntimeError("queue exploded")
 
         monkeypatch.setattr("acemusic.api.services.generation.create_generation_job", _boom)
-        user = await _make_user("credits-refund@example.com", balance=10.0)
+        user = await make_user("credits-refund@example.com", credits_balance=10.0)
         # ASGITransport re-raises unhandled server exceptions into the test
         # (real clients would see a 500); the contract under test is the
         # compensating refund, not the status code.
@@ -291,7 +282,7 @@ class TestRefundOnJobCreationFailure:
 
         # Dispatch now lives in the shared job factory (US-0.1), so patch it there.
         monkeypatch.setattr("acemusic.api.services.jobs.dispatch_job", _boom)
-        user = await _make_user("credits-dispatch@example.com", balance=10.0)
+        user = await make_user("credits-dispatch@example.com", credits_balance=10.0)
         # ASGITransport re-raises unhandled server exceptions into the test
         # (real clients would see a 500); the contract under test is the
         # cleanup, not the status code.
@@ -309,7 +300,7 @@ class TestRefundOnJobCreationFailure:
 @pytest.mark.integration
 class TestCreditsEndpoint:
     async def test_returns_balance_and_tier(self, client, settings):
-        user = await _make_user("credits-view@example.com", balance=7.5)
+        user = await make_user("credits-view@example.com", credits_balance=7.5)
         resp = await client.get(CREDITS_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
@@ -318,7 +309,7 @@ class TestCreditsEndpoint:
         assert body["history"] == []
 
     async def test_history_lists_transactions_newest_first(self, client, settings):
-        user = await _make_user("credits-history@example.com", balance=10.0)
+        user = await make_user("credits-history@example.com", credits_balance=10.0)
         headers = _auth_headers(user, settings)
         song = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
         sound = await client.post(
@@ -345,7 +336,7 @@ class TestCreditsEndpoint:
         assert "created_at" in history[0]
 
     async def test_history_is_capped_at_50_entries(self, client, settings):
-        user = await _make_user("credits-cap@example.com", balance=100.0)
+        user = await make_user("credits-cap@example.com", credits_balance=100.0)
         for i in range(55):
             await credits_service.record_transaction(
                 user_id=user.id,
@@ -362,7 +353,7 @@ class TestCreditsEndpoint:
         assert history[0]["job_id"] == "job-54"
 
     async def test_stale_token_for_deleted_user_returns_404(self, client, settings):
-        user = await _make_user("credits-deleted@example.com")
+        user = await make_user("credits-deleted@example.com")
         headers = _auth_headers(user, settings)
         await user.delete()
         resp = await client.get(CREDITS_URL, headers=headers)
@@ -372,7 +363,7 @@ class TestCreditsEndpoint:
 @pytest.mark.integration
 class TestNewUserDefaultBalance:
     async def test_new_user_starts_with_default_credits(self, client, settings):
-        user = await _make_user("credits-fresh@example.com")
+        user = await make_user("credits-fresh@example.com")
         resp = await client.get(CREDITS_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json()["balance"] == 10.0
@@ -386,7 +377,7 @@ class TestLegacyUserWithoutBalanceField:
         await User.get_pymongo_collection().update_one({"_id": user.id}, {"$unset": {"credits_balance": ""}})
 
     async def test_generation_succeeds_and_deducts_from_default(self, client, settings):
-        user = await _make_user("credits-legacy@example.com")
+        user = await make_user("credits-legacy@example.com")
         await self._strip_balance_field(user)
         resp = await client.post(
             GENERATE_URL,
@@ -397,7 +388,7 @@ class TestLegacyUserWithoutBalanceField:
         assert (await _reload(user)).credits_balance == 9.0
 
     async def test_insufficient_path_still_402_after_backfill_spend(self, client, settings):
-        user = await _make_user("credits-legacy-poor@example.com")
+        user = await make_user("credits-legacy-poor@example.com")
         await self._strip_balance_field(user)
         headers = _auth_headers(user, settings)
         first = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
@@ -416,7 +407,7 @@ class TestLegacyUserWithoutBalanceField:
         # balance instead of reporting 402 with 10 credits available. The race
         # is simulated deterministically by materialising the field just
         # before this request's backfill update runs.
-        user = await _make_user("credits-legacy-race@example.com")
+        user = await make_user("credits-legacy-race@example.com")
         await self._strip_balance_field(user)
 
         collection_cls = type(User.get_pymongo_collection())
@@ -458,7 +449,7 @@ class TestLedgerWriteFailure:
         # _ensure_app_logging); caplog listens on the root logger, so re-enable
         # propagation for this test only.
         monkeypatch.setattr(logging.getLogger("acemusic"), "propagate", True)
-        user = await _make_user("credits-ledger-fail@example.com", balance=10.0)
+        user = await make_user("credits-ledger-fail@example.com", credits_balance=10.0)
         with caplog.at_level(logging.ERROR, logger="acemusic.api.routers.generation"):
             resp = await client.post(
                 GENERATE_URL,

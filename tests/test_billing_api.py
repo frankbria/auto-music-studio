@@ -24,8 +24,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import BillingEvent, User
-from acemusic.api.services import billing as billing_service, users as user_service
+from acemusic.api.services import billing as billing_service
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 WEBHOOK_URL = f"{API_V1_PREFIX}/billing/webhook"
 SUBSCRIPTION_URL = f"{API_V1_PREFIX}/billing/subscription"
@@ -185,12 +186,7 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
 
 async def _subscriber(email: str) -> User:
     """A user already linked to a Stripe customer, as ``ensure_customer`` would leave them."""
-    user = await user_service.get_or_create_user(
-        email=email, provider="google", oauth_id=f"g-{email}", name="Test User"
-    )
-    user.stripe_customer_id = CUSTOMER
-    await user.save()
-    return user
+    return await make_user(email, stripe_customer_id=CUSTOMER)
 
 
 async def _post_event(client, event_type: str, obj: dict, event_id: str = "evt_test_1"):
@@ -411,9 +407,7 @@ class TestBillingHistory:
     async def test_history_is_scoped_to_the_caller(self, client, settings) -> None:
         mine = await _subscriber("sub-mine@example.com")
         await _post_event(client, "invoice.paid", {"customer": CUSTOMER, "amount_paid": 500}, event_id="evt_mine")
-        stranger = await user_service.get_or_create_user(
-            email="sub-stranger@example.com", provider="google", oauth_id="g-stranger", name="Other"
-        )
+        stranger = await make_user("sub-stranger@example.com")
 
         resp = await client.get(HISTORY_URL, headers=_auth_headers(stranger, settings))
         assert resp.json()["entries"] == []

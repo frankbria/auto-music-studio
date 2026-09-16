@@ -21,12 +21,12 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.clips import (
     compute_similarity_score,
     keys_are_related,
 )
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -144,10 +144,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -199,7 +195,7 @@ def _ids(payload) -> list[str]:
 @pytest.mark.integration
 class TestSimilarClips:
     async def test_shared_style_tag_appears(self, client, settings) -> None:
-        user = await _make_user("sim-tag@example.com")
+        user = await make_user("sim-tag@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["lofi", "chill"], bpm=100)
         match = await _insert_clip(user, ws, style_tags=["lofi"], bpm=200)
@@ -212,7 +208,7 @@ class TestSimilarClips:
     async def test_style_tag_match_is_case_insensitive(self, client, settings) -> None:
         # Candidate qualifies only by a differently-cased tag (BPM far apart),
         # so the DB filter — not just the scorer — must match case-insensitively.
-        user = await _make_user("sim-tagcase@example.com")
+        user = await make_user("sim-tagcase@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["LoFi"], bpm=100)
         match = await _insert_clip(user, ws, style_tags=["lofi"], bpm=300)
@@ -221,7 +217,7 @@ class TestSimilarClips:
         assert _ids(resp.json()) == [str(match.id)]
 
     async def test_bpm_proximity_appears(self, client, settings) -> None:
-        user = await _make_user("sim-bpm@example.com")
+        user = await make_user("sim-bpm@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["a"], bpm=100)
         near = await _insert_clip(user, ws, style_tags=["z"], bpm=108)  # within 10%, no tag overlap
@@ -231,7 +227,7 @@ class TestSimilarClips:
         assert _ids(resp.json()) == [str(near.id)]
 
     async def test_ordered_by_score_descending(self, client, settings) -> None:
-        user = await _make_user("sim-order@example.com")
+        user = await make_user("sim-order@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["a", "b", "c"], bpm=100, key="C major")
         low = await _insert_clip(user, ws, style_tags=["a"], bpm=300)  # 1 tag
@@ -241,7 +237,7 @@ class TestSimilarClips:
         assert _ids(resp.json()) == [str(high.id), str(low.id)]
 
     async def test_seed_excluded(self, client, settings) -> None:
-        user = await _make_user("sim-seed@example.com")
+        user = await make_user("sim-seed@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["lofi"], bpm=100)
 
@@ -249,8 +245,8 @@ class TestSimilarClips:
         assert str(seed.id) not in _ids(resp.json())
 
     async def test_scope_mine_excludes_others_public(self, client, settings) -> None:
-        owner = await _make_user("sim-owner@example.com")
-        other = await _make_user("sim-other@example.com")
+        owner = await make_user("sim-owner@example.com")
+        other = await make_user("sim-other@example.com")
         ws = await _make_workspace(owner)
         ws_other = await _make_workspace(other)
         seed = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100)
@@ -261,8 +257,8 @@ class TestSimilarClips:
         assert _ids(resp.json()) == [str(mine.id)]
 
     async def test_scope_public_includes_others_public_only(self, client, settings) -> None:
-        owner = await _make_user("sim-pub-owner@example.com")
-        other = await _make_user("sim-pub-other@example.com")
+        owner = await make_user("sim-pub-owner@example.com")
+        other = await make_user("sim-pub-other@example.com")
         ws = await _make_workspace(owner)
         ws_other = await _make_workspace(other)
         seed = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100)
@@ -273,8 +269,8 @@ class TestSimilarClips:
         assert _ids(resp.json()) == [str(pub.id)]
 
     async def test_scope_all_includes_both(self, client, settings) -> None:
-        owner = await _make_user("sim-all-owner@example.com")
-        other = await _make_user("sim-all-other@example.com")
+        owner = await make_user("sim-all-owner@example.com")
+        other = await make_user("sim-all-other@example.com")
         ws = await _make_workspace(owner)
         ws_other = await _make_workspace(other)
         seed = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100)
@@ -285,7 +281,7 @@ class TestSimilarClips:
         assert set(_ids(resp.json())) == {str(mine.id), str(pub.id)}
 
     async def test_limit_respected(self, client, settings) -> None:
-        user = await _make_user("sim-limit@example.com")
+        user = await make_user("sim-limit@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["lofi"], bpm=100)
         for _ in range(3):
@@ -298,20 +294,20 @@ class TestSimilarClips:
         assert body["limit"] == 2
 
     async def test_limit_over_max_returns_422(self, client, settings) -> None:
-        user = await _make_user("sim-422@example.com")
+        user = await make_user("sim-422@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["lofi"], bpm=100)
         resp = await client.get(f"{CLIPS_URL}/{seed.id}/similar?limit=51", headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("sim-404@example.com")
+        user = await make_user("sim-404@example.com")
         resp = await client.get(f"{CLIPS_URL}/{PydanticObjectId()}/similar", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_others_private_seed_returns_403(self, client, settings) -> None:
-        owner = await _make_user("sim-403-owner@example.com")
-        other = await _make_user("sim-403-other@example.com")
+        owner = await make_user("sim-403-owner@example.com")
+        other = await make_user("sim-403-other@example.com")
         ws = await _make_workspace(owner)
         seed = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100, is_public=False)
 
@@ -319,7 +315,7 @@ class TestSimilarClips:
         assert resp.status_code == 403
 
     async def test_no_matches_returns_empty_200(self, client, settings) -> None:
-        user = await _make_user("sim-empty@example.com")
+        user = await make_user("sim-empty@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["unique-tag"], bpm=100)
         await _insert_clip(user, ws, style_tags=["nothing"], bpm=300)
@@ -332,7 +328,7 @@ class TestSimilarClips:
 
     async def test_seed_without_tags_or_bpm_returns_empty(self, client, settings) -> None:
         # A seed with no style tags and no BPM has no base-similarity criteria.
-        user = await _make_user("sim-nullseed@example.com")
+        user = await make_user("sim-nullseed@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, key="C major")
         await _insert_clip(user, ws, key="A minor")
@@ -343,7 +339,7 @@ class TestSimilarClips:
 
     async def test_null_metadata_candidate_handled(self, client, settings) -> None:
         # A candidate that shares a tag but has null bpm/key/model must not error.
-        user = await _make_user("sim-nullcand@example.com")
+        user = await make_user("sim-nullcand@example.com")
         ws = await _make_workspace(user)
         seed = await _insert_clip(user, ws, style_tags=["lofi"], bpm=100, key="C major", model="m")
         bare = await _insert_clip(user, ws, style_tags=["lofi"])

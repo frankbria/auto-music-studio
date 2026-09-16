@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Job, Preset
-from acemusic.api.services import routing, users as user_service
+from acemusic.api.services import routing
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 PRESETS_URL = f"{API_V1_PREFIX}/presets"
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
@@ -128,10 +129,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _insert_preset(user, name: str = "Default", **params) -> Preset:
     preset = Preset(user_id=user.id, name=name, **params)
     await preset.insert()
@@ -147,7 +144,7 @@ async def _get_job(job_id: str) -> Job:
 @pytest.mark.integration
 class TestCreatePreset:
     async def test_create_with_full_params_returns_201_and_echoes_all(self, client, settings) -> None:
-        user = await _make_user("preset-create@example.com")
+        user = await make_user("preset-create@example.com")
         resp = await client.post(
             PRESETS_URL,
             json={"name": "My Lofi", **FULL_PARAMS},
@@ -162,7 +159,7 @@ class TestCreatePreset:
             assert body[field] == value, f"field {field!r}: {body[field]!r} != {value!r}"
 
     async def test_create_minimal_returns_201_with_null_params(self, client, settings) -> None:
-        user = await _make_user("preset-create-min@example.com")
+        user = await make_user("preset-create-min@example.com")
         resp = await client.post(PRESETS_URL, json={"name": "Bare"}, headers=_auth_headers(user, settings))
         assert resp.status_code == 201
         body = resp.json()
@@ -172,7 +169,7 @@ class TestCreatePreset:
         assert body["instrumental"] is None
 
     async def test_bpm_auto_is_accepted(self, client, settings) -> None:
-        user = await _make_user("preset-create-auto@example.com")
+        user = await make_user("preset-create-auto@example.com")
         resp = await client.post(
             PRESETS_URL, json={"name": "Auto", "bpm": "auto"}, headers=_auth_headers(user, settings)
         )
@@ -180,14 +177,14 @@ class TestCreatePreset:
         assert resp.json()["bpm"] == "auto"
 
     async def test_duplicate_name_for_same_user_returns_409(self, client, settings) -> None:
-        user = await _make_user("preset-dup@example.com")
+        user = await make_user("preset-dup@example.com")
         headers = _auth_headers(user, settings)
         assert (await client.post(PRESETS_URL, json={"name": "Beats"}, headers=headers)).status_code == 201
         assert (await client.post(PRESETS_URL, json={"name": "Beats"}, headers=headers)).status_code == 409
 
     async def test_same_name_for_different_users_is_allowed(self, client, settings) -> None:
-        alice = await _make_user("preset-alice@example.com")
-        bob = await _make_user("preset-bob@example.com")
+        alice = await make_user("preset-alice@example.com")
+        bob = await make_user("preset-bob@example.com")
         assert (
             await client.post(PRESETS_URL, json={"name": "Beats"}, headers=_auth_headers(alice, settings))
         ).status_code == 201
@@ -210,7 +207,7 @@ class TestCreatePreset:
         ],
     )
     async def test_invalid_payload_returns_422(self, client, settings, payload: dict) -> None:
-        user = await _make_user("preset-invalid@example.com")
+        user = await make_user("preset-invalid@example.com")
         resp = await client.post(PRESETS_URL, json=payload, headers=_auth_headers(user, settings))
         assert resp.status_code == 422
 
@@ -218,8 +215,8 @@ class TestCreatePreset:
 @pytest.mark.integration
 class TestListPresets:
     async def test_lists_only_own_presets(self, client, settings) -> None:
-        user = await _make_user("preset-list@example.com")
-        other = await _make_user("preset-list-other@example.com")
+        user = await make_user("preset-list@example.com")
+        other = await make_user("preset-list-other@example.com")
         mine_a = await _insert_preset(user, "A", style="ambient")
         mine_b = await _insert_preset(user, "B")
         await _insert_preset(other, "Theirs")
@@ -233,7 +230,7 @@ class TestListPresets:
         assert by_id[str(mine_a.id)]["style"] == "ambient"
 
     async def test_empty_list_for_new_user(self, client, settings) -> None:
-        user = await _make_user("preset-list-empty@example.com")
+        user = await make_user("preset-list-empty@example.com")
         resp = await client.get(PRESETS_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json() == {"presets": [], "total": 0}
@@ -242,7 +239,7 @@ class TestListPresets:
 @pytest.mark.integration
 class TestGetPreset:
     async def test_get_own_preset_returns_all_saved_params(self, client, settings) -> None:
-        user = await _make_user("preset-get@example.com")
+        user = await make_user("preset-get@example.com")
         preset = await _insert_preset(user, "Mine", **FULL_PARAMS)
 
         resp = await client.get(f"{PRESETS_URL}/{preset.id}", headers=_auth_headers(user, settings))
@@ -254,18 +251,18 @@ class TestGetPreset:
             assert body[field] == value, f"field {field!r}: {body[field]!r} != {value!r}"
 
     async def test_unknown_preset_returns_404(self, client, settings) -> None:
-        user = await _make_user("preset-get-unknown@example.com")
+        user = await make_user("preset-get-unknown@example.com")
         resp = await client.get(f"{PRESETS_URL}/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_malformed_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("preset-get-malformed@example.com")
+        user = await make_user("preset-get-malformed@example.com")
         resp = await client.get(f"{PRESETS_URL}/not-an-object-id", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_preset_returns_404(self, client, settings) -> None:
-        owner = await _make_user("preset-get-owner@example.com")
-        other = await _make_user("preset-get-other@example.com")
+        owner = await make_user("preset-get-owner@example.com")
+        other = await make_user("preset-get-other@example.com")
         preset = await _insert_preset(owner, "Private")
         resp = await client.get(f"{PRESETS_URL}/{preset.id}", headers=_auth_headers(other, settings))
         assert resp.status_code == 404
@@ -274,7 +271,7 @@ class TestGetPreset:
 @pytest.mark.integration
 class TestUpdatePreset:
     async def test_partial_update_changes_only_sent_fields(self, client, settings) -> None:
-        user = await _make_user("preset-patch@example.com")
+        user = await make_user("preset-patch@example.com")
         preset = await _insert_preset(user, "Mine", style="lofi", bpm=90, weirdness=80)
 
         resp = await client.patch(
@@ -294,7 +291,7 @@ class TestUpdatePreset:
         assert fetched.style == "lofi"
 
     async def test_explicit_null_clears_a_param(self, client, settings) -> None:
-        user = await _make_user("preset-patch-null@example.com")
+        user = await make_user("preset-patch-null@example.com")
         preset = await _insert_preset(user, "Mine", style="lofi", bpm=90)
 
         resp = await client.patch(
@@ -308,7 +305,7 @@ class TestUpdatePreset:
         assert body["bpm"] == 90
 
     async def test_empty_body_is_noop_returning_current_state(self, client, settings) -> None:
-        user = await _make_user("preset-patch-empty@example.com")
+        user = await make_user("preset-patch-empty@example.com")
         preset = await _insert_preset(user, "Mine", bpm=90)
         resp = await client.patch(f"{PRESETS_URL}/{preset.id}", json={}, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
@@ -318,7 +315,7 @@ class TestUpdatePreset:
         assert body["updated_at"] is None
 
     async def test_rename_returns_updated_preset(self, client, settings) -> None:
-        user = await _make_user("preset-rename@example.com")
+        user = await make_user("preset-rename@example.com")
         preset = await _insert_preset(user, "Old")
         resp = await client.patch(
             f"{PRESETS_URL}/{preset.id}",
@@ -329,7 +326,7 @@ class TestUpdatePreset:
         assert resp.json()["name"] == "New"
 
     async def test_rename_to_existing_name_returns_409(self, client, settings) -> None:
-        user = await _make_user("preset-rename-dup@example.com")
+        user = await make_user("preset-rename-dup@example.com")
         await _insert_preset(user, "Taken")
         preset = await _insert_preset(user, "Original")
         resp = await client.patch(
@@ -340,7 +337,7 @@ class TestUpdatePreset:
         assert resp.status_code == 409
 
     async def test_null_name_returns_422(self, client, settings) -> None:
-        user = await _make_user("preset-rename-null@example.com")
+        user = await make_user("preset-rename-null@example.com")
         preset = await _insert_preset(user, "Mine")
         resp = await client.patch(
             f"{PRESETS_URL}/{preset.id}",
@@ -350,8 +347,8 @@ class TestUpdatePreset:
         assert resp.status_code == 422
 
     async def test_other_users_preset_returns_404(self, client, settings) -> None:
-        owner = await _make_user("preset-patch-owner@example.com")
-        other = await _make_user("preset-patch-other@example.com")
+        owner = await make_user("preset-patch-owner@example.com")
+        other = await make_user("preset-patch-other@example.com")
         preset = await _insert_preset(owner, "Private")
         resp = await client.patch(
             f"{PRESETS_URL}/{preset.id}",
@@ -365,7 +362,7 @@ class TestUpdatePreset:
 @pytest.mark.integration
 class TestDeletePreset:
     async def test_delete_returns_204_and_preset_is_gone(self, client, settings) -> None:
-        user = await _make_user("preset-del@example.com")
+        user = await make_user("preset-del@example.com")
         preset = await _insert_preset(user, "Doomed")
         headers = _auth_headers(user, settings)
 
@@ -375,13 +372,13 @@ class TestDeletePreset:
         assert (await client.get(f"{PRESETS_URL}/{preset.id}", headers=headers)).status_code == 404
 
     async def test_unknown_preset_returns_404(self, client, settings) -> None:
-        user = await _make_user("preset-del-unknown@example.com")
+        user = await make_user("preset-del-unknown@example.com")
         resp = await client.delete(f"{PRESETS_URL}/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_preset_returns_404(self, client, settings) -> None:
-        owner = await _make_user("preset-del-owner@example.com")
-        other = await _make_user("preset-del-other@example.com")
+        owner = await make_user("preset-del-owner@example.com")
+        other = await make_user("preset-del-other@example.com")
         preset = await _insert_preset(owner, "Private")
         resp = await client.delete(f"{PRESETS_URL}/{preset.id}", headers=_auth_headers(other, settings))
         assert resp.status_code == 404
@@ -411,7 +408,7 @@ class TestGenerateWithPreset:
     """`POST /api/v1/generate` with `preset_id` (US-9.5 acceptance criteria 2+3)."""
 
     async def test_preset_params_are_applied_to_job(self, client, settings) -> None:
-        user = await _make_user("gen-preset@example.com")
+        user = await make_user("gen-preset@example.com")
         preset = await _insert_preset(user, "Lofi", style="lofi hip hop", bpm=90, weirdness=80, instrumental=True)
 
         resp = await client.post(
@@ -430,7 +427,7 @@ class TestGenerateWithPreset:
         assert "preset_id" not in job.input_params
 
     async def test_explicit_params_override_preset_values(self, client, settings) -> None:
-        user = await _make_user("gen-preset-override@example.com")
+        user = await make_user("gen-preset-override@example.com")
         preset = await _insert_preset(user, "Lofi", style="lofi hip hop", bpm=90, weirdness=80)
 
         resp = await client.post(
@@ -448,7 +445,7 @@ class TestGenerateWithPreset:
         # weirdness=50 equals the schema default; because the client SENT it,
         # it must beat the preset's 80 (model_fields_set semantics, not
         # truthiness/None checks).
-        user = await _make_user("gen-preset-default@example.com")
+        user = await make_user("gen-preset-default@example.com")
         preset = await _insert_preset(user, "Weird", weirdness=80, instrumental=True)
 
         resp = await client.post(
@@ -464,7 +461,7 @@ class TestGenerateWithPreset:
     async def test_omitted_default_field_does_not_override_preset(self, client, settings) -> None:
         # The client did NOT send weirdness, so the schema default (50) must
         # not clobber the preset's snapshot.
-        user = await _make_user("gen-preset-omitted@example.com")
+        user = await make_user("gen-preset-omitted@example.com")
         preset = await _insert_preset(user, "Weird", weirdness=80)
 
         resp = await client.post(
@@ -479,7 +476,7 @@ class TestGenerateWithPreset:
     async def test_preset_supplying_sound_mode_passes_deferred_validation(self, client, settings) -> None:
         # mode/sound_type coupling is validated after the merge, so a preset
         # may carry the whole sound configuration.
-        user = await _make_user("gen-preset-sound@example.com")
+        user = await make_user("gen-preset-sound@example.com")
         preset = await _insert_preset(user, "Loop", mode="sound", sound_type="loop", bpm=124)
 
         resp = await client.post(
@@ -496,7 +493,7 @@ class TestGenerateWithPreset:
         # A preset may legally store mode="sound" without sound_type (cross-field
         # rules are deferred to application time); a bare generate against it
         # must then fail the merged validation.
-        user = await _make_user("gen-preset-incomplete@example.com")
+        user = await make_user("gen-preset-incomplete@example.com")
         preset = await _insert_preset(user, "SoundOnly", mode="sound")
 
         resp = await client.post(
@@ -509,7 +506,7 @@ class TestGenerateWithPreset:
     async def test_invalid_merged_params_return_422(self, client, settings) -> None:
         # Preset bpm + explicit one-shot request: the merged result violates
         # the "no bpm for one-shot sounds" rule and must be rejected.
-        user = await _make_user("gen-preset-merge-invalid@example.com")
+        user = await make_user("gen-preset-merge-invalid@example.com")
         preset = await _insert_preset(user, "Tempo", bpm=120)
 
         resp = await client.post(
@@ -520,7 +517,7 @@ class TestGenerateWithPreset:
         assert resp.status_code == 422
 
     async def test_unknown_preset_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("gen-preset-unknown@example.com")
+        user = await make_user("gen-preset-unknown@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "x", "preset_id": str(PydanticObjectId())},
@@ -529,7 +526,7 @@ class TestGenerateWithPreset:
         assert resp.status_code == 404
 
     async def test_malformed_preset_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("gen-preset-malformed@example.com")
+        user = await make_user("gen-preset-malformed@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "x", "preset_id": "not-an-object-id"},
@@ -538,8 +535,8 @@ class TestGenerateWithPreset:
         assert resp.status_code == 404
 
     async def test_other_users_preset_id_returns_404(self, client, settings) -> None:
-        owner = await _make_user("gen-preset-owner@example.com")
-        other = await _make_user("gen-preset-other@example.com")
+        owner = await make_user("gen-preset-owner@example.com")
+        other = await make_user("gen-preset-other@example.com")
         preset = await _insert_preset(owner, "Private", bpm=100)
         resp = await client.post(
             GENERATE_URL,
@@ -549,7 +546,7 @@ class TestGenerateWithPreset:
         assert resp.status_code == 404
 
     async def test_generate_without_preset_id_is_unchanged(self, client, settings) -> None:
-        user = await _make_user("gen-no-preset@example.com")
+        user = await make_user("gen-no-preset@example.com")
         resp = await client.post(
             GENERATE_URL,
             json={"prompt": "a calm piano ballad"},

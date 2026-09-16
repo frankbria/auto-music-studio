@@ -12,20 +12,20 @@ from acemusic.api.services import users as user_service
 from acemusic.api.services.tiers import FREE
 
 
-async def make_user(email: str, *, tier: str = FREE, **fields) -> User:
-    """Create ``email`` as a Google-OAuth user at ``tier`` and set any other ``User`` fields.
+async def make_user(email: str, *, tier: str = FREE, name: str = "T", **fields) -> User:
+    """Create ``email`` as a Google-OAuth user named ``name`` at ``tier``, then set any other ``User`` fields.
 
     ``None`` values are skipped: tests pass optional kwargs straight through
     (``balance=None``), and in a throwaway database every user is freshly created, so
     "None" can only mean "leave the model default".
     """
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name=name)
     fields["subscription_tier"] = tier
-    for name, value in fields.items():
+    for field, value in fields.items():
         if value is None:
             continue
-        if name not in User.model_fields:
-            raise AttributeError(f"User has no field {name!r}")
-        setattr(user, name, value)
+        if field not in User.model_fields:
+            raise AttributeError(f"User has no field {field!r}")
+        setattr(user, field, value)
     await user.save()
     return user

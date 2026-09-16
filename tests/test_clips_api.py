@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip
-from acemusic.api.services import users as user_service
 from acemusic.api.services.audio_conversion import convert_audio_format
 from acemusic.api.settings import ApiSettings
 from acemusic.api.utils.media_types import get_audio_content_type
@@ -32,6 +31,7 @@ from acemusic.api.utils.range_requests import (
 )
 from acemusic.api.utils.rate_limit import FixedWindowRateLimiter, _client_key
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="format conversion requires ffmpeg")
 
@@ -408,10 +408,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_clip(
     user,
     audio_bytes: bytes,
@@ -460,7 +456,7 @@ class TestClipAudioRetrieval:
     async def test_own_clip_returns_playable_audio_with_content_type(
         self, client, settings, local_storage, wav_bytes
     ) -> None:
-        user = await _make_user("clips-own@example.com")
+        user = await make_user("clips-own@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(user, settings))
@@ -472,26 +468,26 @@ class TestClipAudioRetrieval:
         assert resp.content[:4] == b"RIFF"  # playable WAV, not an error payload
 
     async def test_nonexistent_clip_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-missing@example.com")
+        user = await make_user("clips-missing@example.com")
         resp = await client.get(_audio_url(str(PydanticObjectId())), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_malformed_clip_id_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-malformed@example.com")
+        user = await make_user("clips-malformed@example.com")
         resp = await client.get(_audio_url("not-an-object-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_private_clip_returns_403(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("clips-owner@example.com")
-        other = await _make_user("clips-other@example.com")
+        owner = await make_user("clips-owner@example.com")
+        other = await make_user("clips-other@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(other, settings))
         assert resp.status_code == 403
 
     async def test_other_users_public_clip_returns_200(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("clips-pub-owner@example.com")
-        other = await _make_user("clips-pub-other@example.com")
+        owner = await make_user("clips-pub-owner@example.com")
+        other = await make_user("clips-pub-other@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(other, settings))
@@ -499,7 +495,7 @@ class TestClipAudioRetrieval:
         assert resp.content == wav_bytes
 
     async def test_clip_with_missing_audio_file_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-nofile@example.com")
+        user = await make_user("clips-nofile@example.com")
         clip = await _make_clip(user, b"", store=False)
 
         resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(user, settings))
@@ -509,7 +505,7 @@ class TestClipAudioRetrieval:
 @pytest.mark.integration
 class TestClipAudioRangeRequests:
     async def test_first_100_bytes(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-range1@example.com")
+        user = await make_user("clips-range1@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": "bytes=0-99"}
@@ -520,7 +516,7 @@ class TestClipAudioRangeRequests:
         assert int(resp.headers["content-length"]) == 100
 
     async def test_last_100_bytes_via_suffix_range(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-range2@example.com")
+        user = await make_user("clips-range2@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": "bytes=-100"}
@@ -531,7 +527,7 @@ class TestClipAudioRangeRequests:
         assert resp.headers["content-range"] == f"bytes {total - 100}-{total - 1}/{total}"
 
     async def test_open_ended_range_returns_tail(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-range3@example.com")
+        user = await make_user("clips-range3@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": "bytes=1000-"}
@@ -540,7 +536,7 @@ class TestClipAudioRangeRequests:
         assert resp.content == wav_bytes[1000:]
 
     async def test_unsatisfiable_range_returns_416(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-range4@example.com")
+        user = await make_user("clips-range4@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": f"bytes={len(wav_bytes)}-"}
@@ -550,7 +546,7 @@ class TestClipAudioRangeRequests:
         assert resp.headers["accept-ranges"] == "bytes"
 
     async def test_invalid_range_header_serves_full_content(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-range5@example.com")
+        user = await make_user("clips-range5@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": "bytes=5-2"}
@@ -563,7 +559,7 @@ class TestClipAudioRangeRequests:
 class TestClipAudioFormatConversion:
     @requires_ffmpeg
     async def test_format_mp3_returns_mpeg_audio(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-conv1@example.com")
+        user = await make_user("clips-conv1@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         resp = await client.get(_audio_url(str(clip.id)) + "?format=mp3", headers=_auth_headers(user, settings))
@@ -579,7 +575,7 @@ class TestClipAudioFormatConversion:
     async def test_same_format_as_native_serves_bytes_unchanged(
         self, client, settings, local_storage, wav_bytes
     ) -> None:
-        user = await _make_user("clips-conv2@example.com")
+        user = await make_user("clips-conv2@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         resp = await client.get(_audio_url(str(clip.id)) + "?format=wav", headers=_auth_headers(user, settings))
@@ -588,7 +584,7 @@ class TestClipAudioFormatConversion:
         assert resp.content == wav_bytes
 
     async def test_unsupported_format_returns_422(self, client, settings, local_storage, wav_bytes) -> None:
-        user = await _make_user("clips-conv3@example.com")
+        user = await make_user("clips-conv3@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         resp = await client.get(_audio_url(str(clip.id)) + "?format=xm", headers=_auth_headers(user, settings))
@@ -596,7 +592,7 @@ class TestClipAudioFormatConversion:
 
     @requires_ffmpeg
     async def test_undecodable_audio_returns_500(self, client, settings, local_storage) -> None:
-        user = await _make_user("clips-conv5@example.com")
+        user = await make_user("clips-conv5@example.com")
         clip = await _make_clip(user, b"this is not audio data", fmt="wav")
 
         resp = await client.get(_audio_url(str(clip.id)) + "?format=mp3", headers=_auth_headers(user, settings))
@@ -609,7 +605,7 @@ class TestClipAudioFormatConversion:
     ) -> None:
         # Conversion changes the byte layout, so byte ranges against the native
         # file are meaningless — the endpoint serves the full converted body.
-        user = await _make_user("clips-conv4@example.com")
+        user = await make_user("clips-conv4@example.com")
         clip = await _make_clip(user, wav_bytes)
 
         headers = {**_auth_headers(user, settings), "Range": "bytes=0-99"}
@@ -625,7 +621,7 @@ class TestClipStreaming:
     # --- Authentication / access control -----------------------------------
 
     async def test_anonymous_streams_public_clip(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-pub-owner@example.com")
+        owner = await make_user("stream-pub-owner@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_stream_url(str(clip.id)))  # no auth header
@@ -635,7 +631,7 @@ class TestClipStreaming:
         assert "public" in resp.headers["cache-control"]
 
     async def test_anonymous_private_clip_returns_404(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-priv-owner@example.com")
+        owner = await make_user("stream-priv-owner@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         # 404 (not 403) so a stranger cannot tell a private clip exists.
@@ -643,7 +639,7 @@ class TestClipStreaming:
         assert resp.status_code == 404
 
     async def test_owner_streams_own_private_clip(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-own-priv@example.com")
+        owner = await make_user("stream-own-priv@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         resp = await client.get(_stream_url(str(clip.id)), headers=_auth_headers(owner, settings))
@@ -654,15 +650,15 @@ class TestClipStreaming:
     async def test_authenticated_non_owner_private_clip_returns_403(
         self, client, settings, local_storage, wav_bytes
     ) -> None:
-        owner = await _make_user("stream-other-owner@example.com")
-        other = await _make_user("stream-other-user@example.com")
+        owner = await make_user("stream-other-owner@example.com")
+        other = await make_user("stream-other-user@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         resp = await client.get(_stream_url(str(clip.id)), headers=_auth_headers(other, settings))
         assert resp.status_code == 403
 
     async def test_invalid_token_is_rejected(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-badtoken@example.com")
+        owner = await make_user("stream-badtoken@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         # An explicitly-supplied bad token is a 401, not an anonymous request.
@@ -672,7 +668,7 @@ class TestClipStreaming:
     # --- Range requests ----------------------------------------------------
 
     async def test_single_range_returns_206(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-range1@example.com")
+        owner = await make_user("stream-range1@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_stream_url(str(clip.id)), headers={"Range": "bytes=0-99"})
@@ -681,7 +677,7 @@ class TestClipStreaming:
         assert resp.headers["content-range"] == f"bytes 0-99/{len(wav_bytes)}"
 
     async def test_no_range_returns_200_full(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-range2@example.com")
+        owner = await make_user("stream-range2@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_stream_url(str(clip.id)))
@@ -689,7 +685,7 @@ class TestClipStreaming:
         assert resp.content == wav_bytes
 
     async def test_multi_range_returns_multipart_206(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-range3@example.com")
+        owner = await make_user("stream-range3@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_stream_url(str(clip.id)), headers={"Range": "bytes=0-99,200-299"})
@@ -702,7 +698,7 @@ class TestClipStreaming:
         assert b"Content-Range: bytes 200-299/" in resp.content
 
     async def test_unsatisfiable_range_returns_416(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-range4@example.com")
+        owner = await make_user("stream-range4@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_stream_url(str(clip.id)), headers={"Range": f"bytes={len(wav_bytes)}-"})
@@ -713,7 +709,7 @@ class TestClipStreaming:
 
     @requires_ffmpeg
     async def test_format_mp3_converts_and_disables_ranges(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-fmt@example.com")
+        owner = await make_user("stream-fmt@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         headers = {"Range": "bytes=0-99"}  # ranges ignored once converted
@@ -726,7 +722,7 @@ class TestClipStreaming:
     # --- Rate limiting -----------------------------------------------------
 
     async def test_exceeding_rate_limit_returns_429(self, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("stream-ratelimit@example.com")
+        owner = await make_user("stream-ratelimit@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         # Dedicated app with a low limit; all requests share the test client IP.
@@ -752,7 +748,7 @@ class TestGetClipPublic:
     # --- Authentication / access control -----------------------------------
 
     async def test_anonymous_reads_public_clip(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-anon-pub@example.com")
+        owner = await make_user("public-anon-pub@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True, title="Midnight Drive", style_tags=["synthwave"])
 
         resp = await client.get(_public_url(str(clip.id)))  # no auth header
@@ -764,7 +760,7 @@ class TestGetClipPublic:
         assert body["is_owner"] is False
 
     async def test_anonymous_private_clip_returns_404(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-anon-priv@example.com")
+        owner = await make_user("public-anon-priv@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False, title="Secret Demo")
 
         # 404 (not 403) so a stranger cannot tell a private clip exists, and the
@@ -782,8 +778,8 @@ class TestGetClipPublic:
         assert resp.status_code == 404
 
     async def test_authenticated_non_owner_reads_public_clip(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-nonowner-owner@example.com")
-        other = await _make_user("public-nonowner-user@example.com")
+        owner = await make_user("public-nonowner-owner@example.com")
+        other = await make_user("public-nonowner-user@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(other, settings))
@@ -793,8 +789,8 @@ class TestGetClipPublic:
     async def test_authenticated_non_owner_private_clip_returns_403(
         self, client, settings, local_storage, wav_bytes
     ) -> None:
-        owner = await _make_user("public-priv-owner@example.com")
-        other = await _make_user("public-priv-user@example.com")
+        owner = await make_user("public-priv-owner@example.com")
+        other = await make_user("public-priv-user@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         # Authenticated callers get the 403/404 distinction (get_clip_for_streaming).
@@ -802,7 +798,7 @@ class TestGetClipPublic:
         assert resp.status_code == 403
 
     async def test_owner_reads_own_public_clip(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-own-pub@example.com")
+        owner = await make_user("public-own-pub@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))
@@ -810,7 +806,7 @@ class TestGetClipPublic:
         assert resp.json()["is_owner"] is True
 
     async def test_owner_reads_own_private_clip(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-own-priv@example.com")
+        owner = await make_user("public-own-priv@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=False)
 
         resp = await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))
@@ -818,7 +814,7 @@ class TestGetClipPublic:
         assert resp.json()["is_owner"] is True
 
     async def test_invalid_token_is_rejected(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-badtoken@example.com")
+        owner = await make_user("public-badtoken@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         # An explicitly-supplied bad token is a 401, not an anonymous request.
@@ -828,7 +824,7 @@ class TestGetClipPublic:
     # --- Redaction ---------------------------------------------------------
 
     async def test_non_owner_response_redacts_owner_only_fields(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-redact-anon@example.com")
+        owner = await make_user("public-redact-anon@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True, seed=1234, inference_steps=30)
 
         body = (await client.get(_public_url(str(clip.id)))).json()
@@ -839,7 +835,7 @@ class TestGetClipPublic:
         assert str(clip.user_id) not in json.dumps(body)
 
     async def test_owner_response_keeps_owner_only_fields(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-redact-owner@example.com")
+        owner = await make_user("public-redact-owner@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True, seed=1234, inference_steps=30)
 
         body = (await client.get(_public_url(str(clip.id)), headers=_auth_headers(owner, settings))).json()
@@ -848,7 +844,7 @@ class TestGetClipPublic:
         assert body["inference_steps"] == 30
 
     async def test_non_owner_response_redacts_ancestry(self, client, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-lineage-anon@example.com")
+        owner = await make_user("public-lineage-anon@example.com")
         parent = await _make_clip(owner, wav_bytes, is_public=False)
         child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
 
@@ -861,7 +857,7 @@ class TestGetClipPublic:
         assert str(parent.id) not in json.dumps(body)
 
     async def test_owner_response_keeps_ancestry(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-lineage-owner@example.com")
+        owner = await make_user("public-lineage-owner@example.com")
         parent = await _make_clip(owner, wav_bytes, is_public=False)
         child = await _make_clip(owner, wav_bytes, is_public=True, parent_clip_ids=[parent.id])
 
@@ -869,7 +865,7 @@ class TestGetClipPublic:
         assert body["parent_clip_ids"] == [str(parent.id)]
 
     async def test_user_id_is_never_exposed(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-noleak-owner@example.com")
+        owner = await make_user("public-noleak-owner@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         # Even the owner's own read never carries the raw owner id — ownership
@@ -880,7 +876,7 @@ class TestGetClipPublic:
     # --- Rate limiting -----------------------------------------------------
 
     async def test_exceeding_rate_limit_returns_429(self, settings, local_storage, wav_bytes) -> None:
-        owner = await _make_user("public-ratelimit@example.com")
+        owner = await make_user("public-ratelimit@example.com")
         clip = await _make_clip(owner, wav_bytes, is_public=True)
 
         limited = settings.model_copy(update={"stream_rate_limit_per_minute": 2})

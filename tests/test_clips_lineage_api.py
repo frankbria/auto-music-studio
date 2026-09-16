@@ -22,9 +22,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.clips import MAX_LINEAGE_DEPTH
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -84,10 +84,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -135,7 +131,7 @@ async def _insert_clip(
 class TestLineage:
     async def test_extend_child_shows_its_parent(self, client, settings) -> None:
         """AC: a clip created via extend shows its parent in the lineage response."""
-        user = await _make_user("lineage-extend@example.com")
+        user = await make_user("lineage-extend@example.com")
         ws = await _make_workspace(user)
         original = await _insert_clip(user, ws, title="original")
         extended = await _insert_clip(user, ws, title="extended", parents=[original], generation_mode="extend")
@@ -157,7 +153,7 @@ class TestLineage:
 
     async def test_mashup_child_shows_all_sources(self, client, settings) -> None:
         """AC: a clip with multiple parents (mashup) shows all sources."""
-        user = await _make_user("lineage-mashup@example.com")
+        user = await make_user("lineage-mashup@example.com")
         ws = await _make_workspace(user)
         a = await _insert_clip(user, ws, title="A")
         b = await _insert_clip(user, ws, title="B")
@@ -172,7 +168,7 @@ class TestLineage:
 
     async def test_full_chain_returned_to_original(self, client, settings) -> None:
         """AC: lineage traversal returns the full tree up to the original generation."""
-        user = await _make_user("lineage-chain@example.com")
+        user = await make_user("lineage-chain@example.com")
         ws = await _make_workspace(user)
         clips = [await _insert_clip(user, ws, title="gen-0")]
         for i in range(1, 6):
@@ -190,7 +186,7 @@ class TestLineage:
 
     async def test_diamond_lineage_lists_shared_ancestor_once(self, client, settings) -> None:
         """A clip whose two parents share a grandparent lists the grandparent once."""
-        user = await _make_user("lineage-diamond@example.com")
+        user = await make_user("lineage-diamond@example.com")
         ws = await _make_workspace(user)
         root = await _insert_clip(user, ws, title="root")
         left = await _insert_clip(user, ws, title="left", parents=[root], generation_mode="cover")
@@ -204,7 +200,7 @@ class TestLineage:
 
     async def test_depth_cap_truncates(self, client, settings) -> None:
         """AC: maximum lineage depth is 50; deeper chains report truncated=True."""
-        user = await _make_user("lineage-cap@example.com")
+        user = await make_user("lineage-cap@example.com")
         ws = await _make_workspace(user)
         clip = await _insert_clip(user, ws, title="origin")
         # One more generation than the cap so an ancestor sits beyond depth 50.
@@ -218,7 +214,7 @@ class TestLineage:
         assert max(n["depth"] for n in body["nodes"]) == MAX_LINEAGE_DEPTH
 
     async def test_original_clip_has_empty_lineage(self, client, settings) -> None:
-        user = await _make_user("lineage-root@example.com")
+        user = await make_user("lineage-root@example.com")
         ws = await _make_workspace(user)
         clip = await _insert_clip(user, ws, title="solo")
 
@@ -231,7 +227,7 @@ class TestLineage:
 
     async def test_twenty_level_chain_resolves_quickly(self, client, settings) -> None:
         """AC: lineage queries complete within 500ms for chains up to 20 levels deep."""
-        user = await _make_user("lineage-perf@example.com")
+        user = await make_user("lineage-perf@example.com")
         ws = await _make_workspace(user)
         clip = await _insert_clip(user, ws, title="g0")
         for i in range(1, 21):
@@ -246,18 +242,18 @@ class TestLineage:
         assert elapsed < 0.5
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("lineage-unknown@example.com")
+        user = await make_user("lineage-unknown@example.com")
         resp = await client.get(f"{CLIPS_URL}/{PydanticObjectId()}/lineage", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_malformed_id_returns_404(self, client, settings) -> None:
-        user = await _make_user("lineage-malformed@example.com")
+        user = await make_user("lineage-malformed@example.com")
         resp = await client.get(f"{CLIPS_URL}/not-an-object-id/lineage", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("lineage-owner@example.com")
-        other = await _make_user("lineage-other@example.com")
+        owner = await make_user("lineage-owner@example.com")
+        other = await make_user("lineage-other@example.com")
         ws = await _make_workspace(owner)
         clip = await _insert_clip(owner, ws, title="theirs")
 
@@ -266,8 +262,8 @@ class TestLineage:
 
     async def test_other_users_ancestors_are_excluded(self, client, settings) -> None:
         """Lineage is owner-scoped: an ancestor owned by another user is not leaked."""
-        owner = await _make_user("lineage-scope-owner@example.com")
-        other = await _make_user("lineage-scope-other@example.com")
+        owner = await make_user("lineage-scope-owner@example.com")
+        other = await make_user("lineage-scope-other@example.com")
         owner_ws = await _make_workspace(owner)
         other_ws = await _make_workspace(other)
         foreign_root = await _insert_clip(other, other_ws, title="foreign")
@@ -289,7 +285,7 @@ class TestLineage:
 class TestChildren:
     async def test_returns_all_derived_clips(self, client, settings) -> None:
         """AC: children endpoint returns all clips derived from a given clip."""
-        user = await _make_user("children-all@example.com")
+        user = await make_user("children-all@example.com")
         ws = await _make_workspace(user)
         source = await _insert_clip(user, ws, title="source")
         extended = await _insert_clip(user, ws, title="extended", parents=[source], generation_mode="extend")
@@ -306,7 +302,7 @@ class TestChildren:
 
     async def test_includes_mashup_children(self, client, settings) -> None:
         """A clip used as one of several mashup sources counts the mashup as its child."""
-        user = await _make_user("children-mashup@example.com")
+        user = await make_user("children-mashup@example.com")
         ws = await _make_workspace(user)
         a = await _insert_clip(user, ws, title="A")
         b = await _insert_clip(user, ws, title="B")
@@ -317,7 +313,7 @@ class TestChildren:
         assert [c["id"] for c in resp.json()["children"]] == [str(mashup.id)]
 
     async def test_leaf_clip_has_no_children(self, client, settings) -> None:
-        user = await _make_user("children-leaf@example.com")
+        user = await make_user("children-leaf@example.com")
         ws = await _make_workspace(user)
         clip = await _insert_clip(user, ws, title="leaf")
 
@@ -329,8 +325,8 @@ class TestChildren:
 
     async def test_children_are_owner_scoped(self, client, settings) -> None:
         """Another user's derived clip never appears in the owner's children view."""
-        owner = await _make_user("children-owner@example.com")
-        other = await _make_user("children-other@example.com")
+        owner = await make_user("children-owner@example.com")
+        other = await make_user("children-other@example.com")
         owner_ws = await _make_workspace(owner)
         other_ws = await _make_workspace(other)
         source = await _insert_clip(owner, owner_ws, title="shared-source")
@@ -343,13 +339,13 @@ class TestChildren:
         assert [c["id"] for c in resp.json()["children"]] == [str(mine.id)]
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("children-unknown@example.com")
+        user = await make_user("children-unknown@example.com")
         resp = await client.get(f"{CLIPS_URL}/{PydanticObjectId()}/children", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("children-404-owner@example.com")
-        other = await _make_user("children-404-other@example.com")
+        owner = await make_user("children-404-owner@example.com")
+        other = await make_user("children-404-other@example.com")
         ws = await _make_workspace(owner)
         clip = await _insert_clip(owner, ws, title="theirs")
 
