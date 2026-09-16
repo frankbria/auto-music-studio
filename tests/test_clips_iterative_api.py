@@ -112,10 +112,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
-    return await make_user(email, credits_balance=balance)
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -148,7 +144,7 @@ async def _insert_clip(
 
 
 async def _user_with_clip(email: str, *, balance: float = 10.0, **clip_kwargs):
-    user = await _make_user(email, balance=balance)
+    user = await make_user(email, credits_balance=balance)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -163,7 +159,7 @@ async def _user_with_clip(email: str, *, balance: float = 10.0, **clip_kwargs):
 class TestClipNotFound:
     @pytest.mark.parametrize("operation", CLIP_OPS)
     async def test_unknown_clip_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"iter-404-{operation}@example.com", balance=10.0)
+        user = await make_user(f"iter-404-{operation}@example.com", credits_balance=10.0)
         resp = await client.post(
             _op_url(PydanticObjectId(), operation),
             json=VALID_BODIES[operation],
@@ -174,7 +170,7 @@ class TestClipNotFound:
 
     @pytest.mark.parametrize("operation", CLIP_OPS)
     async def test_malformed_id_returns_404(self, client, settings, operation: str) -> None:
-        user = await _make_user(f"iter-malformed-{operation}@example.com", balance=10.0)
+        user = await make_user(f"iter-malformed-{operation}@example.com", credits_balance=10.0)
         resp = await client.post(
             _op_url("not-an-object-id", operation),
             json=VALID_BODIES[operation],
@@ -185,7 +181,7 @@ class TestClipNotFound:
     @pytest.mark.parametrize("operation", CLIP_OPS)
     async def test_other_users_clip_returns_404(self, client, settings, operation: str) -> None:
         _, _, clip = await _user_with_clip(f"iter-owner-{operation}@example.com")
-        other = await _make_user(f"iter-other-{operation}@example.com", balance=10.0)
+        other = await make_user(f"iter-other-{operation}@example.com", credits_balance=10.0)
         resp = await client.post(
             _op_url(clip.id, operation),
             json=VALID_BODIES[operation],
@@ -508,7 +504,7 @@ class TestValidation:
 @pytest.mark.integration
 class TestMashup:
     async def test_two_clips_returns_202_with_lineage(self, client, settings) -> None:
-        user = await _make_user("iter-mashup-ok@example.com", balance=10.0)
+        user = await make_user("iter-mashup-ok@example.com", credits_balance=10.0)
         ws = await _make_workspace(user)
         a = await _insert_clip(user, ws)
         b = await _insert_clip(user, ws)
@@ -529,7 +525,7 @@ class TestMashup:
 
     async def test_too_many_clips_returns_422(self, client, settings) -> None:
         # The source list is capped to keep one request's work bounded.
-        user = await _make_user("iter-mashup-many@example.com", balance=10.0)
+        user = await make_user("iter-mashup-many@example.com", credits_balance=10.0)
         ws = await _make_workspace(user)
         clips = [await _insert_clip(user, ws) for _ in range(9)]
         resp = await client.post(
@@ -541,7 +537,7 @@ class TestMashup:
         assert await Job.count() == 0
 
     async def test_no_duration_source_returns_422(self, client, settings) -> None:
-        user = await _make_user("iter-mashup-nodur@example.com", balance=10.0)
+        user = await make_user("iter-mashup-nodur@example.com", credits_balance=10.0)
         ws = await _make_workspace(user)
         a = await _insert_clip(user, ws, duration=10.0)
         b = await _insert_clip(user, ws, duration=None)
@@ -578,10 +574,10 @@ class TestMashup:
         assert await Job.count() == 0
 
     async def test_unowned_source_returns_404(self, client, settings) -> None:
-        user = await _make_user("iter-mashup-unowned@example.com", balance=10.0)
+        user = await make_user("iter-mashup-unowned@example.com", credits_balance=10.0)
         ws = await _make_workspace(user)
         mine = await _insert_clip(user, ws)
-        other = await _make_user("iter-mashup-other@example.com")
+        other = await make_user("iter-mashup-other@example.com")
         ws2 = await _make_workspace(other)
         theirs = await _insert_clip(other, ws2)
         resp = await client.post(
@@ -647,7 +643,7 @@ class TestIterativeLifecycleEndToEnd:
     async def test_cover_runs_to_completed_via_status_endpoint(self, client, settings, local_storage) -> None:
         from acemusic.api.tasks.processor import JobProcessor
 
-        user = await _make_user("iter-e2e-cover@example.com", balance=10.0)
+        user = await make_user("iter-e2e-cover@example.com", credits_balance=10.0)
         workspace = await _make_workspace(user)
         clip_id = PydanticObjectId()
         file_path = f"{user.id}/{workspace.id}/clips/{clip_id}.wav"
