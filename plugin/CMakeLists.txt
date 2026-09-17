@@ -16,12 +16,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # and no clone happens at all.
 # ---------------------------------------------------------------------------
 include(FetchContent)
-# The tag fixes which licence governs: JUCE 8 EULA, Starter tier (plugin/LICENSE.md).
-# JUCE 9 ships a different EULA, so moving this tag is a licensing change, not just a
-# version bump.
+# The tag fixes which licences govern (plugin/LICENSE.md): the JUCE 8 EULA, Starter
+# tier, and — because JUCE bundles it — the VST3 SDK. 8.0.11 is the first JUCE that
+# ships VST3 SDK 3.8.0 under MIT; anything older carries Steinberg's withdrawn dual
+# licence. JUCE 9 ships a different EULA. Moving this tag in either direction is a
+# licensing change, not just a version bump.
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        8.0.9
+    GIT_TAG        8.0.14
     GIT_SHALLOW    ON)
 FetchContent_MakeAvailable(JUCE)
 

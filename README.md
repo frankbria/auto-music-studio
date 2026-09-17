@@ -536,8 +536,8 @@ we build and distribute.
 
 | Component | Arm chosen | Obligation it creates |
 | --- | --- | --- |
-| **JUCE 8.0.9** (`plugin/`) | JUCE 8 EULA, **Starter** tier — free, not AGPLv3 | Valid only while annual revenue is under **$20,000**; upgrade to Indie before crossing it. No source-offer obligation. |
-| **VST3 SDK** (`plugin/`) | **Undecided** | A VST3 binary needs its own Steinberg agreement (or the SDK's GPLv3 arm). Tracked in issue #406 — settle it before any public plugin build. |
+| **JUCE 8.0.14** (`plugin/`) | JUCE 8 EULA, **Starter** tier — free, not AGPLv3 | Valid only while annual revenue is under **$20,000**; upgrade to Indie before crossing it. No source-offer obligation. |
+| **VST3 SDK 3.8.0** (bundled by JUCE) | **MIT** — Steinberg withdrew the proprietary agreement and GPLv3 arm at SDK 3.8 | Ship Steinberg's copyright and MIT notice with any binary (`plugin/THIRD_PARTY_NOTICES.md`). No registration, no fee, no source-offer. "VST" is Steinberg's trademark; we attribute it and do not use the VST Compatible logo. |
 
 Details, the exact upgrade trigger, and how the $20,000 is counted for a company versus
 an individual: **[`plugin/LICENSE.md`](plugin/LICENSE.md)**.

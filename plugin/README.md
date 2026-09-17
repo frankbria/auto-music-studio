@@ -33,10 +33,14 @@ source-offer obligation, valid while annual revenue stays under **$20,000**. Not
 AGPLv3. `JUCE_DISPLAY_SPLASH_SCREEN=0` is permitted on this tier because JUCE 8
 removed the splash-screen requirement from Starter.
 
-The VST3 SDK is licensed separately by Steinberg and is **not** covered by that.
+The VST3 SDK is Steinberg's, not JUCE's. Since SDK 3.8 it is **MIT**-licensed — no
+agreement, no fee — and JUCE 8.0.11+ bundles that version. The one obligation is
+shipping Steinberg's notice with any binary: `THIRD_PARTY_NOTICES.md`. "VST" is
+Steinberg's trademark; we attribute it and do not use the VST Compatible logo.
 
 Full terms, the upgrade trigger, and how the $20,000 is counted:
-**[plugin/LICENSE.md](LICENSE.md)**. Read it before bumping the JUCE tag off 8.x.
+**[plugin/LICENSE.md](LICENSE.md)**. Read it before moving the JUCE tag in either
+direction: off 8.x changes the JUCE EULA, below 8.0.11 loses the MIT VST3 SDK.
 
 ## Requirements
 
@@ -49,7 +53,7 @@ Full terms, the upgrade trigger, and how the $20,000 is counted:
   ```
   `libcurl` is deliberately **not** required — see "Networking" below.
 
-JUCE itself is fetched by CMake (pinned to tag `8.0.9`); nothing to install.
+JUCE itself is fetched by CMake (pinned to tag `8.0.14`); nothing to install.
 
 ## Build
 

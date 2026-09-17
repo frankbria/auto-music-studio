@@ -146,7 +146,7 @@ tests/
 
 web/                # Next.js frontend (Layer 3) — Stages 15–16 complete; Stage 17 in progress (US-17.1)
 plugin/             # JUCE VST3/AU plugin (Layer 4) — Stage 23; see plugin/README.md
-  CMakeLists.txt    # JUCE 8.0.9 via FetchContent; VST3 + Standalone (+ AU on macOS)
+  CMakeLists.txt    # JUCE 8.0.14 via FetchContent; VST3 + Standalone (+ AU on macOS)
   source/           # PluginProcessor, PluginEditor, BackgroundTaskQueue,
                     #   AceStepClient, ConnectionManager/Settings/Panel
   tests/            # juce::UnitTest suites (category "acemusic") + ctest runner;
