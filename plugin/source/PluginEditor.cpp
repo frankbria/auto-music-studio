@@ -38,6 +38,14 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (resultsPanel);
     addAndMakeVisible (platformPanel);
 
+    // #396: the voice selector only means anything while there is a signed-in session to
+    // list voices from. The platform panel owns the credentials and makes the call; the
+    // editor just forwards the result, because it is the only thing that owns both panels.
+    platformPanel.onVoiceModelsChanged = [this] (const juce::Array<Platform::VoiceModel>& models)
+    {
+        generationPanel.setVoiceModels (models);
+    };
+
     setResizable (true, true);
     // Three real panels need the room: the 520 default from US-23.1 left Results
     // squeezed to a single line once it had waveforms in it. The minimum is raised

@@ -39,6 +39,7 @@ public:
 
     /** Re-reads the clip list for the selected workspace and search text. */
     void refreshClips();
+    void refreshVoiceModels();
 
     /** Downloads the selected clip into the cache and shows it in Results. */
     void importSelectedClip();
@@ -63,6 +64,14 @@ public:
 
     /** True once a workspace list has come back. */
     bool isConnected() const noexcept                         { return connected; }
+
+    /** The musician's voice models, refreshed whenever the session changes (#396).
+
+        Empty on disconnect. This panel makes the call rather than handing its URL and
+        API key out: the key is deliberately private here, and a callback carrying the
+        *result* keeps it that way. The editor forwards the list to the generation
+        panel — the two panels stay unaware of each other. */
+    std::function<void (const juce::Array<Platform::VoiceModel>&)> onVoiceModelsChanged;
 
     /** True when there is enough configuration to try at all. */
     bool hasCredentials() const;

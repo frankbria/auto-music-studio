@@ -88,6 +88,87 @@ namespace
     {
         return object.getProperty (key, juce::var()).toString();
     }
+
+    /** The platform's own explanation of a refusal, or empty if it did not send one.
+
+        FastAPI puts it under `detail`, either as a string or as an object with a
+        `message`. Worth digging out: a Pro-only refusal and an empty wallet both arrive as
+        bare status codes otherwise, and "API key rejected by the server" describes
+        neither. */
+    juce::String serverMessage (const juce::String& body)
+    {
+        const auto parsed = juce::JSON::parse (body);
+        const auto detail = parsed.getProperty ("detail", juce::var());
+
+        if (detail.isString())
+            return detail.toString();
+
+        if (detail.isObject())
+        {
+            const auto message = detail.getProperty ("message", juce::var()).toString();
+
+            if (message.isNotEmpty())
+                return message;
+        }
+
+        return {};
+    }
+
+    /** POST a JSON body. Mirrors `fetch`, but reads the body even on an error status so
+        the platform's own message can be preferred over a generic one. */
+    bool postJson (const juce::String& baseUrl,
+                   const juce::String& apiKey,
+                   const juce::String& path,
+                   const juce::String& payloadJson,
+                   const std::function<bool()>& shouldCancel,
+                   int timeoutMs,
+                   juce::String& bodyOut,
+                   Result& result)
+    {
+        if (const auto problem = findUrlProblem (baseUrl); problem.isNotEmpty())
+        {
+            result = failure (problem);
+            return false;
+        }
+
+        const auto endpoint = Http::prepareEndpoint (baseUrl, apiKey, path);
+
+        if (endpoint.error.isNotEmpty())
+        {
+            result = failure (endpoint.error);
+            return false;
+        }
+
+        if (wasCancelled (shouldCancel))
+        {
+            result = cancelledResult();
+            return false;
+        }
+
+        juce::WebInputStream stream (endpoint.url.withPOSTData (payloadJson), true);
+        Http::configure (stream, endpoint, timeoutMs);
+        stream.withExtraHeaders ("Content-Type: application/json");
+
+        if (! stream.connect (nullptr))
+        {
+            result = wasCancelled (shouldCancel)
+                       ? cancelledResult()
+                       : failure ("Could not reach the platform at " + baseUrl.trim());
+            return false;
+        }
+
+        bodyOut = stream.readEntireStreamAsString();
+
+        if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key);
+            status.isNotEmpty())
+        {
+            const auto explained = serverMessage (bodyOut);
+            result = failure (explained.isNotEmpty() ? explained : status);
+            return false;
+        }
+
+        return true;
+    }
 }
 
 //==============================================================================
@@ -366,6 +447,110 @@ Result uploadClip (const juce::String& baseUrl,
 
     if (result.clipId.isEmpty())
         return failure ("The platform accepted the upload but returned no clip id");
+
+    result.ok = true;
+    return result;
+}
+
+Result listVoiceModels (const juce::String& baseUrl,
+                        const juce::String& apiKey,
+                        std::function<bool()> shouldCancel,
+                        int timeoutMs)
+{
+    Result result;
+    juce::String body;
+
+    if (! fetch (baseUrl, apiKey, juce::String (apiPrefix) + "/voice-models", shouldCancel, timeoutMs, body, result))
+        return result;
+
+    const auto payload = Http::unwrapEnvelope (juce::JSON::parse (body));
+
+    // Bare array or {"voice_models": [...]}, same tolerance as the workspace listing.
+    const juce::Array<juce::var>* items = payload.getArray();
+
+    if (items == nullptr)
+        items = payload.getProperty ("voice_models", juce::var()).getArray();
+
+    if (items == nullptr)
+        return failure ("The platform returned no voice model list");
+
+    for (const auto& item : *items)
+    {
+        VoiceModel model;
+        model.id = textOf (item, "id");
+        model.name = textOf (item, "name");
+        model.status = textOf (item, "status");
+
+        if (model.id.isNotEmpty())
+            result.voiceModels.add (model);
+    }
+
+    result.ok = true;
+    return result;
+}
+
+juce::Array<VoiceModel> readyVoiceModels (const juce::Array<VoiceModel>& models)
+{
+    juce::Array<VoiceModel> ready;
+
+    for (const auto& model : models)
+        if (model.status == "ready")
+            ready.add (model);
+
+    return ready;
+}
+
+Result submitGeneration (const juce::String& baseUrl,
+                         const juce::String& apiKey,
+                         const juce::String& payloadJson,
+                         std::function<bool()> shouldCancel,
+                         int timeoutMs)
+{
+    Result result;
+    juce::String body;
+
+    if (! postJson (baseUrl, apiKey, juce::String (apiPrefix) + "/generate", payloadJson,
+                    shouldCancel, timeoutMs, body, result))
+        return result;
+
+    const auto payload = Http::unwrapEnvelope (juce::JSON::parse (body));
+    result.jobId = textOf (payload, "job_id");
+
+    if (result.jobId.isEmpty())
+        return failure ("The platform accepted the request but returned no job id");
+
+    result.ok = true;
+    return result;
+}
+
+Result getJobStatus (const juce::String& baseUrl,
+                     const juce::String& apiKey,
+                     const juce::String& jobId,
+                     std::function<bool()> shouldCancel,
+                     int timeoutMs)
+{
+    Result result;
+    juce::String body;
+    const auto path = juce::String (apiPrefix) + "/jobs/" + juce::URL::addEscapeChars (jobId, false) + "/status";
+
+    if (! fetch (baseUrl, apiKey, path, shouldCancel, timeoutMs, body, result))
+        return result;
+
+    const auto payload = Http::unwrapEnvelope (juce::JSON::parse (body));
+    const auto status = textOf (payload, "status");
+
+    // The poll succeeded either way; a failed *job* is a different thing from a failed
+    // request, and reporting it as a network error would send the musician looking at
+    // their connection instead of at the message the platform sent.
+    result.jobComplete = (status == "completed");
+    result.jobFailed = (status == "failed");
+
+    if (result.jobFailed)
+        result.errorMessage = textOf (payload, "error");
+
+    if (const auto* ids = payload.getProperty ("clip_ids", juce::var()).getArray())
+        for (const auto& id : *ids)
+            result.clipIds.add (id.toString());
 
     result.ok = true;
     return result;
