@@ -1,8 +1,9 @@
 # Licensing — AceMusic Studio VST3 plugin
 
-The plugin links the **JUCE Framework**, which is dual-licensed. This file records
-which arm this repository uses, because the two arms impose opposite obligations and
-the build configuration has to match the one we picked.
+The plugin links the **JUCE Framework**, which is dual-licensed, and through it the
+**Steinberg VST3 SDK**. This file records which arm this repository uses for each,
+because the arms impose different obligations and the build configuration has to match
+the ones we picked.
 
 > **Not legal advice.** This is a record of a decision and the clauses it rests on. The
 > clause numbers are cited so the reasoning can be checked against the agreement itself
@@ -12,8 +13,9 @@ the build configuration has to match the one we picked.
 
 **JUCE 8 End User Licence Agreement — Starter licence type. Not AGPLv3.**
 
-Decided 2026-08-06 (issue #369). Pinned framework version: JUCE **8.0.9**
-(`plugin/CMakeLists.txt`, `FetchContent` `GIT_TAG 8.0.9`), so the
+Decided 2026-08-06 (issue #369). Pinned framework version: JUCE **8.0.14**
+(`plugin/CMakeLists.txt`, `FetchContent` `GIT_TAG 8.0.14`; moved from 8.0.9 on
+2026-09-17 for the VST3 SDK licence below — still JUCE 8, same EULA), so the
 [JUCE 8 EULA](https://juce.com/legal/juce-8-licence/) is the governing text.
 
 | | Starter | Indie | Pro |
@@ -62,8 +64,41 @@ Two details worth knowing well before that threshold is reached:
 Also re-check this file if the pinned JUCE tag ever moves off 8.x — JUCE 9 ships a
 different EULA, and none of the terms above carry over automatically.
 
-## Not covered here
+## The VST3 SDK
 
-The **VST3 SDK is licensed separately by Steinberg** and is not part of the JUCE
-licence. Building and distributing a VST3 binary needs its own agreement with
-Steinberg (or the SDK's GPLv3 arm). Tracked separately — see issue #406.
+**MIT licence, VST3 SDK 3.8.0, as bundled by JUCE 8.0.14. No agreement with Steinberg.**
+
+Decided 2026-09-17 (issue #406). The VST3 SDK is Steinberg's, not JUCE's, and JUCE's
+licence does not cover it at any tier. Until SDK 3.8 it was dual-licensed — a
+proprietary agreement that had to be signed and returned to Steinberg, or GPLv3 — and
+#406 was opened to pick one. Steinberg has since withdrawn both: from SDK **3.8** the
+SDK is under the [MIT licence](https://steinbergmedia.github.io/vst3_dev_portal/pages/VST+3+Licensing/VST3+License.html),
+"no need to sign any documents", no fee, no membership, and their FAQ confirms a
+JUCE-based plug-in may be sold in binary form under it. We never signed the old
+agreement, so the MIT SDK is the only arm available to us, and it is the better one.
+
+**Which JUCE carries it matters.** JUCE 8.0.9 bundled SDK 3.7.4 under the old dual
+licence; JUCE **8.0.11** is the first release that "updated the VST3 SDK to 3.8.0 (MIT
+license)". That is why the pin moved to 8.0.14. Verify on any future bump:
+`modules/juce_audio_processors_headless/format_types/VST3_SDK/LICENSE.txt` must be the
+MIT text and `pluginterfaces/vst/vsttypes.h` must define `kVstVersionString` as
+"VST 3.8.0" or later.
+
+### What this means for the code
+
+- **One obligation: the notice.** MIT requires Steinberg's copyright line and the licence
+  text to accompany every copy of the SDK, including a binary that links it. The text is
+  in `plugin/THIRD_PARTY_NOTICES.md`; any installer, download bundle, or store listing
+  must ship that file alongside the plug-in. There is no source-offer obligation.
+- **"VST" is a Steinberg trademark.** Using the word, or the *VST Compatible* logo, is
+  optional under MIT, but if used it must follow the
+  [Steinberg VST usage guidelines](https://steinbergmedia.github.io/vst3_dev_portal/pages/VST+3+Licensing/Usage+guidelines.html).
+  Our stance: we say "VST3 plugin" to name the format, carry the attribution line in the
+  notices file, and do **not** use the logo. Adopting the logo commits us to showing it
+  on every web page, document, and About box that mentions VST, which is a decision for
+  whoever builds the product site. Never put "VST" in a company name, and never coin
+  variants like "VSTi" — the guidelines prohibit both outright.
+- **Leave `JUCE_ASIO` off.** From 8.0.11 JUCE also bundles the ASIO SDK, which is still
+  under Steinberg's proprietary/GPLv3 dual licence. It is only compiled when
+  `JUCE_ASIO=1`, which this build never sets. Enabling it would reopen exactly the
+  question this section closes.
