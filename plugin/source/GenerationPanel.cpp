@@ -245,6 +245,7 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     styleCombo (voiceSelector);
     voiceSelector.addItem ("None", 1);
     voiceSelector.setSelectedId (1, juce::dontSendNotification);
+    voiceSelector.onChange = [this] { refresh(); };
     addChildComponent (voiceSelector);
 
     captureLabel.setFont (juce::FontOptions (12.0f));
