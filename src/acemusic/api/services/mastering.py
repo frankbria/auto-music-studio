@@ -156,18 +156,26 @@ async def create_mastering_batch(
     # trajectory. Refunds for failed-to-queue clips offset their upfront share, so
     # the running total over *recorded* rows lands on the true final balance.
     running_balance = 0.0
+    # Spent monthly-first, so the first clips' rows are the ones the monthly bucket paid
+    # for and the purchased share falls on the last ones (#422).
+    monthly_left = 0.0
     if total_cost > 0:
-        deducted = await credits_service.deduct_credits(uid, total_cost)
+        deducted = await credits_service.deduct_credits_split(uid, total_cost)
         if deducted is None:
             fresh = await User.get(uid)
             raise InsufficientCreditsError(
                 balance=credits_service.spendable(fresh) if fresh is not None else 0.0,
                 required=total_cost,
             )
+        balance_after, from_purchased = deducted
         # Balance before the deduction; each successful charge decrements it.
-        running_balance = deducted + total_cost
+        running_balance = balance_after + total_cost
+        monthly_left = total_cost - from_purchased
 
     for clip in owned:
+        from_monthly = min(per_clip_cost, monthly_left)
+        monthly_left -= from_monthly
+        clip_purchased = per_clip_cost - from_monthly
         params = {
             "clip_id": str(clip.id),
             "profile": profile,
@@ -185,7 +193,7 @@ async def create_mastering_batch(
             # Refund just this clip's share — the others stay charged and queued.
             logger.exception("Failed to queue mastering job for clip %s", clip.id)
             # No job id: queueing is what failed, so there is nothing to attribute to.
-            await credits_service.reverse_unrecorded_charge(uid, per_clip_cost)
+            await credits_service.reverse_unrecorded_charge(uid, per_clip_cost, purchased_amount=clip_purchased)
             entries.append(BatchClipEntry(clip_id=str(clip.id), error="Failed to queue mastering job."))
             continue
         running_balance -= per_clip_cost
@@ -196,6 +204,7 @@ async def create_mastering_batch(
                 action_type=MASTERING_JOB_TYPE,
                 job_id=str(job.id),
                 balance_after=running_balance,
+                purchased_amount=-clip_purchased,
             )
         except Exception:
             # The charge is taken and the job queued; a missing ledger row is

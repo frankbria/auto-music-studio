@@ -30,7 +30,6 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.daw_export import export_storage_path
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
@@ -38,6 +37,7 @@ from acemusic.daw_export import CANONICAL_STEMS, assemble_daw_bundle
 from acemusic.midi_client import CHANNEL_MAP, MIDI_OUTPUT_LABELS
 from acemusic.stems_client import STEM_LABELS
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 JOBS_URL = f"{API_V1_PREFIX}/jobs"
@@ -193,14 +193,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    # Pro: DAW export is a Pro capability since US-26.2, and this file tests how the
-    # export behaves, not who may ask for it. The refusal is tested in
-    # test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    await user.save()
-    return user
+# Pro: DAW export is a Pro capability since US-26.2, and this file tests how the
+# export behaves, not who may ask for it. The refusal is tested in
+# test_tier_enforcement_api.py.
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:
@@ -233,7 +228,7 @@ async def _insert_clip(
 
 
 async def _user_with_clip(email: str, **clip_kwargs):
-    user = await _make_user(email)
+    user = await make_user(email, tier=PRO)
     workspace = await _make_workspace(user)
     clip = await _insert_clip(user, workspace, **clip_kwargs)
     return user, workspace, clip
@@ -283,19 +278,19 @@ async def _seed_cached_midi(user, workspace, clip: Clip) -> None:
 class TestClipNotFound:
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_unknown_clip_returns_404(self, client, settings, method: str) -> None:
-        user = await _make_user(f"daw-404-{method}@example.com")
+        user = await make_user(f"daw-404-{method}@example.com", tier=PRO)
         resp = await getattr(client, method)(_daw_url(PydanticObjectId()), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     @pytest.mark.parametrize("method", ["post", "get"])
     async def test_malformed_id_returns_404(self, client, settings, method: str) -> None:
-        user = await _make_user(f"daw-malformed-{method}@example.com")
+        user = await make_user(f"daw-malformed-{method}@example.com", tier=PRO)
         resp = await getattr(client, method)(_daw_url("not-an-object-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404_on_post(self, client, settings) -> None:
         _, _, clip = await _user_with_clip("daw-owner@example.com")
-        other = await _make_user("daw-other@example.com")
+        other = await make_user("daw-other@example.com", tier=PRO)
         resp = await client.post(_daw_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 404
         assert await Job.count() == 0
@@ -383,14 +378,14 @@ class TestDownload:
     async def test_other_users_private_clip_returns_403(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-priv-owner@example.com")
         get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK")
-        other = await _make_user("daw-priv-other@example.com")
+        other = await make_user("daw-priv-other@example.com", tier=PRO)
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 403
 
     async def test_public_clip_export_downloadable_by_other_user(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-pub-owner@example.com", is_public=True)
         get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK-public")
-        other = await _make_user("daw-pub-other@example.com")
+        other = await make_user("daw-pub-other@example.com", tier=PRO)
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
         assert resp.status_code == 200
         assert resp.content == b"PK-public"
@@ -474,7 +469,7 @@ class TestLifecycleEndToEnd:
         monkeypatch.setattr(extraction_tasks, "StemsClient", _ExplodingStemsClient)
         monkeypatch.setattr(extraction_tasks, "MidiClient", _ExplodingMidiClient)
 
-        user = await _make_user("daw-cached@example.com")
+        user = await make_user("daw-cached@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Reused Mix", bpm=120, store_bytes=_tone_bytes())
         await _seed_cached_stems(user, workspace, clip)
@@ -507,7 +502,7 @@ class TestLifecycleEndToEnd:
         monkeypatch.setattr(extraction_tasks, "StemsClient", _FakeStemsClient)
         monkeypatch.setattr(extraction_tasks, "MidiClient", _FakeMidiClient)
 
-        user = await _make_user("daw-fresh@example.com")
+        user = await make_user("daw-fresh@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Fresh Mix", bpm=90, store_bytes=_tone_bytes())
         headers = _auth_headers(user, settings)

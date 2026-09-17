@@ -13,8 +13,9 @@ from beanie import PydanticObjectId
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, Release, User, VisibilityState
-from acemusic.api.services import credits as credits_service, tiers, users as user_service
+from acemusic.api.services import credits as credits_service, tiers
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -49,11 +50,7 @@ def _auth(user: User, settings: ApiSettings) -> dict[str, str]:
 
 async def _user(label: str, tier: str = "free", credits: float = 500.0) -> User:
     email = f"{label}-{PydanticObjectId()}@example.com"
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=email, name="T")
-    user.subscription_tier = tier
-    user.credits_balance = credits
-    await user.save()
-    return user
+    return await make_user(email, tier=tier, credits_balance=credits)
 
 
 async def _wav_clip(user: User) -> Clip:

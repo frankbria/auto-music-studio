@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Release, ReleaseStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.identifiers import calculate_ean13_check_digit
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 RELEASES_URL = f"{API_V1_PREFIX}/releases"
 
@@ -122,10 +122,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 _SEQ = itertools.count(1)
 
 
@@ -162,7 +158,7 @@ async def _create_release(client, user, settings, clip, **overrides) -> httpx.Re
 @pytest.mark.integration
 class TestCreate:
     async def test_create_complete_returns_201_ready(self, client, settings) -> None:
-        user = await _make_user("rel-create@example.com")
+        user = await make_user("rel-create@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         resp = await _create_release(client, settings=settings, user=user, clip=clip)
         assert resp.status_code == 201
@@ -180,7 +176,7 @@ class TestCreate:
         assert stored.title == FULL_METADATA["title"]
 
     async def test_unmastered_clip_without_art_warns_but_creates(self, client, settings) -> None:
-        user = await _make_user("rel-warn@example.com")
+        user = await make_user("rel-warn@example.com")
         clip = await _insert_clip(user, mastered=False, artwork=False)
         resp = await _create_release(client, settings=settings, user=user, clip=clip)
         assert resp.status_code == 201  # soft block, not hard block
@@ -189,7 +185,7 @@ class TestCreate:
         assert "Cover art has not been added" in warnings
 
     async def test_mastered_clip_has_no_mastering_warning(self, client, settings) -> None:
-        user = await _make_user("rel-mastered@example.com")
+        user = await make_user("rel-mastered@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=False)
         resp = await _create_release(client, settings=settings, user=user, clip=clip)
         assert resp.status_code == 201
@@ -199,7 +195,7 @@ class TestCreate:
 
     @pytest.mark.parametrize("missing", ["title", "artist", "genre", "release_date"])
     async def test_missing_required_field_returns_422(self, client, settings, missing: str) -> None:
-        user = await _make_user(f"rel-422-{missing}@example.com")
+        user = await make_user(f"rel-422-{missing}@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         payload = {"clip_id": str(clip.id), **FULL_METADATA}
         del payload[missing]
@@ -209,20 +205,20 @@ class TestCreate:
         assert any(missing in str(err.get("loc", [])) for err in resp.json()["detail"])
 
     async def test_unknown_field_returns_422(self, client, settings) -> None:
-        user = await _make_user("rel-extra@example.com")
+        user = await make_user("rel-extra@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         resp = await _create_release(client, settings=settings, user=user, clip=clip, nope=True)
         assert resp.status_code == 422
 
     async def test_unknown_clip_returns_404(self, client, settings) -> None:
-        user = await _make_user("rel-noclip@example.com")
+        user = await make_user("rel-noclip@example.com")
         payload = {"clip_id": str(PydanticObjectId()), **FULL_METADATA}
         resp = await client.post(RELEASES_URL, json=payload, headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("rel-owner@example.com")
-        intruder = await _make_user("rel-intruder@example.com")
+        owner = await make_user("rel-owner@example.com")
+        intruder = await make_user("rel-intruder@example.com")
         clip = await _insert_clip(owner, mastered=True, artwork=True)
         payload = {"clip_id": str(clip.id), **FULL_METADATA}
         resp = await client.post(RELEASES_URL, json=payload, headers=_auth_headers(intruder, settings))
@@ -232,8 +228,8 @@ class TestCreate:
 @pytest.mark.integration
 class TestList:
     async def test_lists_only_own_releases_newest_first(self, client, settings) -> None:
-        user = await _make_user("rel-list@example.com")
-        other = await _make_user("rel-list-other@example.com")
+        user = await make_user("rel-list@example.com")
+        other = await make_user("rel-list-other@example.com")
         clip_a = await _insert_clip(user, mastered=True, artwork=True)
         clip_b = await _insert_clip(user, mastered=True, artwork=True)
         other_clip = await _insert_clip(other, mastered=True, artwork=True)
@@ -249,7 +245,7 @@ class TestList:
         assert ids == [second["id"], first["id"]]  # newest first
 
     async def test_empty_list_for_new_user(self, client, settings) -> None:
-        user = await _make_user("rel-list-empty@example.com")
+        user = await make_user("rel-list-empty@example.com")
         resp = await client.get(RELEASES_URL, headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         assert resp.json() == {"releases": [], "total": 0}
@@ -258,7 +254,7 @@ class TestList:
 @pytest.mark.integration
 class TestGet:
     async def test_get_own_release_returns_200(self, client, settings) -> None:
-        user = await _make_user("rel-get@example.com")
+        user = await make_user("rel-get@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.get(f"{RELEASES_URL}/{created['id']}", headers=_auth_headers(user, settings))
@@ -266,13 +262,13 @@ class TestGet:
         assert resp.json()["id"] == created["id"]
 
     async def test_unknown_release_returns_404(self, client, settings) -> None:
-        user = await _make_user("rel-get-unknown@example.com")
+        user = await make_user("rel-get-unknown@example.com")
         resp = await client.get(f"{RELEASES_URL}/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_other_users_release_returns_404(self, client, settings) -> None:
-        owner = await _make_user("rel-get-owner@example.com")
-        intruder = await _make_user("rel-get-intruder@example.com")
+        owner = await make_user("rel-get-owner@example.com")
+        intruder = await make_user("rel-get-intruder@example.com")
         clip = await _insert_clip(owner, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=owner, clip=clip)).json()
         resp = await client.get(f"{RELEASES_URL}/{created['id']}", headers=_auth_headers(intruder, settings))
@@ -282,7 +278,7 @@ class TestGet:
 @pytest.mark.integration
 class TestUpdate:
     async def test_update_persists_changes(self, client, settings) -> None:
-        user = await _make_user("rel-update@example.com")
+        user = await make_user("rel-update@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.patch(
@@ -297,7 +293,7 @@ class TestUpdate:
         assert body["updated_at"] is not None
 
     async def test_empty_body_is_noop(self, client, settings) -> None:
-        user = await _make_user("rel-update-noop@example.com")
+        user = await make_user("rel-update-noop@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.patch(f"{RELEASES_URL}/{created['id']}", json={}, headers=_auth_headers(user, settings))
@@ -306,8 +302,8 @@ class TestUpdate:
         assert resp.json()["updated_at"] is None  # untouched
 
     async def test_update_other_users_release_returns_404(self, client, settings) -> None:
-        owner = await _make_user("rel-update-owner@example.com")
-        intruder = await _make_user("rel-update-intruder@example.com")
+        owner = await make_user("rel-update-owner@example.com")
+        intruder = await make_user("rel-update-intruder@example.com")
         clip = await _insert_clip(owner, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=owner, clip=clip)).json()
         resp = await client.patch(
@@ -318,7 +314,7 @@ class TestUpdate:
         assert resp.status_code == 404
 
     async def test_update_after_submission_returns_409(self, client, settings) -> None:
-        user = await _make_user("rel-update-locked@example.com")
+        user = await make_user("rel-update-locked@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         # Move it past the editable window directly.
@@ -337,7 +333,7 @@ class TestUpdate:
     async def test_clearing_required_field_returns_422(self, client, settings, field: str) -> None:
         # A null on a required field would persist an unserializable release (→ 500
         # on later reads); the update schema must reject it up front.
-        user = await _make_user(f"rel-clear-{field}@example.com")
+        user = await make_user(f"rel-clear-{field}@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.patch(
@@ -358,7 +354,7 @@ class TestIdentifiers:
     """ISRC/UPC auto-generation, dual storage, manual override, uniqueness (US-13.4)."""
 
     async def test_create_auto_generates_valid_isrc_and_upc(self, client, settings) -> None:
-        user = await _make_user("rel-ids-auto@example.com")
+        user = await make_user("rel-ids-auto@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         body = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         assert _ISRC_RE.match(body["isrc"]), body["isrc"]
@@ -367,14 +363,14 @@ class TestIdentifiers:
         assert calculate_ean13_check_digit(upc[:12]) == int(upc[12])  # valid EAN-13
 
     async def test_auto_isrc_is_written_to_the_linked_clip(self, client, settings) -> None:
-        user = await _make_user("rel-ids-sync@example.com")
+        user = await make_user("rel-ids-sync@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         body = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         refreshed = await Clip.get(clip.id)
         assert refreshed.isrc == body["isrc"]  # dual storage: release + clip
 
     async def test_existing_clip_isrc_is_preserved(self, client, settings) -> None:
-        user = await _make_user("rel-ids-preserve@example.com")
+        user = await make_user("rel-ids-preserve@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         clip.isrc = "US-ZZZ-20-00042"
         await clip.save()
@@ -382,7 +378,7 @@ class TestIdentifiers:
         assert body["isrc"] == "US-ZZZ-20-00042"  # reused, not regenerated
 
     async def test_patch_overrides_isrc_and_syncs_clip(self, client, settings) -> None:
-        user = await _make_user("rel-ids-patch-isrc@example.com")
+        user = await make_user("rel-ids-patch-isrc@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.patch(
@@ -395,7 +391,7 @@ class TestIdentifiers:
         assert (await Clip.get(clip.id)).isrc == "US-OVR-26-12345"
 
     async def test_patch_overrides_upc(self, client, settings) -> None:
-        user = await _make_user("rel-ids-patch-upc@example.com")
+        user = await make_user("rel-ids-patch-upc@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         manual_upc = _valid_ean13("123456789012")
@@ -408,7 +404,7 @@ class TestIdentifiers:
         assert resp.json()["upc"] == manual_upc
 
     async def test_duplicate_isrc_returns_409(self, client, settings) -> None:
-        user = await _make_user("rel-ids-dup@example.com")
+        user = await make_user("rel-ids-dup@example.com")
         clip_a = await _insert_clip(user, mastered=True, artwork=True)
         clip_b = await _insert_clip(user, mastered=True, artwork=True)
         rel_a = (await _create_release(client, settings=settings, user=user, clip=clip_a)).json()
@@ -428,7 +424,7 @@ class TestIdentifiers:
         assert "isrc" in resp.json()["detail"].lower()
 
     async def test_duplicate_upc_override_returns_409_without_recoding_clip(self, client, settings) -> None:
-        user = await _make_user("rel-ids-dup-upc@example.com")
+        user = await make_user("rel-ids-dup-upc@example.com")
         clip_a = await _insert_clip(user, mastered=True, artwork=True)
         clip_b = await _insert_clip(user, mastered=True, artwork=True)
         rel_a = (await _create_release(client, settings=settings, user=user, clip=clip_a)).json()
@@ -458,7 +454,7 @@ class TestIdentifiers:
             {"name": "isrc_seq"}, {"$set": {"value": 100}}, upsert=True
         )
         # Park the code the counter will produce next (seq 101) on another recording.
-        squatter = await _insert_clip(user := await _make_user("rel-ids-retry@example.com"))
+        squatter = await _insert_clip(user := await make_user("rel-ids-retry@example.com"))
         squatter.isrc = "US-A1B-26-00101"
         await squatter.save()
 
@@ -486,7 +482,7 @@ class TestIdentifiers:
         [("isrc", "not-an-isrc"), ("isrc", "USABC1234567"), ("upc", "012345678905"), ("upc", "abc")],
     )
     async def test_invalid_identifier_returns_422(self, client, settings, field: str, value: str) -> None:
-        user = await _make_user(f"rel-ids-422-{field}-{value[:4]}@example.com")
+        user = await make_user(f"rel-ids-422-{field}-{value[:4]}@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         resp = await client.patch(
@@ -503,7 +499,7 @@ class TestDanglingClip:
     async def test_release_readable_after_source_clip_deleted(self, client, settings) -> None:
         # The release is a self-contained package; deleting its source clip must
         # not make it (or a list containing it) unreadable.
-        user = await _make_user("rel-dangling@example.com")
+        user = await make_user("rel-dangling@example.com")
         clip = await _insert_clip(user, mastered=True, artwork=True)
         created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
         await clip.delete()

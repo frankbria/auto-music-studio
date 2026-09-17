@@ -18,10 +18,10 @@ from PIL import Image
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import ArtworkOption, Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.artwork import ARTWORK_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 JOBS_URL = f"{API_V1_PREFIX}/jobs"
@@ -92,10 +92,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str = "art@example.com"):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_clip(user) -> Clip:
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
@@ -113,7 +109,7 @@ async def _make_clip(user) -> Clip:
 @pytest.mark.integration
 class TestGenerate:
     async def test_returns_202_with_job_id(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.post(
             f"{CLIPS_URL}/{clip.id}/artwork/generate", json={}, headers=_auth_headers(user, settings)
@@ -124,9 +120,9 @@ class TestGenerate:
         assert job.job_type == ARTWORK_JOB_TYPE
 
     async def test_other_users_clip_returns_404(self, client, settings, local_storage) -> None:
-        owner = await _make_user("owner@example.com")
+        owner = await make_user("owner@example.com")
         clip = await _make_clip(owner)
-        intruder = await _make_user("intruder@example.com")
+        intruder = await make_user("intruder@example.com")
         resp = await client.post(
             f"{CLIPS_URL}/{clip.id}/artwork/generate", json={}, headers=_auth_headers(intruder, settings)
         )
@@ -136,7 +132,7 @@ class TestGenerate:
 @pytest.mark.integration
 class TestSelect:
     async def test_select_sets_artwork_and_get_streams_it(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         path = f"{user.id}/{clip.workspace_id}/artwork/{clip.id}/0.png"
         get_storage_backend().upload(path, _png())
@@ -156,7 +152,7 @@ class TestSelect:
         assert got.headers["content-type"] == "image/png"
 
     async def test_unknown_option_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.post(
             f"{CLIPS_URL}/{clip.id}/artwork",
@@ -168,9 +164,9 @@ class TestSelect:
     async def test_another_users_option_returns_404(self, client, settings, local_storage) -> None:
         # An option generated under a different user must not be selectable, even
         # for a clip the caller owns — pins the ownership check in select_artwork.
-        owner = await _make_user("owner@example.com")
+        owner = await make_user("owner@example.com")
         clip = await _make_clip(owner)
-        other = await _make_user("other@example.com")
+        other = await make_user("other@example.com")
         option = ArtworkOption(
             clip_id=clip.id, user_id=other.id, job_id=PydanticObjectId(), storage_path="p.png", option_index=0
         )
@@ -186,7 +182,7 @@ class TestSelect:
 @pytest.mark.integration
 class TestUpload:
     async def test_valid_upload_succeeds(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.put(
             f"{CLIPS_URL}/{clip.id}/artwork/upload",
@@ -198,7 +194,7 @@ class TestUpload:
         assert got.status_code == 200
 
     async def test_below_min_resolution_rejected_with_message(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.put(
             f"{CLIPS_URL}/{clip.id}/artwork/upload",
@@ -209,7 +205,7 @@ class TestUpload:
         assert "3000" in resp.json()["detail"]
 
     async def test_corrupt_file_rejected(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.put(
             f"{CLIPS_URL}/{clip.id}/artwork/upload",
@@ -219,7 +215,7 @@ class TestUpload:
         assert resp.status_code == 422
 
     async def test_unsupported_format_rejected(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.put(
             f"{CLIPS_URL}/{clip.id}/artwork/upload",
@@ -232,7 +228,7 @@ class TestUpload:
 @pytest.mark.integration
 class TestGetArtworkMissing:
     async def test_no_artwork_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
@@ -241,7 +237,7 @@ class TestGetArtworkMissing:
 @pytest.mark.integration
 class TestJobStatusEnrichment:
     async def test_completed_artwork_job_lists_options(self, client, settings, local_storage) -> None:
-        user = await _make_user()
+        user = await make_user("art@example.com")
         clip = await _make_clip(user)
         ids = []
         for idx in range(2):

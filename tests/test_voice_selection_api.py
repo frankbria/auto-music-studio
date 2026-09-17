@@ -13,11 +13,13 @@ from beanie import PydanticObjectId
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, User, VoiceModel, VoiceModelStatus
-from acemusic.api.services import routing, users as user_service
+from acemusic.api.services import routing
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.common import JobProcessingError
 from acemusic.api.tasks.voice_adapter import resolve_weights
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -76,15 +78,9 @@ def _auth(user: User, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, credits: float = 100.0, tier: str = "pro") -> User:
-    # Pro by default: US-26.2 makes generating with a custom voice a Pro capability, so a
-    # free account is refused with 403 before any of the voice rules below are reached.
-    # The tier gate itself is covered in tests/test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.credits_balance = credits
-    user.subscription_tier = tier
-    await user.save()
-    return user
+# Pro by default: US-26.2 makes generating with a custom voice a Pro capability, so a
+# free account is refused with 403 before any of the voice rules below are reached.
+# The tier gate itself is covered in tests/test_tier_enforcement_api.py.
 
 
 async def _make_voice(
@@ -128,7 +124,7 @@ def _song(**extra) -> dict:
 
 class TestGenerateWithAVoice:
     async def test_a_ready_voice_is_recorded_on_the_job(self, client, settings, local_storage) -> None:
-        user = await _make_user("simple@example.com")
+        user = await make_user("simple@example.com", tier=PRO)
         voice = await _make_voice(user)
 
         resp = await client.post(GENERATE_URL, json=_song(voice_model_id=str(voice.id)), headers=_auth(user, settings))
@@ -140,7 +136,7 @@ class TestGenerateWithAVoice:
     async def test_a_voice_pins_the_job_to_local_compute(self, client, settings, local_storage) -> None:
         # The adapter is a file on the local ACE-Step host; a remote backend has no
         # way to load it, so the job must not be routed there.
-        user = await _make_user("pinned@example.com")
+        user = await make_user("pinned@example.com", tier=PRO)
         voice = await _make_voice(user)
 
         resp = await client.post(
@@ -154,7 +150,7 @@ class TestGenerateWithAVoice:
         assert job.compute_target == "local"
 
     async def test_generating_without_a_voice_is_unchanged(self, client, settings) -> None:
-        user = await _make_user("plain@example.com")
+        user = await make_user("plain@example.com", tier=PRO)
 
         resp = await client.post(GENERATE_URL, json=_song(), headers=_auth(user, settings))
 
@@ -163,7 +159,7 @@ class TestGenerateWithAVoice:
         assert "voice_model_id" not in job.input_params
 
     async def test_an_unknown_voice_is_refused_without_charging(self, client, settings) -> None:
-        user = await _make_user("unknown@example.com", credits=10.0)
+        user = await make_user("unknown@example.com", tier=PRO, credits_balance=10.0)
 
         resp = await client.post(
             GENERATE_URL, json=_song(voice_model_id=str(PydanticObjectId())), headers=_auth(user, settings)
@@ -175,8 +171,8 @@ class TestGenerateWithAVoice:
     async def test_another_users_voice_is_indistinguishable_from_a_missing_one(
         self, client, settings, local_storage
     ) -> None:
-        owner = await _make_user("owner@example.com")
-        intruder = await _make_user("intruder@example.com")
+        owner = await make_user("owner@example.com", tier=PRO)
+        intruder = await make_user("intruder@example.com", tier=PRO)
         voice = await _make_voice(owner)
 
         resp = await client.post(
@@ -197,7 +193,7 @@ class TestGenerateWithAVoice:
     async def test_a_voice_that_cannot_sing_yet_is_a_conflict(
         self, client, settings, local_storage, status, weights
     ) -> None:
-        user = await _make_user(f"notready-{status.value}-{weights}@example.com", credits=10.0)
+        user = await make_user(f"notready-{status.value}-{weights}@example.com", tier=PRO, credits_balance=10.0)
         voice = await _make_voice(user, status=status, weights=weights)
 
         resp = await client.post(GENERATE_URL, json=_song(voice_model_id=str(voice.id)), headers=_auth(user, settings))
@@ -216,7 +212,7 @@ class TestIterativeModesWithAVoice:
         ],
     )
     async def test_the_voice_reaches_the_job(self, client, settings, local_storage, op, body) -> None:
-        user = await _make_user(f"{op}@example.com")
+        user = await make_user(f"{op}@example.com", tier=PRO)
         voice = await _make_voice(user)
         clip = await _make_wav_clip(user)
 
@@ -239,7 +235,7 @@ class TestIterativeModesWithAVoice:
         ],
     )
     async def test_an_unusable_voice_costs_nothing(self, client, settings, local_storage, op, body) -> None:
-        user = await _make_user(f"{op}-notready@example.com", credits=10.0)
+        user = await make_user(f"{op}-notready@example.com", tier=PRO, credits_balance=10.0)
         voice = await _make_voice(user, status=VoiceModelStatus.TRAINING, weights=None)
         clip = await _make_wav_clip(user)
 
@@ -255,7 +251,7 @@ class TestIterativeModesWithAVoice:
 
 class TestPreview:
     async def test_the_owner_hears_a_reference_recording(self, client, settings, local_storage) -> None:
-        user = await _make_user("preview@example.com")
+        user = await make_user("preview@example.com", tier=PRO)
         voice = await _make_voice(user)
 
         resp = await client.get(f"{VOICE_URL}/{voice.id}/preview", headers=_auth(user, settings))
@@ -265,8 +261,8 @@ class TestPreview:
         assert resp.headers["content-type"].startswith("audio/wav")
 
     async def test_someone_elses_voice_cannot_be_previewed(self, client, settings, local_storage) -> None:
-        owner = await _make_user("preview-owner@example.com")
-        intruder = await _make_user("preview-intruder@example.com")
+        owner = await make_user("preview-owner@example.com", tier=PRO)
+        intruder = await make_user("preview-intruder@example.com", tier=PRO)
         voice = await _make_voice(owner)
 
         resp = await client.get(f"{VOICE_URL}/{voice.id}/preview", headers=_auth(intruder, settings))
@@ -274,7 +270,7 @@ class TestPreview:
         assert resp.status_code == 404, resp.text
 
     async def test_a_voice_with_no_stored_references_is_a_clean_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("preview-empty@example.com")
+        user = await make_user("preview-empty@example.com", tier=PRO)
         voice = await _make_voice(user, references=False)
 
         resp = await client.get(f"{VOICE_URL}/{voice.id}/preview", headers=_auth(user, settings))
@@ -297,19 +293,19 @@ class TestWorkerResolution:
         return job
 
     async def test_the_adapter_path_is_read_from_the_voice(self, mongo_db, local_storage) -> None:
-        user = await _make_user("worker@example.com")
+        user = await make_user("worker@example.com", tier=PRO)
         voice = await _make_voice(user, weights="./lora/mine/adapter")
 
         assert await resolve_weights(await self._job(user, str(voice.id))) == "./lora/mine/adapter"
 
     async def test_a_job_with_no_voice_needs_no_adapter(self, mongo_db) -> None:
-        user = await _make_user("worker-plain@example.com")
+        user = await make_user("worker-plain@example.com", tier=PRO)
 
         assert await resolve_weights(await self._job(user, None)) is None
 
     async def test_a_voice_deleted_after_queueing_fails_the_job(self, mongo_db, local_storage) -> None:
         # Falling back to the base voice would silently deliver something else.
-        user = await _make_user("worker-deleted@example.com")
+        user = await make_user("worker-deleted@example.com", tier=PRO)
         voice = await _make_voice(user)
         job = await self._job(user, str(voice.id))
         await voice.delete()

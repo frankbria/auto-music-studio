@@ -18,9 +18,10 @@ import soundfile as sf
 from beanie import PydanticObjectId
 
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import iterative as iterative_service, users as user_service
+from acemusic.api.services import iterative as iterative_service
 from acemusic.api.tasks import iterative as tasks
 from acemusic.storage import LocalStorage
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -70,10 +71,6 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
     return LocalStorage(tmp_path / "storage")
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_clip(
     storage: LocalStorage,
     *,
@@ -86,7 +83,7 @@ async def _make_clip(
     audio: bytes | None = None,
 ) -> tuple[Job, Clip]:
     """Create a user/workspace/source clip with real wav bytes in storage."""
-    user = await _make_user(email)
+    user = await make_user(email)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip_id = PydanticObjectId()

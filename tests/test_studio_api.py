@@ -17,7 +17,6 @@ from pydantic import ValidationError
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.studio import (
     MAX_PLACEMENTS_PER_TRACK,
     MAX_TRACKS,
@@ -31,6 +30,7 @@ from acemusic.api.services.studio import (
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 STUDIO_URL = f"{API_V1_PREFIX}/studio"
 
@@ -233,14 +233,9 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    # Pro: Studio editing is a Pro capability since US-26.2 (free is view-only), and this
-    # file tests how the Studio behaves, not who may edit in it. The refusal is tested in
-    # test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    await user.save()
-    return user
+# Pro: Studio editing is a Pro capability since US-26.2 (free is view-only), and this
+# file tests how the Studio behaves, not who may edit in it. The refusal is tested in
+# test_tier_enforcement_api.py.
 
 
 async def _make_workspace(user, name: str = "WS") -> Workspace:
@@ -282,7 +277,7 @@ def _body(workspace, clip, *, with_format=True) -> dict:
 @pytest.mark.integration
 class TestMixdownEnqueue:
     async def test_returns_202_and_persists_job(self, client, settings) -> None:
-        user = await _make_user("studio-mix@example.com")
+        user = await make_user("studio-mix@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)
         resp = await client.post(
@@ -303,7 +298,7 @@ class TestMixdownEnqueue:
         assert job.input_params["format"] == "wav"
 
     async def test_unknown_clip_returns_404_and_no_job(self, client, settings) -> None:
-        user = await _make_user("studio-mix-404@example.com")
+        user = await make_user("studio-mix-404@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         body = {
             "workspace_id": str(workspace.id),
@@ -315,10 +310,10 @@ class TestMixdownEnqueue:
         assert await Job.count() == 0
 
     async def test_unowned_workspace_returns_404(self, client, settings) -> None:
-        owner = await _make_user("studio-ws-owner@example.com")
+        owner = await make_user("studio-ws-owner@example.com", tier=PRO)
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace)
-        other = await _make_user("studio-ws-other@example.com")
+        other = await make_user("studio-ws-other@example.com", tier=PRO)
         resp = await client.post(
             f"{STUDIO_URL}/mixdown", json=_body(workspace, clip), headers=_auth_headers(other, settings)
         )
@@ -326,10 +321,10 @@ class TestMixdownEnqueue:
         assert await Job.count() == 0
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        owner = await _make_user("studio-clip-owner@example.com")
+        owner = await make_user("studio-clip-owner@example.com", tier=PRO)
         ws_owner = await _make_workspace(owner)
         clip = await _insert_clip(owner, ws_owner)
-        other = await _make_user("studio-clip-other@example.com")
+        other = await make_user("studio-clip-other@example.com", tier=PRO)
         ws_other = await _make_workspace(other)
         body = {
             "workspace_id": str(ws_other.id),
@@ -344,7 +339,7 @@ class TestMixdownEnqueue:
 @pytest.mark.integration
 class TestDawExportEnqueue:
     async def test_returns_202_and_persists_daw_job(self, client, settings) -> None:
-        user = await _make_user("studio-daw@example.com")
+        user = await make_user("studio-daw@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)
         resp = await client.post(
@@ -361,12 +356,12 @@ class TestDawExportEnqueue:
 @pytest.mark.integration
 class TestDawDownload:
     async def test_unknown_job_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("studio-dl-404@example.com")
+        user = await make_user("studio-dl-404@example.com", tier=PRO)
         resp = await client.get(f"{STUDIO_URL}/export/daw/{PydanticObjectId()}", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
     async def test_queued_job_returns_409(self, client, settings, local_storage) -> None:
-        user = await _make_user("studio-dl-409@example.com")
+        user = await make_user("studio-dl-409@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -380,7 +375,7 @@ class TestDawDownload:
         assert resp.status_code == 409
 
     async def test_completed_job_returns_zip(self, client, settings, local_storage) -> None:
-        user = await _make_user("studio-dl-ok@example.com")
+        user = await make_user("studio-dl-ok@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -400,7 +395,7 @@ class TestDawDownload:
         assert resp.content == b"PK\x03\x04 zip-bytes"
 
     async def test_completed_but_missing_object_returns_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("studio-dl-missing@example.com")
+        user = await make_user("studio-dl-missing@example.com", tier=PRO)
         workspace = await _make_workspace(user)
         job = Job(
             user_id=user.id,
@@ -414,7 +409,7 @@ class TestDawDownload:
         assert resp.status_code == 404
 
     async def test_other_users_job_returns_404(self, client, settings, local_storage) -> None:
-        owner = await _make_user("studio-dl-owner@example.com")
+        owner = await make_user("studio-dl-owner@example.com", tier=PRO)
         workspace = await _make_workspace(owner)
         job = Job(
             user_id=owner.id,
@@ -425,6 +420,6 @@ class TestDawDownload:
         )
         await job.insert()
         get_storage_backend().upload(studio_export_storage_path(owner.id, workspace.id, job.id), b"PK")
-        other = await _make_user("studio-dl-intruder@example.com")
+        other = await make_user("studio-dl-intruder@example.com", tier=PRO)
         resp = await client.get(f"{STUDIO_URL}/export/daw/{job.id}", headers=_auth_headers(other, settings))
         assert resp.status_code == 404

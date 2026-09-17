@@ -14,7 +14,8 @@ import pytest
 from beanie import PydanticObjectId
 
 from acemusic.api.models import User
-from acemusic.api.services import credits as credits_service, users as user_service
+from acemusic.api.services import credits as credits_service
+from tests.users import make_user
 
 
 def _at(year: int, month: int, day: int) -> datetime:
@@ -48,13 +49,9 @@ class TestNextResetDue:
 class TestApplyMonthlyReset:
     async def _user(self, label: str, *, tier: str, balance: float, created: datetime, last_reset=None) -> User:
         email = f"{label}-{PydanticObjectId()}@example.com"
-        user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=email, name="T")
-        user.subscription_tier = tier
-        user.credits_balance = balance
-        user.created_at = created
-        user.credits_reset_at = last_reset
-        await user.save()
-        return user
+        return await make_user(
+            email, tier=tier, credits_balance=balance, created_at=created, credits_reset_at=last_reset
+        )
 
     async def test_a_due_free_account_is_topped_up_to_its_allocation(self, mongo_db) -> None:
         long_ago = datetime.now(timezone.utc) - timedelta(days=40)
@@ -152,14 +149,14 @@ class TestBackfillDoesNotPayLater:
 
     async def _old_account(self, label: str, *, balance: float) -> User:
         email = f"{label}-{PydanticObjectId()}@example.com"
-        user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=email, name="T")
-        user.subscription_tier = "free"
-        user.credits_balance = balance
         # Predates the field by a long way — this is the shape that leaked.
-        user.created_at = datetime.now(timezone.utc) - timedelta(days=200)
-        user.credits_reset_at = None
-        await user.save()
-        return user
+        return await make_user(
+            email,
+            tier="free",
+            credits_balance=balance,
+            created_at=datetime.now(timezone.utc) - timedelta(days=200),
+            credits_reset_at=None,
+        )
 
     async def test_a_long_lived_account_is_not_paid_on_the_second_read(self, mongo_db) -> None:
         user = await self._old_account("legacy", balance=12.0)

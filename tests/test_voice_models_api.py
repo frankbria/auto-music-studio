@@ -22,10 +22,11 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import CreditTransaction, Job, User, VoiceModel, VoiceModelStatus
-from acemusic.api.services import credits as credits_service, users as user_service, voice_models as voice_service
+from acemusic.api.services import credits as credits_service, voice_models as voice_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 TRAIN_URL = f"{API_V1_PREFIX}/voice-models/train"
 LIST_URL = f"{API_V1_PREFIX}/voice-models"
@@ -163,21 +164,15 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, credits: float = 100.0):
-    # Pro: custom voice models are a Pro capability since US-26.2, and this file tests how
-    # voice training behaves, not who may ask for it. The refusal is tested in
-    # test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    user.credits_balance = credits
-    await user.save()
-    return user
+# Pro: custom voice models are a Pro capability since US-26.2, and this file tests how
+# voice training behaves, not who may ask for it. The refusal is tested in
+# test_tier_enforcement_api.py.
 
 
 @pytest.mark.integration
 class TestTraining:
     async def test_three_valid_files_return_a_job_id(self, client, settings, local_storage) -> None:
-        user = await _make_user("train@example.com")
+        user = await make_user("train@example.com", tier=PRO)
 
         resp = await client.post(
             TRAIN_URL,
@@ -208,7 +203,7 @@ class TestTraining:
             assert len(storage.download(path)) > 0
 
     async def test_ten_credits_are_deducted_on_submission(self, client, settings, local_storage) -> None:
-        user = await _make_user("charged@example.com", credits=25.0)
+        user = await make_user("charged@example.com", tier=PRO, credits_balance=25.0)
 
         resp = await client.post(
             TRAIN_URL,
@@ -224,7 +219,7 @@ class TestTraining:
     async def test_the_charge_lands_in_the_credit_ledger(self, client, settings, local_storage) -> None:
         # /users/me/credits builds its history from CreditTransaction, so a balance
         # that drops with no usage row is a support ticket waiting to happen.
-        user = await _make_user("ledger@example.com", credits=40.0)
+        user = await make_user("ledger@example.com", tier=PRO, credits_balance=40.0)
 
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
@@ -248,7 +243,7 @@ class TestTraining:
         assert sum(r.amount for r in rows) == 0.0, "the ledger does not reconcile to a zero net"
 
     async def test_insufficient_credits_returns_402_and_charges_nothing(self, client, settings, local_storage) -> None:
-        user = await _make_user("broke@example.com", credits=3.0)
+        user = await make_user("broke@example.com", tier=PRO, credits_balance=3.0)
 
         resp = await client.post(
             TRAIN_URL,
@@ -265,7 +260,7 @@ class TestTraining:
     async def test_a_rejected_upload_costs_nothing(self, client, settings, local_storage) -> None:
         # The order of validation is the behaviour: an 8kHz file must be refused
         # *before* the balance is touched.
-        user = await _make_user("rejected@example.com", credits=50.0)
+        user = await make_user("rejected@example.com", tier=PRO, credits_balance=50.0)
 
         resp = await client.post(
             TRAIN_URL,
@@ -288,7 +283,7 @@ class TestTraining:
     async def test_wrong_file_counts_are_refused_without_charge(
         self, client, settings, local_storage, count: int
     ) -> None:
-        user = await _make_user(f"count{count}@example.com", credits=50.0)
+        user = await make_user(f"count{count}@example.com", tier=PRO, credits_balance=50.0)
 
         resp = await client.post(
             TRAIN_URL,
@@ -303,7 +298,7 @@ class TestTraining:
 
     async def test_a_failed_run_refunds_what_it_charged(self, client, settings, local_storage) -> None:
         # AC 4's second half, and the easiest thing to get wrong.
-        user = await _make_user("refund@example.com", credits=40.0)
+        user = await make_user("refund@example.com", tier=PRO, credits_balance=40.0)
 
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
@@ -328,7 +323,7 @@ class TestTraining:
     ) -> None:
         # If the price changes between charging and failing, the musician gets back
         # what they actually paid.
-        user = await _make_user("priced@example.com", credits=40.0)
+        user = await make_user("priced@example.com", tier=PRO, credits_balance=40.0)
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
         )
@@ -344,7 +339,7 @@ class TestTraining:
 
     async def test_a_model_needs_weights_to_count_as_usable(self, client, settings, local_storage) -> None:
         # "Job completed" and "voice is usable" are different claims.
-        user = await _make_user("usable@example.com")
+        user = await make_user("usable@example.com", tier=PRO)
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "Voice"}
         )
@@ -362,8 +357,8 @@ class TestTraining:
 @pytest.mark.integration
 class TestLibraryScoping:
     async def test_a_user_only_sees_their_own_models(self, client, settings, local_storage) -> None:
-        mine = await _make_user("mine@example.com")
-        theirs = await _make_user("theirs@example.com")
+        mine = await make_user("mine@example.com", tier=PRO)
+        theirs = await make_user("theirs@example.com", tier=PRO)
 
         for user, name in ((mine, "Mine"), (theirs, "Theirs")):
             resp = await client.post(
@@ -376,8 +371,8 @@ class TestLibraryScoping:
         assert [m["name"] for m in listed.json()] == ["Mine"]
 
     async def test_another_users_model_cannot_be_fetched_by_id(self, client, settings, local_storage) -> None:
-        owner = await _make_user("owner2@example.com")
-        intruder = await _make_user("intruder2@example.com")
+        owner = await make_user("owner2@example.com", tier=PRO)
+        intruder = await make_user("intruder2@example.com", tier=PRO)
 
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(owner, settings), files=_files(3), data={"name": "Private"}
@@ -388,7 +383,7 @@ class TestLibraryScoping:
         assert await voice_service.find_owned_model(model_id, str(intruder.id)) is None
 
     async def test_a_malformed_id_is_not_found_rather_than_an_error(self, client, settings) -> None:
-        user = await _make_user("malformed@example.com")
+        user = await make_user("malformed@example.com", tier=PRO)
         assert await voice_service.find_owned_model("not-an-object-id", str(user.id)) is None
 
 
@@ -512,7 +507,7 @@ class TestTrainingWorker:
     async def test_a_successful_run_stores_weights_and_marks_the_voice_ready(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("worker-ok@example.com", credits=40.0)
+        user = await make_user("worker-ok@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
 
         result = await self._run(job, monkeypatch)
@@ -528,7 +523,7 @@ class TestTrainingWorker:
         assert (await User.get(user.id)).credits_balance == 30.0
 
     async def test_a_failed_run_refunds_and_records_why(self, client, settings, local_storage, monkeypatch) -> None:
-        user = await _make_user("worker-fail@example.com", credits=40.0)
+        user = await make_user("worker-fail@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
         assert (await User.get(user.id)).credits_balance == 30.0
 
@@ -546,7 +541,7 @@ class TestTrainingWorker:
     ) -> None:
         # "Completed" and "produced a usable voice" are different claims; a run
         # with no weights must not leave a model that looks ready.
-        user = await _make_user("worker-noweights@example.com", credits=40.0)
+        user = await make_user("worker-noweights@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
 
         with pytest.raises(Exception):
@@ -567,7 +562,7 @@ class TestTrainingWorker:
 
         monkeypatch.setattr(voice_training, "TRAINING_START_GRACE_S", 0.0)
 
-        user = await _make_user("worker-nostart@example.com", credits=40.0)
+        user = await make_user("worker-nostart@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
 
         with pytest.raises(Exception):
@@ -585,7 +580,7 @@ class TestTrainingWorker:
         # that then succeeds -- or refund twice, since refunds are not idempotent.
         from acemusic.api.tasks import voice_training
 
-        user = await _make_user("worker-cancel@example.com", credits=40.0)
+        user = await make_user("worker-cancel@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
         assert (await User.get(user.id)).credits_balance == 30.0
 
@@ -615,7 +610,7 @@ class TestTrainingWorker:
         # empty directory and refunds.
         from acemusic.api.tasks import voice_training
 
-        user = await _make_user("worker-materialise@example.com", credits=40.0)
+        user = await make_user("worker-materialise@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
 
         root = tmp_path / "training-root"
@@ -633,7 +628,7 @@ class TestTrainingWorker:
         # actually worked -- undoing a real training run over a transient insert.
         from acemusic.api.services import voice_models as vs
 
-        user = await _make_user("worker-notifyfail@example.com", credits=40.0)
+        user = await make_user("worker-notifyfail@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
 
         async def boom(*args, **kwargs):
@@ -653,7 +648,7 @@ class TestTrainingWorker:
     async def test_a_job_pointing_at_a_missing_model_fails_loudly(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
-        user = await _make_user("worker-orphan@example.com")
+        user = await make_user("worker-orphan@example.com", tier=PRO)
         _, job = await self._queued(client, settings, user)
         job.input_params = {"voice_model_id": "000000000000000000000000"}
         await job.save()
@@ -725,7 +720,7 @@ class TestTrainingStatus:
         return resp.json()
 
     async def test_status_tracks_the_run_through_its_phases(self, client, settings, local_storage) -> None:
-        user = await _make_user("status@example.com")
+        user = await make_user("status@example.com", tier=PRO)
         body = await self._queued(client, settings, user)
         job_id = body["job_id"]
 
@@ -758,8 +753,8 @@ class TestTrainingStatus:
         assert done.json()["progress"] == 100.0
 
     async def test_another_users_training_run_is_not_found(self, client, settings, local_storage) -> None:
-        owner = await _make_user("statusowner@example.com")
-        intruder = await _make_user("statusintruder@example.com")
+        owner = await make_user("statusowner@example.com", tier=PRO)
+        intruder = await make_user("statusintruder@example.com", tier=PRO)
         body = await self._queued(client, settings, owner)
 
         resp = await client.get(f"{STATUS_URL}/{body['job_id']}/status", headers=_auth_headers(intruder, settings))
@@ -768,7 +763,7 @@ class TestTrainingStatus:
         assert resp.status_code == 404
 
     async def test_an_unknown_or_malformed_job_is_404(self, client, settings, local_storage) -> None:
-        user = await _make_user("statusmissing@example.com")
+        user = await make_user("statusmissing@example.com", tier=PRO)
         headers = _auth_headers(user, settings)
 
         assert (await client.get(f"{STATUS_URL}/{PydanticObjectId()}/status", headers=headers)).status_code == 404
@@ -780,7 +775,7 @@ class TestTrainingNotifications:
     async def test_a_finished_run_records_an_in_app_notification(self, client, settings, local_storage) -> None:
         from acemusic.api.models import NotificationEvent
 
-        user = await _make_user("notify@example.com")
+        user = await make_user("notify@example.com", tier=PRO)
         resp = await client.post(
             TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "My voice"}
         )
@@ -799,7 +794,7 @@ class TestTrainingNotifications:
     async def test_a_failed_run_records_why(self, client, settings, local_storage) -> None:
         from acemusic.api.models import NotificationEvent
 
-        user = await _make_user("notifyfail@example.com")
+        user = await make_user("notifyfail@example.com", tier=PRO)
         resp = await client.post(TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "V"})
         model = await VoiceModel.get(resp.json()["voice_model"]["id"])
         await voice_service.fail_training(model, "CUDA out of memory")
@@ -816,7 +811,7 @@ class TestTrainingNotifications:
         # distribution path (US-21.x) must be untouched by that.
         from acemusic.api.models import NotificationEvent
 
-        user = await _make_user("release-notify@example.com")
+        user = await make_user("release-notify@example.com", tier=PRO)
         release_id = PydanticObjectId()
         event = NotificationEvent(user_id=user.id, release_id=release_id, event_type="status_live", channel="in_app")
         await event.insert()
@@ -860,7 +855,7 @@ class TestLibraryManagement:
         # what happened at the time.
         from acemusic.api.models import NotificationEvent
 
-        user = await _make_user("rename@example.com")
+        user = await make_user("rename@example.com", tier=PRO)
         model = await self._ready_model(client, settings, user, name="Old name")
         await voice_service.notify_training_finished(model, succeeded=True)
 
@@ -880,7 +875,7 @@ class TestLibraryManagement:
         assert event.payload["name"] == "Old name"
 
     async def test_a_blank_name_is_refused(self, client, settings, local_storage) -> None:
-        user = await _make_user("blankname@example.com")
+        user = await make_user("blankname@example.com", tier=PRO)
         model = await self._ready_model(client, settings, user)
 
         resp = await client.patch(f"{LIST_URL}/{model.id}", headers=_auth_headers(user, settings), json={"name": "   "})
@@ -888,7 +883,7 @@ class TestLibraryManagement:
         assert (await VoiceModel.get(model.id)).name == "Voice"
 
     async def test_status_and_weights_cannot_be_set_by_a_client(self, client, settings, local_storage) -> None:
-        user = await _make_user("forbidden@example.com")
+        user = await make_user("forbidden@example.com", tier=PRO)
         model = await self._ready_model(client, settings, user)
 
         resp = await client.patch(
@@ -899,7 +894,7 @@ class TestLibraryManagement:
         assert resp.status_code == 422, "a client smuggled system fields through PATCH"
 
     async def test_deleting_removes_the_record_and_frees_the_storage(self, client, settings, local_storage) -> None:
-        user = await _make_user("delete@example.com")
+        user = await make_user("delete@example.com", tier=PRO)
         model = await self._ready_model(client, settings, user)
         storage = get_storage_backend()
 
@@ -918,7 +913,7 @@ class TestLibraryManagement:
     async def test_deleting_a_model_still_training_is_refused(self, client, settings, local_storage) -> None:
         # Deleting the row out from under a running job strands the worker and
         # the credits it charged.
-        user = await _make_user("deletetraining@example.com")
+        user = await make_user("deletetraining@example.com", tier=PRO)
         resp = await client.post(TRAIN_URL, headers=_auth_headers(user, settings), files=_files(3), data={"name": "V"})
         model_id = resp.json()["voice_model"]["id"]
 
@@ -927,8 +922,8 @@ class TestLibraryManagement:
         assert await VoiceModel.get(model_id) is not None
 
     async def test_another_user_can_neither_rename_nor_delete(self, client, settings, local_storage) -> None:
-        owner = await _make_user("libowner@example.com")
-        intruder = await _make_user("libintruder@example.com")
+        owner = await make_user("libowner@example.com", tier=PRO)
+        intruder = await make_user("libintruder@example.com", tier=PRO)
         model = await self._ready_model(client, settings, owner, name="Private")
 
         patched = await client.patch(
@@ -947,7 +942,7 @@ class TestLibraryManagement:
     async def test_a_missing_storage_object_does_not_make_a_model_undeletable(
         self, client, settings, local_storage
     ) -> None:
-        user = await _make_user("halfgone@example.com")
+        user = await make_user("halfgone@example.com", tier=PRO)
         model = await self._ready_model(client, settings, user)
 
         # The backend has already lost one object; the record must still go.

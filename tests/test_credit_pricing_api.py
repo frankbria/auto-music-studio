@@ -13,9 +13,10 @@ from beanie import PydanticObjectId
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, CreditTransaction, Job, User
-from acemusic.api.services import credits as credits_service, users as user_service
+from acemusic.api.services import credits as credits_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -50,15 +51,9 @@ def _auth(user: User, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _user(email: str, credits: float = 100.0) -> User:
-    # Pro: this file is about what an action *costs*, and stems/midi/remaster became
-    # Pro-only in US-26.2. A free user would be refused before the charge, which would
-    # test the gate instead of the price. The gate is tested in test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    user.credits_balance = credits
-    await user.save()
-    return user
+# Pro: this file is about what an action *costs*, and stems/midi/remaster became
+# Pro-only in US-26.2. A free user would be refused before the charge, which would
+# test the gate instead of the price. The gate is tested in test_tier_enforcement_api.py.
 
 
 async def _wav_clip(user: User) -> Clip:
@@ -90,7 +85,7 @@ class TestNewlyPricedActions:
         ],
     )
     async def test_the_documented_cost_is_deducted(self, client, settings, op, body, cost) -> None:
-        user = await _user(f"{op}-cost@example.com", credits=10.0)
+        user = await make_user(f"{op}-cost@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(
@@ -112,7 +107,7 @@ class TestNewlyPricedActions:
     )
     async def test_the_charge_lands_in_the_history(self, client, settings, op, body, action_type) -> None:
         # A balance that drops with no row to explain it is the complaint this avoids.
-        user = await _user(f"{op}-ledger@example.com", credits=10.0)
+        user = await make_user(f"{op}-ledger@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(
@@ -131,7 +126,7 @@ class TestNewlyPricedActions:
         [("stems", None), ("midi", None), ("remaster", {"target_lufs": -14.0})],
     )
     async def test_an_empty_balance_is_refused_and_charges_nothing(self, client, settings, op, body) -> None:
-        user = await _user(f"{op}-broke@example.com", credits=0.0)
+        user = await make_user(f"{op}-broke@example.com", tier=PRO, credits_balance=0.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(
@@ -148,7 +143,7 @@ class TestNewlyPricedActions:
     async def test_a_rejected_request_costs_nothing(self, client, settings, op) -> None:
         # Non-wav is rejected before the charge, so a request that could never run
         # is free — the ordering that makes pricing these fair.
-        user = await _user(f"{op}-mp3@example.com", credits=10.0)
+        user = await make_user(f"{op}-mp3@example.com", tier=PRO, credits_balance=10.0)
         workspace_id = PydanticObjectId()
         clip = Clip(
             user_id=user.id,
@@ -169,7 +164,7 @@ class TestNewlyPricedActions:
         # endpoint would bill on every call.
         from acemusic.stems_client import STEM_LABELS
 
-        user = await _user("stems-cached@example.com", credits=10.0)
+        user = await make_user("stems-cached@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
         for label in STEM_LABELS:
             stem = Clip(
@@ -189,7 +184,7 @@ class TestNewlyPricedActions:
         assert await _balance(user) == 10.0
 
     async def test_cached_midi_is_free(self, client, settings) -> None:
-        user = await _user("midi-cached@example.com", credits=10.0)
+        user = await make_user("midi-cached@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
         clip.midi_paths = {"melody": f"{user.id}/midi/melody.mid"}
         await clip.save()
@@ -211,7 +206,7 @@ class TestStillFreeActions:
         ],
     )
     async def test_local_edits_remain_free(self, client, settings, op, body) -> None:
-        user = await _user(f"{op}-free@example.com", credits=10.0)
+        user = await make_user(f"{op}-free@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(
@@ -224,7 +219,7 @@ class TestStillFreeActions:
         assert await _balance(user) == 10.0
 
     async def test_a_free_edit_writes_no_ledger_row(self, client, settings) -> None:
-        user = await _user("crop-noledger@example.com", credits=10.0)
+        user = await make_user("crop-noledger@example.com", tier=PRO, credits_balance=10.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(
@@ -239,7 +234,7 @@ class TestStillFreeActions:
 
 class TestInsufficientCreditsResponse:
     async def test_the_402_says_what_is_needed_and_where_to_go(self, client, settings) -> None:
-        user = await _user("402-shape@example.com", credits=0.0)
+        user = await make_user("402-shape@example.com", tier=PRO, credits_balance=0.0)
         clip = await _wav_clip(user)
 
         resp = await client.post(f"{API_V1_PREFIX}/clips/{clip.id}/stems", headers=_auth(user, settings))
@@ -256,7 +251,7 @@ class TestInsufficientCreditsResponse:
 
 class TestBalanceEndpoint:
     async def test_it_returns_the_current_balance(self, client, settings) -> None:
-        user = await _user("balance@example.com", credits=42.5)
+        user = await make_user("balance@example.com", tier=PRO, credits_balance=42.5)
 
         resp = await client.get(BALANCE_URL, headers=_auth(user, settings))
 
@@ -267,7 +262,7 @@ class TestBalanceEndpoint:
     async def test_it_reflects_a_deduction_made_after_the_token_was_issued(self, client, settings) -> None:
         # The sidebar shows this on every page, so a stale claim-derived figure would
         # tell the musician they still have credits they have already spent.
-        user = await _user("balance-fresh@example.com", credits=10.0)
+        user = await make_user("balance-fresh@example.com", tier=PRO, credits_balance=10.0)
         headers = _auth(user, settings)
         clip = await _wav_clip(user)
 

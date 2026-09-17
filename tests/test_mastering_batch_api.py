@@ -18,6 +18,7 @@ from acemusic.api.models import BatchClipEntry, BatchJob, Clip, CreditTransactio
 from acemusic.api.services import users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 BATCH_URL = f"{API_V1_PREFIX}/mastering/batch"
 
@@ -75,18 +76,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str, *, balance: float | None = None):
-    # Pro: mastering is a Pro capability since US-26.2, and this file tests how batch
-    # mastering behaves, not who may ask for it. The refusal is tested in
-    # test_tier_enforcement_api.py.
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-    user.subscription_tier = PRO
-    if balance is not None:
-        user.credits_balance = balance
-    await user.save()
-    return user
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -108,7 +97,10 @@ async def _insert_clip(user, workspace: Workspace, *, fmt: str | None = "wav") -
 
 
 async def _user_with_clips(email: str, n: int, *, balance: float | None = None):
-    user = await _make_user(email, balance=balance)
+    # Pro: mastering is a Pro capability since US-26.2, and this file tests how batch
+    # mastering behaves, not who may ask for it. The refusal is tested in
+    # test_tier_enforcement_api.py.
+    user = await make_user(email, tier=PRO, credits_balance=balance)
     workspace = await _make_workspace(user)
     clips = [await _insert_clip(user, workspace) for _ in range(n)]
     return user, workspace, clips
@@ -281,7 +273,7 @@ class TestStatus:
         assert by_job[job_ids[1]]["error"] == "boom"
 
     async def test_unknown_batch_returns_404(self, client, settings) -> None:
-        user = await _make_user("batch-404@example.com")
+        user = await make_user("batch-404@example.com", tier=PRO)
         resp = await client.get(f"{BATCH_URL}/{PydanticObjectId()}/status", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
@@ -293,13 +285,13 @@ class TestStatus:
             headers=_auth_headers(owner, settings),
         )
         batch_id = post.json()["batch_id"]
-        intruder = await _make_user("batch-intruder@example.com")
+        intruder = await make_user("batch-intruder@example.com", tier=PRO)
         resp = await client.get(f"{BATCH_URL}/{batch_id}/status", headers=_auth_headers(intruder, settings))
         assert resp.status_code == 404
 
     async def test_non_mastering_batch_returns_404(self, client, settings) -> None:
         # A stems/export batch must not be readable via the mastering status route.
-        user = await _make_user("batch-wrongop@example.com")
+        user = await make_user("batch-wrongop@example.com", tier=PRO)
         batch = BatchJob(
             user_id=user.id,
             operation="export",

@@ -334,14 +334,15 @@ async def _enqueue_generation(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-    balance_after = await credits_service.deduct_credits(user.id, cost)
-    if balance_after is None:
+    deducted = await credits_service.deduct_credits_split(user.id, cost)
+    if deducted is None:
         fresh = await user_service.get_user_by_id(user.id)
         balance = credits_service.spendable(fresh) if fresh is not None else 0.0
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "insufficient_credits", "balance": balance, "required": cost},
         )
+    balance_after, from_purchased = deducted
     try:
         job = await iterative_service.create_iterative_job(
             user_id=user.id,
@@ -352,7 +353,7 @@ async def _enqueue_generation(
     except BaseException:
         # The deduction already landed but no job exists — give the credit back.
         # BaseException (not Exception): asyncio.CancelledError must also refund.
-        await credits_service.reverse_unrecorded_charge(user.id, cost)
+        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
         raise
     try:
         await credits_service.record_transaction(
@@ -361,6 +362,7 @@ async def _enqueue_generation(
             action_type=job_type,
             job_id=str(job.id),
             balance_after=balance_after,
+            purchased_amount=-from_purchased,
         )
     except Exception:
         # The charge is taken and the job dispatched; failing here would invite a

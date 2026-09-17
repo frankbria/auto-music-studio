@@ -18,9 +18,9 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, VisibilityState, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
+from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
 
@@ -145,10 +145,6 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_user(email: str):
-    return await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
-
-
 async def _make_workspace(user, name: str = "WS") -> Workspace:
     workspace = Workspace(name=name, user_id=user.id)
     await workspace.insert()
@@ -185,7 +181,7 @@ async def _insert_clip(
 @pytest.mark.integration
 class TestVisibilityTransitions:
     async def test_private_to_unlisted_to_public_to_private(self, client, settings) -> None:
-        user = await _make_user(f"vis-transitions-{next(_SEQ)}@example.com")
+        user = await make_user(f"vis-transitions-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)
         headers = _auth_headers(user, settings)
@@ -220,7 +216,7 @@ class TestVisibilityTransitions:
         # {"is_public": True}, so the DENORMALIZATION IN STORAGE must be correct.
         # Assert on the raw pymongo document — this is what caught set-on-assign
         # not re-running the after-validator.
-        user = await _make_user(f"vis-raw-bson-{next(_SEQ)}@example.com")
+        user = await make_user(f"vis-raw-bson-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)
         headers = _auth_headers(user, settings)
@@ -235,7 +231,7 @@ class TestVisibilityTransitions:
         assert doc["visibility"] == "unlisted" and doc["is_public"] is False  # not stale True
 
     async def test_public_without_title_returns_422(self, client, settings) -> None:
-        user = await _make_user(f"vis-no-title-{next(_SEQ)}@example.com")
+        user = await make_user(f"vis-no-title-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title=None, style_tags=["lofi"])
         headers = _auth_headers(user, settings)
@@ -245,7 +241,7 @@ class TestVisibilityTransitions:
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
 
     async def test_public_without_style_tags_returns_422(self, client, settings) -> None:
-        user = await _make_user(f"vis-no-tags-{next(_SEQ)}@example.com")
+        user = await make_user(f"vis-no-tags-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace, title="Ready", style_tags=[])
         headers = _auth_headers(user, settings)
@@ -255,7 +251,7 @@ class TestVisibilityTransitions:
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
 
     async def test_explicit_null_visibility_returns_422(self, client, settings) -> None:
-        user = await _make_user(f"vis-null-{next(_SEQ)}@example.com")
+        user = await make_user(f"vis-null-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(user)
         clip = await _insert_clip(user, workspace)
         headers = _auth_headers(user, settings)
@@ -264,8 +260,8 @@ class TestVisibilityTransitions:
         assert resp.status_code == 422
 
     async def test_cross_user_patch_returns_404(self, client, settings) -> None:
-        owner = await _make_user(f"vis-owner-{next(_SEQ)}@example.com")
-        other = await _make_user(f"vis-other-{next(_SEQ)}@example.com")
+        owner = await make_user(f"vis-owner-{next(_SEQ)}@example.com")
+        other = await make_user(f"vis-other-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace)
 
@@ -280,8 +276,8 @@ class TestVisibilityTransitions:
 @pytest.mark.integration
 class TestVisibilityAudioAccess:
     async def test_non_owner_can_get_audio_for_unlisted_clip(self, client, settings, local_storage) -> None:
-        owner = await _make_user(f"vis-audio-owner-{next(_SEQ)}@example.com")
-        stranger = await _make_user(f"vis-audio-stranger-{next(_SEQ)}@example.com")
+        owner = await make_user(f"vis-audio-owner-{next(_SEQ)}@example.com")
+        stranger = await make_user(f"vis-audio-stranger-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(
             owner, workspace, visibility=VisibilityState.UNLISTED, store_bytes=b"RIFF....WAVEfake"
@@ -291,8 +287,8 @@ class TestVisibilityAudioAccess:
         assert resp.status_code == 200
 
     async def test_non_owner_gets_403_for_private_clip_audio(self, client, settings, local_storage) -> None:
-        owner = await _make_user(f"vis-audio-private-owner-{next(_SEQ)}@example.com")
-        stranger = await _make_user(f"vis-audio-private-stranger-{next(_SEQ)}@example.com")
+        owner = await make_user(f"vis-audio-private-owner-{next(_SEQ)}@example.com")
+        stranger = await make_user(f"vis-audio-private-stranger-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace, visibility=VisibilityState.PRIVATE, store_bytes=b"RIFF....WAVEfake")
 
@@ -308,7 +304,7 @@ class TestUnlistedAnonymousLinkAccess:
     ``get_clip_for_streaming``, so this exercises that shared resolver."""
 
     async def test_anonymous_can_read_unlisted_clip_metadata(self, client) -> None:
-        owner = await _make_user(f"vis-anon-unlisted-{next(_SEQ)}@example.com")
+        owner = await make_user(f"vis-anon-unlisted-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace, visibility=VisibilityState.UNLISTED)
 
@@ -317,7 +313,7 @@ class TestUnlistedAnonymousLinkAccess:
         assert resp.json()["visibility"] == "unlisted"
 
     async def test_anonymous_gets_404_for_private_clip_metadata(self, client) -> None:
-        owner = await _make_user(f"vis-anon-private-{next(_SEQ)}@example.com")
+        owner = await make_user(f"vis-anon-private-{next(_SEQ)}@example.com")
         workspace = await _make_workspace(owner)
         clip = await _insert_clip(owner, workspace, visibility=VisibilityState.PRIVATE)
 
