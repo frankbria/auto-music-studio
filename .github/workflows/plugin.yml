@@ -23,6 +23,11 @@ env:
   # Acceptance criterion for US-23.1 (#315): installed VST3 under 25MB.
   MAX_VST3_KB: 25600
 
+# Every job here is read-only: nothing pushes, comments, tags, or publishes (#425).
+# Cache and artifact steps use the runner token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.name }}

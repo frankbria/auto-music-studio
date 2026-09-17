@@ -235,9 +235,9 @@ Configured in `.pre-commit-config.yaml`:
   on `main`** (`ci (3.11)`, `ci (3.12)`).
 - `web npm audit` — `npm audit --audit-level=high` plus a lockfile-consistency check.
   Installs nothing, so it still reports when `npm ci` is broken.
-- `web` — `npm ci` → `typecheck` → `lint` → `test` → `build` for `web/` (#426). **Should be
-  added to the required checks on `main`**; until someone with repo-admin ticks it, it
-  reports but does not gate. `test` is the load-bearing step: PR #417 shipped a
+- `web` — `npm ci` → `typecheck` → `lint` → `test` → `build` for `web/` (#426). **Required
+  check on `main`** alongside `ci (3.11)` / `ci (3.12)`, so a red `web` blocks the merge.
+  `test` is the load-bearing step: PR #417 shipped a
   `react`/`react-dom` mismatch that passed typecheck, lint *and* `next build`, and failed
   only under vitest — so it runs even when typecheck or lint failed.
 - Both Node jobs pin npm via the workflow-level `NPM_VERSION` (10.9.8). Regenerating
@@ -264,6 +264,16 @@ Configured in `.pre-commit-config.yaml`:
 `.github/workflows/docker-publish.yml` — ACE-Step worker image to Docker Hub. Gated on the
 `DOCKERHUB_PUBLISH_ENABLED` variable, so an unconfigured repo shows it as *skipped* rather
 than green having published nothing.
+
+Conventions across every workflow (#425), enforced by `tests/test_workflow_pins.py`:
+- Every `uses:` is pinned to a 40-hex commit SHA with a trailing `# vX.Y.Z` comment — never
+  a tag or branch, which can be repointed after review. Resolve a new pin with
+  `gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha`, and if
+  `.object.type` is `tag` (annotated), dereference it via `git/tags/<sha>` to get the
+  commit. Dependabot keeps this form on bumps.
+- Every job runs with an explicit `permissions:` block, at workflow level (`contents: read`
+  for the read-only CI/plugin/docker-publish workflows) or per job where a job needs
+  write scope (CD, review bots).
 
 `.github/workflows/plugin.yml` — VST3 plugin (C++):
 - Path-filtered to `plugin/**`, so Python-only changes don't trigger a 3-OS C++ build
