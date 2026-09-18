@@ -558,6 +558,41 @@ class TestRefresh:
         assert resp.status_code == 401
 
 
+class TestPluginToken:
+    """``POST /auth/plugin-token`` (#445): a refresh token for the VST3 plugin."""
+
+    async def test_requires_a_bearer(self, client):
+        resp = await client.post(f"{API_V1_PREFIX}/auth/plugin-token")
+        assert resp.status_code == 401
+
+    async def test_mints_an_independent_pair_that_refreshes(self, client, settings, monkeypatch):
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+        resp = await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+        assert resp.status_code == 200
+        plugin = resp.json()
+        assert plugin["refresh_token"] != tokens["refresh_token"]
+        assert decode_access_token(plugin["access_token"], settings)["email"] == "r@example.com"
+
+        # The plugin's token works at /refresh...
+        rotated = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": plugin["refresh_token"]})
+        assert rotated.status_code == 200
+        # ...and the web session's own token was not consumed by minting it.
+        web = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        assert web.status_code == 200
+
+    async def test_deleted_user_gets_404(self, client, settings, monkeypatch):
+        tokens = await _login(client, settings, monkeypatch)
+        await User.find_one(User.email == "r@example.com").delete()
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/auth/plugin-token",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert resp.status_code == 404
+
+
 class TestLogout:
     async def test_logout_revokes_and_is_idempotent(self, client, settings, monkeypatch):
         tokens = await _login(client, settings, monkeypatch)

@@ -30,6 +30,14 @@ namespace
         return result;
     }
 
+    /** A non-2xx response, flagged when it is the 401 a token refresh can fix. */
+    Result statusFailure (int status, const juce::String& message)
+    {
+        auto result = failure (message);
+        result.unauthorised = (status == 401);
+        return result;
+    }
+
     /** Runs a GET and hands back the body, or fills `result` with the reason it could
         not. @returns false when the caller should give up. */
     bool fetch (const juce::String& baseUrl,
@@ -76,7 +84,7 @@ namespace
         if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key);
             status.isNotEmpty())
         {
-            result = failure (status);
+            result = statusFailure (stream.getStatusCode(), status);
             return false;
         }
 
@@ -163,7 +171,7 @@ namespace
             status.isNotEmpty())
         {
             const auto explained = serverMessage (bodyOut);
-            result = failure (explained.isNotEmpty() ? explained : status);
+            result = statusFailure (stream.getStatusCode(), explained.isNotEmpty() ? explained : status);
             return false;
         }
 
@@ -322,7 +330,7 @@ Result downloadClip (const juce::String& baseUrl,
     }
 
     if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key); status.isNotEmpty())
-        return failure (status);
+        return statusFailure (stream.getStatusCode(), status);
 
     destination.getParentDirectory().createDirectory();
 
@@ -438,7 +446,7 @@ Result uploadClip (const juce::String& baseUrl,
     }
 
     if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key); status.isNotEmpty())
-        return failure (status);
+        return statusFailure (stream.getStatusCode(), status);
 
     const auto payload = Http::unwrapEnvelope (juce::JSON::parse (stream.readEntireStreamAsString()));
 
@@ -551,6 +559,34 @@ Result getJobStatus (const juce::String& baseUrl,
     if (const auto* ids = payload.getProperty ("clip_ids", juce::var()).getArray())
         for (const auto& id : *ids)
             result.clipIds.add (id.toString());
+
+    result.ok = true;
+    return result;
+}
+
+Result refreshTokens (const juce::String& baseUrl,
+                      const juce::String& refreshToken,
+                      std::function<bool()> shouldCancel,
+                      int timeoutMs)
+{
+    auto request = std::make_unique<juce::DynamicObject>();
+    request->setProperty ("refresh_token", refreshToken);
+
+    Result result;
+    juce::String body;
+
+    // No bearer: the refresh token in the body is the credential.
+    if (! postJson (baseUrl, {}, juce::String (apiPrefix) + "/auth/refresh",
+                    juce::JSON::toString (juce::var (request.release()), true),
+                    shouldCancel, timeoutMs, body, result))
+        return result;
+
+    const auto payload = juce::JSON::parse (body);
+    result.accessToken = textOf (payload, "access_token");
+    result.refreshToken = textOf (payload, "refresh_token");
+
+    if (result.accessToken.isEmpty() || result.refreshToken.isEmpty())
+        return failure ("The platform returned no tokens");
 
     result.ok = true;
     return result;

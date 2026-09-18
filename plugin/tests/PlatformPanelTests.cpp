@@ -115,8 +115,8 @@ public:
             panel.connect();
             check ("the connecting state");
 
-            expect (pumpUntil ([&] { return panel.getStatusLabel().getText().containsIgnoreCase ("key"); }, 10000));
-            check ("a rejected key");
+            expect (pumpUntil ([&] { return panel.getStatusLabel().getText().containsIgnoreCase ("plugin token"); }, 10000));
+            check ("a missing token");
 
             // And the no-TLS message, which is a literal rather than a runtime string.
             expect (isAsciiOnly (Platform::findUrlProblem ("")), "non-ASCII in the empty-URL message");
@@ -162,7 +162,7 @@ public:
 
             auto& panel = editor.getPlatformPanel();
             panel.getUrlEditor().setText (server.getBaseUrl(), false);
-            panel.getApiKeyEditor().setText ("token", false);
+            panel.getTokenEditor().setText ("token", false);
 
             panel.connect();
 
@@ -280,7 +280,7 @@ public:
                 PluginEditor first (processor);
                 first.setSize (860, 1080);
                 first.getPlatformPanel().getUrlEditor().setText (url, false);
-                first.getPlatformPanel().getApiKeyEditor().setText ("saved-token", false);
+                first.getPlatformPanel().getTokenEditor().setText ("saved-token", false);
                 first.getPlatformPanel().connect();
                 expect (pumpUntil ([&] { return first.getPlatformPanel().isConnected(); }, 10000));
             }
@@ -290,11 +290,83 @@ public:
 
             expectEquals (second.getPlatformPanel().getUrlEditor().getText(), url,
                           "the platform URL did not persist");
-            expectEquals (second.getPlatformPanel().getApiKeyEditor().getText(),
-                          juce::String ("saved-token"), "the API key did not persist");
+            // The token persists, but in its own 0600 file, and the field never shows it
+            // back: it says one is saved instead.
+            expect (second.getPlatformPanel().getTokenEditor().getText().isEmpty(),
+                    "the stored token was echoed into the field");
+            expect (second.getPlatformPanel().getTokenEditor().getTextToShowWhenEmpty().containsIgnoreCase ("saved"));
+            expectEquals (processor.getGenerationManager().getPlatformSession()->getRefreshToken(),
+                          juce::String ("saved-token"), "the plugin token did not persist");
+            expect (! processor.getSettings()->getFile().loadFileAsString().contains ("saved-token"),
+                    "the plugin token was written into the settings file");
         }
 
-        beginTest ("a rejected key is reported on the panel, not swallowed");
+        beginTest ("AC: an idle session still lists workspaces, clips and voices after the token expires");
+        {
+            ScopedSettings settings;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            serveWorkspacesAndClips (server);
+            server.setResponseFor ("/voice-models", R"([{"id":"vm1","name":"Me","status":"ready"}])");
+            server.setResponseFor ("/api/v1/auth/refresh",
+                                   R"({"access_token":"access-2","refresh_token":"refresh-2","expires_in":900})");
+            server.requireBearer ("access-2");
+
+            PluginProcessor processor (std::move (settings.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getPlatformPanel();
+            int voiceLists = 0;
+            panel.onVoiceModelsChanged = [&] (const juce::Array<Platform::VoiceModel>& models)
+            {
+                if (models.size() == 1)
+                    ++voiceLists;
+            };
+
+            panel.getUrlEditor().setText (server.getBaseUrl(), false);
+            panel.getTokenEditor().setText ("refresh-1", false);
+            panel.connect();
+
+            expect (pumpUntil ([&] { return panel.getClips().size() == 1 && voiceLists == 1; }, 10000),
+                    "first listing failed: " + panel.getStatusLabel().getText());
+
+            // A quarter of an hour later: the access token the panel holds is dead.
+            server.setResponseFor ("/api/v1/auth/refresh",
+                                   R"({"access_token":"access-3","refresh_token":"refresh-3","expires_in":900})");
+            server.requireBearer ("access-3");
+            // A sentinel, so the wait below sees this refresh's outcome, not the last one's.
+            panel.getStatusLabel().setText ("waiting", juce::dontSendNotification);
+
+            panel.refreshClips();
+            expect (pumpUntil ([&] { return panel.getStatusLabel().getText() == "1 clips"; }, 10000),
+                    "clips failed after expiry: " + panel.getStatusLabel().getText());
+
+            panel.refreshVoiceModels();
+            expect (pumpUntil ([&] { return voiceLists == 2; }, 10000), "voice models failed after expiry");
+
+            panel.connect();
+            expect (pumpUntil ([&] { return panel.isConnected() && panel.getWorkspaceSelector().getNumItems() == 2; }, 10000),
+                    "workspaces failed after expiry: " + panel.getStatusLabel().getText());
+
+            // Nothing was pasted a second time, and exactly one refresh covered all three.
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 2);
+        }
+
+        beginTest ("a pre-#445 access token left in the settings file is removed");
+        {
+            ScopedSettings settings;
+            settings.properties->setValue (Platform::legacyApiKeyKey, "old-jwt");
+            settings.properties->saveIfNeeded();
+            const auto file = settings.properties->getFile();
+
+            PluginProcessor processor (std::move (settings.properties), false);
+            PluginEditor editor (processor);
+
+            expect (! file.loadFileAsString().contains ("old-jwt"), "the stale credential is still on disk");
+        }
+
+        beginTest ("AC: a rejected token is reported on the panel, not swallowed");
         {
             ScopedSettings settings;
             test::StubAceStepServer server;
@@ -307,11 +379,11 @@ public:
 
             auto& panel = editor.getPlatformPanel();
             panel.getUrlEditor().setText (server.getBaseUrl(), false);
-            panel.getApiKeyEditor().setText ("wrong", false);
+            panel.getTokenEditor().setText ("wrong", false);
             panel.connect();
 
-            expect (pumpUntil ([&] { return panel.getStatusLabel().getText().containsIgnoreCase ("key"); }, 10000),
-                    "the rejected key was not reported: " + panel.getStatusLabel().getText());
+            expect (pumpUntil ([&] { return panel.getStatusLabel().getText().containsIgnoreCase ("plugin token"); }, 10000),
+                    "the rejected token was not reported: " + panel.getStatusLabel().getText());
             expect (! panel.isConnected());
         }
     }

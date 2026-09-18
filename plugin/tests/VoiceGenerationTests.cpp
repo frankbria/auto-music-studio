@@ -298,12 +298,12 @@ public:
             server.setResponseFor ("/v1/audio", "RIFFfake-wave-bytes-for-the-test");
 
             cleanup.properties->setValue (acemusic::Platform::urlKey, server.getBaseUrl());
-            cleanup.properties->setValue (acemusic::Platform::apiKeyKey, "token");
             cleanup.properties->saveIfNeeded();
 
             BackgroundTaskQueue queue;
             ConnectionManager connection (queue, nullptr);
             GenerationManager generation (queue, connection, cleanup.properties.get());
+            generation.getPlatformSession()->setRefreshToken ("token");
 
             ConnectionSettings settings;
             settings.serverUrl = server.getBaseUrl();
@@ -343,6 +343,54 @@ public:
             // near the local generation endpoint for a voiced run.
             expectEquals (server.getRequestCountFor ("/release_task"), localCallsBefore);
             expectEquals (generation.getClips().size(), 1);
+        }
+
+        beginTest ("AC: a voiced generation that outlives the access token completes");
+        {
+            // #445: the render is under way when the access token expires. The next poll
+            // gets a 401, and the run must refresh and carry on rather than fail.
+            ScopedClipCleanup cleanup;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+
+            server.setResponseFor ("/api/v1/auth/refresh",
+                                   R"({"access_token":"access-2","refresh_token":"refresh-2","expires_in":900})");
+            server.setResponseFor ("/api/v1/generate", R"({"job_id":"job-9","status":"queued"})");
+            server.setResponseFor ("/api/v1/jobs/job-9/status", R"({"job_id":"job-9","status":"running"})");
+            server.setResponseFor ("/api/v1/clips/clip-z/audio", "RIFFfake-wave-bytes-for-the-test");
+            server.requireBearer ("access-2");
+
+            cleanup.properties->setValue (acemusic::Platform::urlKey, server.getBaseUrl());
+            cleanup.properties->saveIfNeeded();
+
+            BackgroundTaskQueue queue;
+            ConnectionManager connection (queue, nullptr);
+            GenerationManager generation (queue, connection, cleanup.properties.get());
+            generation.getPlatformSession()->setRefreshToken ("refresh-1");
+
+            GenerationRequest voiced;
+            voiced.prompt = "a slow torch song";
+            voiced.voiceModelId = "vm-ready";
+            generation.start (voiced);
+
+            expect (pumpUntil ([&] { return server.getRequestCountFor ("/api/v1/jobs/job-9/status") > 0; }, 10000),
+                    "the job was never polled: " + generation.getStatusMessage());
+
+            // Mid-render: the token expires, and the job then finishes.
+            server.setResponseFor ("/api/v1/auth/refresh",
+                                   R"({"access_token":"access-3","refresh_token":"refresh-3","expires_in":900})");
+            server.setResponseFor ("/api/v1/jobs/job-9/status",
+                                   R"({"job_id":"job-9","status":"completed","clip_ids":["clip-z"]})");
+            server.requireBearer ("access-3");
+
+            expect (pumpUntil ([&] { return ! generation.isBusy(); }, 20000),
+                    "the run never finished: " + generation.getStatusMessage());
+
+            expect (generation.getState() == GenerationManager::State::complete,
+                    "the run failed: " + generation.getStatusMessage());
+            expectEquals (generation.getClips().size(), 1);
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 2);
+            expectEquals (generation.getPlatformSession()->getRefreshToken(), juce::String ("refresh-3"));
         }
 
         beginTest ("AC: signed out hides the selector rather than showing an empty list");

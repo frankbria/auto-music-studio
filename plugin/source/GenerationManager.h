@@ -5,7 +5,7 @@
 #include "BackgroundTaskQueue.h"
 #include "ConnectionManager.h"
 #include "GenerationRequest.h"
-#include "PlatformClient.h"
+#include "PlatformSession.h"
 
 #include <atomic>
 #include <memory>
@@ -97,6 +97,10 @@ public:
     /** Where clips are written: the configured cache path, or ClipCache's default. */
     juce::File getClipDirectory() const;
 
+    /** The platform sign-in, shared with the Platform panel so a token either of them
+        refreshes is the one both use (#445). Never null. */
+    std::shared_ptr<Platform::Session> getPlatformSession() const noexcept   { return platformSession; }
+
     /** How long between polls of /query_result. */
     static constexpr int pollIntervalMs = 2000;
 
@@ -123,10 +127,11 @@ private:
         juce::WeakReference<GenerationManager> owner;
         BackgroundTaskQueue* queue = nullptr;
 
-        /** Platform credentials, snapshotted like everything else (#396). Only used when
-            the request names a voice model; empty otherwise. */
+        /** Platform credentials (#396). Only used when the request names a voice model.
+            The session is shared rather than snapshotted: a run that outlives the access
+            token refreshes it, and the panel should get the new one too (#445). */
         juce::String platformUrl;
-        juce::String platformApiKey;
+        std::shared_ptr<Platform::Session> platformSession;
     };
 
     /** What a submit-and-poll produced, whichever server ran it.
@@ -157,6 +162,7 @@ private:
     /** Where the platform URL/key live, for a voiced run. Null in tests that do not
         need one; a voiced run without credentials is refused by findStartProblem. */
     juce::PropertiesFile* settingsFile = nullptr;
+    std::shared_ptr<Platform::Session> platformSession;
 
     State state = State::idle;
     juce::String statusMessage { "Idle" };

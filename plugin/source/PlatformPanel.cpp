@@ -1,4 +1,5 @@
 #include "PlatformPanel.h"
+#include "ConnectionSettings.h"
 
 namespace acemusic
 {
@@ -87,7 +88,8 @@ PlatformPanel::PlatformPanel (BackgroundTaskQueue& queueToUse,
                               juce::PropertiesFile* settingsToUse)
     : queue (queueToUse),
       generation (generationToUse),
-      settings (settingsToUse)
+      settings (settingsToUse),
+      session (generationToUse.getPlatformSession())
 {
     titleLabel.setText ("PLATFORM", juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
@@ -99,13 +101,13 @@ PlatformPanel::PlatformPanel (BackgroundTaskQueue& queueToUse,
     styleEditor (urlEditor, Platform::defaultUrl);
     addAndMakeVisible (urlEditor);
 
-    styleCaption (apiKeyLabel, "API key");
-    addAndMakeVisible (apiKeyLabel);
-    styleEditor (apiKeyEditor, "Optional for a local platform");
-    // Same posture as the ACE-Step key field: masked on screen, and the README is
-    // explicit that the settings file holds it in plaintext.
-    apiKeyEditor.setPasswordCharacter ((juce::juce_wchar) 0x2022);
-    addAndMakeVisible (apiKeyEditor);
+    // A plugin token is a refresh token from Settings on the web app (#445), not an
+    // API key: the platform has no API keys, and the session keeps itself alive from it.
+    styleCaption (tokenLabel, "Token");
+    addAndMakeVisible (tokenLabel);
+    styleEditor (tokenEditor, {});
+    tokenEditor.setPasswordCharacter ((juce::juce_wchar) 0x2022);
+    addAndMakeVisible (tokenEditor);
 
     connectButton.onClick = [this] { connect(); };
     addAndMakeVisible (connectButton);
@@ -146,9 +148,17 @@ PlatformPanel::PlatformPanel (BackgroundTaskQueue& queueToUse,
     if (settings != nullptr)
     {
         urlEditor.setText (settings->getValue (Platform::urlKey, Platform::defaultUrl), false);
-        apiKeyEditor.setText (settings->getValue (Platform::apiKeyKey), false);
+
+        // Before #445 a pasted access token was kept here. It has long expired, and a
+        // credential with no use left should not sit in the file.
+        if (settings->containsKey (Platform::legacyApiKeyKey))
+        {
+            settings->removeValue (Platform::legacyApiKeyKey);
+            ConnectionSettings::save (*settings);
+        }
     }
 
+    updateTokenPrompt();
     refresh();
     startTimerHz (2);
 }
@@ -181,8 +191,8 @@ void PlatformPanel::resized()
     urlLabel.setBounds (credentialsRow.removeFromLeft (34));
     urlEditor.setBounds (credentialsRow.removeFromLeft (juce::jmax (120, credentialsRow.getWidth() / 3)));
     credentialsRow.removeFromLeft (8);
-    apiKeyLabel.setBounds (credentialsRow.removeFromLeft (54));
-    apiKeyEditor.setBounds (credentialsRow.removeFromLeft (juce::jmax (100, credentialsRow.getWidth() - 96)));
+    tokenLabel.setBounds (credentialsRow.removeFromLeft (54));
+    tokenEditor.setBounds (credentialsRow.removeFromLeft (juce::jmax (100, credentialsRow.getWidth() - 96)));
     credentialsRow.removeFromLeft (8);
     connectButton.setBounds (credentialsRow.removeFromLeft (juce::jmin (88, credentialsRow.getWidth())));
 
@@ -214,7 +224,6 @@ bool PlatformPanel::hasCredentials() const
 }
 
 juce::String PlatformPanel::getUrl() const       { return urlEditor.getText().trim(); }
-juce::String PlatformPanel::getApiKey() const    { return apiKeyEditor.getText(); }
 
 juce::String PlatformPanel::getSelectedWorkspaceId() const
 {
@@ -229,6 +238,14 @@ void PlatformPanel::applyStatus (const juce::String& message, bool isError)
 
     if (statusLabel.getText() != message)
         statusLabel.setText (message, juce::dontSendNotification);
+}
+
+void PlatformPanel::updateTokenPrompt()
+{
+    tokenEditor.setTextToShowWhenEmpty (session->getRefreshToken().isNotEmpty()
+                                            ? "Saved - paste a new one to replace it"
+                                            : "Paste a plugin token from web Settings",
+                                        platformColours::textDim);
 }
 
 void PlatformPanel::timerCallback()
@@ -277,22 +294,31 @@ void PlatformPanel::connect()
     if (settings != nullptr)
     {
         settings->setValue (Platform::urlKey, getUrl());
-        settings->setValue (Platform::apiKeyKey, getApiKey());
-        settings->saveIfNeeded();
+        ConnectionSettings::save (*settings);
     }
+
+    // Taken out of the field straight away: it is a live credential, and the prompt says
+    // one is saved. Stored on the worker, because storing waits out any refresh in flight.
+    const auto pasted = tokenEditor.getText().trim();
+    tokenEditor.clear();
 
     busy = true;
     applyStatus ("Connecting...", false);
     refresh();
 
     const auto url = getUrl();
-    const auto key = getApiKey();
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, key, request]
+    queue.enqueue ([safeThis, url, pasted, request, sessionRef = session, queuePtr = &queue]
     {
-        auto result = Platform::listWorkspaces (url, key);
+        if (pasted.isNotEmpty())
+            sessionRef->setRefreshToken (pasted);
+
+        auto result = sessionRef->run (url, [&] (const juce::String& access)
+        {
+            return Platform::listWorkspaces (url, access);
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -305,6 +331,7 @@ void PlatformPanel::connect()
 void PlatformPanel::applyWorkspaces (const Platform::Result& result)
 {
     busy = false;
+    updateTokenPrompt();
 
     if (result.cancelled)
         return;
@@ -366,21 +393,23 @@ void PlatformPanel::refreshClips()
     if (settings != nullptr && workspaceId.isNotEmpty())
     {
         settings->setValue (Platform::workspaceKey, workspaceId);
-        settings->saveIfNeeded();
+        ConnectionSettings::save (*settings);
     }
 
     busy = true;
     refresh();
 
     const auto url = getUrl();
-    const auto key = getApiKey();
     const auto search = searchEditor.getText();
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, key, workspaceId, search, request]
+    queue.enqueue ([safeThis, url, workspaceId, search, request, sessionRef = session, queuePtr = &queue]
     {
-        auto result = Platform::listClips (url, key, workspaceId, search);
+        auto result = sessionRef->run (url, [&] (const juce::String& access)
+        {
+            return Platform::listClips (url, access, workspaceId, search);
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -435,13 +464,15 @@ void PlatformPanel::importSelectedClip()
     refresh();
 
     const auto url = getUrl();
-    const auto key = getApiKey();
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, key, clip, destination, request]
+    queue.enqueue ([safeThis, url, clip, destination, request, sessionRef = session, queuePtr = &queue]
     {
-        auto result = Platform::downloadClip (url, key, clip.id, destination);
+        auto result = sessionRef->run (url, [&] (const juce::String& access)
+        {
+            return Platform::downloadClip (url, access, clip.id, destination);
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request, clip]
         {
@@ -496,15 +527,17 @@ void PlatformPanel::pushClip (const juce::File& clip)
     refresh();
 
     const auto url = getUrl();
-    const auto key = getApiKey();
     const auto title = clip.getFileNameWithoutExtension();
     const auto bpm = generation.getRequestedBpm();
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, key, workspaceId, clip, title, bpm, request]
+    queue.enqueue ([safeThis, url, workspaceId, clip, title, bpm, request, sessionRef = session, queuePtr = &queue]
     {
-        auto result = Platform::uploadClip (url, key, workspaceId, clip, title, bpm, {}, 0.0);
+        auto result = sessionRef->run (url, [&] (const juce::String& access)
+        {
+            return Platform::uploadClip (url, access, workspaceId, clip, title, bpm, {}, 0.0);
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -535,13 +568,18 @@ void PlatformPanel::refreshVoiceModels()
     // Same shape as every other action here: snapshot the credentials on the message
     // thread, do the blocking call on the queue, marshal back behind a WeakReference.
     const auto url = getUrl();
-    const auto key = getApiKey();
     juce::WeakReference<PlatformPanel> self (this);
     auto* queuePtr = &queue;
 
-    queue.enqueue ([self, url, key, queuePtr]
+    queue.enqueue ([self, url, queuePtr, sessionRef = session]
     {
-        const auto result = Platform::listVoiceModels (url, key, [queuePtr] { return queuePtr->isStopping(); });
+        // Built once and captured by value: MSVC rejects a by-value capture of queuePtr
+        // re-captured inside the nested [&] lambda.
+        const std::function<bool()> stopping = [queuePtr] { return queuePtr->isStopping(); };
+        const auto result = sessionRef->run (url, [&url, &stopping] (const juce::String& access)
+        {
+            return Platform::listVoiceModels (url, access, stopping);
+        }, stopping);
 
         queuePtr->callOnMessageThread ([self, result]
         {

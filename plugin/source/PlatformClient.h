@@ -73,6 +73,10 @@ namespace Platform
         /** True when the caller asked to stop. Not a failure — the UI shows nothing. */
         bool cancelled = false;
 
+        /** The platform answered 401: the access token is missing, expired or revoked.
+            What `Session` refreshes on (#445). */
+        bool unauthorised = false;
+
         juce::Array<Workspace> workspaces;
         juce::Array<Clip> clips;
         juce::Array<VoiceModel> voiceModels;
@@ -89,6 +93,11 @@ namespace Platform
         /** The clip a push created, or an import wrote to. */
         juce::String clipId;
         juce::File file;
+
+        /** A new pair from `refreshTokens`. The refresh token is single-use, so it must
+            replace the one that was sent. */
+        juce::String accessToken;
+        juce::String refreshToken;
     };
 
     //==============================================================================
@@ -173,9 +182,17 @@ namespace Platform
                          std::function<bool()> shouldCancel = nullptr,
                          int timeoutMs = 10000);
 
+    /** `POST /api/v1/auth/refresh`: trades a refresh token for a new access/refresh pair.
+        A spent, revoked or expired token comes back `unauthorised`. */
+    Result refreshTokens (const juce::String& baseUrl,
+                          const juce::String& refreshToken,
+                          std::function<bool()> shouldCancel = nullptr,
+                          int timeoutMs = 10000);
+
     /** Settings keys, so the panel and the settings file agree on one spelling. */
     constexpr const char* urlKey = "platformUrl";
-    constexpr const char* apiKeyKey = "platformApiKey";
+    /** Where a pasted access token used to be kept, before #445. Only read to delete it. */
+    constexpr const char* legacyApiKeyKey = "platformApiKey";
     constexpr const char* workspaceKey = "platformWorkspaceId";
     constexpr const char* voiceModelKey = "platformVoiceModelId";
 

@@ -1,4 +1,5 @@
 #include "ClipCache.h"
+#include "ConnectionSettings.h"
 
 namespace acemusic
 {
@@ -64,7 +65,7 @@ void ClipCache::setDirectory (const juce::File& directory)
     // An empty path means "back to the default" rather than "the filesystem root".
     settings->setValue (cachePathKey,
                         directory == juce::File() ? juce::String() : directory.getFullPathName());
-    settings->saveIfNeeded();
+    ConnectionSettings::save (*settings);
 }
 
 bool ClipCache::hasProblem (juce::String& reason) const
