@@ -342,15 +342,33 @@ plugin is unchanged — generation against a local ACE-Step server never needs i
 platform outage cannot affect local generation either: the two clients share no state,
 and there is a test that generates locally while the platform is unreachable.
 
-Set the platform URL and API key, press **Connect**, pick a workspace, and the clip list
+Set the platform URL and a plugin token, press **Connect**, pick a workspace, and the clip list
 fills. **Import** downloads the selected clip into the cache and shows it in Results,
 where it is draggable like any generated clip — the plugin cannot place audio on the
 timeline (see the US-23.4 note), so the drop stays yours. **Push** uploads the most
 recent generated clip with its metadata.
 
-The API key persists in the same settings file as the ACE-Step key, with the same
-plaintext caveat. Note the platform authenticates with a **JWT access token**, not a
-long-lived API key, and that token expires — see issue #445.
+### The plugin token (#445)
+
+The platform has no API keys. Every route takes a JWT access token, and those last
+15 minutes, so the plugin signs in with a **refresh token** instead. Create one under
+**Settings → DAW plugin token** in the web app and paste it into the **Token** field.
+It is shown once, and it is separate from your browser session, so using it never
+signs the web app out.
+
+From then on the plugin keeps itself signed in. The first call goes out with no access
+token, and the 401 it gets back triggers a refresh. So does every expiry after that,
+including one that lands in the middle of a voiced render. The refresh happens once and
+the call is retried once. If the platform still refuses, the panel says the token was
+rejected and stops there. It never loops.
+
+Refresh tokens are single-use and the platform rotates them on every refresh. The
+plugin writes the new one straight away to `platform.token`, next to the settings file,
+at 0600. It gets its own file rather than a settings key because every plugin instance
+in a DAW holds the settings in memory, and any of them saving would write back a spent
+token. Before refreshing, an instance re-reads the file, which is how it picks up a
+rotation another instance made. The field never shows the stored token again; its hint
+says one is saved. A token left unused for 7 days expires. Paste a new one to carry on.
 
 ### Custom voices (#396)
 

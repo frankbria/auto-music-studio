@@ -6,6 +6,7 @@ Endpoints (mounted under ``/api/v1/auth``):
 * ``POST /callback/{provider}`` → exchange code, upsert the user, mint tokens
 * ``POST /refresh``             → rotate the refresh token, mint a new access token
 * ``POST /logout``              → revoke a refresh token (idempotent, 204)
+* ``POST /plugin-token``        → mint a separate token pair for the VST3 plugin (#445)
 
 State (CSRF) validation is stateless via the signed ``state`` JWT minted in
 :mod:`acemusic.api.auth.oauth`. ``exchange_code_for_user`` is referenced through
@@ -45,10 +46,11 @@ HTTP status choices (documented for callers):
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from ..auth import oauth, services
+from ..auth.dependencies import CurrentUser, get_current_user
 from ..auth.oauth import (
     STATE_EXPIRE_MINUTES,
     OAuthError,
@@ -258,6 +260,28 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
     return TokenResponse(
         access_token=access,
         refresh_token=new_refresh,
+        expires_in=settings.access_token_expire_minutes * 60,
+    )
+
+
+@router.post("/plugin-token", response_model=TokenResponse)
+async def plugin_token(request: Request, current: CurrentUser = Depends(get_current_user)) -> TokenResponse:
+    """Mint a fresh token pair for the VST3 plugin (#445).
+
+    A new refresh token rather than the web session's: refresh tokens are single-use,
+    so a shared one would sign out whichever client rotated second.
+    """
+    settings = _settings(request)
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None:
+        # The access token outlived the account; nothing to mint for.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    access, refresh = _mint_token_pair(user, settings)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    await services.store_refresh_token(user.id, refresh, expires_at)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh,
         expires_in=settings.access_token_expire_minutes * 60,
     )
 

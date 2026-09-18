@@ -9,7 +9,10 @@ GenerationManager::GenerationManager (BackgroundTaskQueue& queueToUse,
     : queue (queueToUse),
       connection (connectionToUse),
       cache (settings),
-      settingsFile (settings)
+      settingsFile (settings),
+      // Next to the settings file, not in it — see Platform::Session for why.
+      platformSession (std::make_shared<Platform::Session> (
+          settings != nullptr ? settings->getFile().getSiblingFile ("platform.token") : juce::File()))
 {
 }
 
@@ -115,10 +118,9 @@ void GenerationManager::start (const GenerationRequest& request)
     // #396: a voiced run goes to the platform instead, so it needs those credentials —
     // read here, on the message thread, for the same reason as everything else above.
     if (settingsFile != nullptr)
-    {
-        context.platformUrl    = settingsFile->getValue (Platform::urlKey);
-        context.platformApiKey = settingsFile->getValue (Platform::apiKeyKey);
-    }
+        context.platformUrl = settingsFile->getValue (Platform::urlKey);
+
+    context.platformSession = platformSession;
 
     activeControl = context.control;
 
@@ -285,10 +287,15 @@ GenerationManager::RunOutcome GenerationManager::runOnPlatform (const RunContext
     // state, which is what the plugin doing it itself would break.
     RunOutcome outcome;
 
-    const auto submitted = Platform::submitGeneration (context.platformUrl,
-                                                       context.platformApiKey,
-                                                       context.request.toPlatformPayloadJson(),
-                                                       shouldStop);
+    // Every platform call goes through the session, so a token that expires partway
+    // through a long render is refreshed rather than failing it (#445). A 401 means the
+    // submit was refused before any job existed, so retrying it cannot double-submit.
+    auto& session = *context.platformSession;
+    const auto payload = context.request.toPlatformPayloadJson();
+    const auto submitted = session.run (context.platformUrl, [&] (const juce::String& access)
+    {
+        return Platform::submitGeneration (context.platformUrl, access, payload, shouldStop);
+    });
 
     if (submitted.cancelled || shouldStop())
     {
@@ -320,8 +327,10 @@ GenerationManager::RunOutcome GenerationManager::runOnPlatform (const RunContext
             juce::Thread::sleep (100);
         }
 
-        const auto status = Platform::getJobStatus (context.platformUrl, context.platformApiKey,
-                                                    submitted.jobId, shouldStop);
+        const auto status = session.run (context.platformUrl, [&] (const juce::String& access)
+        {
+            return Platform::getJobStatus (context.platformUrl, access, submitted.jobId, shouldStop);
+        });
 
         if (status.cancelled || shouldStop())
         {
@@ -439,8 +448,11 @@ void GenerationManager::runGeneration (RunContext context)
         }
         else
         {
-            const auto fetched = Platform::downloadClip (context.platformUrl, context.platformApiKey,
-                                                         outcome.clipIds[i], destination, shouldStop);
+            const auto fetched = context.platformSession->run (context.platformUrl, [&] (const juce::String& access)
+            {
+                return Platform::downloadClip (context.platformUrl, access, outcome.clipIds[i],
+                                               destination, shouldStop);
+            });
 
             if (fetched.cancelled)
             {

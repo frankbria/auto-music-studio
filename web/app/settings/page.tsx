@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { AvatarUpload } from "@/components/settings/AvatarUpload"
 import { FieldError } from "@/components/settings/FieldError"
+import { PluginTokenCard } from "@/components/settings/PluginTokenCard"
 import { StyleTagsInput } from "@/components/settings/StyleTagsInput"
 import { useRequireAuth } from "@/hooks/use-require-auth"
 import {
@@ -143,7 +144,8 @@ function SettingsForm({
       payload.style_tags = form.style_tags
     // "" means "clear preference" → send null so the backend unsets it.
     if (form.default_model !== baseline.default_model)
-      payload.default_model = form.default_model === "" ? null : form.default_model
+      payload.default_model =
+        form.default_model === "" ? null : form.default_model
 
     // Nothing actually changed once normalized — just re-sync the form to the
     // trimmed values and report success without a wasted round-trip.
@@ -347,7 +349,11 @@ function SettingsForm({
 }
 
 export default function SettingsPage() {
-  const { isLoading: authLoading, isAuthenticated } = useRequireAuth()
+  const {
+    isLoading: authLoading,
+    isAuthenticated,
+    accessToken,
+  } = useRequireAuth()
   const { profile, isLoading, error, save } = useProfileSettings()
 
   // useRequireAuth redirects unauthenticated users; render nothing meanwhile.
@@ -368,7 +374,10 @@ export default function SettingsPage() {
         </p>
       )}
       {!isLoading && !error && profile && (
-        <SettingsForm profile={profile} save={save} />
+        <div className="flex flex-col gap-6">
+          <SettingsForm profile={profile} save={save} />
+          <PluginTokenCard accessToken={accessToken} />
+        </div>
       )}
     </div>
   )

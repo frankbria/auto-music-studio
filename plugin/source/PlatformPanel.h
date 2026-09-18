@@ -25,7 +25,7 @@ class PlatformPanel final : public juce::Component,
                             private juce::Timer
 {
 public:
-    /** @param settings  where the platform URL, key and last workspace persist; null
+    /** @param settings  where the platform URL and last workspace persist; null
                          means "do not persist", which is what tests get */
     PlatformPanel (BackgroundTaskQueue&, GenerationManager&, juce::PropertiesFile* settings = nullptr);
     ~PlatformPanel() override;
@@ -50,7 +50,7 @@ public:
     //==============================================================================
     // Test seams.
     juce::TextEditor& getUrlEditor() noexcept                 { return urlEditor; }
-    juce::TextEditor& getApiKeyEditor() noexcept              { return apiKeyEditor; }
+    juce::TextEditor& getTokenEditor() noexcept               { return tokenEditor; }
     juce::TextEditor& getSearchEditor() noexcept              { return searchEditor; }
     juce::ComboBox&   getWorkspaceSelector() noexcept         { return workspaceSelector; }
     juce::ListBox&    getClipList() noexcept                  { return clipList; }
@@ -68,7 +68,7 @@ public:
     /** The musician's voice models, refreshed whenever the session changes (#396).
 
         Empty on disconnect. This panel makes the call rather than handing its URL and
-        API key out: the key is deliberately private here, and a callback carrying the
+        token out: the credential is deliberately private here, and a callback carrying the
         *result* keeps it that way. The editor forwards the list to the generation
         panel — the two panels stay unaware of each other. */
     std::function<void (const juce::Array<Platform::VoiceModel>&)> onVoiceModelsChanged;
@@ -85,8 +85,11 @@ private:
     void applyClips (const Platform::Result&);
     void applyStatus (const juce::String& message, bool isError);
 
+    /** The token field never shows the stored token back; its hint says whether one
+        is saved. */
+    void updateTokenPrompt();
+
     juce::String getUrl() const;
-    juce::String getApiKey() const;
     juce::String getSelectedWorkspaceId() const;
 
     /** Rows of clips: title, then bpm/key/duration. */
@@ -106,12 +109,13 @@ private:
     BackgroundTaskQueue& queue;
     GenerationManager& generation;
     juce::PropertiesFile* settings = nullptr;
+    std::shared_ptr<Platform::Session> session;
 
     juce::Label      titleLabel;
     juce::Label      urlLabel;
     juce::TextEditor urlEditor;
-    juce::Label      apiKeyLabel;
-    juce::TextEditor apiKeyEditor;
+    juce::Label      tokenLabel;
+    juce::TextEditor tokenEditor;
     juce::TextButton connectButton { "Connect" };
 
     juce::Label      workspaceLabel;

@@ -71,6 +71,7 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | `POST /api/v1/auth/callback/{provider}` | Validates state against the cookie, exchanges the code, upserts the user, mints tokens |
 | `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
 | `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
+| `POST /api/v1/auth/plugin-token` | Mints a separate token pair for the DAW plugin (bearer required) |
 
 **One account, several providers (#111).** A `User` carries a list of `identities`
 (`{provider, oauth_id}`), so the same person can sign in with Google or Discord and land

@@ -41,7 +41,11 @@ void ConnectionSettings::writeTo (juce::PropertiesFile& properties) const
     properties.setValue (keys::serverUrl, serverUrl.trim());
     properties.setValue (keys::apiKey, apiKey);
     properties.setValue (keys::modelId, modelId);
+    save (properties);
+}
 
+void ConnectionSettings::save (juce::PropertiesFile& properties)
+{
     // Lock the directory down *before* the write, not just the file after it. JUCE
     // writes through the process umask, so the file is briefly 0644 no matter what we
     // do afterwards, and a rewrite reopens that window on every save — including the

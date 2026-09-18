@@ -134,6 +134,17 @@ public:
         return pathBodies[pathFragment];
     }
 
+    /** Serve `line` as the status for paths containing `pathFragment`. */
+    void setStatusFor (const juce::String& pathFragment, const juce::String& line)
+    {
+        const juce::ScopedLock sl (lock);
+        statusRoutes.set (pathFragment, line);
+    }
+
+    /** Behave like the platform's auth (#445): any request outside `/auth/` that does
+        not carry `Authorization: Bearer <token>` gets a 401. Empty turns it off. */
+    void requireBearer (const juce::String& token)       { const juce::ScopedLock sl (lock); requiredBearer = token; }
+
 private:
     /** Content-Length from a header block, or 0 when absent. */
     static int contentLengthOf (const juce::String& headers)
@@ -236,6 +247,22 @@ private:
                         break;
                     }
                 }
+
+                for (auto& route : statusRoutes)
+                {
+                    if (lastPath.contains (route.name.toString()))
+                    {
+                        status = route.value.toString();
+                        break;
+                    }
+                }
+
+                if (requiredBearer.isNotEmpty() && ! lastPath.contains ("/auth/")
+                    && ! juce::StringArray::fromLines (lastRequest).contains ("Authorization: Bearer " + requiredBearer))
+                {
+                    status = "HTTP/1.1 401 Unauthorized";
+                    body = R"({"detail":"Token has expired."})";
+                }
             }
 
             ++requestCount;
@@ -277,7 +304,8 @@ private:
 
     mutable juce::CriticalSection lock;
     juce::String lastRequest, lastBody, lastPath;
-    juce::NamedValueSet routes;
+    juce::NamedValueSet routes, statusRoutes;
+    juce::String requiredBearer;
     mutable juce::HashMap<juce::String, int> pathCounts;
     mutable juce::HashMap<juce::String, juce::String> pathBodies;
     juce::String statusLine  { "HTTP/1.1 200 OK" };

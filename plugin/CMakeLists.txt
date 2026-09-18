@@ -108,6 +108,7 @@ set(ACEMUSIC_SOURCES
     source/MidiCapture.cpp
     source/PlatformClient.cpp
     source/PlatformPanel.cpp
+    source/PlatformSession.cpp
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/ResultsPanel.cpp
@@ -182,6 +183,7 @@ target_sources(AceMusicPluginTests PRIVATE
     tests/HostSyncTests.cpp
     tests/PlatformClientTests.cpp
     tests/PlatformPanelTests.cpp
+    tests/PlatformSessionTests.cpp
     tests/PluginProcessorTests.cpp
     tests/ResultsPanelTests.cpp
     tests/TimeStretchTests.cpp

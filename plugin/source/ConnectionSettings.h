@@ -40,6 +40,11 @@ struct ConnectionSettings
         on Linux, the platform equivalent elsewhere. */
     static std::unique_ptr<juce::PropertiesFile> createPropertiesFile();
 
+    /** Flushes `properties` without letting the rewrite leave it world-readable. Every
+        writer of the settings file goes through this: it holds the ACE-Step key, so a
+        save of any unrelated setting is a save of that key too. */
+    static void save (juce::PropertiesFile& properties);
+
     /** Makes `file` owner-read/write only (0600) and its parent directory
         owner-only (0700). No-op on Windows, where the per-user AppData ACL already
         restricts both.
