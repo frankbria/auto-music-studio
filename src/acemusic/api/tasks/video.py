@@ -143,14 +143,15 @@ async def _is_free_tier(job: Job) -> bool:
 
 
 async def _recorded_by_sibling(job: Job) -> dict[str, Any] | None:
-    """The result to answer with if another worker already recorded this job's video (#427).
+    """The result to answer with if an earlier run (a racing sibling, or this job's
+    own run before a re-queue) already recorded its video (#427).
 
     Failing the job instead would refund its credits and hide a stored video.
     """
     existing = await Video.find_one(Video.job_id == job.id)
     if existing is None:
         return None
-    logger.warning("Video for job %s was already recorded by another worker; reusing it", job.id)
+    logger.warning("Video for job %s was already recorded by an earlier run; reusing it", job.id)
     return {"video_ids": [str(existing.id)], "storage_path": existing.storage_path}
 
 
@@ -175,6 +176,13 @@ async def process_video_job(
     """
     params = dict(job.input_params or {})
     source_video_id = params.get("source_video_id")
+
+    # #427: a retry of a job whose earlier run recorded its video but died before
+    # the job was marked complete must not pay the provider for a second render
+    # — nor even re-read the source from storage.
+    existing = await _recorded_by_sibling(job)
+    if existing is not None:
+        return existing
 
     if source_video_id is not None:
         # Edit: the media is the source video's bytes; the provider gets the edit
@@ -212,12 +220,6 @@ async def process_video_job(
         parent_video_id = None
         edit = None
         duration = clip.duration
-
-    # #427: a retry of a job whose earlier run recorded its video but died before
-    # the job was marked complete must not pay the provider for a second render.
-    existing = await _recorded_by_sibling(job)
-    if existing is not None:
-        return existing
 
     try:
         provider_job_id = await asyncio.to_thread(client.submit, media, filename, provider_params)
