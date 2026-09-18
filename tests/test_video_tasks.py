@@ -177,7 +177,9 @@ class TestProcessVideoJob:
         assert video.user_id == job.user_id and video.job_id == job.id
         assert video.resolution == "720p" and video.aspect_ratio == "16:9"
         assert video.duration == clip.duration == 10.0  # original render inherits the song's length
-        assert video.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
+        # Namespaced by job id, plus a per-run token so a racing sibling (#427) never shares the path.
+        assert video.storage_path.startswith(f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}-")
+        assert video.storage_path.endswith(".mp4")
         # The stored object is the provider's rendered MP4, byte for byte.
         assert storage.download(video.storage_path) == FAKE_MP4
         # The poll loop walked the provider states and left the terminal detail.
@@ -332,7 +334,7 @@ class TestProcessVideoEditJob:
         assert new.duration == 6.0  # a trim resizes the video to its range (8 - 2)
         assert new.clip_id == source.clip_id
         assert new.resolution == "1080p" and new.aspect_ratio == "9:16"
-        assert new.storage_path == f"{job.user_id}/{job.workspace_id}/videos/{source.clip_id}/{job.id}.mp4"
+        assert new.storage_path.startswith(f"{job.user_id}/{job.workspace_id}/videos/{source.clip_id}/{job.id}-")
         # The source document and its object are untouched.
         assert (await Video.get(source.id)).parent_video_id is None
         assert storage.download(source.storage_path) == FAKE_MP4
@@ -516,7 +518,7 @@ class TestFreeTierWatermark:
 
         assert calls == [FAKE_MP4]
 
-    async def test_watermark_failure_fails_the_job(self, storage) -> None:
+    async def test_watermark_failure_fails_the_job(self, storage, tmp_path) -> None:
         """#401: never silently produce an unmarked video for a free account."""
         job, clip = await _make_job_and_clip(tier="free")
         storage.upload(clip.file_path, FAKE_AUDIO)
@@ -528,9 +530,7 @@ class TestFreeTierWatermark:
             )
 
         assert await Video.find(Video.job_id == job.id).count() == 0
-        path = f"{job.user_id}/{job.workspace_id}/videos/{clip.id}/{job.id}.mp4"
-        with pytest.raises(FileNotFoundError):
-            storage.download(path)
+        assert not list((tmp_path / "storage").rglob("*.mp4")), "an unmarked video reached storage"
 
     @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
     async def test_default_path_really_composites(self, storage, tmp_path) -> None:
@@ -577,3 +577,33 @@ class TestSiblingWorkerCannotDuplicate:
         videos = await Video.find(Video.job_id == job.id).to_list()
         assert len(videos) == 1
         assert storage.download(first["storage_path"]) == FAKE_MP4
+
+    async def test_a_loser_that_already_uploaded_keeps_only_the_winners_object(
+        self, storage, tmp_path, monkeypatch
+    ) -> None:
+        """The narrower race: both workers pass the pre-upload check, both upload,
+        the loser's insert hits the unique index. Its rollback must delete its
+        own object only, and it still answers with the winner's record."""
+        job, clip = await _make_job_and_clip()
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        first = await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+        )
+        real_check = tasks._recorded_by_sibling
+        calls: list[int] = []
+
+        async def blind_once(job_):  # the pre-upload check misses the winner, exactly once
+            calls.append(1)
+            return None if len(calls) == 1 else await real_check(job_)
+
+        monkeypatch.setattr(tasks, "_recorded_by_sibling", blind_once)
+        loser = FakeVideoService(_updates_to_complete())
+        loser.download = lambda provider_job_id: b"LOSER-BYTES"
+
+        second = await tasks.process_video_job(job, storage=storage, client=loser, poll_interval=0)
+
+        assert second == first
+        assert len(await Video.find(Video.job_id == job.id).to_list()) == 1
+        assert storage.download(first["storage_path"]) == FAKE_MP4
+        mp4s = sorted(p.name for p in (tmp_path / "storage").rglob("*.mp4"))
+        assert len(mp4s) == 1, f"the loser's object was left behind: {mp4s}"

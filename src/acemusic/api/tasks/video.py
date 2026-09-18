@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any, Callable
 
 from pymongo.errors import DuplicateKeyError
@@ -232,12 +233,14 @@ async def process_video_job(
             raise JobProcessingError(f"Watermarking the free-tier video failed: {exc}") from exc
 
     # Namespace by job id so re-rendering/editing the same song never overwrites
-    # an earlier video (and a failed job's rollback only deletes its own object).
-    path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}.mp4"
+    # an earlier video, and by a per-run token (#427) so a sibling racing us on
+    # this very job writes its own object: a rollback then deletes only this
+    # run's bytes, never the record-holder's.
+    path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}-{uuid.uuid4().hex[:8]}.mp4"
     # #427: if another worker already recorded this job (a stale-requeue race),
-    # answer with its record rather than overwriting its object with a second
-    # render. The unique index below still catches the sliver between this check
-    # and the insert; the heartbeat is what keeps the race from happening at all.
+    # answer with its record rather than storing a second render. The unique
+    # index below catches the sliver between this check and the insert; the
+    # heartbeat is what keeps the race from happening at all.
     existing = await _recorded_by_sibling(job)
     if existing is not None:
         return existing
@@ -255,20 +258,19 @@ async def process_video_job(
     )
     try:
         await video.insert()
-    except DuplicateKeyError:
-        # The sibling won between the check above and this insert. The object at
-        # ``path`` is theirs (same path), so it must NOT be rolled back.
-        existing = await _recorded_by_sibling(job)
-        if existing is None:  # pragma: no cover - the index just rejected us, so it exists
-            raise
-        return existing
-    except BaseException:
+    except BaseException as exc:
         # BaseException (not Exception): a shutdown CancelledError must also clean
         # up the just-uploaded object, else a requeued retry leaves it orphaned.
+        # The path is this run's alone, so a sibling's object is never touched.
         try:
             await asyncio.to_thread(storage.delete, path)
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.exception("Failed to delete orphaned video object %s during rollback", path)
+        if isinstance(exc, DuplicateKeyError):
+            # The sibling won between the check above and this insert.
+            existing = await _recorded_by_sibling(job)
+            if existing is not None:
+                return existing
         raise
 
     await _set_progress(job, COMPLETE, 100, None)
