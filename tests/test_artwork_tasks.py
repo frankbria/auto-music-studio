@@ -15,7 +15,6 @@ import pytest
 from PIL import Image
 
 from acemusic.api.models import ArtworkOption, Clip, Job, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.artwork import ARTWORK_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks import artwork as tasks
@@ -23,6 +22,7 @@ from acemusic.api.tasks.common import JobProcessingError
 from acemusic.constants import ARTWORK_FINAL_SIZE, ARTWORK_OPTIONS_COUNT
 from acemusic.image_processing import validate_image
 from acemusic.storage import LocalStorage, StorageBackend
+from tests.users import make_user
 
 
 def _png_1024() -> bytes:
@@ -96,7 +96,7 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
 
 
 async def _make_job_and_clip(*, prompt: str | None = "album cover") -> tuple[Job, Clip]:
-    user = await user_service.get_or_create_user(email="t@e.com", provider="google", oauth_id="g-t", name="T")
+    user = await make_user("t@e.com")
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="x.wav", title="Song", style_tags=["lofi"])

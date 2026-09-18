@@ -18,6 +18,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.models import Clip, Job, Video, Workspace
 from acemusic.api.services import users as user_service
+from acemusic.api.services.tiers import FREE, PRO
 from acemusic.api.services.video import VIDEO_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks import video as tasks
@@ -25,6 +26,7 @@ from acemusic.api.tasks.common import JobProcessingError
 from acemusic.storage import LocalStorage
 from acemusic.video_client import VideoGenerationError, VideoJobUpdate
 from acemusic.video_watermark import WatermarkError
+from tests.users import make_user
 
 FAKE_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 256
 FAKE_AUDIO = b"RIFF" + b"\x00" * 100
@@ -135,13 +137,9 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
     return LocalStorage(tmp_path / "storage")
 
 
-async def _make_job_and_clip(*, tier: str = "pro") -> tuple[Job, Clip]:
-    # Pro by default: these tests assert the provider's bytes are stored verbatim,
-    # which is exactly the Pro deliverable. The free tier's watermarking (#401) has
-    # its own cases below.
-    user = await user_service.get_or_create_user(email="v@e.com", provider="google", oauth_id="g-v", name="V")
-    user.subscription_tier = tier
-    await user.save()
+async def _make_job_and_clip(*, tier: str) -> tuple[Job, Clip]:
+    """Tests asserting the provider's bytes are stored verbatim pass ``PRO``: free output is watermarked (#401)."""
+    user = await make_user("v@e.com", tier=tier, name="V")
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="song.wav", title="Song", duration=10.0)
@@ -164,7 +162,7 @@ def _updates_to_complete() -> list[VideoJobUpdate]:
 @pytest.mark.integration
 class TestProcessVideoJob:
     async def test_success_stores_mp4_and_records_video(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
 
@@ -188,7 +186,7 @@ class TestProcessVideoJob:
         assert fresh.progress_detail == {"state": "complete", "progress": 100}
 
     async def test_submit_receives_params_without_clip_id(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
 
@@ -201,7 +199,7 @@ class TestProcessVideoJob:
 
     async def test_progress_detail_written_during_polling(self, storage, monkeypatch) -> None:
         """Each poll persists the provider's state so the status endpoint can serve it live."""
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
         seen: list[dict | None] = []
@@ -219,7 +217,7 @@ class TestProcessVideoJob:
 
     async def test_transient_poll_failures_tolerated(self, storage) -> None:
         """A blip in a status poll must not kill a render that is still running."""
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
         real_get_status = client.get_status
@@ -237,7 +235,7 @@ class TestProcessVideoJob:
         assert result["video_ids"]
 
     async def test_sustained_poll_failure_fails_job(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
 
@@ -249,7 +247,7 @@ class TestProcessVideoJob:
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
 
     async def test_provider_failure_fails_job_without_artifacts(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService([VideoJobUpdate(state="failed", error="render farm on fire")])
 
@@ -259,7 +257,7 @@ class TestProcessVideoJob:
         assert await Video.find(Video.job_id == job.id).count() == 0
 
     async def test_submit_error_fails_job(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService([], submit_error="401 from provider")
 
@@ -267,7 +265,7 @@ class TestProcessVideoJob:
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
 
     async def test_poll_timeout_fails_job(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService([VideoJobUpdate(state="rendering", progress=10)])
 
@@ -275,7 +273,7 @@ class TestProcessVideoJob:
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0, poll_timeout=0)
 
     async def test_missing_source_clip_fails_job(self, storage) -> None:
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         await clip.delete()
         client = FakeVideoService(_updates_to_complete())
 
@@ -288,11 +286,9 @@ class TestProcessVideoJob:
 # ---------------------------------------------------------------------------
 
 
-async def _make_edit_job_and_source(storage: LocalStorage, *, tier: str = "pro") -> tuple[Job, Video]:
+async def _make_edit_job_and_source(storage: LocalStorage, *, tier: str) -> tuple[Job, Video]:
     """A source Video (its MP4 stored) plus a queued edit job referencing it."""
-    user = await user_service.get_or_create_user(email="ve@e.com", provider="google", oauth_id="g-ve", name="VE")
-    user.subscription_tier = tier
-    await user.save()
+    user = await make_user("ve@e.com", tier=tier, name="VE")
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(user_id=user.id, workspace_id=workspace.id, file_path="song.wav", title="Song", duration=10.0)
@@ -322,7 +318,7 @@ async def _make_edit_job_and_source(storage: LocalStorage, *, tier: str = "pro")
 @pytest.mark.integration
 class TestProcessVideoEditJob:
     async def test_edit_stores_new_version_linked_to_source(self, storage) -> None:
-        job, source = await _make_edit_job_and_source(storage)
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
         client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
 
         result = await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
@@ -341,7 +337,7 @@ class TestProcessVideoEditJob:
 
     async def test_non_trim_edit_inherits_source_duration(self, storage) -> None:
         # A lyrics-overlay edit keeps the source video's length (only trim resizes).
-        job, source = await _make_edit_job_and_source(storage)
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
         source.duration = 8.0
         await source.save()
         job.input_params["edit"] = {"operation": "lyrics_overlay", "lyrics_enabled": True}
@@ -354,7 +350,7 @@ class TestProcessVideoEditJob:
         assert new.duration == 8.0
 
     async def test_edit_submits_source_media_and_spec(self, storage) -> None:
-        job, source = await _make_edit_job_and_source(storage)
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
         client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
 
         await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
@@ -366,7 +362,7 @@ class TestProcessVideoEditJob:
         assert "source_video_id" not in params  # provider gets the media + spec, not our ids
 
     async def test_missing_source_object_fails_job(self, storage) -> None:
-        job, source = await _make_edit_job_and_source(storage)
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
         storage.delete(source.storage_path)
         client = FakeVideoService(_updates_to_complete(), expect_media=None)
 
@@ -374,7 +370,7 @@ class TestProcessVideoEditJob:
             await tasks.process_video_job(job, storage=storage, client=client, poll_interval=0)
 
     async def test_deleted_source_document_fails_job(self, storage) -> None:
-        job, source = await _make_edit_job_and_source(storage)
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
         await source.delete()
         client = FakeVideoService(_updates_to_complete(), expect_media=None)
 
@@ -434,7 +430,7 @@ class TestFreeTierWatermark:
     """US-26.2 sells the free tier as *watermarked* 720p; #401 is that half."""
 
     async def test_free_account_render_is_watermarked(self, storage) -> None:
-        job, clip = await _make_job_and_clip(tier="free")
+        job, clip = await _make_job_and_clip(tier=FREE)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
         calls: list[bytes] = []
@@ -447,7 +443,7 @@ class TestFreeTierWatermark:
         assert storage.download(result["storage_path"]) == MARKED_MP4  # ...the marked one was stored
 
     async def test_pro_account_render_is_untouched(self, storage) -> None:
-        job, clip = await _make_job_and_clip(tier="pro")
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
         calls: list[bytes] = []
@@ -473,7 +469,7 @@ class TestFreeTierWatermark:
         assert calls == [FAKE_MP4]
 
     async def test_deleted_user_is_watermarked(self, storage) -> None:
-        job, clip = await _make_job_and_clip(tier="pro")
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         await (await user_service.get_user_by_id(str(job.user_id))).delete()
         client = FakeVideoService(_updates_to_complete())
@@ -487,7 +483,7 @@ class TestFreeTierWatermark:
 
     async def test_free_account_edit_is_watermarked(self, storage) -> None:
         """An edit is a render too — it must not be a way around the mark."""
-        job, source = await _make_edit_job_and_source(storage, tier="free")
+        job, source = await _make_edit_job_and_source(storage, tier=FREE)
         client = FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4)
         calls: list[bytes] = []
 
@@ -504,10 +500,10 @@ class TestFreeTierWatermark:
         The policy is deliberate — the mark reflects the tier at the moment the
         video is produced — so it deserves a test rather than only a docstring.
         """
-        job, clip = await _make_job_and_clip(tier="pro")
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         owner = await user_service.get_user_by_id(str(job.user_id))
-        owner.subscription_tier = "free"
+        owner.subscription_tier = FREE
         await owner.save()
         calls: list[bytes] = []
 
@@ -520,7 +516,7 @@ class TestFreeTierWatermark:
 
     async def test_watermark_failure_fails_the_job(self, storage, tmp_path) -> None:
         """#401: never silently produce an unmarked video for a free account."""
-        job, clip = await _make_job_and_clip(tier="free")
+        job, clip = await _make_job_and_clip(tier=FREE)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
 
@@ -540,7 +536,7 @@ class TestFreeTierWatermark:
         a regression that kept the default but stopped calling it pass unnoticed.
         """
         rendered = _encode_test_video(tmp_path)
-        job, clip = await _make_job_and_clip(tier="free")
+        job, clip = await _make_job_and_clip(tier=FREE)
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
         client.download = lambda provider_job_id: rendered
@@ -561,7 +557,7 @@ class TestSiblingWorkerCannotDuplicate:
         as the winner's ``Video``) nor fail the job (the processor would refund
         credits over a video that exists): it answers with the winner's record.
         """
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         first = await tasks.process_video_job(
             job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
@@ -581,7 +577,7 @@ class TestSiblingWorkerCannotDuplicate:
     async def test_a_retry_of_a_recorded_job_does_not_render_again(self, storage) -> None:
         """A run that recorded its Video but died before the job was marked complete is
         re-queued; the retry must answer with the record, not pay for a second render."""
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         first = await tasks.process_video_job(
             job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
@@ -599,7 +595,7 @@ class TestSiblingWorkerCannotDuplicate:
         """The narrower race: both workers pass the pre-upload check, both upload,
         the loser's insert hits the unique index. Its rollback must delete its
         own object only, and it still answers with the winner's record."""
-        job, clip = await _make_job_and_clip()
+        job, clip = await _make_job_and_clip(tier=PRO)
         storage.upload(clip.file_path, FAKE_AUDIO)
         first = await tasks.process_video_job(
             job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0

@@ -12,10 +12,11 @@ from beanie import PydanticObjectId
 from PIL import Image
 
 from acemusic.api.models import ArtworkOption, Clip, Workspace
-from acemusic.api.services import artwork as artwork_service, users as user_service
+from acemusic.api.services import artwork as artwork_service
 from acemusic.api.services.artwork import ARTWORK_JOB_TYPE, ArtworkNotFoundError
 from acemusic.constants import ARTWORK_PROMPT_MAX_LENGTH
 from acemusic.storage import LocalStorage
+from tests.users import make_user
 
 
 def _png(size=(3000, 3000)) -> bytes:
@@ -64,7 +65,7 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
 
 
 async def _make_clip(*, email: str = "art@example.com") -> Clip:
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user = await make_user(email)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(

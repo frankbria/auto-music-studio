@@ -31,6 +31,7 @@ from acemusic.api.tasks import mastering as tasks
 from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.mastering_protocol import MasteringError, MasteringOutput
 from acemusic.storage import LocalStorage
+from tests.users import make_user
 
 SR = 44100
 
@@ -134,7 +135,7 @@ async def _make_clip(
     key: str | None = "C",
     service: str = "dolby",
 ) -> tuple[Job, Clip]:
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user = await make_user(email)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip_id = PydanticObjectId()

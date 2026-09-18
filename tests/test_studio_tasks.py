@@ -22,7 +22,6 @@ import soundfile as sf
 from beanie import PydanticObjectId
 
 from acemusic.api.models import Clip, Job, JobStatus, Workspace
-from acemusic.api.services import users as user_service
 from acemusic.api.services.studio import (
     STUDIO_DAW_EXPORT_JOB_TYPE,
     STUDIO_MIXDOWN_JOB_TYPE,
@@ -30,6 +29,7 @@ from acemusic.api.services.studio import (
 )
 from acemusic.api.tasks import studio as tasks
 from acemusic.storage import LocalStorage
+from tests.users import make_user
 
 SR = 48000
 
@@ -68,7 +68,7 @@ async def _make_clip(storage: LocalStorage, user, workspace, *, freq: float = 22
 
 
 async def _setup(storage: LocalStorage, email: str, n_clips: int = 2):
-    user = await user_service.get_or_create_user(email=email, provider="google", oauth_id=f"g-{email}", name="T")
+    user = await make_user(email)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clips = [await _make_clip(storage, user, workspace, freq=220.0 * (i + 1)) for i in range(n_clips)]

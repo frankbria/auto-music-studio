@@ -1,4 +1,4 @@
-"""The one way API tests create users (#423).
+"""The one way tests create users (#423, #495).
 
 ``subscription_tier`` defaults to **free** because that is what a real signup gets. A test
 that wants Pro says so at the call site — never through a file-level default, which is how
