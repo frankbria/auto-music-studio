@@ -11,6 +11,9 @@ namespace
     constexpr const char* tokenRejected = "Plugin token rejected - create a new one in Settings on the web app";
     constexpr const char* tokenMissing = "The platform needs a plugin token - create one in Settings on the web app";
 
+    /** `renew`'s answer when it was told to stop. Never shown: `run` reports a cancel. */
+    constexpr const char* stopped = "stopped";
+
     /** Serialises every refresh in the process, not just this session's: two plugin
         instances share one token file, and a single-use token refreshed twice signs one
         of them out. Held across the network call on purpose. */
@@ -46,8 +49,11 @@ void Session::setRefreshToken (const juce::String& token)
 }
 
 Result Session::run (const juce::String& baseUrl,
-                     const std::function<Result (const juce::String&)>& call)
+                     const std::function<Result (const juce::String&)>& call,
+                     const std::function<bool()>& shouldCancel)
 {
+    const auto stopping = [&] { return shouldCancel != nullptr && shouldCancel(); };
+
     const auto access = [this] { const juce::ScopedLock sl (lock); return accessToken; }();
 
     // No access token yet (a fresh start) goes out bare: the 401 it earns is what
@@ -63,10 +69,11 @@ Result Session::run (const juce::String& baseUrl,
         return result;
     }
 
-    if (const auto error = renew (baseUrl, access); error.isNotEmpty())
+    if (const auto error = renew (baseUrl, access, stopping); error.isNotEmpty())
     {
         Result failed;
-        failed.errorMessage = error;
+        failed.cancelled = (error == stopped);
+        failed.errorMessage = failed.cancelled ? juce::String() : error;
         return failed;
     }
 
@@ -79,10 +86,15 @@ Result Session::run (const juce::String& baseUrl,
     return result;
 }
 
-juce::String Session::renew (const juce::String& baseUrl, const juce::String& rejectedAccess)
+juce::String Session::renew (const juce::String& baseUrl, const juce::String& rejectedAccess,
+                             const std::function<bool()>& shouldCancel)
 {
     const juce::ScopedLock refreshing (refreshLock());
     juce::String token;
+
+    // It may have waited out another instance's refresh, and been asked to stop meanwhile.
+    if (shouldCancel())
+        return stopped;
 
     {
         const juce::ScopedLock sl (lock);
@@ -99,7 +111,10 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
         token = refreshToken;
     }
 
-    const auto refreshed = refreshTokens (baseUrl, token);
+    const auto refreshed = refreshTokens (baseUrl, token, shouldCancel);
+
+    if (refreshed.cancelled)
+        return stopped;
 
     if (! refreshed.ok)
         return refreshed.unauthorised ? juce::String (tokenRejected) : refreshed.errorMessage;

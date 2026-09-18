@@ -220,6 +220,32 @@ public:
             expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 1);
         }
 
+        beginTest ("a stopping queue does not start a refresh");
+        {
+            // Teardown: the refresh holds a process-wide lock across a network call, so
+            // one that starts while the plugin is closing would stall every other instance.
+            ScopedTokenFile tokens;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/api/v1/auth/refresh", rotated);
+            server.requireBearer ("access-2");
+
+            Platform::Session session (tokens.file());
+            session.setRefreshToken ("refresh-1");
+
+            std::atomic<bool> stopping { false };
+            const auto result = session.run (server.getBaseUrl(), [&] (const juce::String& access)
+            {
+                auto r = Platform::listWorkspaces (server.getBaseUrl(), access);
+                stopping = true;   // the host closes the plugin while this call is out
+                return r;
+            }, [&] { return stopping.load(); });
+
+            expect (result.cancelled, "a stopped run did not report cancelled");
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 0);
+            expectEquals (session.getRefreshToken(), juce::String ("refresh-1"), "the token was spent anyway");
+        }
+
         beginTest ("pasting a token forgets the old access token and persists the new one");
         {
             ScopedTokenFile tokens;

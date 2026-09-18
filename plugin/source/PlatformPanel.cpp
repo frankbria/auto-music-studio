@@ -310,7 +310,7 @@ void PlatformPanel::connect()
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, pasted, request, sessionRef = session]
+    queue.enqueue ([safeThis, url, pasted, request, sessionRef = session, queuePtr = &queue]
     {
         if (pasted.isNotEmpty())
             sessionRef->setRefreshToken (pasted);
@@ -318,7 +318,7 @@ void PlatformPanel::connect()
         auto result = sessionRef->run (url, [&] (const juce::String& access)
         {
             return Platform::listWorkspaces (url, access);
-        });
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -404,12 +404,12 @@ void PlatformPanel::refreshClips()
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, workspaceId, search, request, sessionRef = session]
+    queue.enqueue ([safeThis, url, workspaceId, search, request, sessionRef = session, queuePtr = &queue]
     {
         auto result = sessionRef->run (url, [&] (const juce::String& access)
         {
             return Platform::listClips (url, access, workspaceId, search);
-        });
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -467,12 +467,12 @@ void PlatformPanel::importSelectedClip()
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, clip, destination, request, sessionRef = session]
+    queue.enqueue ([safeThis, url, clip, destination, request, sessionRef = session, queuePtr = &queue]
     {
         auto result = sessionRef->run (url, [&] (const juce::String& access)
         {
             return Platform::downloadClip (url, access, clip.id, destination);
-        });
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request, clip]
         {
@@ -532,12 +532,12 @@ void PlatformPanel::pushClip (const juce::File& clip)
     const auto request = ++currentRequest;
     juce::WeakReference<PlatformPanel> safeThis { this };
 
-    queue.enqueue ([safeThis, url, workspaceId, clip, title, bpm, request, sessionRef = session]
+    queue.enqueue ([safeThis, url, workspaceId, clip, title, bpm, request, sessionRef = session, queuePtr = &queue]
     {
         auto result = sessionRef->run (url, [&] (const juce::String& access)
         {
             return Platform::uploadClip (url, access, workspaceId, clip, title, bpm, {}, 0.0);
-        });
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         BackgroundTaskQueue::callOnMessageThread ([safeThis, result, request]
         {
@@ -576,7 +576,7 @@ void PlatformPanel::refreshVoiceModels()
         const auto result = sessionRef->run (url, [&] (const juce::String& access)
         {
             return Platform::listVoiceModels (url, access, [queuePtr] { return queuePtr->isStopping(); });
-        });
+        }, [queuePtr] { return queuePtr->isStopping(); });
 
         queuePtr->callOnMessageThread ([self, result]
         {

@@ -37,14 +37,20 @@ public:
     /** Runs `call` with the current access token, refreshing and retrying once on a 401.
 
         Blocking — worker threads only. A token the platform still refuses after that is
-        reported as such, never retried again. */
+        reported as such, never retried again.
+
+        @param shouldCancel  checked before a refresh starts: a closing plugin must not
+                             spend a single-use token, nor hold the process-wide refresh
+                             lock across a network call */
     Result run (const juce::String& baseUrl,
-                const std::function<Result (const juce::String& accessToken)>& call);
+                const std::function<Result (const juce::String& accessToken)>& call,
+                const std::function<bool()>& shouldCancel = nullptr);
 
 private:
     /** Swaps the refresh token for a new pair, unless another caller already replaced
         `rejectedAccess`. @returns an error to show, or empty on success. */
-    juce::String renew (const juce::String& baseUrl, const juce::String& rejectedAccess);
+    juce::String renew (const juce::String& baseUrl, const juce::String& rejectedAccess,
+                        const std::function<bool()>& shouldCancel);
 
     void persist (const juce::String& token);
 

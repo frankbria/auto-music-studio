@@ -295,7 +295,7 @@ GenerationManager::RunOutcome GenerationManager::runOnPlatform (const RunContext
     const auto submitted = session.run (context.platformUrl, [&] (const juce::String& access)
     {
         return Platform::submitGeneration (context.platformUrl, access, payload, shouldStop);
-    });
+    }, shouldStop);
 
     if (submitted.cancelled || shouldStop())
     {
@@ -330,7 +330,7 @@ GenerationManager::RunOutcome GenerationManager::runOnPlatform (const RunContext
         const auto status = session.run (context.platformUrl, [&] (const juce::String& access)
         {
             return Platform::getJobStatus (context.platformUrl, access, submitted.jobId, shouldStop);
-        });
+        }, shouldStop);
 
         if (status.cancelled || shouldStop())
         {
@@ -452,7 +452,7 @@ void GenerationManager::runGeneration (RunContext context)
             {
                 return Platform::downloadClip (context.platformUrl, access, outcome.clipIds[i],
                                                destination, shouldStop);
-            });
+            }, shouldStop);
 
             if (fetched.cancelled)
             {
