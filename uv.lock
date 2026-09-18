@@ -79,7 +79,7 @@ requires-dist = [
     { name = "basic-pitch", marker = "extra == 'audio-ml-midi'", specifier = ">=0.3.0" },
     { name = "beanie", specifier = ">=2.2.0" },
     { name = "black", marker = "extra == 'dev'" },
-    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.43.82" },
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.43.88" },
     { name = "demucs", marker = "extra == 'audio-ml'", specifier = ">=4.0" },
     { name = "dnspython", specifier = ">=2.6" },
     { name = "email-validator", specifier = ">=2.0" },
@@ -334,16 +334,16 @@ wheels = [
 
 [[package]]
 name = "boto3"
-version = "1.43.82"
+version = "1.43.88"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
     { name = "jmespath" },
     { name = "s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/b1/5d8bc6b7335d86f15d43a34a4bbbeced202aef2b4e942c67a5846120c1ff/boto3-1.43.82.tar.gz", hash = "sha256:bc5a7824568c117110bac8fe7ccfac63f0a946f253953d42e73a8c1fb65162e0", size = 112671, upload-time = "2026-08-27T20:08:42.01Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/a4/d7b6ca0c2c21722c12b6ecc942ff3e2304c40f00724182500236616c4236/boto3-1.43.88.tar.gz", hash = "sha256:b3d03fba8ace049de27e3a6ed69b25a55d752f49d563394985e805ed5f0a0a74", size = 112730, upload-time = "2026-09-03T19:24:05.814Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/70/d7/743fafc6d544b3552517d45958b093ec70b934b513d95b238abe935e54a3/boto3-1.43.82-py3-none-any.whl", hash = "sha256:65319e8bba6e30f74a6e2727a5688725222da2ab71c6069bc484ce5bfd101c73", size = 140026, upload-time = "2026-08-27T20:08:40.323Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/04/b024d6c8ba2ae18ebaf6597981069a6f51d97ab64d769d466936f1454954/boto3-1.43.88-py3-none-any.whl", hash = "sha256:62efee681fefc9b14244d66ab66ead11dd4a32fec0a54ac9f23106003ef210ca", size = 140024, upload-time = "2026-09-03T19:24:04.27Z" },
 ]
 
 [[package]]
