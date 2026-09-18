@@ -108,15 +108,6 @@ async def create_mastering_job(
 # ---------------------------------------------------------------------------
 
 
-class InsufficientCreditsError(Exception):
-    """The user cannot afford the batch. Carries the balance and required cost."""
-
-    def __init__(self, balance: float, required: float) -> None:
-        super().__init__("insufficient_credits")
-        self.balance = balance
-        self.required = required
-
-
 async def create_mastering_batch(
     *,
     user_id: str,
@@ -129,7 +120,7 @@ async def create_mastering_batch(
     """Queue one mastering job per owned clip under a single :class:`BatchJob`.
 
     Unknown/not-owned clips become failed entries (never charged). The remaining
-    clips' summed cost is deducted atomically upfront — :class:`InsufficientCreditsError`
+    clips' summed cost is deducted atomically upfront — :class:`~acemusic.api.services.credits.InsufficientCreditsError`
     if the balance is short, before any job is created. Each queued job records a
     per-clip ``mastering`` ledger row; a job that fails to queue refunds its own
     credit and becomes a failed entry. Returns the saved batch.
@@ -163,7 +154,7 @@ async def create_mastering_batch(
         deducted = await credits_service.deduct_credits_split(uid, total_cost)
         if deducted is None:
             fresh = await User.get(uid)
-            raise InsufficientCreditsError(
+            raise credits_service.InsufficientCreditsError(
                 balance=credits_service.spendable(fresh) if fresh is not None else 0.0,
                 required=total_cost,
             )

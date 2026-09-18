@@ -222,20 +222,14 @@ async def create_mastering_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
     target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
-    try:
-        batch = await mastering_service.create_mastering_batch(
-            user_id=current.user_id,
-            clip_ids=request.clip_ids,
-            profile=request.profile,
-            service=request.service,
-            format=request.format,
-            target_lufs=target_lufs,
-        )
-    except mastering_service.InsufficientCreditsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "insufficient_credits", "balance": exc.balance, "required": exc.required},
-        ) from exc
+    batch = await mastering_service.create_mastering_batch(
+        user_id=current.user_id,
+        clip_ids=request.clip_ids,
+        profile=request.profile,
+        service=request.service,
+        format=request.format,
+        target_lufs=target_lufs,
+    )
     return BatchMasteringResponse(
         batch_id=str(batch.id),
         jobs=[BatchJobItem(clip_id=e.clip_id, job_id=e.job_id, error=e.error) for e in batch.entries],

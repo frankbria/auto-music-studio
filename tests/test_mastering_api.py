@@ -319,8 +319,8 @@ class TestJobCreationFailure:
             raise RuntimeError("job store down")
 
         monkeypatch.setattr(mastering_service, "create_mastering_job", _boom)
-        # The ASGI test transport re-raises app exceptions; the refund happens in
-        # the router's ``except`` before the error propagates.
+        # The ASGI test transport re-raises app exceptions; charge_and_create
+        # refunds before the error propagates.
         with pytest.raises(RuntimeError):
             await client.post(
                 MASTERING_URL,
