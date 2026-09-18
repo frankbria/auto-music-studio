@@ -4,9 +4,9 @@ Next.js 16 app built on the Shadcn Nova template (gray palette, Hugeicons, Nunit
 
 ## Toolchain
 
-**Node 22, npm 10.9.8.** CI pins both — the npm version lives in one place, the
+**Node 24, npm 10.9.8.** CI pins both — the npm version lives in one place, the
 workflow-level `NPM_VERSION` in `.github/workflows/ci.yml`, and is used by the `web` and
-`web npm audit` jobs alike. The `web/Dockerfile` builds on `node:22-slim`.
+`web npm audit` jobs alike. The `web/Dockerfile` builds on `node:24-slim`.
 
 The npm version matters specifically when you **regenerate `package-lock.json`**. npm 11
 drops the bundled nested `@emnapi/*` entries that npm 10 writes, which leaves declared

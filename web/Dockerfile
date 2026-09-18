@@ -1,10 +1,10 @@
 # Next.js web image (#429). Built from the web/ context, not the repo root.
 #
-# Node 22 to match CI. The app is a true BFF — there is not a single NEXT_PUBLIC_* var, and
+# Node 24 (the active LTS line) to match CI. The app is a true BFF — there is not a single NEXT_PUBLIC_* var, and
 # API_BASE_URL is read server-side at request time — so nothing here is baked in at build
 # time and one image is portable across every environment.
 
-FROM node:22-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /app
 
@@ -22,7 +22,7 @@ COPY . .
 RUN npm run typecheck && npm run build
 
 
-FROM node:22-slim AS runtime
+FROM node:24-slim AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \
