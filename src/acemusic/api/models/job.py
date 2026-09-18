@@ -49,6 +49,11 @@ class Job(Document):
     progress_detail: dict | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
+    # Stamped on claim and re-stamped periodically by the worker running the job
+    # (#427). The startup stale sweep keys on this, not ``started_at``, so a job
+    # is "stale" when its worker stopped reporting — not when it has merely run
+    # for a long time. None for jobs claimed before the field existed.
+    heartbeat_at: datetime | None = None
     completed_at: datetime | None = None
 
     class Settings:

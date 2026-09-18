@@ -108,12 +108,11 @@ Three things that are easy to get wrong the first time:
 ### Single container, not a split API and worker
 
 The job processor runs in-process inside the API's lifespan. Splitting it is nearly free —
-`job_processor_enabled` already exists — but it makes **#427** live: the stale-requeue
-window is shorter than a video render's worst case, so multiple worker processes are
-precisely the deployment that turns that latent race into double provider billing and
-racing `Video` documents.
-
-Single container until #427 is closed. Then splitting is a compose service and a flag.
+`job_processor_enabled` already exists — and since **#427** it is safe: a worker heartbeats
+each job it is running, and the startup stale sweep re-queues only jobs whose heartbeat has
+stopped, so a sibling process starting mid-render never reclaims a live job (and the
+`videos` collection rejects a second document for one job regardless). Still a single
+container: nothing needs more than one worker yet. Splitting is a compose service and a flag.
 
 ### Deploys are fully automatic
 

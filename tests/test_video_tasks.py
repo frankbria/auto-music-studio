@@ -550,3 +550,28 @@ class TestFreeTierWatermark:
         stored = storage.download(result["storage_path"])
         assert stored != rendered
         assert _bottom_right_changed(tmp_path, rendered, stored), "no mark in the stored video"
+
+
+@pytest.mark.integration
+class TestSiblingWorkerCannotDuplicate:
+    async def test_second_run_for_the_same_job_fails_and_keeps_the_first_video(self, storage) -> None:
+        """#427: two workers that both run the same job cannot both record a Video.
+
+        The unique index on ``job_id`` rejects the second insert, and the rollback
+        must not delete the stored object — it is the same path the first worker's
+        ``Video`` points at.
+        """
+        job, clip = await _make_job_and_clip()
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        first = await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+        )
+
+        with pytest.raises(JobProcessingError, match="already"):
+            await tasks.process_video_job(
+                job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+            )
+
+        videos = await Video.find(Video.job_id == job.id).to_list()
+        assert len(videos) == 1
+        assert storage.download(first["storage_path"]) == FAKE_MP4

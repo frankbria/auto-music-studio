@@ -16,6 +16,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
+from pymongo.errors import DuplicateKeyError
+
 from acemusic.storage import StorageBackend
 from acemusic.video_client import (
     COMPLETE,
@@ -38,14 +40,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 5.0
-# Poll budget for the provider render. Note the handler's worst-case wall time
-# (submit + this poll budget + download) can exceed the processor's stale-requeue
-# window (poll_timeout + 300s, 900s by default). The stale sweep only runs at
-# process START, so a single-process deployment is safe (a restart killed the old
-# worker anyway); only a multi-process deployment starting a sibling mid-render
-# could re-queue a live job. Acceptable for now — revisit if video ever runs
-# multi-process (raise stale_after for this job type). #401's watermarking pass
-# widens that worst case again by up to its own timeout; see #427.
+# Poll budget for the provider render. The handler's worst-case wall time (submit
+# + this + download + the watermark pass) exceeds the processor's stale window,
+# which is fine: since #427 the worker heartbeats the job while this runs, so a
+# sibling process starting mid-render never re-queues it.
 POLL_TIMEOUT_S = 600.0
 
 # One failed status poll must not kill a paid render that is still progressing on
@@ -238,6 +236,10 @@ async def process_video_job(
     )
     try:
         await video.insert()
+    except DuplicateKeyError as exc:
+        # #427: another worker already recorded this job's video. The object at
+        # ``path`` is theirs (same path), so it must NOT be rolled back here.
+        raise JobProcessingError(f"Video for job {job.id} was already recorded by another worker") from exc
     except BaseException:
         # BaseException (not Exception): a shutdown CancelledError must also clean
         # up the just-uploaded object, else a requeued retry leaves it orphaned.
