@@ -92,10 +92,6 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
     const juce::ScopedLock refreshing (refreshLock());
     juce::String token;
 
-    // It may have waited out another instance's refresh, and been asked to stop meanwhile.
-    if (shouldCancel())
-        return stopped;
-
     {
         const juce::ScopedLock sl (lock);
 
@@ -111,6 +107,8 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
         token = refreshToken;
     }
 
+    // Checked right before connecting, which covers a stop that arrived while this call
+    // waited out another instance's refresh.
     const auto refreshed = refreshTokens (baseUrl, token, shouldCancel);
 
     if (refreshed.cancelled)
