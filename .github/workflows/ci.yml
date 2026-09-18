@@ -7,11 +7,12 @@ on:
     branches: [main]
 
 # Both Node jobs pin the same npm. `setup-node` cannot pin npm itself — it installs
-# whatever the Node 22 line happens to bundle — and the two jobs must agree, because
+# whatever the Node 24 line happens to bundle — and the two jobs must agree, because
 # `web-audit` decides whether the lockfile is internally consistent and `web` consumes
-# that same lockfile via `npm ci`. If a future Node 22 point release ships a different
+# that same lockfile via `npm ci`. If a future Node 24 point release ships a different
 # npm, an unpinned pair could disagree about what "consistent" means.
-# Keep this in step with the version documented in web/README.md.
+# Keep this in step with the version documented in web/README.md and the NPM_VERSION
+# build arg in web/Dockerfile.
 env:
   NPM_VERSION: "10.9.8"
 
@@ -103,7 +104,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -157,7 +158,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 

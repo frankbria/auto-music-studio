@@ -1,12 +1,18 @@
 # Next.js web image (#429). Built from the web/ context, not the repo root.
 #
-# Node 22 to match CI. The app is a true BFF — there is not a single NEXT_PUBLIC_* var, and
+# Node 24 (the active LTS line) to match CI. The app is a true BFF — there is not a single NEXT_PUBLIC_* var, and
 # API_BASE_URL is read server-side at request time — so nothing here is baked in at build
 # time and one image is portable across every environment.
 
-FROM node:22-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /app
+
+# node:24-slim bundles npm 11, which reads this lockfile differently from the npm 10 CI
+# validates it with (see web/README.md). Pin the same version CI's NPM_VERSION does, and
+# assert it, so the image is installed by the installer that judged the lockfile.
+ARG NPM_VERSION=10.9.8
+RUN npm install -g "npm@${NPM_VERSION}" && test "$(npm -v)" = "${NPM_VERSION}"
 
 # npm ci needs both files and nothing else; keeping this ahead of the source copy means a
 # source-only change reuses the install layer.
@@ -22,7 +28,7 @@ COPY . .
 RUN npm run typecheck && npm run build
 
 
-FROM node:22-slim AS runtime
+FROM node:24-slim AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \
