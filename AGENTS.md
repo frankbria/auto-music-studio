@@ -228,7 +228,7 @@ Configured in `.pre-commit-config.yaml`:
 ## CI
 
 `.github/workflows/ci.yml` — four jobs:
-- Triggers on push (all branches) and PR to `main`
+- Triggers on PR to `main`, push to `main`, and `workflow_dispatch` (branches without a PR). A newer push to a PR cancels its in-flight run; `main` runs are never cancelled (#481)
 - `ci` — matrix Python 3.11, 3.12, with a `mongo:7` service container. Steps: install
   ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov` →
   `pytest -m integration` against the service Mongo. **These two are required checks
