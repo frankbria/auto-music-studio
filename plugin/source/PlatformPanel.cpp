@@ -573,10 +573,13 @@ void PlatformPanel::refreshVoiceModels()
 
     queue.enqueue ([self, url, queuePtr, sessionRef = session]
     {
-        const auto result = sessionRef->run (url, [&] (const juce::String& access)
+        // Built once and captured by value: MSVC rejects a by-value capture of queuePtr
+        // re-captured inside the nested [&] lambda.
+        const std::function<bool()> stopping = [queuePtr] { return queuePtr->isStopping(); };
+        const auto result = sessionRef->run (url, [&url, &stopping] (const juce::String& access)
         {
-            return Platform::listVoiceModels (url, access, [queuePtr] { return queuePtr->isStopping(); });
-        }, [queuePtr] { return queuePtr->isStopping(); });
+            return Platform::listVoiceModels (url, access, stopping);
+        }, stopping);
 
         queuePtr->callOnMessageThread ([self, result]
         {
