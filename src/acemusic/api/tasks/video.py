@@ -213,6 +213,12 @@ async def process_video_job(
         edit = None
         duration = clip.duration
 
+    # #427: a retry of a job whose earlier run recorded its video but died before
+    # the job was marked complete must not pay the provider for a second render.
+    existing = await _recorded_by_sibling(job)
+    if existing is not None:
+        return existing
+
     try:
         provider_job_id = await asyncio.to_thread(client.submit, media, filename, provider_params)
     except VideoGenerationError as exc:

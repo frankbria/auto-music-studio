@@ -578,6 +578,21 @@ class TestSiblingWorkerCannotDuplicate:
         assert len(videos) == 1
         assert storage.download(first["storage_path"]) == FAKE_MP4
 
+    async def test_a_retry_of_a_recorded_job_does_not_render_again(self, storage) -> None:
+        """A run that recorded its Video but died before the job was marked complete is
+        re-queued; the retry must answer with the record, not pay for a second render."""
+        job, clip = await _make_job_and_clip()
+        storage.upload(clip.file_path, FAKE_AUDIO)
+        first = await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+        )
+        retry = FakeVideoService(_updates_to_complete())
+
+        second = await tasks.process_video_job(job, storage=storage, client=retry, poll_interval=0)
+
+        assert second == first
+        assert retry.submitted == [], "the retry re-rendered a video that already exists"
+
     async def test_a_loser_that_already_uploaded_keeps_only_the_winners_object(
         self, storage, tmp_path, monkeypatch
     ) -> None:
@@ -592,11 +607,11 @@ class TestSiblingWorkerCannotDuplicate:
         real_check = tasks._recorded_by_sibling
         calls: list[int] = []
 
-        async def blind_once(job_):  # the pre-upload check misses the winner, exactly once
+        async def blind_until_insert(job_):  # the pre-submit and pre-upload checks both miss the winner
             calls.append(1)
-            return None if len(calls) == 1 else await real_check(job_)
+            return None if len(calls) <= 2 else await real_check(job_)
 
-        monkeypatch.setattr(tasks, "_recorded_by_sibling", blind_once)
+        monkeypatch.setattr(tasks, "_recorded_by_sibling", blind_until_insert)
         loser = FakeVideoService(_updates_to_complete())
         loser.download = lambda provider_job_id: b"LOSER-BYTES"
 
