@@ -209,8 +209,8 @@ Environment variables (see `.env.example`):
 - Test config: `testpaths = ["tests"]`, `bdd_features_base_dir = "tests/features"`
 - **Test users (#423)**: create them with the `free_user` / `pro_user` fixtures (`tests/conftest.py`), or
   `tests.users.make_user(email, tier=..., **fields)` when a test needs several accounts. Never write a
-  per-file `_make_user`; `tests/test_user_fixtures.py` fails if an API test file calls
-  `get_or_create_user` directly.
+  per-file `_make_user`; `tests/test_user_fixtures.py` fails if any test file calls
+  `get_or_create_user` directly, except the allow-listed files that test the user service itself (#495).
   - **Free is the default** because it is what a real signup gets. A Pro-by-default helper keeps passing
     when an ungated endpoint is accidentally gated, so it proves nothing about the gate.
   - Say `tier=PRO` at the call site that needs it, never as a file-level default. Tests parametrized by

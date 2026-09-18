@@ -1,6 +1,6 @@
 """The shared test-user convention (#423).
 
-Every API test creates its users through ``tests.users.make_user`` or the ``free_user`` /
+Every test creates its users through ``tests.users.make_user`` or the ``free_user`` /
 ``pro_user`` fixtures, so the tier a test needs is stated rather than inherited from a
 per-file helper. These tests pin the two properties the convention exists for: the default
 is **free** (what a real signup gets, so gating regressions cannot hide behind a Pro
@@ -18,11 +18,16 @@ from tests.users import make_user
 
 TESTS_DIR = Path(__file__).parent
 
+# These test the user service itself, so they must call it directly.
+USER_SERVICE_TESTS = {"test_user_service.py", "test_oauth_identities.py"}
 
-def test_api_tests_do_not_create_users_directly() -> None:
-    """Any ``tests/test_*_api.py`` reaching for the service is a per-file helper coming back."""
+
+def test_tests_do_not_create_users_directly() -> None:
+    """Any ``tests/test_*.py`` reaching for the service is a per-file helper coming back."""
     offenders = sorted(
-        p.name for p in TESTS_DIR.glob("test_*_api.py") if re.search(r"\bget_or_create_user\(", p.read_text())
+        p.name
+        for p in TESTS_DIR.glob("test_*.py")
+        if p.name not in USER_SERVICE_TESTS and re.search(r"\bget_or_create_user\(", p.read_text())
     )
     assert offenders == [], f"create users via tests.users.make_user, not directly: {offenders}"
 
