@@ -652,6 +652,28 @@ public:
             expect (! result.ok);
             expect (result.errorMessage.containsIgnoreCase ("credits"), "got: " + result.errorMessage);
         }
+
+        beginTest ("a validation error names the field the platform rejected");
+        {
+            // FastAPI sends 422 detail as a list of {loc, msg, type}, not a string.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 422 Unprocessable Entity");
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"detail": [{"loc": ["body", "prompt"], "msg": "Field required",
+                                       "type": "missing"}, {"loc": ["body", "duration"],
+                                       "msg": "Input should be a valid number", "type": "float_parsing"}]})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.contains ("Field required"), "got: " + result.errorMessage);
+            expect (result.errorMessage.contains ("body.prompt"), "got: " + result.errorMessage);
+        }
     }
 };
 
