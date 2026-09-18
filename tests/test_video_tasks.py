@@ -138,6 +138,7 @@ def storage(mongo_db, tmp_path) -> LocalStorage:
 
 
 async def _make_job_and_clip(*, tier: str) -> tuple[Job, Clip]:
+    """Tests asserting the provider's bytes are stored verbatim pass ``PRO``: free output is watermarked (#401)."""
     user = await make_user("v@e.com", tier=tier, name="V")
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
