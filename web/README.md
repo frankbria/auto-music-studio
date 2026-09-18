@@ -4,9 +4,10 @@ Next.js 16 app built on the Shadcn Nova template (gray palette, Hugeicons, Nunit
 
 ## Toolchain
 
-**Node 24, npm 10.9.8.** CI pins both — the npm version lives in one place, the
-workflow-level `NPM_VERSION` in `.github/workflows/ci.yml`, and is used by the `web` and
-`web npm audit` jobs alike. The `web/Dockerfile` builds on `node:24-slim`.
+**Node 24, npm 10.9.8.** CI pins both — the npm version is the workflow-level
+`NPM_VERSION` in `.github/workflows/ci.yml`, used by the `web` and `web npm audit` jobs
+alike. The `web/Dockerfile` builds on `node:24-slim`, whose bundled npm is 11, so it pins
+the same npm through its own `NPM_VERSION` build arg — change the two together.
 
 The npm version matters specifically when you **regenerate `package-lock.json`**. npm 11
 drops the bundled nested `@emnapi/*` entries that npm 10 writes, which leaves declared
@@ -21,7 +22,7 @@ That fails the lockfile check (`npm ls --package-lock-only --all`) in the `web n
 job, on a diff that otherwise looks fine. Before touching the lockfile:
 
 ```bash
-npm install -g npm@10.9.8   # or: nvm use 22 && npm i -g npm@10.9.8
+npm install -g npm@10.9.8   # or: nvm use 24 && npm i -g npm@10.9.8
 npm -v                      # expect 10.9.8
 ```
 

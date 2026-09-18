@@ -11,7 +11,8 @@ on:
 # `web-audit` decides whether the lockfile is internally consistent and `web` consumes
 # that same lockfile via `npm ci`. If a future Node 24 point release ships a different
 # npm, an unpinned pair could disagree about what "consistent" means.
-# Keep this in step with the version documented in web/README.md.
+# Keep this in step with the version documented in web/README.md and the NPM_VERSION
+# build arg in web/Dockerfile.
 env:
   NPM_VERSION: "10.9.8"
 

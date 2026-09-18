@@ -8,6 +8,12 @@ FROM node:24-slim AS builder
 
 WORKDIR /app
 
+# node:24-slim bundles npm 11, which reads this lockfile differently from the npm 10 CI
+# validates it with (see web/README.md). Pin the same version CI's NPM_VERSION does, and
+# assert it, so the image is installed by the installer that judged the lockfile.
+ARG NPM_VERSION=10.9.8
+RUN npm install -g "npm@${NPM_VERSION}" && test "$(npm -v)" = "${NPM_VERSION}"
+
 # npm ci needs both files and nothing else; keeping this ahead of the source copy means a
 # source-only change reuses the install layer.
 COPY package.json package-lock.json ./
