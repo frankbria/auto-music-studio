@@ -114,6 +114,11 @@ stopped, so a sibling process starting mid-render never reclaims a live job (and
 `videos` collection rejects a second document for one job regardless). Still a single
 container: nothing needs more than one worker yet. Splitting is a compose service and a flag.
 
+The first deploy carrying #427 builds a unique index on `videos.job_id` at startup. A
+database that already holds two `Video` documents for one job (only possible if the race
+above ever ran) would refuse to start; run `uv run python scripts/dedupe_videos.py --apply`
+against it first (dry run without the flag).
+
 ### Deploys are fully automatic
 
 No human approval step. CI is already a hard gate with two required checks and strict
