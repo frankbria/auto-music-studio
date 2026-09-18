@@ -144,10 +144,18 @@ jobs:
             --strictness-level 10 \
             --validate "${{ steps.artefacts.outputs.vst3 }}"
 
+      # The VST3 SDK (MIT) and several JUCE-bundled codecs (BSD) require their
+      # notices in every binary distribution (#499), so the package carries them.
+      - name: Package
+        working-directory: plugin
+        run: |
+          mkdir -p dist
+          cp -R "${{ steps.artefacts.outputs.vst3 }}" dist/
+          cp THIRD_PARTY_NOTICES.md dist/
+
       - name: Upload VST3
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: acemusic-vst3-${{ runner.os }}
-          path: plugin/build/AceMusicPlugin_artefacts/**/VST3/
-          if-no-files-found: warn
+          path: plugin/dist/
+          if-no-files-found: error

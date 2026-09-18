@@ -34,8 +34,10 @@ AGPLv3. `JUCE_DISPLAY_SPLASH_SCREEN=0` is permitted on this tier because JUCE 8
 removed the splash-screen requirement from Starter.
 
 The VST3 SDK is Steinberg's, not JUCE's. Since SDK 3.8 it is **MIT**-licensed — no
-agreement, no fee — and JUCE 8.0.11+ bundles that version. The one obligation is
-shipping Steinberg's notice with any binary: `THIRD_PARTY_NOTICES.md`. "VST" is
+agreement, no fee — and JUCE 8.0.11+ bundles that version. Its one obligation, shared
+with the codecs and font libraries JUCE compiles in (FLAC, Ogg Vorbis, jpeglib,
+HarfBuzz and others), is shipping their notices with any binary:
+`THIRD_PARTY_NOTICES.md`, which CI packages next to every VST3 it uploads. "VST" is
 Steinberg's trademark; we attribute it and do not use the VST Compatible logo.
 
 Full terms, the upgrade trigger, and how the $20,000 is counted:
