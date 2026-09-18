@@ -89,7 +89,9 @@ MIT text and `pluginterfaces/vst/vsttypes.h` must define `kVstVersionString` as
 - **One obligation: the notice.** MIT requires Steinberg's copyright line and the licence
   text to accompany every copy of the SDK, including a binary that links it. The text is
   in `plugin/THIRD_PARTY_NOTICES.md`; any installer, download bundle, or store listing
-  must ship that file alongside the plug-in. There is no source-offer obligation.
+  must ship that file alongside the plug-in. The same file carries the notices for the
+  components JUCE compiles into the plug-in (audited in #499), and CI's package step
+  stages it next to the VST3. There is no source-offer obligation.
 - **"VST" is a Steinberg trademark.** Using the word, or the *VST Compatible* logo, is
   optional under MIT, but if used it must follow the
   [Steinberg VST usage guidelines](https://steinbergmedia.github.io/vst3_dev_portal/pages/VST+3+Licensing/Usage+guidelines.html).
