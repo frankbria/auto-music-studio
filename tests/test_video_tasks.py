@@ -554,12 +554,13 @@ class TestFreeTierWatermark:
 
 @pytest.mark.integration
 class TestSiblingWorkerCannotDuplicate:
-    async def test_second_run_for_the_same_job_fails_and_keeps_the_first_video(self, storage) -> None:
+    async def test_second_run_for_the_same_job_reuses_the_first_video(self, storage) -> None:
         """#427: two workers that both run the same job cannot both record a Video.
 
-        The unique index on ``job_id`` rejects the second insert, and the rollback
-        must not delete the stored object — it is the same path the first worker's
-        ``Video`` points at.
+        The unique index on ``job_id`` rejects the second insert. The loser must
+        neither delete the stored object (same path as the winner's ``Video``) nor
+        fail the job (the processor would refund credits over a video that exists):
+        it answers with the winner's record.
         """
         job, clip = await _make_job_and_clip()
         storage.upload(clip.file_path, FAKE_AUDIO)
@@ -567,11 +568,11 @@ class TestSiblingWorkerCannotDuplicate:
             job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
         )
 
-        with pytest.raises(JobProcessingError, match="already"):
-            await tasks.process_video_job(
-                job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
-            )
+        second = await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+        )
 
+        assert second == first
         videos = await Video.find(Video.job_id == job.id).to_list()
         assert len(videos) == 1
         assert storage.download(first["storage_path"]) == FAKE_MP4

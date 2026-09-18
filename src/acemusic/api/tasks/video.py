@@ -236,10 +236,16 @@ async def process_video_job(
     )
     try:
         await video.insert()
-    except DuplicateKeyError as exc:
+    except DuplicateKeyError:
         # #427: another worker already recorded this job's video. The object at
-        # ``path`` is theirs (same path), so it must NOT be rolled back here.
-        raise JobProcessingError(f"Video for job {job.id} was already recorded by another worker") from exc
+        # ``path`` is theirs (same path), so it must NOT be rolled back — and the
+        # job must not be failed (that would refund credits and hide a stored
+        # video), so answer with the record that won.
+        existing = await Video.find_one(Video.job_id == job.id)
+        if existing is None:  # pragma: no cover - the index just rejected us, so it exists
+            raise
+        logger.warning("Video for job %s was already recorded by another worker; reusing it", job.id)
+        return {"video_ids": [str(existing.id)], "storage_path": existing.storage_path}
     except BaseException:
         # BaseException (not Exception): a shutdown CancelledError must also clean
         # up the just-uploaded object, else a requeued retry leaves it orphaned.
