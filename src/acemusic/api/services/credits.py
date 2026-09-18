@@ -371,9 +371,9 @@ async def charge_and_create(
 ) -> "Job":
     """Deduct ``cost``, create the job, and ledger the charge — or leave nothing behind.
 
-    The four steps in here were already hand-written in five places (generation,
-    iterative, videos, mastering, batch mastering) and US-26.1 adds three more. Each
-    copy has to get the same things right, in order:
+    Every billed action that queues one job charges through here (batch mastering,
+    which splits one deduction across many jobs, is the exception). The steps have to
+    happen right, and in order:
 
     * deduct **atomically** — the balance-conditioned update is the concurrency guard,
       so two requests racing over the last credit cannot both win;
