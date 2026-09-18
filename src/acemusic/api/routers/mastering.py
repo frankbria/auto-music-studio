@@ -13,7 +13,6 @@ mastering work is a future ticket — the processor only claims registered
 """
 
 import asyncio
-import logging
 from datetime import datetime
 from typing import Literal
 
@@ -32,8 +31,6 @@ from ..services import (
 )
 from ..services.common import coerce_object_id
 from ..services.tiers import Capability
-
-logger = logging.getLogger(__name__)
 
 # Custom LUFS targets share the remaster bounds: anything above -5 or below -70
 # is a client error, not a master (see editing.RemasterRequest).
@@ -108,55 +105,22 @@ async def create_mastering_job(
     # 404 with no credit movement. The clip's workspace is where the master lands.
     clip = await clip_service.get_owned_clip(request.clip_id, current.user_id)
 
-    cost = credits_service.get_mastering_cost(request.service)
-    deducted = await credits_service.deduct_credits_split(user.id, cost)
-    if deducted is None:
-        # Re-read the balance for the error payload: the copy on ``user`` was
-        # loaded before the deduction attempt and may be stale under concurrency.
-        fresh = await user_service.get_user_by_id(user.id)
-        balance = credits_service.spendable(fresh) if fresh is not None else 0.0
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "insufficient_credits", "balance": balance, "required": cost},
-        )
-
-    balance_after, from_purchased = deducted
-    try:
-        # Everything after the deduction lives inside the refund guard so the
-        # "charged ⇒ either a job exists or the credit is returned" invariant
-        # holds structurally, not just because resolve_target_lufs happens to be
-        # unreachable today (the Literal profile is Pydantic-validated upstream).
-        target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
-        params = {
-            "clip_id": str(clip.id),
-            "profile": request.profile,
-            "service": request.service,
-            "format": request.format,
-            "target_lufs": target_lufs,
-        }
-        job = await mastering_service.create_mastering_job(
-            user_id=user.id,
-            workspace_id=clip.workspace_id,
-            params=params,
-        )
-    except BaseException:
-        # The deduction already landed but no job exists — give the credit back.
-        # BaseException (not Exception): asyncio.CancelledError must also refund.
-        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
-        raise
-    try:
-        await credits_service.record_transaction(
-            user_id=user.id,
-            amount=-cost,
-            action_type=mastering_service.MASTERING_JOB_TYPE,
-            job_id=str(job.id),
-            balance_after=balance_after,
-            purchased_amount=-from_purchased,
-        )
-    except Exception:
-        # The charge is taken and the job dispatched; failing here would invite a
-        # retry that double-charges. The ledger row is best-effort history.
-        logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
+    # Resolved before the charge, so a bad profile costs nothing.
+    params = {
+        "clip_id": str(clip.id),
+        "profile": request.profile,
+        "service": request.service,
+        "format": request.format,
+        "target_lufs": mastering_service.resolve_target_lufs(request.profile, request.target_lufs),
+    }
+    job = await credits_service.charge_and_create(
+        user_id=user.id,
+        cost=credits_service.get_mastering_cost(request.service),
+        action_type=mastering_service.MASTERING_JOB_TYPE,
+        create=lambda: mastering_service.create_mastering_job(
+            user_id=user.id, workspace_id=clip.workspace_id, params=params
+        ),
+    )
     return MasteringJobResponse(job_id=str(job.id))
 
 
@@ -258,20 +222,14 @@ async def create_mastering_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
     target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
-    try:
-        batch = await mastering_service.create_mastering_batch(
-            user_id=current.user_id,
-            clip_ids=request.clip_ids,
-            profile=request.profile,
-            service=request.service,
-            format=request.format,
-            target_lufs=target_lufs,
-        )
-    except mastering_service.InsufficientCreditsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "insufficient_credits", "balance": exc.balance, "required": exc.required},
-        ) from exc
+    batch = await mastering_service.create_mastering_batch(
+        user_id=current.user_id,
+        clip_ids=request.clip_ids,
+        profile=request.profile,
+        service=request.service,
+        format=request.format,
+        target_lufs=target_lufs,
+    )
     return BatchMasteringResponse(
         batch_id=str(batch.id),
         jobs=[BatchJobItem(clip_id=e.clip_id, job_id=e.job_id, error=e.error) for e in batch.entries],

@@ -23,7 +23,6 @@ Time parameters are human-readable strings ("60s", "1m30s", "5") parsed with
 :func:`acemusic.utils.parse_time_string`, matching the CLI commands.
 """
 
-import logging
 from enum import Enum
 from typing import Literal
 
@@ -44,8 +43,6 @@ from ..services import (
     users as user_service,
 )
 from ._validators import require_voice_model
-
-logger = logging.getLogger(__name__)
 
 # Advisory wall-clock estimates (seconds) returned to the client. Iterative
 # generations run one ACE-Step task each, so the base is the song estimate;
@@ -324,50 +321,25 @@ async def _enqueue_generation(
     cost: float,
     estimate_seconds: int,
 ) -> IterativeJobResponse:
-    """Resolve the user, deduct credits atomically, persist the job, return 202.
+    """Resolve the user, charge credits and persist the job, return 202.
 
-    Mirrors ``POST /generate``: the atomic balance-conditioned deduction is the
-    concurrency guard; a job-creation failure refunds; the ledger write is
-    best-effort. Raises 404 (stale token), 402 (insufficient credits).
+    Mirrors ``POST /generate``. Raises 404 (stale token), 402 (insufficient credits).
     """
     user = await user_service.get_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-    deducted = await credits_service.deduct_credits_split(user.id, cost)
-    if deducted is None:
-        fresh = await user_service.get_user_by_id(user.id)
-        balance = credits_service.spendable(fresh) if fresh is not None else 0.0
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "insufficient_credits", "balance": balance, "required": cost},
-        )
-    balance_after, from_purchased = deducted
-    try:
-        job = await iterative_service.create_iterative_job(
+    job = await credits_service.charge_and_create(
+        user_id=user.id,
+        cost=cost,
+        action_type=job_type,
+        create=lambda: iterative_service.create_iterative_job(
             user_id=user.id,
             workspace_id=workspace_id,
             job_type=job_type,
             params=params,
-        )
-    except BaseException:
-        # The deduction already landed but no job exists — give the credit back.
-        # BaseException (not Exception): asyncio.CancelledError must also refund.
-        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
-        raise
-    try:
-        await credits_service.record_transaction(
-            user_id=user.id,
-            amount=-cost,
-            action_type=job_type,
-            job_id=str(job.id),
-            balance_after=balance_after,
-            purchased_amount=-from_purchased,
-        )
-    except Exception:
-        # The charge is taken and the job dispatched; failing here would invite a
-        # retry that double-charges. The ledger row is best-effort history.
-        logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
+        ),
+    )
     return IterativeJobResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds)
 
 

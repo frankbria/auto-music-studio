@@ -19,7 +19,7 @@ from beanie import PydanticObjectId
 
 from acemusic.storage import StorageBackend, get_storage_backend
 
-from ..models import Job, NotificationEvent, User, VoiceModel, VoiceModelStatus
+from ..models import Job, NotificationEvent, VoiceModel, VoiceModelStatus
 from ..models.common import utcnow
 from ..models.voice_model import (
     MAX_REFERENCE_BYTES,
@@ -47,15 +47,6 @@ class VoiceModelNotFoundError(Exception):
 
 class VoiceModelNotReadyError(Exception):
     """The voice exists but has no usable weights yet (still training, or failed)."""
-
-
-class InsufficientCreditsError(Exception):
-    """Not enough credits to start training."""
-
-    def __init__(self, balance: float, required: float) -> None:
-        super().__init__(f"Training needs {required} credits; balance is {balance}.")
-        self.balance = balance
-        self.required = required
 
 
 @dataclass(frozen=True)
@@ -224,15 +215,6 @@ async def create_training_job(
     uid = PydanticObjectId(user_id)
     cost = credits_service.VOICE_TRAINING_COST
 
-    deducted = await credits_service.deduct_credits_split(uid, cost)
-    if deducted is None:
-        user = await User.get(uid)
-        raise InsufficientCreditsError(
-            balance=credits_service.spendable(user) if user is not None else 0.0,
-            required=cost,
-        )
-    balance_after, from_purchased = deducted
-
     model = VoiceModel(
         user_id=uid,
         name=name.strip(),
@@ -243,13 +225,24 @@ async def create_training_job(
 
     storage = get_storage_backend()
 
+    job = await credits_service.charge_and_create(
+        user_id=uid,
+        cost=cost,
+        action_type="voice_training",
+        create=lambda: _store_and_queue(storage, model, references),
+    )
+    return model, job
+
+
+async def _store_and_queue(storage: StorageBackend, model: VoiceModel, references: list[ReferenceAudio]) -> Job:
+    """Persist the model and its references and queue the run — or leave none of it behind."""
     try:
         await model.insert()
         model.reference_paths = await _store_references(storage, model, references)
         await model.save()
 
         job = Job(
-            user_id=uid,
+            user_id=model.user_id,
             # Voice training is account-scoped, not workspace-scoped: the model is
             # usable from every workspace. The field is required, so it carries the
             # model id to keep the record self-describing rather than a fake id.
@@ -264,26 +257,12 @@ async def create_training_job(
 
         model.job_id = job.id
         await model.save()
-
-        # The ledger, not just the balance: /users/me/credits builds its history
-        # from CreditTransaction, so without this the balance drops with no usage
-        # row to explain it -- unlike every other billed endpoint.
-        await credits_service.record_transaction(
-            user_id=uid,
-            amount=-cost,
-            action_type="voice_training",
-            job_id=str(job.id),
-            balance_after=balance_after,
-            purchased_amount=-from_purchased,
-        )
     except BaseException:
-        # BaseException, not Exception: a shutdown CancelledError must also give
-        # the credits back rather than leaving the musician charged for nothing.
-        await credits_service.reverse_unrecorded_charge(uid, cost, purchased_amount=from_purchased)
+        # charge_and_create gives the credits back; the half-written model is ours to remove.
         await _cleanup_partial(storage, model)
         raise
 
-    return model, job
+    return job
 
 
 async def _store_references(storage: StorageBackend, model: VoiceModel, references: list[ReferenceAudio]) -> list[str]:

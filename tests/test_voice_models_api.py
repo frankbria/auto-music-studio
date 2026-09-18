@@ -253,6 +253,11 @@ class TestTraining:
         )
 
         assert resp.status_code == 402
+        # The same payload every other billed action returns (#493), not a bare string.
+        detail = resp.json()["detail"]
+        assert detail["error"] == "insufficient_credits"
+        assert detail["balance"] == 3.0
+        assert detail["required"] == credits_service.VOICE_TRAINING_COST
         fresh = await User.get(user.id)
         assert fresh.credits_balance == 3.0
         assert await VoiceModel.find_all().count() == 0

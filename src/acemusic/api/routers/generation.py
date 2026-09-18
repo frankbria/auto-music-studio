@@ -10,7 +10,6 @@ bounds and enumerations come from :mod:`acemusic.constants` so CLI and API
 validation share one source of truth.
 """
 
-import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -47,8 +46,6 @@ from ..services import (
 from ..services.routing import ComputePreference, ComputeUnavailableError
 from ..settings import ApiSettings
 from ._validators import require_voice_model, validate_format, validate_model, validate_time_signature
-
-logger = logging.getLogger(__name__)
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -229,47 +226,15 @@ async def create_generation(
             detail = f"Compute target '{exc.target.value}' is unavailable (preference: {exc.preference.value})."
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
     # US-9.6: credits are deducted atomically at queue time. Cost is judged on
-    # the merged request, since a preset may supply the mode. The atomic
-    # balance-conditioned deduction is the concurrency guard — two requests
-    # racing over the last credit cannot both pass.
-    cost = credits_service.get_cost(request.mode)
-    deducted = await credits_service.deduct_credits_split(user.id, cost)
-    if deducted is None:
-        # Re-read the balance for the error payload: the copy on ``user`` was
-        # loaded before the deduction attempt and may be stale under
-        # concurrent requests.
-        fresh = await user_service.get_user_by_id(user.id)
-        balance = credits_service.spendable(fresh) if fresh is not None else 0.0
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "insufficient_credits", "balance": balance, "required": cost},
-        )
-    balance_after, from_purchased = deducted
-    try:
-        job = await generation_service.create_generation_job(
+    # the merged request, since a preset may supply the mode.
+    job = await credits_service.charge_and_create(
+        user_id=user.id,
+        cost=credits_service.get_cost(request.mode),
+        action_type=request.mode,
+        create=lambda: generation_service.create_generation_job(
             user_id=user.id,
             params=request.model_dump(exclude_none=True, exclude={"preset_id", "compute_target"}),
             compute_target=resolved_target,
-        )
-    except BaseException:
-        # The deduction already landed but no job exists — give the credit back
-        # rather than charging for work that will never run. BaseException (not
-        # Exception) on purpose: asyncio.CancelledError must also compensate.
-        await credits_service.reverse_unrecorded_charge(user.id, cost, purchased_amount=from_purchased)
-        raise
-    try:
-        await credits_service.record_transaction(
-            user_id=user.id,
-            amount=-cost,
-            action_type=request.mode,
-            job_id=str(job.id),
-            balance_after=balance_after,
-            purchased_amount=-from_purchased,
-        )
-    except Exception:
-        # The charge is taken and the job is dispatched (possibly already
-        # claimed by the processor), so failing the request here would invite a
-        # retry that charges the user twice for work that is already running.
-        # The ledger row is best-effort history — log loudly and keep the 202.
-        logger.exception("Credit ledger write failed for job %s (user %s)", job.id, user.id)
+        ),
+    )
     return GenerationResponse(job_id=str(job.id), estimated_time_seconds=estimate_seconds(request))
