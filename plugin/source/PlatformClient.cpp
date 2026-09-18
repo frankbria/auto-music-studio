@@ -99,10 +99,10 @@ namespace
 
     /** The platform's own explanation of a refusal, or empty if it did not send one.
 
-        FastAPI puts it under `detail`, either as a string or as an object with a
-        `message`. Worth digging out: a Pro-only refusal and an empty wallet both arrive as
-        bare status codes otherwise, and "API key rejected by the server" describes
-        neither. */
+        FastAPI puts it under `detail`: a string, an object with a `message`, or (for a
+        422) a list of `{loc, msg, type}`, of which the first is reported. Worth digging
+        out: a Pro-only refusal and an empty wallet both arrive as bare status codes
+        otherwise, and "API key rejected by the server" describes neither. */
     juce::String serverMessage (const juce::String& body)
     {
         const auto parsed = juce::JSON::parse (body);
@@ -110,6 +110,23 @@ namespace
 
         if (detail.isString())
             return detail.toString();
+
+        if (const auto* errors = detail.getArray(); errors != nullptr && ! errors->isEmpty())
+        {
+            const auto& first = errors->getReference (0);
+            const auto message = first.getProperty ("msg", juce::var()).toString();
+
+            if (message.isEmpty())
+                return {};
+
+            juce::StringArray loc;
+
+            if (const auto* parts = first.getProperty ("loc", juce::var()).getArray())
+                for (const auto& part : *parts)
+                    loc.add (part.toString());
+
+            return loc.isEmpty() ? message : message + " (" + loc.joinIntoString (".") + ")";
+        }
 
         if (detail.isObject())
         {
