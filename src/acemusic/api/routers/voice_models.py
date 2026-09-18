@@ -100,11 +100,6 @@ async def train_voice_model(
 
     try:
         model, job = await voice_service.create_training_job(current.user_id, name, payloads, description=description)
-    except voice_service.InsufficientCreditsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=str(exc),
-        ) from exc
     except voice_service.VoiceModelError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
