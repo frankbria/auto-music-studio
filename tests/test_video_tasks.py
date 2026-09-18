@@ -557,10 +557,9 @@ class TestSiblingWorkerCannotDuplicate:
     async def test_second_run_for_the_same_job_reuses_the_first_video(self, storage) -> None:
         """#427: two workers that both run the same job cannot both record a Video.
 
-        The unique index on ``job_id`` rejects the second insert. The loser must
-        neither delete the stored object (same path as the winner's ``Video``) nor
-        fail the job (the processor would refund credits over a video that exists):
-        it answers with the winner's record.
+        The loser must neither overwrite nor delete the stored object (same path
+        as the winner's ``Video``) nor fail the job (the processor would refund
+        credits over a video that exists): it answers with the winner's record.
         """
         job, clip = await _make_job_and_clip()
         storage.upload(clip.file_path, FAKE_AUDIO)
@@ -568,9 +567,11 @@ class TestSiblingWorkerCannotDuplicate:
             job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
         )
 
-        second = await tasks.process_video_job(
-            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
-        )
+        # The loser's render differs (nondeterministic provider, tier change...):
+        # if it ever reached storage the winner's object would be silently replaced.
+        loser = FakeVideoService(_updates_to_complete())
+        loser.download = lambda provider_job_id: b"LOSER-BYTES"
+        second = await tasks.process_video_job(job, storage=storage, client=loser, poll_interval=0)
 
         assert second == first
         videos = await Video.find(Video.job_id == job.id).to_list()

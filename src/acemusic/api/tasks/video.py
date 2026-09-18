@@ -141,6 +141,18 @@ async def _is_free_tier(job: Job) -> bool:
     return tiers.normalise(user.subscription_tier if user is not None else None) != tiers.PRO
 
 
+async def _recorded_by_sibling(job: Job) -> dict[str, Any] | None:
+    """The result to answer with if another worker already recorded this job's video (#427).
+
+    Failing the job instead would refund its credits and hide a stored video.
+    """
+    existing = await Video.find_one(Video.job_id == job.id)
+    if existing is None:
+        return None
+    logger.warning("Video for job %s was already recorded by another worker; reusing it", job.id)
+    return {"video_ids": [str(existing.id)], "storage_path": existing.storage_path}
+
+
 async def process_video_job(
     job: Job,
     *,
@@ -222,6 +234,13 @@ async def process_video_job(
     # Namespace by job id so re-rendering/editing the same song never overwrites
     # an earlier video (and a failed job's rollback only deletes its own object).
     path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}.mp4"
+    # #427: if another worker already recorded this job (a stale-requeue race),
+    # answer with its record rather than overwriting its object with a second
+    # render. The unique index below still catches the sliver between this check
+    # and the insert; the heartbeat is what keeps the race from happening at all.
+    existing = await _recorded_by_sibling(job)
+    if existing is not None:
+        return existing
     await asyncio.to_thread(storage.upload, path, data)
     video = Video(
         clip_id=clip_id,
@@ -237,15 +256,12 @@ async def process_video_job(
     try:
         await video.insert()
     except DuplicateKeyError:
-        # #427: another worker already recorded this job's video. The object at
-        # ``path`` is theirs (same path), so it must NOT be rolled back — and the
-        # job must not be failed (that would refund credits and hide a stored
-        # video), so answer with the record that won.
-        existing = await Video.find_one(Video.job_id == job.id)
+        # The sibling won between the check above and this insert. The object at
+        # ``path`` is theirs (same path), so it must NOT be rolled back.
+        existing = await _recorded_by_sibling(job)
         if existing is None:  # pragma: no cover - the index just rejected us, so it exists
             raise
-        logger.warning("Video for job %s was already recorded by another worker; reusing it", job.id)
-        return {"video_ids": [str(existing.id)], "storage_path": existing.storage_path}
+        return existing
     except BaseException:
         # BaseException (not Exception): a shutdown CancelledError must also clean
         # up the just-uploaded object, else a requeued retry leaves it orphaned.
