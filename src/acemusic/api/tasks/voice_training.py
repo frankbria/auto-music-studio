@@ -274,8 +274,9 @@ async def _train(
     export_path = f"{TRAINING_ROOT}/{model.id}/voice.safetensors"
 
     async def record(phase: str) -> None:
-        job.progress = phase
-        await job.save()
+        # Field-level: the processor heartbeats this job behind our back (#427),
+        # and a whole-document save would write the claim-time copy over it.
+        await job.set({Job.progress: phase})
 
     async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=60.0) as client:
         # 1. Preprocess the references into a training dataset.
@@ -335,14 +336,17 @@ async def _train(
             # Structured provider progress, in the field the platform already has
             # for exactly this (US-22.1 video uses it the same way).
             # Field names are ACE-Step's own (see its /v1/training/status payload).
-            job.progress_detail = {
-                "phase": "training",
-                "step": data.get("current_step"),
-                "epoch": data.get("current_epoch"),
-                "loss": data.get("current_loss"),
-                "eta_seconds": data.get("estimated_time_remaining"),
-            }
-            await job.save()
+            await job.set(
+                {
+                    Job.progress_detail: {
+                        "phase": "training",
+                        "step": data.get("current_step"),
+                        "epoch": data.get("current_epoch"),
+                        "loss": data.get("current_loss"),
+                        "eta_seconds": data.get("estimated_time_remaining"),
+                    }
+                }
+            )
 
         await _poll_training(client, interval=poll_interval, timeout=poll_timeout, on_progress=on_progress)
 

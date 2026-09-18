@@ -522,6 +522,28 @@ class TestTrainingWorker:
         # A successful run keeps the charge.
         assert (await User.get(user.id)).credits_balance == 30.0
 
+    async def test_progress_writes_do_not_clobber_the_heartbeat(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        """#427: the processor heartbeats the job behind the handler's back, so a
+        whole-document save of the handler's stale copy would reset the heartbeat
+        to claim time and make a live training run look orphaned."""
+        from datetime import timedelta, timezone
+
+        from acemusic.api.models.common import utcnow
+
+        user = await make_user("worker-hb@example.com", tier=PRO, credits_balance=40.0)
+        _, job = await self._queued(client, settings, user)
+        job.heartbeat_at = utcnow() - timedelta(hours=1)  # what the handler's copy carries from claim time
+        live = utcnow()
+        await Job.find_one(Job.id == job.id).set({Job.heartbeat_at: live})  # the heartbeat task, meanwhile
+
+        await self._run(job, monkeypatch)
+
+        fresh = await Job.get(job.id)
+        stored = fresh.heartbeat_at.replace(tzinfo=timezone.utc)
+        assert abs((stored - live).total_seconds()) < 1, "a progress write reset the heartbeat to claim time"
+
     async def test_a_failed_run_refunds_and_records_why(self, client, settings, local_storage, monkeypatch) -> None:
         user = await make_user("worker-fail@example.com", tier=PRO, credits_balance=40.0)
         model, job = await self._queued(client, settings, user)
