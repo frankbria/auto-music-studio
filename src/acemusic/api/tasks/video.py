@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any, Callable
+
+from pymongo.errors import DuplicateKeyError
 
 from acemusic.storage import StorageBackend
 from acemusic.video_client import (
@@ -38,14 +41,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 5.0
-# Poll budget for the provider render. Note the handler's worst-case wall time
-# (submit + this poll budget + download) can exceed the processor's stale-requeue
-# window (poll_timeout + 300s, 900s by default). The stale sweep only runs at
-# process START, so a single-process deployment is safe (a restart killed the old
-# worker anyway); only a multi-process deployment starting a sibling mid-render
-# could re-queue a live job. Acceptable for now — revisit if video ever runs
-# multi-process (raise stale_after for this job type). #401's watermarking pass
-# widens that worst case again by up to its own timeout; see #427.
+# Poll budget for the provider render. The handler's worst-case wall time (submit
+# + this + download + the watermark pass) exceeds the processor's stale window,
+# which is fine: since #427 the worker heartbeats the job while this runs, so a
+# sibling process starting mid-render never re-queues it.
 POLL_TIMEOUT_S = 600.0
 
 # One failed status poll must not kill a paid render that is still progressing on
@@ -143,6 +142,19 @@ async def _is_free_tier(job: Job) -> bool:
     return tiers.normalise(user.subscription_tier if user is not None else None) != tiers.PRO
 
 
+async def _recorded_by_sibling(job: Job) -> dict[str, Any] | None:
+    """The result to answer with if an earlier run (a racing sibling, or this job's
+    own run before a re-queue) already recorded its video (#427).
+
+    Failing the job instead would refund its credits and hide a stored video.
+    """
+    existing = await Video.find_one(Video.job_id == job.id)
+    if existing is None:
+        return None
+    logger.warning("Video for job %s was already recorded by an earlier run; reusing it", job.id)
+    return {"video_ids": [str(existing.id)], "storage_path": existing.storage_path}
+
+
 async def process_video_job(
     job: Job,
     *,
@@ -164,6 +176,13 @@ async def process_video_job(
     """
     params = dict(job.input_params or {})
     source_video_id = params.get("source_video_id")
+
+    # #427: a retry of a job whose earlier run recorded its video but died before
+    # the job was marked complete must not pay the provider for a second render
+    # — nor even re-read the source from storage.
+    existing = await _recorded_by_sibling(job)
+    if existing is not None:
+        return existing
 
     if source_video_id is not None:
         # Edit: the media is the source video's bytes; the provider gets the edit
@@ -222,8 +241,17 @@ async def process_video_job(
             raise JobProcessingError(f"Watermarking the free-tier video failed: {exc}") from exc
 
     # Namespace by job id so re-rendering/editing the same song never overwrites
-    # an earlier video (and a failed job's rollback only deletes its own object).
-    path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}.mp4"
+    # an earlier video, and by a per-run token (#427) so a sibling racing us on
+    # this very job writes its own object: a rollback then deletes only this
+    # run's bytes, never the record-holder's.
+    path = f"{job.user_id}/{job.workspace_id}/videos/{clip_id}/{job.id}-{uuid.uuid4().hex[:8]}.mp4"
+    # #427: if another worker already recorded this job (a stale-requeue race),
+    # answer with its record rather than storing a second render. The unique
+    # index below catches the sliver between this check and the insert; the
+    # heartbeat is what keeps the race from happening at all.
+    existing = await _recorded_by_sibling(job)
+    if existing is not None:
+        return existing
     await asyncio.to_thread(storage.upload, path, data)
     video = Video(
         clip_id=clip_id,
@@ -238,13 +266,19 @@ async def process_video_job(
     )
     try:
         await video.insert()
-    except BaseException:
+    except BaseException as exc:
         # BaseException (not Exception): a shutdown CancelledError must also clean
         # up the just-uploaded object, else a requeued retry leaves it orphaned.
+        # The path is this run's alone, so a sibling's object is never touched.
         try:
             await asyncio.to_thread(storage.delete, path)
         except Exception:  # pragma: no cover - cleanup is best-effort
             logger.exception("Failed to delete orphaned video object %s during rollback", path)
+        if isinstance(exc, DuplicateKeyError):
+            # The sibling won between the check above and this insert.
+            existing = await _recorded_by_sibling(job)
+            if existing is not None:
+                return existing
         raise
 
     await _set_progress(job, COMPLETE, 100, None)

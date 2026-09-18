@@ -50,4 +50,8 @@ class Video(Document):
             # Serves "videos for this clip owned by this user" (the association
             # the status endpoint resolves and future delivery endpoints validate).
             IndexModel([("clip_id", ASCENDING), ("user_id", ASCENDING)]),
+            # #427: one job produces exactly one Video. Two workers that both run
+            # the same job (a stale-requeue race) then fail loudly on the second
+            # insert instead of leaving two documents over one storage object.
+            IndexModel([("job_id", ASCENDING)], unique=True),
         ]

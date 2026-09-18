@@ -704,6 +704,83 @@ class TestHandlerRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Heartbeat — a live job is never stale, however long its handler runs (#427)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestHeartbeat:
+    async def _video_job(self, *, started_ago_s: float, heartbeat_ago_s: float | None) -> Job:
+        from datetime import timedelta
+
+        from acemusic.api.models.common import utcnow
+
+        job = Job(
+            user_id=PydanticObjectId(),
+            workspace_id=PydanticObjectId(),
+            job_type="video",
+            status=JobStatus.PROCESSING,
+            started_at=utcnow() - timedelta(seconds=started_ago_s),
+            heartbeat_at=None if heartbeat_ago_s is None else utcnow() - timedelta(seconds=heartbeat_ago_s),
+            input_params={"clip_id": "x"},
+        )
+        await job.insert()
+        return job
+
+    async def test_video_job_with_live_heartbeat_is_not_requeued(self, mongo_db, tmp_path) -> None:
+        # The render has run far longer than the stale window (a slow provider plus
+        # the watermark pass), but the sibling working it is still heartbeating.
+        proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path), stale_after=60.0)
+        job = await self._video_job(started_ago_s=7200, heartbeat_ago_s=1)
+
+        await proc._requeue_stale_jobs()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.PROCESSING
+        assert refreshed.heartbeat_at is not None
+
+    async def test_video_job_with_dead_heartbeat_is_requeued(self, mongo_db, tmp_path) -> None:
+        proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path), stale_after=60.0)
+        job = await self._video_job(started_ago_s=7200, heartbeat_ago_s=120)
+
+        await proc._requeue_stale_jobs()
+
+        refreshed = await Job.get(job.id)
+        assert refreshed.status == JobStatus.QUEUED
+        assert refreshed.started_at is None and refreshed.heartbeat_at is None
+
+    async def test_heartbeat_advances_while_handler_runs(self, mongo_db, tmp_path) -> None:
+        release = asyncio.Event()
+
+        async def slow(job: Job) -> dict:
+            await release.wait()
+            return {"ok": True}
+
+        proc = JobProcessor(
+            poll_interval=0.01,
+            heartbeat_interval=0.02,
+            client_factory=lambda: _FakeAceClient(),
+            storage_factory=lambda: LocalStorage(root_dir=tmp_path),
+            handlers={"slow": slow},
+        )
+        job = await _enqueue({"x": 1}, job_type="slow")
+        await proc.start()
+        try:
+            assert await _wait_until(lambda: _is_status(job.id, JobStatus.PROCESSING))
+            first = (await Job.get(job.id)).heartbeat_at
+            assert first is not None, "claim did not stamp a heartbeat"
+
+            async def _advanced() -> bool:
+                return (await Job.get(job.id)).heartbeat_at > first
+
+            assert await _wait_until(_advanced), "heartbeat never advanced during the handler"
+            release.set()
+            assert await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+
+# ---------------------------------------------------------------------------
 # Status predicates (used by _wait_until)
 # ---------------------------------------------------------------------------
 

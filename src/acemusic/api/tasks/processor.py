@@ -108,6 +108,7 @@ class JobProcessor:
         poll_timeout: float = 600.0,
         ace_poll_interval: float = 2.0,
         stale_after: float | None = None,
+        heartbeat_interval: float = 30.0,
         client_factory: Callable[[], AceStepClient] | None = None,
         runpod_client_factory: Callable[[], RunPodClient] | None = None,
         runpod_timeout: float = 300.0,
@@ -144,11 +145,14 @@ class JobProcessor:
         # None when no provider URL/key is set; the video handler then fails a
         # claimed job with a clear "not configured" message rather than crashing.
         self._video_client_factory = video_client_factory
-        # A job legitimately stays in `processing` for at most poll_timeout (its
-        # own worker fails it after that). Only re-queue jobs older than that
-        # window plus a margin, so a startup sweep never reclaims a job a live
-        # sibling process is still working — see _requeue_stale_jobs.
+        # A job whose worker has not heartbeated for this long is orphaned and the
+        # startup sweep re-queues it — see _requeue_stale_jobs. The worker stamps
+        # ``heartbeat_at`` every ``heartbeat_interval`` seconds while a handler
+        # runs (#427), so a live sibling is never reclaimed however long its job
+        # takes; the window only needs to dwarf the interval, and poll_timeout +
+        # 300s does that with room for a stalled event loop.
         self._stale_after = stale_after if stale_after is not None else poll_timeout + 300.0
+        self._heartbeat_interval = heartbeat_interval
         self._client_factory = client_factory or _default_client_factory
         self._storage_factory = storage_factory or get_storage_backend
         # US-25.1: the local directory ACE-Step sees as its training root. The
@@ -277,9 +281,10 @@ class JobProcessor:
         racing for the same job are serialised by MongoDB — exactly one wins.
         """
         collection = database.get_database()[Job.Settings.name]
+        now = utcnow()
         doc = await collection.find_one_and_update(
             {"status": JobStatus.QUEUED.value, "job_type": {"$in": list(self._handlers)}},
-            {"$set": {"status": JobStatus.PROCESSING.value, "started_at": utcnow()}},
+            {"$set": {"status": JobStatus.PROCESSING.value, "started_at": now, "heartbeat_at": now}},
             sort=[("created_at", ASCENDING)],
             return_document=ReturnDocument.AFTER,
         )
@@ -295,13 +300,13 @@ class JobProcessor:
     async def _requeue_stale_jobs(self) -> None:
         """Reset *stale* ``processing`` jobs back to ``queued`` on startup.
 
-        A job left in ``processing`` longer than ``stale_after`` is orphaned: its
-        worker either crashed or was cancelled mid-generation, since a live worker
-        fails a job after ``poll_timeout``. Re-queue only those so they are retried
-        rather than stranded. Bounding by ``started_at`` keeps this safe when more
-        than one API process runs — a job a sibling is actively working (started
-        recently) is never reclaimed. (Running a single processor instance is still
-        the recommended deployment; this is the safety net.)
+        A ``processing`` job whose ``heartbeat_at`` is older than ``stale_after``
+        is orphaned: the worker that claimed it crashed or was cancelled, since a
+        live worker re-stamps the heartbeat every ``heartbeat_interval``. Re-queue
+        only those so they are retried rather than stranded. Keying on the
+        heartbeat rather than ``started_at`` (#427) keeps this safe when more than
+        one API process runs: a job a sibling is actively working is never
+        reclaimed, no matter how long its handler has been running.
         """
         collection = database.get_database()[Job.Settings.name]
         cutoff = utcnow() - timedelta(seconds=self._stale_after)
@@ -309,10 +314,14 @@ class JobProcessor:
             {
                 "status": JobStatus.PROCESSING.value,
                 "job_type": {"$in": list(self._handlers)},
-                # ``started_at`` missing/None means a legacy/partial claim — also stale.
-                "$or": [{"started_at": {"$lt": cutoff}}, {"started_at": None}],
+                "$or": [
+                    {"heartbeat_at": {"$lt": cutoff}},
+                    # No heartbeat: a claim from before the field existed. Fall back
+                    # to ``started_at``; missing/None there is a partial claim — stale.
+                    {"heartbeat_at": None, "started_at": {"$not": {"$gte": cutoff}}},
+                ],
             },
-            {"$set": {"status": JobStatus.QUEUED.value, "started_at": None}},
+            {"$set": {"status": JobStatus.QUEUED.value, "started_at": None, "heartbeat_at": None}},
         )
         if result.modified_count:
             logger.info("Re-queued %d stale processing job(s)", result.modified_count)
@@ -327,6 +336,7 @@ class JobProcessor:
         captured on the job as ``failed`` with its message. The claim query
         filters on registered types, so the handler lookup cannot miss.
         """
+        heartbeat = asyncio.create_task(self._heartbeat(job))
         try:
             handler = self._handlers[job.job_type]
             result = await handler(job)
@@ -336,6 +346,19 @@ class JobProcessor:
         except Exception as exc:  # noqa: BLE001 - any failure must land on the job record
             logger.exception("Job %s failed", job.id)
             await self._mark_failed(job, str(exc))
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _heartbeat(self, job: Job) -> None:
+        """Re-stamp ``heartbeat_at`` until cancelled, so the job never reads as stale (#427)."""
+        collection = database.get_database()[Job.Settings.name]
+        while True:
+            await asyncio.sleep(self._heartbeat_interval)
+            try:
+                await collection.update_one({"_id": job.id}, {"$set": {"heartbeat_at": utcnow()}})
+            except Exception:  # pragma: no cover - a missed beat is not a failed job
+                logger.exception("Heartbeat for job %s failed", job.id)
 
     async def _run_storage_handler(self, storage_handler: Any, job: Job) -> dict[str, Any]:
         """Adapt a ``(job, storage) -> result`` handler (editing/extraction) to the registry."""
