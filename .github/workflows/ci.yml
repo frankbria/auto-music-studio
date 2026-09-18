@@ -1,10 +1,24 @@
 name: CI
 
+# Feature branches run through their PR only. Also triggering on every branch push ran
+# the whole workflow twice per SHA, which doubled the runner minutes and the exposure to
+# flake: a single flaked copy left the PR blocked even when the other copy passed (#481).
+# Use workflow_dispatch for a branch that has no PR yet.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+# A new push to a PR cancels that PR's in-flight run. Every other run (main, dispatch)
+# gets its own group keyed by run_id, so it is never cancelled or queued behind another.
+# A github.ref key would not do this: while one main run is in progress, GitHub cancels
+# any older *pending* run in the same group even with cancel-in-progress off, and CD
+# expects a completed CI run for each main commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 # Both Node jobs pin the same npm. `setup-node` cannot pin npm itself — it installs
 # whatever the Node 24 line happens to bundle — and the two jobs must agree, because

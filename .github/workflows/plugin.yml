@@ -4,7 +4,7 @@ name: Plugin
 # own workflow and only runs when plugin code (or this file) changes.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     paths:
       - "plugin/**"
       - ".github/workflows/plugin.yml"
@@ -14,8 +14,9 @@ on:
       - "plugin/**"
       - ".github/workflows/plugin.yml"
 
+# Same scheme as ci.yml (#481): PR runs supersede each other, main runs never do.
 concurrency:
-  group: plugin-${{ github.ref }}
+  group: plugin-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
