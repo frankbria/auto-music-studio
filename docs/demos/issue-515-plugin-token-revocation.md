@@ -123,6 +123,39 @@ plugin tokens are live, and both `kind=web` browser sessions were never touched 
 6aaf7985c6c990525ec6d7a6  kind=plugin  revoked=True  created=2026-09-20 06:13:25.612000
 ```
 
+## Credentials that predate this change
+
+The feature would have missed exactly the tokens that most need it. `/auth/plugin-token`
+shipped in #445 and wrote no `kind` key at all, so a plugin token minted before this change
+matches neither `kind: "web"` nor `kind: "plugin"`: invisible in the listing, 404 on revoke,
+and still refreshing itself — and since rotation pushes `expires_at` out on every use, the
+7-day TTL never reaps one that is in use.
+
+Nothing stored distinguishes such a document from a browser session, so they are retired
+rather than guessed at. Stage 1 plants one byte-for-byte as `main` wrote it; stage 2 runs
+`init_db`, which is what the API does on boot.
+
+```bash
+uv run python $CLAUDE_JOB_DIR/tmp/demo515/legacy.py plant
+uv run python $CLAUDE_JOB_DIR/tmp/demo515/legacy.py check
+```
+
+```output
+planted a #445-era plugin token, exactly as `main` wrote it
+  stored keys         : ['_id', 'created_at', 'expires_at', 'revoked', 'token_hash', 'user_id']
+  has a 'kind' key    : False
+  works as a credential: True
+  visible in Settings : []
+  revocable           : False
+  -> a leaked token the musician cannot see and cannot revoke
+
+after the API boots (init_db runs the retirement):
+  stored keys         : ['_id', 'created_at', 'expires_at', 'kind', 'revoked', 'token_hash', 'user_id']
+  revoked             : True
+  works as a credential: False
+  -> the credential is dead; that client signs in again and gets a tagged token
+```
+
 ## Two defects the demo found, which the tests had not
 
 - **Timestamps serialized without an offset.** MongoDB returns naive UTC datetimes, so the
@@ -159,4 +192,12 @@ from revoke; dropping the `kind` filter from the listing; minting without
 `kind="plugin"`; defaulting `kind` to `"plugin"`; reverting rotation to the old
 consume-then-insert (this one fails the AC2 test, which is the point); and on the web
 side, a revoke that does not remove the row, a list that never renders, a DELETE proxy
-that drops the bearer, and a GET proxy that skips its 401 guard.
+that drops the bearer, and a GET proxy that skips its 401 guard. After the review round,
+four more: `init_db` no longer retiring untagged tokens, the card not dismissing a revoked
+one-time token, a non-array 200 falling back to `[]`, and the `cancelled` guard removed.
+
+Two of the original tests were found to pass for the wrong reason and were fixed rather
+than kept: the expired-rotation test's final assertion held either way, and the unmount
+test stayed green with the `cancelled` guard deleted — React 18 makes a setState after
+unmount a silent no-op, so the guard's real job is the effect re-running when `accessToken`
+changes. Its replacement fails without the guard.
