@@ -54,6 +54,8 @@ class TestRefreshTokenModel:
         assert token.id is not None
         assert token.revoked is False
         assert token.created_at is not None
+        # #515: web sessions are the default kind; only /auth/plugin-token opts out.
+        assert token.kind == "web"
 
         found = await RefreshToken.find_one(RefreshToken.token_hash == "abc123hash")
         assert found is not None and found.user_id == user_id

@@ -23,6 +23,11 @@ class RefreshToken(Document):
     expires_at: datetime
     revoked: bool = False
     created_at: datetime = Field(default_factory=utcnow)
+    #: ``"web"`` for a browser session, ``"plugin"`` for a DAW-plugin credential
+    #: minted by ``/auth/plugin-token``. Plugin tokens are the only ones the
+    #: musician can list and revoke from Settings (#515); the default keeps every
+    #: document predating that field — all web sessions — out of that listing.
+    kind: str = "web"
 
     class Settings:
         name = "refresh_tokens"

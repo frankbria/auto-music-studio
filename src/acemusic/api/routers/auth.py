@@ -7,6 +7,8 @@ Endpoints (mounted under ``/api/v1/auth``):
 * ``POST /refresh``             → rotate the refresh token, mint a new access token
 * ``POST /logout``              → revoke a refresh token (idempotent, 204)
 * ``POST /plugin-token``        → mint a separate token pair for the VST3 plugin (#445)
+* ``GET /plugin-tokens``        → list the caller's live plugin tokens, metadata only (#515)
+* ``DELETE /plugin-tokens/{id}`` → revoke one plugin token (#515)
 
 State (CSRF) validation is stateless via the signed ``state`` JWT minted in
 :mod:`acemusic.api.auth.oauth`. ``exchange_code_for_user`` is referenced through
@@ -42,10 +44,16 @@ HTTP status choices (documented for callers):
 * provider rejects the code / userinfo fails → ``502`` (upstream dependency failed;
   the detail is generic so no provider secrets leak)
 * logout → ``204`` always (idempotent; revoking an unknown token is a no-op)
+* revoking a plugin token that is not the caller's own plugin token → ``404``
+  (an unknown id, another account's token, and the caller's own *web session*
+  are deliberately indistinguishable: this endpoint exists to manage DAW
+  credentials, and must not become a way to probe for or sign out anything else)
 """
 
 from datetime import datetime, timedelta, timezone
 
+from beanie import PydanticObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
@@ -81,6 +89,18 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class PluginTokenSummary(BaseModel):
+    """One live plugin token, as Settings lists it (#515).
+
+    Metadata only — the credential itself is unrecoverable by design (only its
+    SHA-256 hash is stored), and ``id`` is all a revoke needs.
+    """
+
+    id: str
+    created_at: datetime
+    expires_at: datetime
 
 
 class TokenResponse(BaseModel):
@@ -234,9 +254,13 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
     """Rotate a refresh token: atomically consume the old, issue a new pair."""
     settings = _settings(request)
 
-    # Atomic consume (validate + revoke in one op) so a duplicated/concurrent
-    # refresh can't mint two token pairs from the same single-use token.
-    user_id = await services.consume_refresh_token(body.refresh_token)
+    # The replacement is minted first so the swap below is a single atomic op:
+    # validate + rotate in one ``find_one_and_update``, so a duplicated or
+    # concurrent refresh can't mint two live pairs from one single-use token.
+    # If the swap fails nothing was persisted and this pair is simply dropped.
+    new_refresh = create_refresh_token()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    user_id = await services.rotate_refresh_token(body.refresh_token, new_refresh, expires_at)
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -253,9 +277,12 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access, new_refresh = _mint_token_pair(user, settings)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
-    await services.store_refresh_token(user.id, new_refresh, expires_at)
+    access = create_access_token(
+        user_id=str(user.id),
+        email=user.email,
+        subscription_tier=user.subscription_tier,
+        settings=settings,
+    )
 
     return TokenResponse(
         access_token=access,
@@ -278,12 +305,45 @@ async def plugin_token(request: Request, current: CurrentUser = Depends(get_curr
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
-    await services.store_refresh_token(user.id, refresh, expires_at)
+    # Tagged so it can be listed and revoked apart from the browser session (#515).
+    await services.store_refresh_token(user.id, refresh, expires_at, kind="plugin")
     return TokenResponse(
         access_token=access,
         refresh_token=refresh,
         expires_in=settings.access_token_expire_minutes * 60,
     )
+
+
+@router.get("/plugin-tokens", response_model=list[PluginTokenSummary])
+async def list_plugin_tokens(current: CurrentUser = Depends(get_current_user)) -> list[PluginTokenSummary]:
+    """List the caller's live plugin tokens, newest first (#515).
+
+    Web sessions are not included: this is the DAW-credential list, and the
+    browser session reading it is not something to revoke from here.
+    """
+    tokens = await services.list_plugin_tokens(PydanticObjectId(current.user_id))
+    return [
+        PluginTokenSummary(id=str(token.id), created_at=token.created_at, expires_at=token.expires_at)
+        for token in tokens
+    ]
+
+
+@router.delete("/plugin-tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_plugin_token(token_id: str, current: CurrentUser = Depends(get_current_user)) -> Response:
+    """Revoke one of the caller's plugin tokens (#515).
+
+    Idempotent for a token that is the caller's own: revoking it twice still
+    succeeds. Everything else — an unknown id, a malformed id, another account's
+    token, the caller's own web session — is a flat 404, so the endpoint reveals
+    nothing about tokens it will not act on.
+    """
+    try:
+        oid = PydanticObjectId(token_id)
+    except (InvalidId, TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin token not found.") from None
+    if not await services.revoke_plugin_token(PydanticObjectId(current.user_id), oid):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin token not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
