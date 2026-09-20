@@ -372,6 +372,14 @@ token. Before refreshing, an instance re-reads the file, which is how it picks u
 rotation another instance made. The field never shows the stored token again; its hint
 says one is saved. A token left unused for 7 days expires. Paste a new one to carry on.
 
+**Revoking a token (#515).** Creating a second token leaves the first one working, so
+**Settings → DAW plugin token** also lists the tokens that are still live — when each was
+created and when it expires, never the token itself — each with a **Revoke** button. Revoke
+one and the plugin holding it fails its next refresh and reports "Plugin token rejected".
+Because rotation swaps the credential on the same record rather than creating a new one, a
+token in daily use stays one entry in that list instead of multiplying. Your browser session
+is not in the list and cannot be revoked there; sign out for that.
+
 ### Custom voices (#396)
 
 Connecting also fills a **Voice** selector in the Generation panel with the musician's
