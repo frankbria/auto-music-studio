@@ -29,14 +29,18 @@ import {
 // the musician no longer has could not be taken back. The card now lists the
 // live tokens and revokes them one by one.
 
+// Date *and* time: tokens made on the same day are otherwise three identical
+// rows, and the date is the only thing telling the musician which one to revoke.
 function formatDate(iso: string): string {
   const date = new Date(iso)
   return Number.isNaN(date.getTime())
     ? "unknown"
-    : date.toLocaleDateString(undefined, {
+    : date.toLocaleString(undefined, {
         year: "numeric",
         month: "short",
         day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
       })
 }
 
