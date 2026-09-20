@@ -613,6 +613,12 @@ class TestPluginTokenList:
         assert len(listed) == 1
         entry = listed[0]
         assert set(entry) == {"id", "created_at", "expires_at"}
+        # Offsets are explicit: JavaScript reads an offset-less date-time as local
+        # time, which would slide the displayed day across the timezone boundary.
+        for field in ("created_at", "expires_at"):
+            parsed = datetime.fromisoformat(entry[field])
+            assert parsed.tzinfo is not None, f"{field} must carry an offset"
+            assert parsed.utcoffset() == timedelta(0)
         # The credential itself is never returned by the listing.
         assert minted["refresh_token"] not in resp.text
 

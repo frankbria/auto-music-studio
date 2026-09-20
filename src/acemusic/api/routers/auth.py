@@ -128,6 +128,18 @@ def _state_cookie_path(request: Request) -> str:
     return "/"
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Stamp a MongoDB datetime as UTC before it is serialized.
+
+    MongoDB returns naive UTC datetimes, and a naive value serializes without an
+    offset. JavaScript parses an offset-less date-time as *local* time, so the
+    browser would render a token created at 23:40 UTC as the previous day west of
+    Greenwich — the one thing this listing is read for is telling two tokens apart
+    by their date.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _mint_token_pair(user: User, settings: ApiSettings) -> tuple[str, str]:
     """Mint a fresh ``(access_token, refresh_token)`` pair for ``user``."""
     access = create_access_token(
@@ -323,7 +335,11 @@ async def list_plugin_tokens(current: CurrentUser = Depends(get_current_user)) -
     """
     tokens = await services.list_plugin_tokens(PydanticObjectId(current.user_id))
     return [
-        PluginTokenSummary(id=str(token.id), created_at=token.created_at, expires_at=token.expires_at)
+        PluginTokenSummary(
+            id=str(token.id),
+            created_at=_as_utc(token.created_at),
+            expires_at=_as_utc(token.expires_at),
+        )
         for token in tokens
     ]
 
