@@ -61,8 +61,13 @@ export function PluginTokenCard({
   useEffect(() => {
     if (!accessToken) return
     let cancelled = false
-    // State is set from the promise continuation, never in the effect body —
-    // `react-hooks/set-state-in-effect` is an error in this repo.
+    // Two separate reasons, both load-bearing:
+    //  - state is set from the promise continuation, never in the effect body,
+    //    because `react-hooks/set-state-in-effect` is an error in this repo;
+    //  - `cancelled` is not about unmounting (React 18 makes that setState a
+    //    silent no-op) but about this effect re-running when `accessToken`
+    //    changes: two loads are then in flight, and the slower, older one must
+    //    not overwrite the newer list.
     listPluginTokens(accessToken)
       .then((next) => {
         if (!cancelled) setTokens(next)
@@ -111,7 +116,15 @@ export function PluginTokenCard({
     setError(null)
     try {
       await revokePluginToken(accessToken, id)
-      setTokens((prev) => (prev ?? []).filter((t) => t.id !== id))
+      // The one-time token field is dismissed on any successful revoke. It holds a
+      // secret shown once, and the create response carries no id, so the card
+      // cannot tell whether the row just revoked is the one on display — offering
+      // a dead credential next to a working Copy button is the worse failure.
+      setToken(null)
+      setCopied(false)
+      // Re-list rather than filtering locally, so the card always agrees with the
+      // server — with two tabs open, a local filter leaves the other one stale.
+      setTokens(await listPluginTokens(accessToken))
     } catch (err) {
       setError(
         err instanceof Error
@@ -187,7 +200,7 @@ export function PluginTokenCard({
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
-              {tokens.map((t) => (
+              {tokens.map((t, i) => (
                 <li
                   key={t.id}
                   className="flex items-center justify-between gap-3 rounded-lg border p-3"
@@ -201,7 +214,10 @@ export function PluginTokenCard({
                   <Button
                     type="button"
                     variant="outline"
-                    aria-label={`Revoke token created ${formatDate(t.created_at)}`}
+                    // Position disambiguates: `formatDate` stops at minutes, and
+                    // two tokens minted in the same minute would otherwise give
+                    // two buttons the same accessible name.
+                    aria-label={`Revoke plugin token ${i + 1} of ${tokens.length}, created ${formatDate(t.created_at)}`}
                     disabled={revoking !== null}
                     onClick={() => handleRevoke(t.id)}
                   >

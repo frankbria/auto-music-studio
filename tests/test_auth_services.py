@@ -12,6 +12,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.services import (
     list_plugin_tokens,
+    retire_untagged_refresh_tokens,
     revoke_all_user_tokens,
     revoke_plugin_token,
     revoke_refresh_token,
@@ -153,7 +154,86 @@ class TestRotate:
 
         after = await RefreshToken.get(stored.id)
         assert after.token_hash == stored.token_hash
-        assert await validate_refresh_token(new) is None
+        # ``new`` resolving to nothing is not evidence on its own — an overwritten
+        # document would be rejected as expired anyway. The hash above is the claim.
+        assert await RefreshToken.find_one(RefreshToken.token_hash == hashlib.sha256(new.encode()).hexdigest()) is None
+
+
+class TestRetireUntaggedTokens:
+    """Documents written before ``kind`` existed are retired, not guessed at (#515)."""
+
+    async def _insert_pre_515(self, user_id: PydanticObjectId, raw: str) -> PydanticObjectId:
+        """Insert exactly what ``main``'s ``store_refresh_token`` wrote: no ``kind`` key."""
+        result = await RefreshToken.get_pymongo_collection().insert_one(
+            {
+                "token_hash": hashlib.sha256(raw.encode()).hexdigest(),
+                "user_id": user_id,
+                "expires_at": _future(),
+                "revoked": False,
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+        return result.inserted_id
+
+    async def test_an_untagged_token_is_unlistable_and_unrevokable_until_retired(self, mongo_db):
+        """The gap this retirement closes: a #445 plugin token has no ``kind`` at all.
+
+        Nothing stored distinguishes it from a browser session, so it matches
+        neither query — it could not be listed, and could not be revoked, which is
+        the exact failure #515 exists to fix.
+        """
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        token_id = await self._insert_pre_515(user_id, raw)
+
+        assert await list_plugin_tokens(user_id) == []
+        assert await revoke_plugin_token(user_id, token_id) is False
+        assert await validate_refresh_token(raw) == user_id, "and it still works as a credential"
+
+    async def test_retiring_kills_it(self, mongo_db):
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        await self._insert_pre_515(user_id, raw)
+
+        assert await retire_untagged_refresh_tokens() == 1
+
+        assert await validate_refresh_token(raw) is None
+        assert await rotate_refresh_token(raw, create_refresh_token(), _future()) is None
+
+    async def test_startup_runs_the_retirement(self, mongo_settings, mongo_db):
+        """``init_db`` is where the fix actually reaches production, so pin it there.
+
+        A retirement function nobody calls fixes nothing; this asserts the startup
+        path itself kills an untagged token.
+        """
+        from acemusic.api.database import close_db, init_db
+
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        await self._insert_pre_515(user_id, raw)
+        assert await validate_refresh_token(raw) == user_id
+
+        client = await init_db(mongo_settings)
+        try:
+            assert await validate_refresh_token(raw) is None
+        finally:
+            await close_db(client)
+
+    async def test_is_idempotent_and_leaves_tagged_tokens_alone(self, mongo_db):
+        user_id = PydanticObjectId()
+        await self._insert_pre_515(user_id, create_refresh_token())
+        web_raw, plugin_raw = create_refresh_token(), create_refresh_token()
+        await store_refresh_token(user_id, web_raw, _future())
+        await store_refresh_token(user_id, plugin_raw, _future(), kind="plugin")
+
+        assert await retire_untagged_refresh_tokens() == 1
+        # A second run finds nothing left to retire.
+        assert await retire_untagged_refresh_tokens() == 0
+
+        # Tokens minted since the field exists are untouched.
+        assert await validate_refresh_token(web_raw) == user_id
+        assert await validate_refresh_token(plugin_raw) == user_id
+        assert len(await list_plugin_tokens(user_id)) == 1
 
 
 class TestPluginTokens:

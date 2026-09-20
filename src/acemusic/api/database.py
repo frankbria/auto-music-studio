@@ -21,6 +21,7 @@ from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import PyMongoError
 
+from .auth import services as auth_services
 from .models import ALL_MODELS
 from .settings import ApiSettings
 
@@ -82,6 +83,15 @@ async def init_db(settings: ApiSettings) -> AsyncMongoClient:
 
     _client = client
     _db_name = settings.mongodb_db_name
+
+    # One-shot, idempotent: refresh tokens written before #515 carry no ``kind``,
+    # and a #445-era plugin token is indistinguishable from a browser session in
+    # storage. Retiring them is what stops a leaked plugin token from staying
+    # invisible in Settings while it refreshes itself indefinitely.
+    retired = await auth_services.retire_untagged_refresh_tokens()
+    if retired:
+        logger.info("Retired %d refresh token(s) predating the 'kind' field; those clients sign in again", retired)
+
     logger.info("Connected to MongoDB database %r at %s", settings.mongodb_db_name, safe_url)
     return client
 

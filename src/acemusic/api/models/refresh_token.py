@@ -25,8 +25,14 @@ class RefreshToken(Document):
     created_at: datetime = Field(default_factory=utcnow)
     #: ``"web"`` for a browser session, ``"plugin"`` for a DAW-plugin credential
     #: minted by ``/auth/plugin-token``. Plugin tokens are the only ones the
-    #: musician can list and revoke from Settings (#515); the default keeps every
-    #: document predating that field — all web sessions — out of that listing.
+    #: musician can list and revoke from Settings (#515).
+    #:
+    #: The default applies to *reads* only. A document written before this field
+    #: existed has no ``kind`` key at all, so it matches neither ``"web"`` nor
+    #: ``"plugin"`` in a query — and because #445 wrote plugin tokens and browser
+    #: sessions identically, nothing in such a document says which it was. Those
+    #: are retired at startup by ``retire_untagged_refresh_tokens`` rather than
+    #: guessed at, so an untaggable plugin token cannot linger unlistable.
     kind: str = "web"
 
     class Settings:

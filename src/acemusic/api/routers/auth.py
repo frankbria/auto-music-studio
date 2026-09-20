@@ -140,16 +140,24 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-def _mint_token_pair(user: User, settings: ApiSettings) -> tuple[str, str]:
-    """Mint a fresh ``(access_token, refresh_token)`` pair for ``user``."""
-    access = create_access_token(
+def _mint_access_token(user: User, settings: ApiSettings) -> str:
+    """Mint an access token for ``user``.
+
+    One place builds the claim set: ``/refresh`` needs only this half (it rotates
+    the refresh token in place rather than issuing a new one), and a change to the
+    claims should not have to be made in two files that can drift apart.
+    """
+    return create_access_token(
         user_id=str(user.id),
         email=user.email,
         subscription_tier=user.subscription_tier,
         settings=settings,
     )
-    refresh = create_refresh_token()
-    return access, refresh
+
+
+def _mint_token_pair(user: User, settings: ApiSettings) -> tuple[str, str]:
+    """Mint a fresh ``(access_token, refresh_token)`` pair for ``user``."""
+    return _mint_access_token(user, settings), create_refresh_token()
 
 
 @router.post("/login/{provider}", response_model=LoginResponse)
@@ -289,12 +297,7 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access = create_access_token(
-        user_id=str(user.id),
-        email=user.email,
-        subscription_tier=user.subscription_tier,
-        settings=settings,
-    )
+    access = _mint_access_token(user, settings)
 
     return TokenResponse(
         access_token=access,
@@ -355,7 +358,7 @@ async def revoke_plugin_token(token_id: str, current: CurrentUser = Depends(get_
     """
     try:
         oid = PydanticObjectId(token_id)
-    except (InvalidId, TypeError, ValueError):
+    except InvalidId:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin token not found.") from None
     if not await services.revoke_plugin_token(PydanticObjectId(current.user_id), oid):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin token not found.")

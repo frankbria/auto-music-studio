@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { PluginTokenCard } from "@/components/settings/PluginTokenCard"
@@ -138,7 +138,7 @@ describe("PluginTokenCard", () => {
 
     await waitFor(() =>
       expect(
-        screen.getAllByRole("button", { name: /revoke token created/i })
+        screen.getAllByRole("button", { name: /revoke plugin token/i })
       ).toHaveLength(2)
     )
     expect(screen.getAllByText(/^Created /)).toHaveLength(2)
@@ -155,23 +155,26 @@ describe("PluginTokenCard", () => {
   })
 
   it("removes the row when a token is revoked", async () => {
-    const fetchMock = stubFetch((url, init) =>
-      init?.method === "DELETE"
-        ? new Response(null, { status: 204 })
-        : jsonRes(TOKENS)
-    )
+    let listed = TOKENS
+    const fetchMock = stubFetch((url, init) => {
+      if (init?.method === "DELETE") {
+        listed = TOKENS.slice(1)
+        return new Response(null, { status: 204 })
+      }
+      return jsonRes(listed)
+    })
     const user = userEvent.setup()
     render(<PluginTokenCard accessToken="tok" />)
 
     const buttons = await screen.findAllByRole("button", {
-      name: /revoke token created/i,
+      name: /revoke plugin token/i,
     })
     expect(buttons).toHaveLength(2)
     await user.click(buttons[0])
 
     await waitFor(() =>
       expect(
-        screen.getAllByRole("button", { name: /revoke token created/i })
+        screen.getAllByRole("button", { name: /revoke plugin token/i })
       ).toHaveLength(1)
     )
     expect(fetchMock).toHaveBeenCalledWith(
@@ -190,7 +193,7 @@ describe("PluginTokenCard", () => {
     render(<PluginTokenCard accessToken="tok" />)
 
     const buttons = await screen.findAllByRole("button", {
-      name: /revoke token created/i,
+      name: /revoke plugin token/i,
     })
     await user.click(buttons[0])
 
@@ -198,7 +201,7 @@ describe("PluginTokenCard", () => {
       /plugin token not found/i
     )
     expect(
-      screen.getAllByRole("button", { name: /revoke token created/i })
+      screen.getAllByRole("button", { name: /revoke plugin token/i })
     ).toHaveLength(2)
   })
 
@@ -221,8 +224,89 @@ describe("PluginTokenCard", () => {
 
     await waitFor(() =>
       expect(
-        screen.getAllByRole("button", { name: /revoke token created/i })
+        screen.getAllByRole("button", { name: /revoke plugin token/i })
       ).toHaveLength(1)
     )
+  })
+
+  it("throws rather than reporting an empty list when a 200 is not an array", async () => {
+    // An ingress error page answering 200 must not tell a musician with live DAW
+    // credentials that they have none to revoke.
+    stubFetch(() => jsonRes({ detail: "gateway says hi" }))
+    render(<PluginTokenCard accessToken="tok" />)
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not load your plugin tokens/i
+    )
+    expect(
+      screen.queryByText(/no plugin tokens are active/i)
+    ).not.toBeInTheDocument()
+  })
+
+  it("dismisses the once-only token field when a token is revoked", async () => {
+    // Otherwise a revoked credential sits in a read-only field next to a working
+    // Copy button, and the musician pastes a dead token into their DAW.
+    let listed: unknown[] = []
+    stubFetch((_url, init) => {
+      if (init?.method === "POST") {
+        listed = TOKENS.slice(0, 1)
+        return jsonRes({ refresh_token: "plugin-r-123" })
+      }
+      if (init?.method === "DELETE") {
+        listed = []
+        return new Response(null, { status: 204 })
+      }
+      return jsonRes(listed)
+    })
+    const user = userEvent.setup()
+    render(<PluginTokenCard accessToken="tok" />)
+
+    await screen.findByText(/no plugin tokens are active/i)
+    await user.click(
+      screen.getByRole("button", { name: /create plugin token/i })
+    )
+    expect(await screen.findByLabelText("Plugin token")).toHaveValue(
+      "plugin-r-123"
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: /revoke plugin token/i })
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Plugin token")).not.toBeInTheDocument()
+    )
+  })
+
+  it("ignores a stale load when the access token changes mid-flight", async () => {
+    // React 18 makes a setState after unmount a silent no-op, so the `cancelled`
+    // flag is not about unmounting — it is about the effect re-running. Two loads
+    // are then in flight and the slower, older one must not win.
+    const resolvers: ((value: Response) => void)[] = []
+    stubFetch(
+      () => new Promise<Response>((resolve) => resolvers.push(resolve))
+    )
+    const { rerender } = render(<PluginTokenCard accessToken="old" />)
+    rerender(<PluginTokenCard accessToken="new" />)
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+
+    // The second (current) load lands first, then the first (stale) one.
+    resolvers[1](jsonRes(TOKENS.slice(0, 1)))
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /revoke plugin token/i })
+      ).toHaveLength(1)
+    )
+    // Flush inside act(), so an unguarded stale setTokens would actually land —
+    // a waitFor on an already-true condition passes before React ever re-renders
+    // and would prove nothing.
+    await act(async () => {
+      resolvers[0](jsonRes(TOKENS))
+      await Promise.resolve()
+    })
+
+    expect(
+      screen.getAllByRole("button", { name: /revoke plugin token/i })
+    ).toHaveLength(1)
   })
 })

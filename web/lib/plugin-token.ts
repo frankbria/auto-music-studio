@@ -43,7 +43,14 @@ export async function listPluginTokens(
   if (!res.ok) {
     throw new Error(body.detail || "Could not load your plugin tokens.")
   }
-  return Array.isArray(body) ? (body as PluginTokenSummary[]) : []
+  // A 200 that is not an array means something answered for the backend (an
+  // ingress error page, a truncated body). Returning [] there would tell a
+  // musician with live DAW credentials that they have none to revoke — the one
+  // wrong answer this card must never give.
+  if (!Array.isArray(body)) {
+    throw new Error("Could not load your plugin tokens.")
+  }
+  return body as PluginTokenSummary[]
 }
 
 /** Revoke one plugin token. Idempotent on the backend; a 204 carries no body. */

@@ -79,6 +79,15 @@ async def rotate_refresh_token(
     Revoked and expired tokens are excluded by the filter, so neither is
     rewritten on its way to being rejected — an expired document keeps its own
     hash and is left for the TTL index.
+
+    **What this gives up.** Under revoke-and-reissue a replayed token still hashed
+    to a document that existed with ``revoked: True``, which is the signal OAuth
+    refresh-token *reuse detection* keys off ("a thief is replaying a token the
+    real client already spent — kill the whole family"). Swapping the hash erases
+    that, so a replay is now indistinguishable from a random string. Nothing in
+    this codebase implements reuse detection today, but whoever adds it will need
+    to keep the spent hash — a ``previous_token_hash`` on the same document would
+    restore the signal without giving up the stable id AC2 needs.
     """
     collection = RefreshToken.get_pymongo_collection()
     doc = await collection.find_one_and_update(
@@ -100,6 +109,28 @@ async def revoke_refresh_token(raw_token: str) -> bool:
     token.revoked = True
     await token.save()
     return True
+
+
+async def retire_untagged_refresh_tokens() -> int:
+    """Revoke every refresh token stored before ``kind`` existed. Return the count.
+
+    A document written before #515 has no ``kind`` key at all, and nothing in it
+    says whether it was a browser session or a DAW plugin token minted by #445 —
+    both were written identically. Guessing "web" would produce the worst possible
+    outcome for the issue this feature exists to close: a leaked plugin token would
+    stay absent from the Settings list *and* keep refreshing itself indefinitely,
+    because rotation pushes ``expires_at`` out on every use, so the TTL never
+    reaps a token that is being used.
+
+    They are therefore retired rather than guessed at. Everyone signs in once more
+    and re-pastes a plugin token, and every credential from then on is tagged and
+    revocable. Idempotent: after the first run no document lacks ``kind``.
+    """
+    result = await RefreshToken.get_pymongo_collection().update_many(
+        {"kind": {"$exists": False}},
+        {"$set": {"kind": "web", "revoked": True}},
+    )
+    return result.modified_count
 
 
 async def list_plugin_tokens(user_id: PydanticObjectId) -> list[RefreshToken]:
@@ -128,8 +159,14 @@ async def revoke_plugin_token(user_id: PydanticObjectId, token_id: PydanticObjec
 
     Scoping the update to the owner *and* to ``kind == "plugin"`` in one query is
     what stops this endpoint from being used to sign another account — or this
-    account's own browser — out. Revoking twice still returns ``True``: the
-    caller asked for a token of theirs to be dead, and it is.
+    account's own browser — out. Revoking twice still returns ``True``: the caller
+    asked for a token of theirs to be dead, and it is.
+
+    Expiry is deliberately not in the filter, so an already-expired plugin token of
+    the caller's own still reports success rather than "not found". The cost is a
+    narrow oracle — ``True`` here and ``False`` for an id that was never theirs
+    distinguishes the two — which needs a valid ObjectId of the caller's own to
+    ask, so it tells an attacker nothing they did not already have.
     """
     result = await RefreshToken.get_pymongo_collection().update_one(
         {"_id": token_id, "user_id": user_id, "kind": "plugin"},
