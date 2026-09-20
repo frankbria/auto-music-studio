@@ -66,14 +66,18 @@ const MODELS = [
   },
 ]
 
-// fetch mock that routes /api/models (the default-model dropdown, US-16.4) to a
-// fixed model list and serves the given responses, in order, for /api/users/me.
-// This keeps model-list loading from disturbing the profile load/save sequence.
+// fetch mock that routes /api/models (the default-model dropdown, US-16.4) and
+// /api/auth/plugin-tokens (the plugin token list, #515) to fixed responses and
+// serves the given responses, in order, for /api/users/me. This keeps those two
+// background loads from disturbing the profile load/save sequence.
 function meFetch(...meResponses: Response[]) {
   let i = 0
   return vi.fn((url: unknown) => {
     if (typeof url === "string" && url.includes("/api/models")) {
       return Promise.resolve(jsonRes({ models: MODELS }))
+    }
+    if (typeof url === "string" && url.includes("/api/auth/plugin-tokens")) {
+      return Promise.resolve(jsonRes([]))
     }
     const res = meResponses[Math.min(i, meResponses.length - 1)]
     i += 1

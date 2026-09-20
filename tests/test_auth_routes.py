@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import jwt
 import pytest
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends
 
 from acemusic.api.auth import oauth as oauth_module
@@ -531,7 +532,7 @@ async def _login(client, settings, monkeypatch, *, oauth_id="r-1", email="r@exam
 
 
 class TestRefresh:
-    async def test_refresh_rotates_and_old_token_revoked(self, client, settings, monkeypatch):
+    async def test_refresh_rotates_and_old_token_rejected(self, client, settings, monkeypatch):
         tokens = await _login(client, settings, monkeypatch)
         old_refresh = tokens["refresh_token"]
 
@@ -590,6 +591,130 @@ class TestPluginToken:
             f"{API_V1_PREFIX}/auth/plugin-token",
             headers={"Authorization": f"Bearer {tokens['access_token']}"},
         )
+        assert resp.status_code == 404
+
+
+class TestPluginTokenList:
+    """``GET``/``DELETE /auth/plugin-tokens`` (#515): see and revoke plugin tokens."""
+
+    async def test_requires_a_bearer(self, client):
+        assert (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens")).status_code == 401
+        resp = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{PydanticObjectId()}")
+        assert resp.status_code == 401
+
+    async def test_lists_minted_plugin_tokens_without_the_secret(self, client, settings, monkeypatch):
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        minted = (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).json()
+
+        resp = await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)
+        assert resp.status_code == 200
+        listed = resp.json()
+        assert len(listed) == 1
+        entry = listed[0]
+        assert set(entry) == {"id", "created_at", "expires_at"}
+        # Offsets are explicit: JavaScript reads an offset-less date-time as local
+        # time, which would slide the displayed day across the timezone boundary.
+        for field in ("created_at", "expires_at"):
+            parsed = datetime.fromisoformat(entry[field])
+            assert parsed.tzinfo is not None, f"{field} must carry an offset"
+            assert parsed.utcoffset() == timedelta(0)
+        # The credential itself is never returned by the listing.
+        assert minted["refresh_token"] not in resp.text
+
+    async def test_web_session_is_not_listed_and_cannot_be_revoked(self, client, settings, monkeypatch):
+        """AC3: the web session's own refresh token is invisible to this UI."""
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+
+        listed = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()
+        assert len(listed) == 1, "only the plugin token, not the web session"
+
+        from acemusic.api.auth.services import _hash_token
+        from acemusic.api.models import RefreshToken
+
+        web = await RefreshToken.find_one(RefreshToken.token_hash == _hash_token(tokens["refresh_token"]))
+        assert str(web.id) not in [entry["id"] for entry in listed]
+
+        resp = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{web.id}", headers=auth)
+        assert resp.status_code == 404
+        # ...and the web session still refreshes.
+        alive = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        assert alive.status_code == 200
+
+    async def test_rotation_keeps_the_same_entry(self, client, settings, monkeypatch):
+        """AC2: refreshing a plugin token updates its entry rather than adding one."""
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        minted = (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).json()
+        before = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()
+
+        rotated = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": minted["refresh_token"]})
+        assert rotated.status_code == 200
+
+        after = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()
+        assert len(after) == 1
+        assert after[0]["id"] == before[0]["id"]
+        assert after[0]["created_at"] == before[0]["created_at"]
+
+    async def test_revoking_kills_the_next_refresh(self, client, settings, monkeypatch):
+        """AC1: after revocation the plugin's next refresh is rejected (401)."""
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        first = (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).json()
+        second = (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).json()
+        listed = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()
+        assert len(listed) == 2
+
+        # Revoke exactly the first token's entry.
+        from acemusic.api.auth.services import _hash_token
+        from acemusic.api.models import RefreshToken
+
+        doc = await RefreshToken.find_one(RefreshToken.token_hash == _hash_token(first["refresh_token"]))
+        resp = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{doc.id}", headers=auth)
+        assert resp.status_code == 204
+
+        dead = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": first["refresh_token"]})
+        assert dead.status_code == 401
+        # The other plugin token is untouched.
+        alive = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": second["refresh_token"]})
+        assert alive.status_code == 200
+        remaining = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()
+        assert str(doc.id) not in [entry["id"] for entry in remaining]
+
+    async def test_revoke_is_idempotent_and_unknown_id_404s(self, client, settings, monkeypatch):
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+        entry = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()[0]
+
+        assert (
+            await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{entry['id']}", headers=auth)
+        ).status_code == 204
+        assert (
+            await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{entry['id']}", headers=auth)
+        ).status_code == 204
+        unknown = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{PydanticObjectId()}", headers=auth)
+        assert unknown.status_code == 404
+        malformed = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/not-an-object-id", headers=auth)
+        assert malformed.status_code == 404
+
+    async def test_another_users_token_is_invisible(self, client, settings, monkeypatch):
+        tokens = await _login(client, settings, monkeypatch)
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+        entry = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()[0]
+
+        intruder = create_access_token(
+            user_id=str(PydanticObjectId()),
+            email="intruder@example.com",
+            subscription_tier="free",
+            settings=settings,
+        )
+        headers = {"Authorization": f"Bearer {intruder}"}
+        assert (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=headers)).json() == []
+        resp = await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{entry['id']}", headers=headers)
         assert resp.status_code == 404
 
 

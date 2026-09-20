@@ -72,6 +72,8 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
 | `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
 | `POST /api/v1/auth/plugin-token` | Mints a separate token pair for the DAW plugin (bearer required) |
+| `GET /api/v1/auth/plugin-tokens` | Lists the caller's live plugin tokens — id, created, expires; never the token |
+| `DELETE /api/v1/auth/plugin-tokens/{id}` | Revokes one plugin token (idempotent; 404 for anything that is not the caller's own) |
 
 **One account, several providers (#111).** A `User` carries a list of `identities`
 (`{provider, oauth_id}`), so the same person can sign in with Google or Discord and land
