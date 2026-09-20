@@ -84,7 +84,8 @@ async def init_db(settings: ApiSettings) -> AsyncMongoClient:
     _client = client
     _db_name = settings.mongodb_db_name
 
-    # One-shot, idempotent: refresh tokens written before #515 carry no ``kind``,
+    # Idempotent (see the service docstring for its cost): tokens written before
+    # #515 carry no ``kind``,
     # and a #445-era plugin token is indistinguishable from a browser session in
     # storage. Retiring them is what stops a leaked plugin token from staying
     # invisible in Settings while it refreshes itself indefinitely.

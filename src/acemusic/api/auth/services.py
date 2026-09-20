@@ -124,7 +124,13 @@ async def retire_untagged_refresh_tokens() -> int:
 
     They are therefore retired rather than guessed at. Everyone signs in once more
     and re-pastes a plugin token, and every credential from then on is tagged and
-    revocable. Idempotent: after the first run no document lacks ``kind``.
+    revocable.
+
+    Idempotent but not one-shot: once no document lacks ``kind`` this matches
+    nothing, yet it still scans the collection on every boot, because ``kind`` is
+    not indexed. In-place rotation keeps one document per session lineage rather
+    than one per refresh, so that scan is bounded by live sessions — add a ``kind``
+    index if it ever shows up in profiling.
     """
     result = await RefreshToken.get_pymongo_collection().update_many(
         {"kind": {"$exists": False}},
