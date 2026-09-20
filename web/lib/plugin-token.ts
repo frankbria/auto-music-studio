@@ -21,3 +21,41 @@ export async function createPluginToken(accessToken: string): Promise<string> {
   }
   return body.refresh_token as string
 }
+
+/**
+ * A live plugin token, as the settings card lists it (issue #515). The token
+ * value itself is never returned — only the id, which revoke takes.
+ */
+export type PluginTokenSummary = {
+  id: string
+  created_at: string
+  expires_at: string
+}
+
+/** List the caller's live plugin tokens, newest first. */
+export async function listPluginTokens(
+  accessToken: string
+): Promise<PluginTokenSummary[]> {
+  const res = await fetch("/api/auth/plugin-tokens", {
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(body.detail || "Could not load your plugin tokens.")
+  }
+  return Array.isArray(body) ? (body as PluginTokenSummary[]) : []
+}
+
+/** Revoke one plugin token. Idempotent on the backend; a 204 carries no body. */
+export async function revokePluginToken(
+  accessToken: string,
+  id: string
+): Promise<void> {
+  const res = await fetch(`/api/auth/plugin-tokens/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  if (res.ok) return
+  const body = await res.json().catch(() => ({}))
+  throw new Error(body.detail || "Could not revoke that plugin token.")
+}
