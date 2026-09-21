@@ -7,6 +7,7 @@ from .artwork import ArtworkOption
 from .batch_job import BatchClipEntry, BatchJob
 from .billing_event import BillingEvent
 from .clip import Clip
+from .clip_report import ClipReport, ReportCategory
 from .counter import Counter
 from .credit_transaction import CreditTransaction
 from .distribution import DistributionStatus, VisibilityState
@@ -42,6 +43,7 @@ ALL_MODELS = [
     Video,
     VoiceModel,
     ScreeningRulesDocument,
+    ClipReport,
 ]
 
 __all__ = [
@@ -51,6 +53,8 @@ __all__ = [
     "User",
     "Workspace",
     "Clip",
+    "ClipReport",
+    "ReportCategory",
     "ArtworkOption",
     "BillingEvent",
     "CreditTransaction",

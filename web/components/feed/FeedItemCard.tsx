@@ -5,6 +5,7 @@ import Link from "next/link"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   FavouriteIcon,
+  Flag02Icon,
   MusicNote01Icon,
   PauseIcon,
   PlayIcon,
@@ -13,6 +14,7 @@ import {
   SparklesIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { Badge } from "@/components/ui/badge"
 import { ShareModal } from "@/components/song/ShareModal"
 import { usePlayer } from "@/contexts/player-context"
@@ -185,6 +187,13 @@ export function FeedItemCard({
           icon={SparklesIcon}
           label="Inspire"
           href={clipInspirationHref(item)}
+        />
+        <ReportClipButton
+          clipId={item.id}
+          isOwner={item.is_owner === true}
+          trigger={(open) => (
+            <RailButton icon={Flag02Icon} label="Report" onClick={open} />
+          )}
         />
       </div>
 
