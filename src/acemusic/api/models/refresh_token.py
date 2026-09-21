@@ -40,9 +40,9 @@ class RefreshToken(Document):
     #: history here restores OAuth refresh-token reuse detection without handing
     #: the lineage a new document id on every refresh (#515 AC2).
     #:
-    #: Capped at ``REUSE_LEEWAY``-independent ``REUSE_HISTORY_DEPTH`` entries: a
-    #: session that is used daily never expires (rotation pushes ``expires_at``
-    #: out), so an uncapped list would grow for the life of the account.
+    #: Capped at ``REUSE_HISTORY_DEPTH`` entries: a session that is used daily
+    #: never expires (rotation pushes ``expires_at`` out), so an uncapped list
+    #: would grow for the life of the account.
     #:
     #: Empty on a token that has never rotated, and absent entirely from a
     #: document written before this field existed. Neither is a replay candidate:
