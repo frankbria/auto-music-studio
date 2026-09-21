@@ -97,17 +97,21 @@ async def _download(storage: StorageBackend, clip: Clip, dest: Path) -> None:
     dest.write_bytes(await download_clip(storage, clip))
 
 
-async def _rescreen(*texts: str | None) -> None:
-    """Re-screen clip metadata a worker is about to prompt with (US-27.1).
+async def _rescreen(job: Job, *clips: Clip, lyrics: str | None = None) -> None:
+    """Re-screen the live clip metadata a worker is about to prompt with (US-27.1).
 
-    The router screens the source at enqueue, but the owner can still rename or edit it
-    before the job runs, and the worker reads the live clip. Blocking fails the job, and
-    a failed job is refunded.
+    The router screens the source at enqueue, but the owner can still rename it before
+    the job runs, and the worker reads the live clip. Blocking fails the job (and a
+    failed job is refunded); new flags join the job's, so the child clip carries them.
     """
     try:
-        await screening.enforce(*texts)
+        flags = await screening.enforce(*screening.clip_texts(*clips), lyrics)
     except ContentBlockedError as exc:
         raise JobProcessingError(str(exc)) from exc
+    existing = (job.input_params or {}).get("moderation_flags", [])
+    merged = existing + [flag for flag in flags if flag not in existing]
+    if merged:
+        job.input_params = {**(job.input_params or {}), "moderation_flags": merged}
 
 
 def _source_prompt(clip: Clip, fallback: str) -> str:
@@ -212,7 +216,7 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
     """Grow the source by ``duration`` from ``from_point`` (ACE-Step ``repaint``)."""
     params = dict(job.input_params or {})
     source = await load_clip(params["clip_id"])
-    await _rescreen(source.title, *source.style_tags)
+    await _rescreen(job, source)
     if source.duration is None:
         raise JobProcessingError(f"Source clip {source.id} has no duration metadata")
     fmt = native_format(source)
@@ -348,7 +352,7 @@ async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: Ac
     """Layer vocals onto the source (ACE-Step ``complete``)."""
     params = dict(job.input_params or {})
     source = await load_clip(params["clip_id"])
-    await _rescreen(source.title, *source.style_tags)
+    await _rescreen(job, source)
     fmt = native_format(source)
     with tempfile.TemporaryDirectory(prefix="acemusic-vocal-") as tmp:
         src_path = Path(tmp) / f"source.{fmt}"
@@ -467,7 +471,7 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
     clip_ids: list[str] = params["clip_ids"]
     sources = [await load_clip(cid) for cid in clip_ids]
     primary, secondaries = sources[0], sources[1:]
-    await _rescreen(*(clip.title for clip in sources))
+    await _rescreen(job, *sources)
     fmt = native_format(primary)
     style = params.get("style")
     # Submit without a key constraint when any secondary's key disagrees with the
@@ -702,7 +706,7 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
     base_style_resolved = base_style or base_style_tags
     base_lyrics = params.get("lyrics")
     effective_lyrics = base_lyrics if base_lyrics is not None else seed.lyrics
-    await _rescreen(seed.title, *seed.style_tags, effective_lyrics)
+    await _rescreen(job, seed, lyrics=effective_lyrics)
     prompt = _source_prompt(seed, "continue the song")
 
     parent_id = seed.id

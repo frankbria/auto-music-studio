@@ -336,8 +336,9 @@ async def _enqueue_generation(
     # US-27.1: every free-text field any iterative mode carries, screened before charging —
     # plus each source's editable title, tags and lyrics, which the workers fall back to
     # (``_source_prompt``; full-song inherits the seed's lyrics) when the request has none.
-    source_texts = [text for clip in sources for text in (clip.title, *clip.style_tags, clip.lyrics)]
-    moderation_flags = await screening_service.enforce(*(params.get(key) for key in _SCREENED_PARAMS), *source_texts)
+    moderation_flags = await screening_service.enforce(
+        *(params.get(key) for key in _SCREENED_PARAMS), *screening_service.clip_texts(*sources)
+    )
     if moderation_flags:
         params = {**params, "moderation_flags": moderation_flags}
 

@@ -12,6 +12,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ..models import Clip
 from ..models.screening import Rule, ScreeningRules, ScreeningRulesDocument
 
 DEFAULT_BLOCK_THRESHOLD = 3
@@ -86,6 +87,15 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
         return ScreeningResult(blocked=True, categories=blocked)
     escalate = rules.block_threshold > 0 and len(flagged) >= rules.block_threshold
     return ScreeningResult(blocked=escalate, categories=flagged)
+
+
+def clip_texts(*clips: Clip) -> list[str | None]:
+    """A clip's text as generation uses it: title, lyrics, and the tags *joined*.
+
+    Workers prompt with ``", ".join(style_tags)``, so tags are screened as that one
+    string — separately, ``["sieg", "heil"]`` would never match the phrase it forms.
+    """
+    return [text for clip in clips for text in (clip.title, ", ".join(clip.style_tags), clip.lyrics)]
 
 
 async def get_rules() -> ScreeningRules:

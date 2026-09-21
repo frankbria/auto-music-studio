@@ -576,6 +576,30 @@ class TestWorkerRescreensLiveClipMetadata:
             await getattr(tasks, handler)(job, storage=storage, client=client, poll=_make_poll())
         assert client.submitted == []
 
+    async def test_tags_are_screened_as_the_joined_prompt_the_worker_submits(self, storage) -> None:
+        # Upload splits tags on commas; the worker prompts with ", ".join(tags) == "sieg, heil".
+        job, source = await _make_clip(storage, email="t-rescreen-split@example.com")
+        await source.set({Clip.style_tags: ["sieg", "heil"]})
+        job.job_type = tasks.EXTEND_JOB_TYPE
+        job.input_params = {"clip_id": str(source.id), "duration": "2s", "from_point": "end"}
+        client = FakeAce(_wav_bytes(5.0))
+
+        with pytest.raises(tasks.JobProcessingError, match="hate speech"):
+            await tasks.process_extend_job(job, storage=storage, client=client, poll=_make_poll())
+        assert client.submitted == []
+
+    async def test_borderline_rename_before_the_worker_runs_flags_the_child(self, storage) -> None:
+        job, source = await _make_clip(storage, email="t-rescreen-flag@example.com")
+        await source.set({Clip.style_tags: ["teen suicide anthem"]})
+        job.job_type = tasks.EXTEND_JOB_TYPE
+        job.input_params = {"clip_id": str(source.id), "duration": "2s", "from_point": "end"}
+
+        result = await tasks.process_extend_job(
+            job, storage=storage, client=FakeAce(_wav_bytes(5.0)), poll=_make_poll()
+        )
+
+        assert (await _child(result)).moderation_flags == ["self-harm"]
+
     async def test_mashup_rescreens_source_titles(self, storage) -> None:
         job, primary = await _make_clip(storage, email="t-rescreen-mashup@example.com", title="White Power")
         secondary = Clip(

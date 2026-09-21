@@ -240,6 +240,15 @@ class TestOtherEntryPoints:
         assert resp.status_code == 422, resp.text
         assert await _balance(user) == 10.0
 
+    async def test_a_phrase_split_across_tags_is_screened_as_the_joined_prompt(self, client, settings):
+        user, clip = await _user_with_clip("screen-split-tags@example.com")
+        await clip.set({Clip.style_tags: ["sieg", "heil"]})
+        resp = await client.post(
+            f"{API_V1_PREFIX}/clips/{clip.id}/extend", json={"duration": "30s"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
+        assert await _balance(user) == 10.0
+
     async def test_mashup_flags_a_borderline_tag_on_any_source(self, client, settings):
         user, first = await _user_with_clip("screen-mashup@example.com")
         second = Clip(
