@@ -207,6 +207,11 @@ Environment variables (see `.env.example`):
 - Integration tests marked `@pytest.mark.integration` (excluded by default)
 - Integration tests require a live ACE-Step server (auto-started via `ACESTEP_API_CMD` env var, or skipped)
 - Test config: `testpaths = ["tests"]`, `bdd_features_base_dir = "tests/features"`
+- **`tests/conftest.py` pops `FORCE_COLOR`/`CLICOLOR_FORCE` at import time (#520)**, so CLI
+  substring assertions never see Rich's ANSI escapes. It has to happen at import, not in a
+  fixture: `acemusic.cli` builds its `Console` at module import and latches the setting.
+  `tests/test_force_color_isolation.py` guards it by re-running an affected test in a
+  subprocess with `FORCE_COLOR` set — an in-process env assertion would pass in CI either way
 - **Test users (#423)**: create them with the `free_user` / `pro_user` fixtures (`tests/conftest.py`), or
   `tests.users.make_user(email, tier=..., **fields)` when a test needs several accounts. Never write a
   per-file `_make_user`; `tests/test_user_fixtures.py` fails if any test file calls
