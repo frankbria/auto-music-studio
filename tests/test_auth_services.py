@@ -11,6 +11,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from acemusic.api.auth.services import (
+    REUSE_LEEWAY_SECONDS,
     list_plugin_tokens,
     retire_untagged_refresh_tokens,
     revoke_all_user_tokens,
@@ -307,3 +308,129 @@ class TestRevoke:
             assert await validate_refresh_token(raw) is None
         # Another user's token is untouched.
         assert await validate_refresh_token(other_raw) == other_id
+
+
+class TestReuseDetection:
+    """Replaying a spent refresh token kills the lineage it came from (#525).
+
+    In-place rotation means a spent token no longer resolves to any document, so a
+    replay would be indistinguishable from a random string. ``previous_token_hash``
+    keeps the spent hash on the same document, which is what makes the replay
+    recognisable without handing the lineage a new id on every refresh (#515 AC2).
+    """
+
+    async def _backdate_rotation(self, token_id: PydanticObjectId, seconds: float) -> None:
+        """Age the last rotation so it falls outside the concurrency leeway."""
+        await RefreshToken.get_pymongo_collection().update_one(
+            {"_id": token_id},
+            {"$set": {"rotated_at": datetime.now(timezone.utc) - timedelta(seconds=seconds)}},
+        )
+
+    async def test_rotation_records_the_hash_it_spent(self, mongo_db):
+        user_id = PydanticObjectId()
+        old, new = create_refresh_token(), create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _future())
+
+        await rotate_refresh_token(old, new, _future())
+
+        after = await RefreshToken.get(stored.id)
+        assert after.previous_token_hash == hashlib.sha256(old.encode()).hexdigest()
+        assert after.rotated_at is not None
+
+    async def test_a_replay_kills_the_live_credential_in_the_lineage(self, mongo_db):
+        """AC2: the token the thief holds is already dead; the one the client holds must die too."""
+        user_id = PydanticObjectId()
+        old, new = create_refresh_token(), create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _future())
+        await rotate_refresh_token(old, new, _future())
+        await self._backdate_rotation(stored.id, REUSE_LEEWAY_SECONDS + 5)
+
+        assert await rotate_refresh_token(old, create_refresh_token(), _future()) is None
+
+        assert await validate_refresh_token(new) is None, "the live successor must be revoked, not just refused"
+        assert (await RefreshToken.get(stored.id)).revoked is True
+
+    async def test_an_unknown_token_revokes_nothing(self, mongo_db):
+        """AC1: this is what makes a replay *distinguishable* — garbage input is inert."""
+        user_id = PydanticObjectId()
+        old, new = create_refresh_token(), create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _future())
+        await rotate_refresh_token(old, new, _future())
+        await self._backdate_rotation(stored.id, REUSE_LEEWAY_SECONDS + 5)
+
+        assert await rotate_refresh_token("never-stored", create_refresh_token(), _future()) is None
+
+        assert await validate_refresh_token(new) == user_id
+
+    async def test_a_replay_leaves_the_users_other_lineages_alone(self, mongo_db):
+        """A replayed browser session must not sign the musician's DAW plugin out."""
+        user_id = PydanticObjectId()
+        web_old, web_new = create_refresh_token(), create_refresh_token()
+        plugin_raw = create_refresh_token()
+        web = await store_refresh_token(user_id, web_old, _future())
+        await store_refresh_token(user_id, plugin_raw, _future(), kind="plugin")
+        await rotate_refresh_token(web_old, web_new, _future())
+        await self._backdate_rotation(web.id, REUSE_LEEWAY_SECONDS + 5)
+
+        await rotate_refresh_token(web_old, create_refresh_token(), _future())
+
+        assert await validate_refresh_token(web_new) is None
+        assert await validate_refresh_token(plugin_raw) == user_id
+
+    async def test_a_racing_second_refresh_is_not_a_replay(self, mongo_db):
+        """AC4: a client firing two refreshes at once presents the same spent token a thief would.
+
+        Only elapsed time separates them, so inside the leeway the loser is refused
+        without the family being killed — which is why the single-use gather test
+        above still finds exactly one live token.
+        """
+        user_id = PydanticObjectId()
+        old = create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _future())
+        news = [create_refresh_token() for _ in range(5)]
+
+        results = await asyncio.gather(*(rotate_refresh_token(old, new, _future()) for new in news))
+
+        assert results.count(user_id) == 1
+        live = [new for new in news if await validate_refresh_token(new) == user_id]
+        assert len(live) == 1, "the losers must not have revoked the winner's token"
+        assert (await RefreshToken.get(stored.id)).revoked is False
+
+    async def test_a_document_written_before_525_gains_the_substrate_when_it_rotates(self, mongo_db):
+        """A live session predating this field has no ``previous_token_hash`` key at all.
+
+        It cannot be replay-detected until it next rotates — there is no spent hash to
+        recognise — and the lookup must not mistake its missing key for a match.
+        """
+        user_id = PydanticObjectId()
+        old, new = create_refresh_token(), create_refresh_token()
+        result = await RefreshToken.get_pymongo_collection().insert_one(
+            {
+                "token_hash": hashlib.sha256(old.encode()).hexdigest(),
+                "user_id": user_id,
+                "expires_at": _future(),
+                "revoked": False,
+                "created_at": datetime.now(timezone.utc),
+                "kind": "web",
+            }
+        )
+
+        # An unrelated unknown token must not match the absent key.
+        assert await rotate_refresh_token("never-stored", create_refresh_token(), _future()) is None
+        assert await validate_refresh_token(old) == user_id
+
+        assert await rotate_refresh_token(old, new, _future()) == user_id
+        await self._backdate_rotation(result.inserted_id, REUSE_LEEWAY_SECONDS + 5)
+
+        assert await rotate_refresh_token(old, create_refresh_token(), _future()) is None
+        assert await validate_refresh_token(new) is None
+
+    async def test_an_expired_token_is_not_treated_as_a_replay(self, mongo_db):
+        """It was never spent — it timed out. Its successor-less lineage stays as it is."""
+        user_id = PydanticObjectId()
+        old = create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _past())
+
+        assert await rotate_refresh_token(old, create_refresh_token(), _future()) is None
+
+        assert (await RefreshToken.get(stored.id)).revoked is False
