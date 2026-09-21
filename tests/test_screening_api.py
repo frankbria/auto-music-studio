@@ -215,7 +215,11 @@ class TestOtherEntryPoints:
         assert resp.status_code == 422
         assert await Job.find(Job.user_id == user.id).to_list() == []
 
-    async def test_video_prompt_is_screened_before_charging(self, mongo_settings, mongo_db):
+    @pytest.mark.parametrize(
+        ("prompt", "status", "flags"),
+        [("sieg heil parade", 422, None), ("a genocide memorial montage", 202, ["violent extremism"])],
+    )
+    async def test_video_prompt_is_screened_before_charging(self, mongo_settings, mongo_db, prompt, status, flags):
         s = mongo_settings.model_copy(
             update={
                 "jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx",
@@ -228,11 +232,15 @@ class TestOtherEntryPoints:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(s)), base_url="http://t") as ac:
             resp = await ac.post(
                 f"{API_V1_PREFIX}/videos/generate",
-                json={"clip_id": str(clip.id), "prompt": "sieg heil parade"},
+                json={"clip_id": str(clip.id), "prompt": prompt},
                 headers=_auth(user, s),
             )
-        assert resp.status_code == 422, resp.text
-        assert await _balance(user) == 10.0
+        assert resp.status_code == status, resp.text
+        if flags is None:
+            assert await _balance(user) == 10.0
+        else:
+            job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+            assert job.input_params["moderation_flags"] == flags
 
 
 class TestAdminRules:
