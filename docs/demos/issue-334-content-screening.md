@@ -156,3 +156,29 @@ $DEMO/balance musician
 ```output
 musician credits_balance = 46; jobs = 4
 ```
+
+## AC1 across entry points — iterative modes also screen the source clip (fixed after post-PR review)
+`extend` carries no text of its own; the worker prompts ACE-Step with the clip's title/tags, which the owner can edit. (Fresh demo DB for this section; the musician again starts at 50 credits.)
+
+```bash
+$DEMO/api POST /clips/6ab167ed36972cd59e9559c6/extend musician '{"duration":"10s"}'; $DEMO/balance musician
+```
+
+```output
+HTTP 202
+{"job_id":"6ab167ff5527d23373ccbb19","status":"queued","estimated_time_seconds":45}
+musician credits_balance = 49; jobs = 1
+```
+
+```bash
+$DEMO/api PATCH /clips/6ab167ed36972cd59e9559c6 musician '{"title":"Sieg-Heil march"}' | head -1; $DEMO/api POST /clips/6ab167ed36972cd59e9559c6/extend musician '{"duration":"10s"}'; $DEMO/balance musician
+```
+
+```output
+HTTP 200
+HTTP 422
+{"detail":"This request wasn't generated because parts of it look like hate speech content, which our content policy doesn't allow. If we misread your intent, try rephrasing the prompt, style or lyrics."}
+musician credits_balance = 48; jobs = 2
+```
+
+Renaming the clip is allowed (renaming alone generates nothing), but the next generative operation that would prompt with that title is refused before the charge: balance and job count are unchanged. (They read 48/2 rather than 49/1 because a discarded attempt, a PATCH that sent a non-editable `style_tags` field and was rejected with 422, ran one more clean extend first.)
