@@ -117,7 +117,7 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport
     routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
@@ -331,4 +331,8 @@ Package manager: `uv` with `hatchling` build backend
   `Clip.moderation_flags` by the clip builders. A new generative endpoint must screen its text too.
   Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
   admins are `User.is_admin=True`, set in the database only
+- **User reporting (US-27.2)**: `POST /api/v1/clips/{id}/report` writes a `ClipReport`; the unique
+  `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Admins list reports via
+  `GET /api/v1/admin/moderation/reports`. On the web, `ReportClipButton` reads `AuthContext` directly (not
+  `useAuth`, which throws) so it renders nothing outside an `AuthProvider`, signed out, or on your own clip
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)
