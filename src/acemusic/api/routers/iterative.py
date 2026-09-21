@@ -40,6 +40,7 @@ from ..services import (
     clips as clip_service,
     credits as credits_service,
     iterative as iterative_service,
+    screening as screening_service,
     users as user_service,
 )
 from ._validators import require_voice_model
@@ -316,7 +317,7 @@ async def _enqueue_generation(
     *,
     user_id: str,
     job_type: str,
-    workspace_id,
+    sources: list[Clip],
     params: dict,
     cost: float,
     estimate_seconds: int,
@@ -329,13 +330,22 @@ async def _enqueue_generation(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    # US-27.1: every free-text field any iterative mode carries, screened before charging —
+    # plus each source's editable title, tags and lyrics, which the workers fall back to
+    # (``_source_prompt``; full-song inherits the seed's lyrics) when the request has none.
+    moderation_flags = await screening_service.enforce(
+        *(params.get(key) for key in screening_service.ITERATIVE_TEXT_PARAMS), *screening_service.clip_texts(*sources)
+    )
+    if moderation_flags:
+        params = {**params, "moderation_flags": moderation_flags}
+
     job = await credits_service.charge_and_create(
         user_id=user.id,
         cost=cost,
         action_type=job_type,
         create=lambda: iterative_service.create_iterative_job(
             user_id=user.id,
-            workspace_id=workspace_id,
+            workspace_id=sources[0].workspace_id,
             job_type=job_type,
             params=params,
         ),
@@ -414,7 +424,7 @@ async def extend_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.EXTEND_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=credits_service.get_cost(iterative_service.EXTEND_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
@@ -439,7 +449,7 @@ async def cover_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.COVER_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=credits_service.get_cost(iterative_service.COVER_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
@@ -458,7 +468,7 @@ async def remix_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.REMIX_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=credits_service.get_cost(iterative_service.REMIX_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
@@ -487,7 +497,7 @@ async def repaint_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.REPAINT_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=credits_service.get_cost(iterative_service.REPAINT_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
@@ -525,7 +535,7 @@ async def sample_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.SAMPLE_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=cost,
         estimate_seconds=_BASE_ESTIMATE_SECONDS * request.num_clips,
@@ -550,7 +560,7 @@ async def add_vocal_clip(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.ADD_VOCAL_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=credits_service.get_cost(iterative_service.ADD_VOCAL_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,
@@ -606,7 +616,7 @@ async def full_song(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.FULL_SONG_JOB_TYPE,
-        workspace_id=clip.workspace_id,
+        sources=[clip],
         params=params,
         cost=cost,
         estimate_seconds=_BASE_ESTIMATE_SECONDS * num_sections,
@@ -631,7 +641,6 @@ async def mashup_clips(
     # Validate every source up front so an unknown/unowned/non-wav id fails the
     # whole request (404/422) before any credit is touched.
     clips = [await _owned_wav_clip(clip_id, current.user_id, cap_duration=True) for clip_id in request.clip_ids]
-    primary = clips[0]
     params = {
         "clip_ids": [str(clip.id) for clip in clips],
         "blend_mode": request.blend_mode.value,
@@ -640,7 +649,7 @@ async def mashup_clips(
     return await _enqueue_generation(
         user_id=current.user_id,
         job_type=iterative_service.MASHUP_JOB_TYPE,
-        workspace_id=primary.workspace_id,
+        sources=clips,
         params=params,
         cost=credits_service.get_cost(iterative_service.MASHUP_JOB_TYPE),
         estimate_seconds=_BASE_ESTIMATE_SECONDS,

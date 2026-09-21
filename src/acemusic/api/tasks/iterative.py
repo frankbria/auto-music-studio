@@ -50,7 +50,7 @@ from acemusic.storage import StorageBackend
 from acemusic.utils import parse_time_string, slice_audio
 
 from ..models import Clip, Job
-from ..services import credits as credits_service
+from ..services import credits as credits_service, screening
 from ..services.clips import native_format
 from ..services.iterative import (
     ADD_VOCAL_JOB_TYPE,
@@ -62,6 +62,7 @@ from ..services.iterative import (
     REPAINT_JOB_TYPE,
     SAMPLE_JOB_TYPE,
 )
+from ..services.screening import ContentBlockedError
 from .common import JobProcessingError, download_clip, load_clip, rollback_clips, store_clip
 from .voice_adapter import active_voice, resolve_weights
 
@@ -94,6 +95,29 @@ PollFn = Callable[[AceStepClient, str], Awaitable[dict[str, Any]]]
 
 async def _download(storage: StorageBackend, clip: Clip, dest: Path) -> None:
     dest.write_bytes(await download_clip(storage, clip))
+
+
+async def _rescreen(job: Job, *clips: Clip) -> None:
+    """Re-screen what a worker is about to prompt with against the live clips (US-27.1).
+
+    The router screens the request and sources at enqueue, but the owner can still
+    rename a source before the job runs, and the worker reads the live clip. Screening
+    the same combined text again keeps the block threshold honest across both. Blocking
+    fails the job (and a failed job is refunded); new flags join the job's, so the child
+    clip carries them. Modes that never prompt from clip metadata (cover/remix/repaint/
+    sample) submit only their already-screened request text, so they need no re-screen.
+    """
+    params = job.input_params or {}
+    try:
+        flags = await screening.enforce(
+            *(params.get(key) for key in screening.ITERATIVE_TEXT_PARAMS), *screening.clip_texts(*clips)
+        )
+    except ContentBlockedError as exc:
+        raise JobProcessingError(str(exc)) from exc
+    existing = params.get("moderation_flags", [])
+    merged = existing + [flag for flag in flags if flag not in existing]
+    if merged:
+        job.input_params = {**params, "moderation_flags": merged}
 
 
 def _source_prompt(clip: Clip, fallback: str) -> str:
@@ -178,6 +202,7 @@ async def _store_child_clip(
         parent_clip_ids=parent_ids,
         generation_mode=job.job_type,
         generation_params=dict(job.input_params or {}),
+        moderation_flags=(job.input_params or {}).get("moderation_flags", []),
     )
     await store_clip(storage, clip, data)
     return str(clip_id)
@@ -197,6 +222,7 @@ async def process_extend_job(job: Job, *, storage: StorageBackend, client: AceSt
     """Grow the source by ``duration`` from ``from_point`` (ACE-Step ``repaint``)."""
     params = dict(job.input_params or {})
     source = await load_clip(params["clip_id"])
+    await _rescreen(job, source)
     if source.duration is None:
         raise JobProcessingError(f"Source clip {source.id} has no duration metadata")
     fmt = native_format(source)
@@ -332,6 +358,7 @@ async def process_add_vocal_job(job: Job, *, storage: StorageBackend, client: Ac
     """Layer vocals onto the source (ACE-Step ``complete``)."""
     params = dict(job.input_params or {})
     source = await load_clip(params["clip_id"])
+    await _rescreen(job, source)
     fmt = native_format(source)
     with tempfile.TemporaryDirectory(prefix="acemusic-vocal-") as tmp:
         src_path = Path(tmp) / f"source.{fmt}"
@@ -450,6 +477,7 @@ async def process_mashup_job(job: Job, *, storage: StorageBackend, client: AceSt
     clip_ids: list[str] = params["clip_ids"]
     sources = [await load_clip(cid) for cid in clip_ids]
     primary, secondaries = sources[0], sources[1:]
+    await _rescreen(job, *sources)
     fmt = native_format(primary)
     style = params.get("style")
     # Submit without a key constraint when any secondary's key disagrees with the
@@ -684,6 +712,7 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
     base_style_resolved = base_style or base_style_tags
     base_lyrics = params.get("lyrics")
     effective_lyrics = base_lyrics if base_lyrics is not None else seed.lyrics
+    await _rescreen(job, seed)
     prompt = _source_prompt(seed, "continue the song")
 
     parent_id = seed.id

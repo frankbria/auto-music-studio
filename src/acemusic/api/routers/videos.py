@@ -27,6 +27,7 @@ from ..models import JobStatus, Video
 from ..services import (
     clips as clip_service,
     credits as credits_service,
+    screening as screening_service,
     users as user_service,
     video as video_service,
 )
@@ -174,6 +175,7 @@ async def create_video_job(
     # Validate ownership before charging: an unknown/unowned clip yields a clean
     # 404 with no credit movement. The clip's workspace is where the video lands.
     clip = await clip_service.get_owned_clip(request.clip_id, current.user_id)
+    moderation_flags = await screening_service.enforce(request.prompt)
 
     params = {
         "clip_id": str(clip.id),
@@ -186,6 +188,8 @@ async def create_video_job(
         "frame_rate": request.frame_rate,
         "transitions": request.transitions,
     }
+    if moderation_flags:
+        params["moderation_flags"] = moderation_flags
     job = await credits_service.charge_and_create(
         user_id=user.id,
         cost=credits_service.get_video_cost(request.resolution, clip.duration),
@@ -476,6 +480,7 @@ async def edit_video(
             detail=f"Edit times must be within the {effective_duration:.1f}s video.",
         )
 
+    moderation_flags = await screening_service.enforce(request.prompt)
     # Bill at the source's resolution (the edit inherits it). Fall back to the base
     # tier if the source predates resolution tracking, so pricing never raises.
     resolution = source.resolution if source.resolution in _KNOWN_RESOLUTIONS else "720p"
@@ -486,6 +491,8 @@ async def edit_video(
         "aspect_ratio": source.aspect_ratio,
         "edit": request.to_spec(),
     }
+    if moderation_flags:
+        params["moderation_flags"] = moderation_flags
     job = await credits_service.charge_and_create(
         user_id=user.id,
         cost=credits_service.get_video_cost(resolution, clip.duration),

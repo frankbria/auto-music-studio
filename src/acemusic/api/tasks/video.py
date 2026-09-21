@@ -210,7 +210,8 @@ async def process_video_job(
     else:
         clip = await load_source_clip(job)
         media = await download_clip(storage, clip)
-        provider_params = {k: v for k, v in params.items() if k != "clip_id"}  # provider gets the audio, not our id
+        # The provider gets the audio, not our id, and never our internal screening flags (US-27.1).
+        provider_params = {k: v for k, v in params.items() if k not in ("clip_id", "moderation_flags")}
         filename = f"{clip.id}.{clip_service.native_format(clip)}"
         clip_id, resolution, aspect_ratio = (
             clip.id,

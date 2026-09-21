@@ -41,6 +41,7 @@ from ..services import (
     generation as generation_service,
     presets as preset_service,
     routing as routing_service,
+    screening as screening_service,
     users as user_service,
 )
 from ..services.routing import ComputePreference, ComputeUnavailableError
@@ -202,6 +203,10 @@ async def create_generation(
         # 404 for unknown/malformed/not-owned ids (never reveals other users' presets).
         preset = await preset_service.get_preset(request.preset_id, current.user_id)
         request = _apply_preset(request, preset)
+    # US-27.1: screen the merged request (a preset can supply style/lyrics) before charging.
+    moderation_flags = await screening_service.enforce(
+        request.prompt, request.style, request.lyrics, request.vocal_language
+    )
     # US-25.4: a voice the caller cannot use is rejected before anything is charged.
     await require_voice_model(request.voice_model_id, str(user.id))
     # US-11.1: pick the compute target BEFORE charging credits, so an unavailable
@@ -233,7 +238,8 @@ async def create_generation(
         action_type=request.mode,
         create=lambda: generation_service.create_generation_job(
             user_id=user.id,
-            params=request.model_dump(exclude_none=True, exclude={"preset_id", "compute_target"}),
+            params=request.model_dump(exclude_none=True, exclude={"preset_id", "compute_target"})
+            | ({"moderation_flags": moderation_flags} if moderation_flags else {}),
             compute_target=resolved_target,
         ),
     )

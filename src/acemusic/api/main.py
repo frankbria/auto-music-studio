@@ -22,6 +22,7 @@ from acemusic.runpod_client import RunPodClient
 from . import database
 from .exceptions import DuplicateIdentifierError, HandleConflictError
 from .routers import (
+    admin,
     artwork,
     auth,
     batch,
@@ -49,6 +50,7 @@ from .routers import (
     workspaces,
 )
 from .services.credits import UPGRADE_URL, InsufficientCreditsError
+from .services.screening import ContentBlockedError
 from .settings import ApiSettings
 from .tasks.artwork import get_image_client
 from .tasks.mastering import get_mastering_orchestrator
@@ -224,6 +226,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(videos.router, prefix=API_V1_PREFIX)
     # US-22.3 delivery reads (metadata/playback/for-clip) open for the public song page.
     app.include_router(videos.public_router, prefix=API_V1_PREFIX)
+    app.include_router(admin.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
@@ -257,6 +260,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 }
             },
         )
+
+    # US-27.1: 422 with a plain-string detail, which the web create flow already shows
+    # inline next to the form, so the musician sees why and can rephrase.
+    @app.exception_handler(ContentBlockedError)
+    async def _content_blocked(_request: Request, exc: ContentBlockedError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     return app
 

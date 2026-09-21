@@ -140,6 +140,14 @@ async def require_tier_capability(user_id: str | None, capability: Capability) -
     )
 
 
+async def require_admin(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """403 unless the account is an admin. Read from the database, never token claims."""
+    user = await user_service.get_user_by_id(current.user_id)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return current
+
+
 def require_capability(capability: Capability):
     """Router dependency form of :func:`require_tier_capability`.
 
