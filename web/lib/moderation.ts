@@ -115,20 +115,38 @@ function withReason(body: Record<string, unknown>, reason?: string) {
 
 type RawResult = { ok: boolean; detail?: string | null }
 
+/** The backend rejects (422) a batch of more than this many ids. */
+export const MAX_BATCH = 100
+
+// "Select all" can cover the whole 500-row queue, so large selections go out as
+// sequential batches. A failed batch throws; earlier batches have already applied,
+// which the caller's refetch shows.
+async function inBatches(
+  ids: string[],
+  send: (batch: string[]) => Promise<ActionResult[]>
+): Promise<ActionResult[]> {
+  const results: ActionResult[] = []
+  for (let i = 0; i < ids.length; i += MAX_BATCH)
+    results.push(...(await send(ids.slice(i, i + MAX_BATCH))))
+  return results
+}
+
 export async function applyClipAction(
   token: string,
   action: ClipAction,
   clipIds: string[],
   reason?: string
 ): Promise<ActionResult[]> {
-  const { results } = await request<{
-    results: (RawResult & { clip_id: string })[]
-  }>("clips", token, withReason({ action, clip_ids: clipIds }, reason))
-  return results.map((r) => ({
-    id: r.clip_id,
-    ok: r.ok,
-    detail: r.detail ?? null,
-  }))
+  return inBatches(clipIds, async (batch) => {
+    const { results } = await request<{
+      results: (RawResult & { clip_id: string })[]
+    }>("clips", token, withReason({ action, clip_ids: batch }, reason))
+    return results.map((r) => ({
+      id: r.clip_id,
+      ok: r.ok,
+      detail: r.detail ?? null,
+    }))
+  })
 }
 
 export async function applyUserAction(
@@ -137,14 +155,16 @@ export async function applyUserAction(
   userIds: string[],
   reason?: string
 ): Promise<ActionResult[]> {
-  const { results } = await request<{
-    results: (RawResult & { user_id: string })[]
-  }>("users", token, withReason({ action, user_ids: userIds }, reason))
-  return results.map((r) => ({
-    id: r.user_id,
-    ok: r.ok,
-    detail: r.detail ?? null,
-  }))
+  return inBatches(userIds, async (batch) => {
+    const { results } = await request<{
+      results: (RawResult & { user_id: string })[]
+    }>("users", token, withReason({ action, user_ids: batch }, reason))
+    return results.map((r) => ({
+      id: r.user_id,
+      ok: r.ok,
+      detail: r.detail ?? null,
+    }))
+  })
 }
 
 /** "reports" is the server's own order (report count, severity, recency). */

@@ -3,10 +3,13 @@ import { NextResponse, type NextRequest } from "next/server"
 import { BACKEND_URL } from "@/lib/auth-server"
 import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 
-// Same-origin proxy for /api/v1/admin/* (US-27.3). One catch-all because every admin
-// endpoint forwards identically; the backend's require_admin is the gate, so a
-// non-admin's token gets the backend's 403 passed straight back. No allowlist: unlike
-// billing, an unknown admin path 404s at the backend rather than silently here.
+// Same-origin proxy for /api/v1/admin/* (US-27.3). One catch-all because the
+// moderation endpoints (queue, log, clip and user actions) forward identically. Only
+// GET and POST are exported, which is all the dashboard uses; PUT
+// /admin/screening-rules is not proxied and gets Next's 405. The backend's
+// require_admin is the gate, so a non-admin's token gets the backend's 403 passed
+// straight back. No allowlist: unlike billing, an unknown admin path 404s at the
+// backend rather than silently here.
 
 async function proxy(
   request: NextRequest,

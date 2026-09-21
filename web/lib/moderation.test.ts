@@ -141,6 +141,39 @@ describe("applyClipAction / applyUserAction", () => {
     })
   })
 
+  it("splits a large selection into sequential batches of 100 and merges the results", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      const ids: string[] = body.clip_ids ?? body.user_ids
+      const key = body.clip_ids ? "clip_id" : "user_id"
+      return new Response(
+        JSON.stringify({ results: ids.map((id) => ({ [key]: id, ok: true })) }),
+        { status: 200 }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const ids = Array.from({ length: 250 }, (_, i) => `c${i}`)
+
+    const results = await applyClipAction("tok", "approve", ids, "dupes")
+
+    const bodies = fetchMock.mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body))
+    )
+    expect(bodies.map((b) => b.clip_ids.length)).toEqual([100, 100, 50])
+    expect(bodies.flatMap((b) => b.clip_ids)).toEqual(ids)
+    expect(bodies.every((b) => b.reason === "dupes")).toBe(true)
+    expect(results.map((r) => r.id)).toEqual(ids)
+
+    fetchMock.mockClear()
+    const users = Array.from({ length: 101 }, (_, i) => `u${i}`)
+    expect(await applyUserAction("tok", "warn", users)).toHaveLength(101)
+    expect(
+      fetchMock.mock.calls.map(
+        ([, init]) => JSON.parse(String(init?.body)).user_ids.length
+      )
+    ).toEqual([100, 1])
+  })
+
   it("throws on a rejected request", async () => {
     stubFetch(422, { detail: [{ msg: "too many" }] })
     await expect(applyUserAction("tok", "warn", ["u2"])).rejects.toMatchObject({
