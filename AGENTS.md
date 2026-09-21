@@ -117,8 +117,8 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction
-    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative)
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument
+    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
@@ -325,4 +325,10 @@ Package manager: `uv` with `hatchling` build backend
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions
+- **Content screening (US-27.1)**: every generation entry point calls `services/screening.enforce(...)`
+  on its free text *before* `charge_and_create`, so a blocked request (422, string `detail`) never
+  charges. Borderline matches ride in `job.input_params["moderation_flags"]` and are copied to
+  `Clip.moderation_flags` by the clip builders. A new generative endpoint must screen its text too.
+  Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
+  admins are `User.is_admin=True`, set in the database only
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)
