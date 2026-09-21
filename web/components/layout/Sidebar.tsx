@@ -21,6 +21,7 @@ import { useCredits } from "@/contexts/credits-context"
 import { useUnreadCount } from "@/contexts/notifications-context"
 import { formatCredits } from "@/lib/credits"
 import { useAuth } from "@/hooks/use-auth"
+import { useIsAdmin } from "@/hooks/use-is-admin"
 import { cn } from "@/lib/utils"
 import {
   DropdownMenu,
@@ -98,6 +99,7 @@ function NavLink({
  */
 function AccountMenuItems() {
   const { user, logout } = useAuth()
+  const { isAdmin } = useIsAdmin()
   return (
     <>
       <DropdownMenuLabel className="truncate">
@@ -116,6 +118,11 @@ function AccountMenuItems() {
       <DropdownMenuItem asChild>
         <Link href="/settings/billing">Subscription</Link>
       </DropdownMenuItem>
+      {isAdmin && (
+        <DropdownMenuItem asChild>
+          <Link href="/admin/moderation">Moderation</Link>
+        </DropdownMenuItem>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
         Log out

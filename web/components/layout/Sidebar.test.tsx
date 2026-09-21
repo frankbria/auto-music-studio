@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -9,6 +9,7 @@ import { mainNav } from "@/config/navigation"
 import { LAYOUT } from "@/lib/constants/layout"
 import { initialNotifications, unreadCount } from "@/lib/notifications"
 import { routerMock } from "@/test/router-mock"
+import { SignedIn } from "@/test/signed-in"
 
 // The Sidebar's account menu now reads auth state, so renders need a provider.
 function renderSidebar() {
@@ -136,6 +137,40 @@ describe("Sidebar navigation (US-15.3)", () => {
       screen.getByRole("menuitem", { name: "Log out" })
     ).toBeInTheDocument()
   })
+
+  it.each([
+    [true, true],
+    [false, false],
+  ])(
+    "shows the Moderation link only to an admin (is_admin=%s) (US-27.3)",
+    async (isAdmin, shown) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ is_admin: isAdmin }), { status: 200 })
+      )
+      vi.stubGlobal("fetch", fetchMock)
+      const user = userEvent.setup()
+      render(
+        <SignedIn>
+          <Sidebar />
+        </SignedIn>
+      )
+
+      await user.click(screen.getByRole("button", { name: "Open account menu" }))
+      await screen.findByRole("menuitem", { name: "Profile" })
+
+      if (shown) {
+        expect(
+          await screen.findByRole("menuitem", { name: "Moderation" })
+        ).toHaveAttribute("href", "/admin/moderation")
+      } else {
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+        await new Promise((r) => setTimeout(r, 20))
+        expect(
+          screen.queryByRole("menuitem", { name: "Moderation" })
+        ).not.toBeInTheDocument()
+      }
+    }
+  )
 
   it("opens the account dialog from the bottom-pinned Account item", async () => {
     const user = userEvent.setup()

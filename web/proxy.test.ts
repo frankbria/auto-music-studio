@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { describe, expect, it } from "vitest"
 
-import { proxy } from "@/proxy"
+import { config, proxy } from "@/proxy"
 import { REFRESH_COOKIE } from "@/lib/auth"
 
 function request(path: string, withSession: boolean): NextRequest {
@@ -22,5 +22,9 @@ describe("proxy route protection", () => {
   it("lets an authenticated visitor through", () => {
     const res = proxy(request("/create", true))
     expect(res.headers.get("location")).toBeNull()
+  })
+
+  it("gates the admin pages on the session cookie too (US-27.3)", () => {
+    expect(config.matcher).toContain("/admin/:path*")
   })
 })

@@ -48,6 +48,20 @@ describe("SongHeader", () => {
     expect(screen.getByText("lofi")).toBeInTheDocument()
   })
 
+  it("labels a moderator-flagged clip with a content warning for every viewer (US-27.3)", () => {
+    const { unmount } = renderHeader({ clip: clip({ content_warning: true }) })
+    expect(screen.getByText("Content warning")).toBeInTheDocument()
+    unmount()
+
+    renderHeader({ clip: clip({ content_warning: true }), isOwner: true })
+    expect(screen.getByText("Content warning")).toBeInTheDocument()
+  })
+
+  it("shows no content warning on an unflagged clip", () => {
+    renderHeader()
+    expect(screen.queryByText("Content warning")).not.toBeInTheDocument()
+  })
+
   it("toggles like state via the player store", async () => {
     const user = userEvent.setup()
     renderHeader()
