@@ -187,6 +187,8 @@ class TestProcessVideoJob:
 
     async def test_submit_receives_params_without_clip_id(self, storage) -> None:
         job, clip = await _make_job_and_clip(tier=PRO)
+        # US-27.1: screening metadata is ours, never the provider's.
+        await job.set({"input_params.moderation_flags": ["violent extremism"]})
         storage.upload(clip.file_path, FAKE_AUDIO)
         client = FakeVideoService(_updates_to_complete())
 
@@ -195,6 +197,7 @@ class TestProcessVideoJob:
         (filename, params), *_ = client.submitted
         assert filename == f"{clip.id}.wav"
         assert "clip_id" not in params
+        assert "moderation_flags" not in params
         assert params["prompt"] == "neon city"
 
     async def test_progress_detail_written_during_polling(self, storage, monkeypatch) -> None:
