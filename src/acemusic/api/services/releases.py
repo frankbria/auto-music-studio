@@ -150,9 +150,8 @@ async def _sync_isrc_to_clip(clip_id: PydanticObjectId, user_id: str, isrc: str)
     clip = await clip_service.find_owned_clip(str(clip_id), user_id)
     if clip is None or clip.isrc == isrc:
         return
-    clip.isrc = isrc
     try:
-        await clip.save()
+        await clip.set({"isrc": isrc})
     except DuplicateKeyError as exc:
         raise DuplicateIdentifierError("isrc") from exc
 

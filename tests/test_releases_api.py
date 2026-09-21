@@ -560,3 +560,13 @@ def test_visibility_mirror_never_saves_the_whole_clip():
     source = inspect.getsource(release_service.update_visibility)
     assert re.findall(r"(\w+)\.save\(\)", source) == ["release"]
     assert '"removed_at": None' in source
+
+
+def test_release_service_never_saves_a_whole_clip():
+    """No path in the release service may read a clip and ``save()`` it whole (US-27.3).
+
+    The ISRC mirror used to, and a metadata PATCH racing an admin removal would write the
+    pre-removal clip back. Every clip write here is a targeted ``$set``.
+    """
+    source = inspect.getsource(release_service)
+    assert "clip.save()" not in source
