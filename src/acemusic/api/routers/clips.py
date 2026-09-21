@@ -441,7 +441,7 @@ class ClipReportRequest(BaseModel):
     @field_validator("details")
     @classmethod
     def _strip(cls, value: str | None) -> str | None:
-        return value.strip() if value else None
+        return (value or "").strip() or None
 
 
 class ClipReportResponse(BaseModel):

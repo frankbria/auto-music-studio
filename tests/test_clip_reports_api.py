@@ -145,6 +145,24 @@ class TestReportClip:
         assert resp.status_code == 400
         assert await ClipReport.find(ClipReport.clip_id == clip.id).count() == 0
 
+    async def test_own_private_clip_is_400_not_403(self, client, settings):
+        owner = await _user()
+        clip = await _clip(owner, VisibilityState.PRIVATE)
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/report", json={"category": "spam"}, headers=_auth(owner, settings)
+        )
+        assert resp.status_code == 400
+
+    async def test_whitespace_only_details_store_none(self, client, settings):
+        clip = await _clip(await _user())
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/report",
+            json={"category": "spam", "details": "   "},
+            headers=_auth(await _user(), settings),
+        )
+        assert resp.status_code == 201
+        assert (await ClipReport.find_one(ClipReport.clip_id == clip.id)).details is None
+
     @pytest.mark.parametrize(
         "body",
         [{"category": "rude"}, {}, {"category": "spam", "details": "x" * 1001}],
