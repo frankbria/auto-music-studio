@@ -219,6 +219,36 @@ class TestOtherEntryPoints:
         job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
         assert job.input_params["moderation_flags"] == ["violent extremism"]
 
+    async def test_iterative_screens_the_source_clip_title_the_worker_prompts_with(self, client, settings):
+        # extend carries no text of its own: the worker prompts ACE-Step with the clip's title/tags.
+        user, clip = await _user_with_clip("screen-extend-title@example.com")
+        await clip.set({Clip.title: "Sieg Heil march"})
+        resp = await client.post(
+            f"{API_V1_PREFIX}/clips/{clip.id}/extend", json={"duration": "30s"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
+        assert await _balance(user) == 10.0
+
+    async def test_mashup_flags_a_borderline_tag_on_any_source(self, client, settings):
+        user, first = await _user_with_clip("screen-mashup@example.com")
+        second = Clip(
+            user_id=user.id,
+            workspace_id=first.workspace_id,
+            file_path="b.wav",
+            format="wav",
+            duration=10.0,
+            style_tags=["genocide doom"],
+        )
+        await second.insert()
+        resp = await client.post(
+            f"{API_V1_PREFIX}/mashup",
+            json={"clip_ids": [str(first.id), str(second.id)]},
+            headers=_auth(user, settings),
+        )
+        assert resp.status_code == 202, resp.text
+        job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+        assert job.input_params["moderation_flags"] == ["violent extremism"]
+
     async def test_artwork_prompt_is_screened(self, client, settings):
         user, clip = await _user_with_clip("screen-art@example.com")
         resp = await client.post(
