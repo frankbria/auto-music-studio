@@ -89,6 +89,10 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     return ScreeningResult(blocked=escalate, categories=flagged)
 
 
+#: Every free-text param any iterative mode carries (US-10.3 request models).
+ITERATIVE_TEXT_PARAMS = ("prompt", "style", "style_override", "lyrics", "lyrics_override", "vocal_style")
+
+
 def clip_texts(*clips: Clip) -> list[str | None]:
     """A clip's text as generation uses it: title, lyrics, and the tags *joined*.
 

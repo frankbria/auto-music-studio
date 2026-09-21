@@ -97,21 +97,27 @@ async def _download(storage: StorageBackend, clip: Clip, dest: Path) -> None:
     dest.write_bytes(await download_clip(storage, clip))
 
 
-async def _rescreen(job: Job, *clips: Clip, lyrics: str | None = None) -> None:
-    """Re-screen the live clip metadata a worker is about to prompt with (US-27.1).
+async def _rescreen(job: Job, *clips: Clip) -> None:
+    """Re-screen what a worker is about to prompt with against the live clips (US-27.1).
 
-    The router screens the source at enqueue, but the owner can still rename it before
-    the job runs, and the worker reads the live clip. Blocking fails the job (and a
-    failed job is refunded); new flags join the job's, so the child clip carries them.
+    The router screens the request and sources at enqueue, but the owner can still
+    rename a source before the job runs, and the worker reads the live clip. Screening
+    the same combined text again keeps the block threshold honest across both. Blocking
+    fails the job (and a failed job is refunded); new flags join the job's, so the child
+    clip carries them. Modes that never prompt from clip metadata (cover/remix/repaint/
+    sample) submit only their already-screened request text, so they need no re-screen.
     """
+    params = job.input_params or {}
     try:
-        flags = await screening.enforce(*screening.clip_texts(*clips), lyrics)
+        flags = await screening.enforce(
+            *(params.get(key) for key in screening.ITERATIVE_TEXT_PARAMS), *screening.clip_texts(*clips)
+        )
     except ContentBlockedError as exc:
         raise JobProcessingError(str(exc)) from exc
-    existing = (job.input_params or {}).get("moderation_flags", [])
+    existing = params.get("moderation_flags", [])
     merged = existing + [flag for flag in flags if flag not in existing]
     if merged:
-        job.input_params = {**(job.input_params or {}), "moderation_flags": merged}
+        job.input_params = {**params, "moderation_flags": merged}
 
 
 def _source_prompt(clip: Clip, fallback: str) -> str:
@@ -706,7 +712,7 @@ async def process_full_song_job(job: Job, *, storage: StorageBackend, client: Ac
     base_style_resolved = base_style or base_style_tags
     base_lyrics = params.get("lyrics")
     effective_lyrics = base_lyrics if base_lyrics is not None else seed.lyrics
-    await _rescreen(job, seed, lyrics=effective_lyrics)
+    await _rescreen(job, seed)
     prompt = _source_prompt(seed, "continue the song")
 
     parent_id = seed.id

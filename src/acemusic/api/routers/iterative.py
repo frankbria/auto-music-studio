@@ -313,9 +313,6 @@ def _check_range(start_ms: int, end_ms: int, duration_ms: int, start: str, end: 
         raise _unprocessable(f"end ({end}) exceeds clip duration ({clip.duration:.1f}s).")
 
 
-_SCREENED_PARAMS = ("prompt", "style", "style_override", "lyrics", "lyrics_override", "vocal_style")
-
-
 async def _enqueue_generation(
     *,
     user_id: str,
@@ -337,7 +334,7 @@ async def _enqueue_generation(
     # plus each source's editable title, tags and lyrics, which the workers fall back to
     # (``_source_prompt``; full-song inherits the seed's lyrics) when the request has none.
     moderation_flags = await screening_service.enforce(
-        *(params.get(key) for key in _SCREENED_PARAMS), *screening_service.clip_texts(*sources)
+        *(params.get(key) for key in screening_service.ITERATIVE_TEXT_PARAMS), *screening_service.clip_texts(*sources)
     )
     if moderation_flags:
         params = {**params, "moderation_flags": moderation_flags}

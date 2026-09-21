@@ -600,6 +600,24 @@ class TestWorkerRescreensLiveClipMetadata:
 
         assert (await _child(result)).moderation_flags == ["self-harm"]
 
+    async def test_threshold_applies_to_request_text_and_renamed_metadata_together(self, storage) -> None:
+        # Default threshold 3: two categories from the request lyrics + one from a rename.
+        job, source = await _make_clip(storage, email="t-rescreen-threshold@example.com")
+        await source.set({Clip.style_tags: ["terrorist anthem"]})
+        job.job_type = tasks.EXTEND_JOB_TYPE
+        job.input_params = {
+            "clip_id": str(source.id),
+            "duration": "2s",
+            "from_point": "end",
+            "lyrics": "after the suicide, after the rape",
+            "moderation_flags": ["self-harm", "sexual violence"],
+        }
+        client = FakeAce(_wav_bytes(5.0))
+
+        with pytest.raises(tasks.JobProcessingError, match="wasn't generated"):
+            await tasks.process_extend_job(job, storage=storage, client=client, poll=_make_poll())
+        assert client.submitted == []
+
     async def test_mashup_rescreens_source_titles(self, storage) -> None:
         job, primary = await _make_clip(storage, email="t-rescreen-mashup@example.com", title="White Power")
         secondary = Clip(
