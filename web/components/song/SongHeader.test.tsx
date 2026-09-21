@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import { SongHeader, type SongHeaderProps } from "@/components/song/SongHeader"
 import { PlayerProvider } from "@/contexts/player-context"
 import type { Clip } from "@/lib/workspace-clips"
+import { SignedIn } from "@/test/signed-in"
 
 function clip(overrides: Partial<Clip> = {}): Clip {
   return {
@@ -129,5 +130,26 @@ describe("SongHeader", () => {
     await user.click(screen.getByRole("button", { name: "Share" }))
     expect(await screen.findByRole("dialog")).toHaveTextContent(/share/i)
     expect(screen.getByLabelText("Share link")).toBeInTheDocument()
+  })
+
+  it("offers Report to a signed-in listener but not to the owner (US-27.2)", () => {
+    const { unmount } = render(
+      <SignedIn>
+        <PlayerProvider>
+          <SongHeader clip={clip()} />
+        </PlayerProvider>
+      </SignedIn>
+    )
+    expect(screen.getByRole("button", { name: "Report" })).toBeInTheDocument()
+    unmount()
+
+    render(
+      <SignedIn>
+        <PlayerProvider>
+          <SongHeader clip={clip()} isOwner />
+        </PlayerProvider>
+      </SignedIn>
+    )
+    expect(screen.queryByRole("button", { name: "Report" })).not.toBeInTheDocument()
   })
 })

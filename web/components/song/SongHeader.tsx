@@ -6,6 +6,7 @@ import { FavouriteIcon, Share01Icon, ThumbsDownIcon } from "@hugeicons/core-free
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { ShareModal } from "@/components/song/ShareModal"
 import { VisibilityBadge } from "@/components/song/VisibilityBadge"
 import { VisibilityToggle } from "@/components/song/VisibilityToggle"
@@ -141,6 +142,7 @@ export function SongHeader({
         >
           <HugeiconsIcon icon={Share01Icon} size={18} />
         </Button>
+        <ReportClipButton clipId={clip.id} isOwner={isOwner} />
         {isOwner && (
           <VisibilityToggle value={visibility} onChange={changeVisibility} />
         )}

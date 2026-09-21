@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import { ExploreClipCard } from "@/components/explore/ExploreClipCard"
 import { makeClip } from "@/test/clip-factory"
+import { SignedIn } from "@/test/signed-in"
 
 describe("ExploreClipCard", () => {
   it("links the whole card to the song detail page (AC5)", () => {
@@ -29,5 +30,15 @@ describe("ExploreClipCard", () => {
     )
     // Intl compact: 8200 → "8.2K".
     expect(screen.getByText("8.2K")).toBeInTheDocument()
+  })
+
+  it("has a Report button outside the card link (US-27.2)", () => {
+    render(
+      <SignedIn>
+        <ExploreClipCard clip={makeClip({ id: "abc", title: "Neon" })} />
+      </SignedIn>
+    )
+    const report = screen.getByRole("button", { name: "Report" })
+    expect(report.closest("a")).toBeNull()
   })
 })

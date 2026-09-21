@@ -38,8 +38,8 @@ from ..auth.dependencies import (
     require_existing_user,
     require_tier_capability,
 )
-from ..models import Clip, VisibilityState
-from ..services import clips as clip_service
+from ..models import Clip, ReportCategory, VisibilityState
+from ..services import clips as clip_service, reports as report_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
 from ..services.tiers import Capability
@@ -432,6 +432,29 @@ async def get_similar_clips(
         total=total,
         limit=limit,
     )
+
+
+class ClipReportRequest(BaseModel):
+    category: ReportCategory
+    details: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("details")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+
+class ClipReportResponse(BaseModel):
+    detail: str
+
+
+@router.post("/{clip_id}/report", response_model=ClipReportResponse, status_code=status.HTTP_201_CREATED)
+async def report_clip(
+    clip_id: str, body: ClipReportRequest, current: CurrentUser = Depends(require_existing_user)
+) -> ClipReportResponse:
+    """Report a clip for moderation review (US-27.2). 409 if this user already reported it."""
+    await report_service.report_clip(clip_id, current.user_id, body.category, body.details)
+    return ClipReportResponse(detail="Report received. Our team will review it.")
 
 
 @router.get("/{clip_id}/children", response_model=ClipChildrenResponse)

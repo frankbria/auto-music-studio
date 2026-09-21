@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { FeedItemCard } from "@/components/feed/FeedItemCard"
 import { PlayerProvider } from "@/contexts/player-context"
 import { getFeedPage, type FeedItem } from "@/lib/feed"
+import { SignedIn } from "@/test/signed-in"
 
 // jsdom doesn't implement media playback; stub it so the auto-play effect runs.
 let play: ReturnType<typeof vi.fn>
@@ -78,5 +79,17 @@ describe("FeedItemCard", () => {
     renderCard(false)
     await user.click(screen.getByRole("button", { name: "Share" }))
     expect(await screen.findByRole("dialog")).toBeInTheDocument()
+  })
+
+  it("has a Report rail button that opens the report modal (US-27.2)", async () => {
+    render(
+      <SignedIn>
+        <PlayerProvider>
+          <FeedItemCard item={item} active={false} />
+        </PlayerProvider>
+      </SignedIn>
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Report" }))
+    expect(screen.getByRole("dialog", { name: "Report clip" })).toBeInTheDocument()
   })
 })

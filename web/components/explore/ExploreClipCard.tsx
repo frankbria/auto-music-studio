@@ -7,6 +7,7 @@ import {
   Share01Icon,
 } from "@hugeicons/core-free-icons"
 
+import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { Badge } from "@/components/ui/badge"
 import { versionLabel } from "@/lib/clip-labels"
 import { formatTime } from "@/lib/clips"
@@ -18,6 +19,8 @@ import type { Clip } from "@/lib/workspace-clips"
 // actions (rename/publish/remix/drag/player dispatch) — the whole card is one
 // link to the public song detail page. Artwork shows a music-note glyph: there
 // is no authed artwork proxy, so a real <img src=.../artwork> would 401.
+// The Report control (US-27.2) sits beside the link, not inside it — a button
+// nested in an <a> is invalid and would navigate on click.
 
 /** Compact engagement number: 8200 → "8.2K". */
 const compact = new Intl.NumberFormat("en", { notation: "compact" })
@@ -47,75 +50,80 @@ export function ExploreClipCard({
     clip.share_count != null
 
   return (
-    <Link
-      href={`/song/${clip.id}`}
-      data-testid="explore-clip-card"
-      className="group/card flex w-40 shrink-0 flex-col gap-2 rounded-lg border border-border bg-card p-2 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
-    >
-      {/* Square artwork placeholder with duration + optional rank overlays. */}
-      <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
-        <HugeiconsIcon
-          icon={MusicNote01Icon}
-          size={28}
-          aria-hidden
-          className="group-hover/card:opacity-0"
-        />
-        <span
-          aria-hidden
-          className="absolute inset-0 flex items-center justify-center bg-background/30 opacity-0 transition-opacity group-hover/card:opacity-100"
-        >
-          <HugeiconsIcon icon={PlayIcon} size={28} className="fill-current" />
-        </span>
-        {rank != null && (
+    <div className="relative w-40 shrink-0">
+      <Link
+        href={`/song/${clip.id}`}
+        data-testid="explore-clip-card"
+        className="group/card flex flex-col gap-2 rounded-lg border border-border bg-card p-2 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        {/* Square artwork placeholder with duration + optional rank overlays. */}
+        <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+          <HugeiconsIcon
+            icon={MusicNote01Icon}
+            size={28}
+            aria-hidden
+            className="group-hover/card:opacity-0"
+          />
           <span
-            data-testid="clip-rank"
-            className="absolute top-1 left-1 flex size-6 items-center justify-center rounded-md bg-background/85 text-sm font-bold tabular-nums"
+            aria-hidden
+            className="absolute inset-0 flex items-center justify-center bg-background/30 opacity-0 transition-opacity group-hover/card:opacity-100"
           >
-            {rank}
+            <HugeiconsIcon icon={PlayIcon} size={28} className="fill-current" />
           </span>
-        )}
-        {clip.duration != null && (
-          <span className="absolute right-1 bottom-1 rounded bg-background/80 px-1 text-[10px] tabular-nums">
-            {formatTime(clip.duration)}
-          </span>
-        )}
-      </div>
-
-      <div className="flex min-w-0 flex-col gap-1">
-        <span className="truncate text-sm font-medium" title={clip.title ?? undefined}>
-          {clip.title ?? "Untitled clip"}
-        </span>
-        {styleText && (
-          <p title={styleText} className="truncate text-xs text-muted-foreground">
-            {styleText}
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-1">
-          {version && (
-            <Badge variant="secondary" className="text-[10px]">
-              {version}
-            </Badge>
-          )}
-          {hasStats && (
-            <div
-              className={cn(
-                "flex items-center gap-2 text-[10px] text-muted-foreground",
-                version && "ml-auto"
-              )}
+          {rank != null && (
+            <span
+              data-testid="clip-rank"
+              className="absolute top-1 left-1 flex size-6 items-center justify-center rounded-md bg-background/85 text-sm font-bold tabular-nums"
             >
-              {clip.play_count != null && (
-                <Stat icon={PlayIcon} value={clip.play_count} />
-              )}
-              {clip.like_count != null && (
-                <Stat icon={FavouriteIcon} value={clip.like_count} />
-              )}
-              {clip.share_count != null && (
-                <Stat icon={Share01Icon} value={clip.share_count} />
-              )}
-            </div>
+              {rank}
+            </span>
+          )}
+          {clip.duration != null && (
+            <span className="absolute right-1 bottom-1 rounded bg-background/80 px-1 text-[10px] tabular-nums">
+              {formatTime(clip.duration)}
+            </span>
           )}
         </div>
+
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="truncate text-sm font-medium" title={clip.title ?? undefined}>
+            {clip.title ?? "Untitled clip"}
+          </span>
+          {styleText && (
+            <p title={styleText} className="truncate text-xs text-muted-foreground">
+              {styleText}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-1">
+            {version && (
+              <Badge variant="secondary" className="text-[10px]">
+                {version}
+              </Badge>
+            )}
+            {hasStats && (
+              <div
+                className={cn(
+                  "flex items-center gap-2 text-[10px] text-muted-foreground",
+                  version && "ml-auto"
+                )}
+              >
+                {clip.play_count != null && (
+                  <Stat icon={PlayIcon} value={clip.play_count} />
+                )}
+                {clip.like_count != null && (
+                  <Stat icon={FavouriteIcon} value={clip.like_count} />
+                )}
+                {clip.share_count != null && (
+                  <Stat icon={Share01Icon} value={clip.share_count} />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </Link>
+      <div className="absolute top-3 right-3">
+        <ReportClipButton clipId={clip.id} isOwner={clip.is_owner === true} />
       </div>
-    </Link>
+    </div>
   )
 }
