@@ -12,6 +12,7 @@ from .counter import Counter
 from .credit_transaction import CreditTransaction
 from .distribution import DistributionStatus, VisibilityState
 from .job import Job, JobStatus
+from .moderation_log import ModerationLogEntry
 from .notification_event import NotificationEvent
 from .preset import PRESET_PARAM_FIELDS, Preset
 from .queue import PlaybackQueue, RepeatMode
@@ -44,6 +45,7 @@ ALL_MODELS = [
     VoiceModel,
     ScreeningRulesDocument,
     ClipReport,
+    ModerationLogEntry,
 ]
 
 __all__ = [
@@ -55,6 +57,7 @@ __all__ = [
     "Clip",
     "ClipReport",
     "ReportCategory",
+    "ModerationLogEntry",
     "ArtworkOption",
     "BillingEvent",
     "CreditTransaction",

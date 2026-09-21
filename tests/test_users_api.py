@@ -59,6 +59,12 @@ class TestGetProfile:
         resp = await client.get(f"{API_V1_PREFIX}/users/me")
         assert resp.status_code == 401
 
+    @pytest.mark.parametrize("is_admin", [False, True])
+    async def test_reports_admin_flag(self, client, settings, is_admin):
+        user = await make_user(f"admin-{is_admin}@example.com", is_admin=is_admin)
+        resp = await client.get(f"{API_V1_PREFIX}/users/me", headers=_auth_headers(user, settings))
+        assert resp.json()["is_admin"] is is_admin
+
 
 class TestUpdateProfile:
     async def test_updates_fields_and_returns_updated_profile(self, client, settings):

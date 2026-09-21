@@ -47,6 +47,7 @@ class UserProfileResponse(BaseModel):
     style_tags: list[str]
     avatar_url: str | None
     subscription_tier: str
+    is_admin: bool
     default_model: str | None
     created_at: datetime
     updated_at: datetime | None
@@ -63,6 +64,7 @@ class UserProfileResponse(BaseModel):
             style_tags=user.style_tags,
             avatar_url=user.avatar_url,
             subscription_tier=user.subscription_tier,
+            is_admin=user.is_admin,
             default_model=user.default_model,
             created_at=user.created_at,
             updated_at=user.updated_at,

@@ -219,14 +219,14 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     ``Clip.set_visibility``, which syncs the ``is_public`` denormalization
     in-memory before the save (the after-validator does NOT run on a plain
     assignment). A deleted source clip is tolerated (the release keeps its
-    visibility).
+    visibility), and a clip removed by moderation is never republished (US-27.3).
     """
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
 
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
-    if clip is not None and clip.visibility != visibility:
+    if clip is not None and clip.removed_at is None and clip.visibility != visibility:
         clip.set_visibility(visibility)
         await clip.save()
     return release
