@@ -83,6 +83,7 @@ async def create_release(user_id: str, clip_id: str, metadata: dict, settings: A
     the schema, so a created release is immediately ``ready``.
     """
     clip = await clip_service.get_owned_clip(clip_id, user_id)
+    clip_service.ensure_not_removed(clip)
     isrc = await _claim_clip_isrc(clip, settings)
 
     for _ in range(_MAX_MINT_ATTEMPTS):
@@ -208,6 +209,13 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     return release
 
 
+async def ensure_source_not_removed(release: Release) -> None:
+    """403 when ``release``'s source clip was removed by moderation; a deleted clip passes."""
+    clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
+    if clip is not None:
+        clip_service.ensure_not_removed(clip)
+
+
 async def update_visibility(release: Release, visibility: VisibilityState) -> Release:
     """Set ``release``'s visibility and mirror it onto the source clip (US-13.6).
 
@@ -219,14 +227,16 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     ``Clip.set_visibility``, which syncs the ``is_public`` denormalization
     in-memory before the save (the after-validator does NOT run on a plain
     assignment). A deleted source clip is tolerated (the release keeps its
-    visibility), and a clip removed by moderation is never republished (US-27.3).
+    visibility). A clip removed by moderation refuses anything but private (US-27.3).
     """
+    if visibility != VisibilityState.PRIVATE:
+        await ensure_source_not_removed(release)
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
 
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
-    if clip is not None and clip.removed_at is None and clip.visibility != visibility:
+    if clip is not None and clip.visibility != visibility:
         clip.set_visibility(visibility)
         await clip.save()
     return release
@@ -245,6 +255,7 @@ async def confirm_submission(release_id: str, user_id: str, target: str) -> Rele
     Raises 404 if not owned, 409 from ``draft`` or a terminal state.
     """
     release = await get_owned_release(release_id, user_id)
+    await ensure_source_not_removed(release)
     if release.status not in _CONFIRMABLE_STATUSES:
         raise _state_error(f"Release cannot be submitted from status {release.status.value!r}")
     # Atomic $addToSet + guarded $set so concurrent confirmations of different

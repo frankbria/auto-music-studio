@@ -302,6 +302,7 @@ async def prepare_release(
     await require_tier_capability(current.user_id, Capability.DISTRIBUTION)
 
     release = await release_service.get_owned_release(release_id, current.user_id)
+    await release_service.ensure_source_not_removed(release)
     checklist, bundle_url = await distribution_service.prepare_release(release, target)
     return PrepareResponse(
         release_id=str(release.id),
@@ -384,6 +385,9 @@ async def update_visibility(
 ) -> ReleaseStatusResponse:
     """Change a release's visibility (US-13.6); sync SoundCloud sharing if it's uploaded there."""
     release = await release_service.get_owned_release(release_id, current.user_id)
+    if body.state != VisibilityState.PRIVATE:
+        # Before the SoundCloud sync, so a removed clip's track is never re-shared (US-27.3).
+        await release_service.ensure_source_not_removed(release)
     if release.soundcloud_track_id:
         await _sync_soundcloud_sharing(release, body.state, settings)
     release = await release_service.update_visibility(release, body.state)

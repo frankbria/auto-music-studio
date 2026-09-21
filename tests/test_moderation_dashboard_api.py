@@ -22,12 +22,13 @@ from acemusic.api.models import (
     NotificationEvent,
     RefreshToken,
     Release,
+    ReleaseStatus,
     User,
     Video,
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import releases as release_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -37,6 +38,10 @@ CLIP_ACTIONS_URL = f"{ADMIN_URL}/moderation/clips"
 USER_ACTIONS_URL = f"{ADMIN_URL}/moderation/users"
 LOG_URL = f"{ADMIN_URL}/moderation/log"
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
+RELEASES_URL = f"{API_V1_PREFIX}/releases"
+VIDEOS_URL = f"{API_V1_PREFIX}/videos"
+REMOVED = "This clip was removed by moderation."
+RELEASE_METADATA = {"title": "Tune", "artist": "DJ", "genre": "house", "release_date": "2026-07-01T00:00:00Z"}
 SUSPENDED = "This account has been suspended."
 
 _SEQ = itertools.count(1)
@@ -327,24 +332,6 @@ class TestRemove:
 
         assert resp.status_code == 200
 
-    async def test_release_visibility_does_not_republish_a_removed_clip(self, client, settings):
-        admin, owner = await _admin(), await _user()
-        clip = await _clip(owner)
-        release = Release(
-            clip_id=clip.id,
-            user_id=owner.id,
-            title="Tune",
-            artist="DJ",
-            genre="house",
-            release_date=datetime.now(timezone.utc),
-        )
-        await release.insert()
-        await _act_on_clips(client, admin, settings, "remove", [clip.id])
-
-        await release_service.update_visibility(release, VisibilityState.PUBLIC)
-
-        assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
-
     async def test_remove_on_a_deleted_clip_fails_in_results(self, client, settings):
         gone = PydanticObjectId()
         [result] = await _act_on_clips(client, await _admin(), settings, "remove", [gone])
@@ -593,3 +580,114 @@ class TestModerationLog:
 
         assert len(resp.json()["entries"]) == 2
         assert (await client.get(LOG_URL, params={"limit": 501}, headers=_auth(admin, settings))).status_code == 422
+
+
+async def _removed_clip(client, settings, owner, **fields) -> Clip:
+    clip = await _clip(owner, **fields)
+    await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+    return clip
+
+
+async def _release(clip, **fields) -> Release:
+    release = Release(
+        clip_id=clip.id,
+        user_id=clip.user_id,
+        release_date=datetime.now(timezone.utc),
+        **{k: v for k, v in RELEASE_METADATA.items() if k != "release_date"},
+        **fields,
+    )
+    await release.insert()
+    return release
+
+
+@pytest.mark.integration
+class TestRemovedClipStaysDown:
+    """A removed clip cannot be republished through any owner path (US-27.3)."""
+
+    async def test_soundcloud_upload_is_refused(self, client, settings):
+        owner = await _user(tier=PRO)
+        clip = await _removed_clip(client, settings, owner)
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/distribution/soundcloud/upload",
+            json={"clip_id": str(clip.id)},
+            headers=_auth(owner, settings),
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+
+    async def test_release_cannot_be_created(self, client, settings):
+        owner = await _user()
+        clip = await _removed_clip(client, settings, owner)
+
+        resp = await client.post(
+            RELEASES_URL, json={"clip_id": str(clip.id), **RELEASE_METADATA}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+        assert await Release.find(Release.clip_id == clip.id).count() == 0
+
+    @pytest.mark.parametrize("state", ["public", "unlisted"])
+    async def test_release_cannot_be_made_visible(self, client, settings, state):
+        owner = await _user()
+        clip = await _clip(owner)
+        # A SoundCloud track id means the route would sync sharing first; the refusal must come before it.
+        release = await _release(clip, soundcloud_track_id="sc-1")
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": state}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
+
+    async def test_release_can_still_be_made_private(self, client, settings):
+        owner = await _user()
+        clip = await _clip(owner)
+        release = await _release(clip)
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": "private"}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("step", ["prepare", "submit"])
+    async def test_release_cannot_be_distributed(self, client, settings, step):
+        owner = await _user(tier=PRO)
+        clip = await _clip(owner)
+        release = await _release(clip, status=ReleaseStatus.READY)
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        resp = await client.post(f"{RELEASES_URL}/{release.id}/{step}/distrokid", headers=_auth(owner, settings))
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+        assert (await Release.get(release.id)).status == ReleaseStatus.READY
+
+    async def test_published_video_goes_down_with_its_clip(self, client, settings):
+        owner, stranger = await _user(), await _user()
+        clip = await _clip(owner)
+        video = Video(
+            clip_id=clip.id,
+            user_id=owner.id,
+            job_id=PydanticObjectId(),
+            storage_path="v.mp4",
+            resolution="720p",
+            aspect_ratio="16:9",
+            published=True,
+        )
+        await video.insert()
+        assert (await client.get(f"{VIDEOS_URL}/{video.id}")).status_code == 200
+
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        for url in (f"{VIDEOS_URL}/{video.id}", f"{VIDEOS_URL}/for-clip/{clip.id}"):
+            assert (await client.get(url)).status_code == 404
+            assert (await client.get(url, headers=_auth(stranger, settings))).status_code == 403

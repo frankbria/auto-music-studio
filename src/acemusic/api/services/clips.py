@@ -234,6 +234,12 @@ async def _is_active_admin(user_id: str) -> bool:
     return user is not None and user.is_admin and user.banned_at is None
 
 
+def ensure_not_removed(clip: Clip) -> None:
+    """403 for a clip moderation took down (US-27.3): its owner may not publish or distribute it again."""
+    if clip.removed_at is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip was removed by moderation.")
+
+
 def _clip_not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
 
@@ -454,8 +460,8 @@ async def update_clip_fields(
         # the boolean has no unlisted concept, and PRIVATE is the safe (more
         # restrictive) resolution. Modern clients send `visibility` and skip this.
         visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
-    if clip.removed_at is not None and visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip was removed by moderation.")
+    if visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED):
+        ensure_not_removed(clip)
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
     if visibility is not None:
