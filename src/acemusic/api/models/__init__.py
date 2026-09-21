@@ -16,6 +16,7 @@ from .preset import PRESET_PARAM_FIELDS, Preset
 from .queue import PlaybackQueue, RepeatMode
 from .refresh_token import RefreshToken
 from .release import Release, ReleaseStatus
+from .screening import ScreeningRulesDocument
 from .soundcloud_connection import SoundCloudConnection
 from .user import OAuthIdentity, User
 from .video import Video
@@ -40,6 +41,7 @@ ALL_MODELS = [
     PlaybackQueue,
     Video,
     VoiceModel,
+    ScreeningRulesDocument,
 ]
 
 __all__ = [
@@ -69,5 +71,6 @@ __all__ = [
     "PlaybackQueue",
     "RepeatMode",
     "Video",
+    "ScreeningRulesDocument",
     "ALL_MODELS",
 ]

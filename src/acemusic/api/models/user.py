@@ -52,6 +52,8 @@ class User(Document):
     oauth_provider: str | None = None
     oauth_id: str | None = None
     subscription_tier: str = "free"
+    #: US-27.1: may edit platform-wide settings such as content-screening rules. Granted in the database only.
+    is_admin: bool = False
     # US-9.6: deducted atomically at job-queue time (see services/credits.py).
     # Documents predating the field load with the default starting balance.
     credits_balance: float = DEFAULT_CREDITS_BALANCE

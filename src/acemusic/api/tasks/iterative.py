@@ -178,6 +178,7 @@ async def _store_child_clip(
         parent_clip_ids=parent_ids,
         generation_mode=job.job_type,
         generation_params=dict(job.input_params or {}),
+        moderation_flags=(job.input_params or {}).get("moderation_flags", []),
     )
     await store_clip(storage, clip, data)
     return str(clip_id)

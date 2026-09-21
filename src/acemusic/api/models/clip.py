@@ -28,6 +28,8 @@ class Clip(Document):
     key: str | None = None
     style_tags: list[str] = Field(default_factory=list)
     lyrics: str | None = None
+    #: US-27.1: screening categories this clip's request was flagged for (borderline, allowed).
+    moderation_flags: list[str] = Field(default_factory=list)
     vocal_language: str | None = None
     model: str | None = None
     seed: int | None = None

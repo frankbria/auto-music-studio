@@ -565,6 +565,7 @@ class JobProcessor:
             seed=params.get("seed"),
             inference_steps=params.get("inference_steps"),
             generation_mode=params.get("mode"),
+            moderation_flags=params.get("moderation_flags", []),
         )
 
     # -- status transitions ------------------------------------------------

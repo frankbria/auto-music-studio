@@ -40,6 +40,7 @@ from ..services import (
     clips as clip_service,
     credits as credits_service,
     iterative as iterative_service,
+    screening as screening_service,
     users as user_service,
 )
 from ._validators import require_voice_model
@@ -312,6 +313,9 @@ def _check_range(start_ms: int, end_ms: int, duration_ms: int, start: str, end: 
         raise _unprocessable(f"end ({end}) exceeds clip duration ({clip.duration:.1f}s).")
 
 
+_SCREENED_PARAMS = ("prompt", "style", "style_override", "lyrics", "lyrics_override", "vocal_style")
+
+
 async def _enqueue_generation(
     *,
     user_id: str,
@@ -328,6 +332,11 @@ async def _enqueue_generation(
     user = await user_service.get_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    # US-27.1: every free-text field any iterative mode carries, screened before charging.
+    moderation_flags = await screening_service.enforce(*(params.get(key) for key in _SCREENED_PARAMS))
+    if moderation_flags:
+        params = {**params, "moderation_flags": moderation_flags}
 
     job = await credits_service.charge_and_create(
         user_id=user.id,
