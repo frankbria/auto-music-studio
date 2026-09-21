@@ -75,6 +75,16 @@ token plus a rotating, single-use refresh token. All `/api/v1` routes except
 | `GET /api/v1/auth/plugin-tokens` | Lists the caller's live plugin tokens — id, created, expires; never the token |
 | `DELETE /api/v1/auth/plugin-tokens/{id}` | Revokes one plugin token (idempotent; 404 for anything that is not the caller's own) |
 
+**Replaying a spent refresh token signs that session out (#525).** Rotation records the
+hash it just spent, so presenting an already-consumed token is recognisable rather than
+looking like a random string — the classic sign that someone else holds a copy. The
+lineage is revoked, which kills the credential the real client is still holding, and
+`/auth/refresh` answers with the same 401 either way so nothing on the wire says which
+happened. A client firing two refreshes at once presents the same spent token a thief
+does, so a replay within three seconds of a legitimate rotation is refused without the
+session being killed. Only the replayed lineage dies: a compromised browser session does
+not sign the musician's DAW plugin out.
+
 **One account, several providers (#111).** A `User` carries a list of `identities`
 (`{provider, oauth_id}`), so the same person can sign in with Google or Discord and land
 in the same account. When a provider reports an email that already belongs to a different
