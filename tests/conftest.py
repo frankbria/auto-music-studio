@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 # Load .env.local for integration tests (ACEMUSIC_BASE_URL, ACESTEP_LOCAL_URL, etc.)
 load_dotenv(Path(__file__).parent.parent / ".env.local", override=False)
 
+# Strip the caller's color-forcing env vars (#520). Rich honours these even when
+# writing to CliRunner's non-tty buffer, injecting ANSI escapes that break the
+# substring assertions in the CLI tests. This must run at conftest import time:
+# acemusic.cli builds its Console at module import, which latches the setting,
+# so an autouse fixture would already be too late.
+for _color_var in ("FORCE_COLOR", "CLICOLOR_FORCE"):
+    os.environ.pop(_color_var, None)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
