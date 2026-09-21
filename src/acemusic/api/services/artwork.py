@@ -24,6 +24,7 @@ from acemusic.image_processing import ImageValidationError, validate_image
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, Job
+from . import screening
 from .common import coerce_object_id
 from .jobs import create_job
 
@@ -62,11 +63,15 @@ async def create_artwork_job(*, clip: Clip, style_prompt: str | None = None) -> 
     The prompt is resolved here (not in the worker) so the job document carries
     everything generation needs, matching the other service modules.
     """
+    prompt = build_artwork_prompt(clip, style_prompt)
+    # US-27.1: screen the *effective* prompt — without an override it is built from the
+    # clip's user-editable title and style tags, which were never screened themselves.
+    moderation_flags = await screening.enforce(prompt)
+    params = {"clip_id": str(clip.id), "prompt": prompt}
+    if moderation_flags:
+        params["moderation_flags"] = moderation_flags
     return await create_job(
-        user_id=clip.user_id,
-        workspace_id=clip.workspace_id,
-        job_type=ARTWORK_JOB_TYPE,
-        params={"clip_id": str(clip.id), "prompt": build_artwork_prompt(clip, style_prompt)},
+        user_id=clip.user_id, workspace_id=clip.workspace_id, job_type=ARTWORK_JOB_TYPE, params=params
     )
 
 

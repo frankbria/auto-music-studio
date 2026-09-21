@@ -6,6 +6,7 @@ generation request without a deploy. :class:`ScreeningRules` is the plain shape
 persisted singleton, addressed by ``key``.
 """
 
+import re
 from typing import Literal
 
 from beanie import Document
@@ -23,15 +24,15 @@ class Rule(BaseModel):
     @field_validator("term")
     @classmethod
     def _non_blank(cls, value: str) -> str:
-        if not value.strip():
+        if not re.sub(r"[\W_]+", "", value):
             raise ValueError("term must not be blank")
         return value.strip()
 
 
 class ScreeningRules(BaseModel):
-    rules: list[Rule] = Field(default_factory=list)
-    #: Phrases removed before matching, so "rapeseed oil" never trips "rape".
-    allow_terms: list[str] = Field(default_factory=list)
+    rules: list[Rule] = Field(default_factory=list, max_length=1000)
+    #: Phrases removed before matching, so "rape awareness" never trips "rape".
+    allow_terms: list[str] = Field(default_factory=list, max_length=1000)
     #: This many distinct flag categories in one request escalate it to a block; 0 never does.
     block_threshold: int = Field(default=0, ge=0)
 

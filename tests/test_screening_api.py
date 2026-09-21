@@ -18,8 +18,6 @@ from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
 from tests.users import make_user
 
-pytestmark = pytest.mark.integration
-
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
 RULES_URL = f"{API_V1_PREFIX}/admin/screening-rules"
 
@@ -67,6 +65,13 @@ class TestMatch:
         rules = self.RULES.model_copy(update={"block_threshold": 0})
         assert screening.match(rules, ["rape", "genocide"]).blocked is False
 
+    @pytest.mark.parametrize("text", ["chant sieg-heil", "SIEG.HEIL", "sieg_heil", "chant sieg heíl"])
+    def test_punctuation_and_accents_do_not_evade(self, text):
+        assert screening.match(self.RULES, [text]).blocked is True
+
+    def test_a_phrase_does_not_span_two_fields(self):
+        assert screening.match(self.RULES, ["a march for sieg", "heil"]).blocked is False
+
     def test_none_texts_are_ignored(self):
         assert screening.match(self.RULES, [None, ""]).flags == []
 
@@ -107,6 +112,7 @@ async def _balance(user) -> float:
     return (await user_service.get_user_by_id(str(user.id))).credits_balance
 
 
+@pytest.mark.integration
 class TestGenerateScreening:
     async def test_prohibited_prompt_is_blocked_with_an_explanation_and_no_charge(self, client, settings):
         user = await make_user("screen-block@example.com")
@@ -120,6 +126,13 @@ class TestGenerateScreening:
         assert "wasn't generated" in detail
         assert await Job.find(Job.user_id == user.id).to_list() == []
         assert await _balance(user) == before
+
+    async def test_vocal_language_is_screened(self, client, settings):
+        user = await make_user("screen-lang@example.com")
+        resp = await client.post(
+            GENERATE_URL, json={"prompt": "pop", "vocal_language": "heil hitler"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
 
     async def test_prohibited_lyrics_are_blocked(self, client, settings):
         user = await make_user("screen-lyrics@example.com")
@@ -186,6 +199,7 @@ async def _user_with_clip(email: str):
     return user, clip
 
 
+@pytest.mark.integration
 class TestOtherEntryPoints:
     async def test_iterative_blocked_style_costs_nothing(self, client, settings):
         user, clip = await _user_with_clip("screen-remix@example.com")
@@ -215,6 +229,26 @@ class TestOtherEntryPoints:
         assert resp.status_code == 422
         assert await Job.find(Job.user_id == user.id).to_list() == []
 
+    async def test_artwork_prompt_derived_from_the_clip_title_is_screened(self, client, settings):
+        user, clip = await _user_with_clip("screen-art-title@example.com")
+        await clip.set({Clip.title: "White-Power rally"})
+        resp = await client.post(
+            f"{API_V1_PREFIX}/clips/{clip.id}/artwork/generate", json={}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
+        assert await Job.find(Job.user_id == user.id).to_list() == []
+
+    async def test_borderline_artwork_prompt_is_flagged_on_the_job(self, client, settings):
+        user, clip = await _user_with_clip("screen-art-flag@example.com")
+        resp = await client.post(
+            f"{API_V1_PREFIX}/clips/{clip.id}/artwork/generate",
+            json={"style_prompt": "terrorist propaganda aesthetic, satirical"},
+            headers=_auth(user, settings),
+        )
+        assert resp.status_code == 202
+        job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
+        assert job.input_params["moderation_flags"] == ["violent extremism"]
+
     @pytest.mark.parametrize(
         ("prompt", "status", "flags"),
         [("sieg heil parade", 422, None), ("a genocide memorial montage", 202, ["violent extremism"])],
@@ -243,6 +277,7 @@ class TestOtherEntryPoints:
             assert job.input_params["moderation_flags"] == flags
 
 
+@pytest.mark.integration
 class TestAdminRules:
     async def test_non_admin_cannot_read_or_change_rules(self, client, settings):
         user = await make_user("screen-nonadmin@example.com")

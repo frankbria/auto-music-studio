@@ -8,6 +8,7 @@ admin-editable (``routers/admin.py``); these defaults apply until an admin saves
 """
 
 import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -57,7 +58,9 @@ class ScreeningResult:
 
 
 def _normalise(text: str) -> str:
-    return " ".join(text.lower().split())
+    """Lowercase, fold accents ("heíl" -> "heil") and treat punctuation as spaces ("child-porn")."""
+    folded = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[\W_]+", " ", folded.lower()).split())
 
 
 def _phrase(term: str) -> re.Pattern[str]:
@@ -67,9 +70,9 @@ def _phrase(term: str) -> re.Pattern[str]:
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
     """Screen ``texts`` against ``rules``. Pure — no storage, so it is cheap to test."""
     # ponytail: regexes compiled per call; cache per rule set if rule lists grow to thousands.
-    text = "\n".join(_normalise(t) for t in texts if t)
+    text = " | ".join(_normalise(t) for t in texts if t)
     for allowed in rules.allow_terms:
-        if allowed.strip():
+        if _normalise(allowed):
             text = _phrase(allowed).sub(" ", text)
 
     blocked: list[str] = []

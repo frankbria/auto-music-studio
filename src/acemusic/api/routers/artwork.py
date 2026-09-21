@@ -25,7 +25,7 @@ from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
 from ..models import Clip
-from ..services import artwork as artwork_service, clips as clip_service, screening as screening_service
+from ..services import artwork as artwork_service, clips as clip_service
 from ..services.artwork import ArtworkNotFoundError
 from ..services.clips import get_clip_for_audio_access
 
@@ -83,7 +83,6 @@ async def generate_artwork(
 ) -> ArtworkJobResponse:
     """Enqueue cover-art generation for ``clip_id``; poll the job for the options."""
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
-    await screening_service.enforce(request.style_prompt)
     job = await artwork_service.create_artwork_job(clip=clip, style_prompt=request.style_prompt)
     return ArtworkJobResponse(job_id=str(job.id))
 

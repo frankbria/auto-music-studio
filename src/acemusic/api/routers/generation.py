@@ -204,7 +204,9 @@ async def create_generation(
         preset = await preset_service.get_preset(request.preset_id, current.user_id)
         request = _apply_preset(request, preset)
     # US-27.1: screen the merged request (a preset can supply style/lyrics) before charging.
-    moderation_flags = await screening_service.enforce(request.prompt, request.style, request.lyrics)
+    moderation_flags = await screening_service.enforce(
+        request.prompt, request.style, request.lyrics, request.vocal_language
+    )
     # US-25.4: a voice the caller cannot use is rejected before anything is charged.
     await require_voice_model(request.voice_model_id, str(user.id))
     # US-11.1: pick the compute target BEFORE charging credits, so an unavailable
