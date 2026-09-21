@@ -166,6 +166,10 @@ class TestGenerateScreening:
         clip = JobProcessor._build_clip(job, job.input_params, PydanticObjectId(), "p.wav", "wav")
         assert clip.moderation_flags == ["self-harm"]
 
+        # The status poll rebuilds the request from input_params; the flag must not break its estimate.
+        status_resp = await client.get(f"{API_V1_PREFIX}/jobs/{job.id}/status", headers=_auth(user, settings))
+        assert status_resp.json()["estimated_time_seconds"] == resp.json()["estimated_time_seconds"]
+
     async def test_preset_supplied_text_is_screened(self, client, settings):
         user = await make_user("screen-preset@example.com")
         preset = await client.post(

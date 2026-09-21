@@ -114,7 +114,9 @@ def _estimate_for(job: Job) -> int:
             return _ITERATIVE_ESTIMATE_SECONDS * len(structure)
         return _ITERATIVE_ESTIMATE_SECONDS
     try:
-        return estimate_seconds(GenerationRequest(**job.input_params))
+        # ``moderation_flags`` (US-27.1) is added after validation; the request model forbids it.
+        params = {k: v for k, v in job.input_params.items() if k != "moderation_flags"}
+        return estimate_seconds(GenerationRequest(**params))
     except Exception:
         return 0
 
