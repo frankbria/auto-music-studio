@@ -54,7 +54,8 @@ class User(Document):
     subscription_tier: str = "free"
     #: US-27.1: may edit platform-wide settings such as content-screening rules. Granted in the database only.
     is_admin: bool = False
-    #: US-27.3: suspended by an admin. Refused at sign-in, refresh and every account-backed endpoint.
+    #: US-27.3: suspended by an admin. Refused at sign-in, refresh, plugin-token and every endpoint that loads
+    #: the account (require_existing_user / require_admin); a live access token lasts until expiry elsewhere.
     banned_at: datetime | None = None
     # US-9.6: deducted atomically at job-queue time (see services/credits.py).
     # Documents predating the field load with the default starting balance.

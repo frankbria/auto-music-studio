@@ -8,6 +8,7 @@ import {
   fetchModerationQueue,
   filterQueue,
   formatLogAction,
+  parseApiTime,
   sortQueue,
   type QueueItem,
 } from "@/lib/moderation"
@@ -275,5 +276,24 @@ describe("formatLogAction", () => {
       "Updated screening rules"
     )
     expect(formatLogAction("something_new")).toBe("something new")
+  })
+})
+
+describe("parseApiTime", () => {
+  // The API sends naive UTC ("...T23:32:56.360000", no offset), which `new Date`
+  // would read as local time. Run under a non-UTC TZ to see the difference.
+  it("reads an offset-less timestamp as UTC", () => {
+    expect(parseApiTime("2026-09-21T23:32:56.360000").toISOString()).toBe(
+      "2026-09-21T23:32:56.360Z"
+    )
+  })
+
+  it("keeps an explicit offset", () => {
+    expect(parseApiTime("2026-09-21T19:32:56-04:00").toISOString()).toBe(
+      "2026-09-21T23:32:56.000Z"
+    )
+    expect(parseApiTime("2026-09-21T23:32:56Z").toISOString()).toBe(
+      "2026-09-21T23:32:56.000Z"
+    )
   })
 })

@@ -31,6 +31,7 @@ import {
   type QueueSort,
   type SourceFilter,
   type UserAction,
+  parseApiTime,
 } from "@/lib/moderation"
 import { REPORT_CATEGORIES } from "@/lib/reports"
 
@@ -100,7 +101,7 @@ function nounFor(kind: Pending["kind"]) {
 }
 
 function formatTime(iso: string) {
-  const date = new Date(iso)
+  const date = parseApiTime(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
 }
 
