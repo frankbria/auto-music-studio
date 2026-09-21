@@ -546,6 +546,30 @@ class TestRefresh:
         reuse = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": old_refresh})
         assert reuse.status_code == 401
 
+    async def test_replaying_a_spent_token_signs_the_session_out(self, client, settings, monkeypatch):
+        """#525: a replay is a stolen-token signal, so the live credential dies with it."""
+        from acemusic.api.auth.services import REUSE_LEEWAY_SECONDS, _hash_token
+        from acemusic.api.models import RefreshToken
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-reuse", email="reuse@example.com")
+        spent = tokens["refresh_token"]
+
+        rotated = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": spent})
+        assert rotated.status_code == 200
+        live = rotated.json()["refresh_token"]
+
+        # Age the rotation past the leeway that keeps a client's own racing retry benign.
+        await RefreshToken.get_pymongo_collection().update_one(
+            {"previous_token_hashes": _hash_token(spent)},
+            {"$set": {"rotated_at": datetime.now(timezone.utc) - timedelta(seconds=REUSE_LEEWAY_SECONDS + 5)}},
+        )
+
+        replay = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": spent})
+        assert replay.status_code == 401
+
+        dead = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": live})
+        assert dead.status_code == 401, "the token the real client is holding must be dead too"
+
     async def test_refresh_invalid_token_401(self, client):
         resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": "never-issued"})
         assert resp.status_code == 401

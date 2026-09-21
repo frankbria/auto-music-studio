@@ -10,12 +10,31 @@ lags the actual expiry time).
 """
 
 import hashlib
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 
 from beanie import PydanticObjectId
 from pymongo import DESCENDING
 
 from ..models import RefreshToken
+
+logger = logging.getLogger(__name__)
+
+#: How long after a rotation the spent token is still forgiven rather than treated
+#: as a replay (#525). A client that fires two refreshes at once presents exactly
+#: what a thief does — the same spent token — and only elapsed time separates them.
+#: Inside this window the second attempt is still refused; it just does not kill the
+#: family. Three seconds is Auth0's default for the same trade-off.
+REUSE_LEEWAY_SECONDS = 3
+
+#: How many spent hashes a lineage remembers (#525). A thief typically sits on a
+#: stolen token while the real client keeps refreshing, so remembering only the
+#: last rotation would miss the ordinary case. It is capped rather than complete
+#: because rotation pushes ``expires_at`` out: a session used daily never expires,
+#: and an unbounded list would grow for the life of the account. At the usual
+#: refresh cadence this covers days of rotations — a replay older than that is
+#: still refused, it just is not attributed to a theft.
+REUSE_HISTORY_DEPTH = 100
 
 
 def _hash_token(raw_token: str) -> str:
@@ -80,35 +99,92 @@ async def rotate_refresh_token(
     rewritten on its way to being rejected — an expired document keeps its own
     hash and is left for the TTL index.
 
-    **What this gives up.** Under revoke-and-reissue a replayed token still hashed
-    to a document that existed with ``revoked: True``, which is the signal OAuth
-    refresh-token *reuse detection* keys off ("a thief is replaying a token the
-    real client already spent — kill the whole family"). Swapping the hash erases
-    that, so a replay is now indistinguishable from a random string. Nothing in
-    this codebase implements reuse detection today, but whoever adds it will need
-    to keep the spent hash — a ``previous_token_hash`` on the same document would
-    restore the signal without giving up the stable id AC2 needs.
+    The swap also records the hash it just spent on the same document, so the
+    rejection above can tell a *replay* from a random string — see
+    ``_detect_refresh_token_reuse``.
     """
     collection = RefreshToken.get_pymongo_collection()
+    now = datetime.now(timezone.utc)
+    old_hash = _hash_token(old_raw)
     doc = await collection.find_one_and_update(
         {
-            "token_hash": _hash_token(old_raw),
+            "token_hash": old_hash,
             "revoked": False,
-            "expires_at": {"$gt": datetime.now(timezone.utc)},
+            "expires_at": {"$gt": now},
         },
-        {"$set": {"token_hash": _hash_token(new_raw), "expires_at": expires_at}},
+        {
+            "$set": {
+                "token_hash": _hash_token(new_raw),
+                "expires_at": expires_at,
+                "rotated_at": now,
+            },
+            # ``$slice`` keeps the newest ``REUSE_HISTORY_DEPTH`` and drops the rest
+            # in the same atomic update, so the history can never outgrow its cap.
+            "$push": {"previous_token_hashes": {"$each": [old_hash], "$slice": -REUSE_HISTORY_DEPTH}},
+        },
     )
-    return None if doc is None else doc["user_id"]
+    if doc is None:
+        await _detect_refresh_token_reuse(old_hash)
+        return None
+    return doc["user_id"]
+
+
+async def _detect_refresh_token_reuse(spent_hash: str) -> bool:
+    """Kill the lineage that already spent ``spent_hash``. Return ``True`` if one was killed.
+
+    A refresh token is single-use, so the only way to present one the server has
+    already consumed is to have held a copy of it — the classic OAuth signal that a
+    token was stolen. The thief's copy is dead on arrival; what has to die with it is
+    the *successor* the real client is holding, because whoever replayed the old token
+    may hold that one too.
+
+    The kill is the document, which under in-place rotation is the whole token family:
+    one lineage per document (#515 AC2). It deliberately stops there rather than
+    revoking every token of the user — signing the musician's DAW plugin out because a
+    browser session was replayed is a worse default than the attack it prevents, and
+    the plugin's own lineage is unaffected by the theft.
+
+    Revoke, rather than delete: the TTL index reaps the document on schedule, and until
+    then the spent history keeps answering this question for any further replays.
+
+    Bounded by ``REUSE_HISTORY_DEPTH``: a replay older than that many rotations is
+    refused like any other dead token, it simply is not recognised as a theft.
+    """
+    result = await RefreshToken.get_pymongo_collection().find_one_and_update(
+        {
+            # Matches any element of the array — every hash this lineage has spent.
+            "previous_token_hashes": spent_hash,
+            "revoked": False,
+            # Outside the leeway only. A document missing ``rotated_at`` cannot match
+            # here, which is correct: its spent history is empty too, so it never
+            # reaches this filter in the first place.
+            "rotated_at": {"$lt": datetime.now(timezone.utc) - timedelta(seconds=REUSE_LEEWAY_SECONDS)},
+        },
+        {"$set": {"revoked": True}},
+    )
+    if result is None:
+        return False
+    logger.warning(
+        "Refresh-token reuse detected for user %s; revoked token lineage %s",
+        result["user_id"],
+        result["_id"],
+    )
+    return True
 
 
 async def revoke_refresh_token(raw_token: str) -> bool:
-    """Revoke a single token. Return ``True`` if a token was revoked."""
-    token = await RefreshToken.find_one(RefreshToken.token_hash == _hash_token(raw_token))
-    if token is None or token.revoked:
-        return False
-    token.revoked = True
-    await token.save()
-    return True
+    """Revoke a single token. Return ``True`` if a token was revoked.
+
+    One atomic update rather than a read-modify-``save()``: ``save()`` writes the
+    whole document back, so a logout that read the document just before a rotation
+    landed would silently undo that rotation's hash swap and spent history (#525),
+    handing a spent token back its validity.
+    """
+    result = await RefreshToken.get_pymongo_collection().update_one(
+        {"token_hash": _hash_token(raw_token), "revoked": False},
+        {"$set": {"revoked": True}},
+    )
+    return result.modified_count == 1
 
 
 async def retire_untagged_refresh_tokens() -> int:
