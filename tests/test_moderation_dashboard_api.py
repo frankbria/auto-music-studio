@@ -154,7 +154,8 @@ class TestAdminGate:
 class TestQueue:
     async def test_groups_open_reports_per_clip_and_sorts_by_count_then_severity(self, client, settings):
         admin, owner = await _admin(), await _user(display_name="Owner Name")
-        busy, copyright_clip, spam_clip = [await _clip(owner, title=t) for t in ("Busy", "Copy", "Spam")]
+        # Created least-urgent first, so the expected order only holds if the queue really sorts.
+        spam_clip, copyright_clip, busy = [await _clip(owner, title=t) for t in ("Spam", "Copy", "Busy")]
         await _clip(owner, title="Unreported")
         await _report(busy.id, "inappropriate")
         await _report(busy.id, "spam")
@@ -178,6 +179,20 @@ class TestQueue:
         assert top["content_warning"] is False
         assert items[1]["severity"] == 2
         assert items[2]["severity"] == 1
+
+    async def test_order_comes_from_the_sort_not_from_insertion(self, client, settings):
+        admin, owner = await _admin(), await _user()
+        reporters = [await _user() for _ in range(5)]
+        by_count = {}
+        for count in (2, 5, 1, 4, 3):
+            clip = await _clip(owner, title=f"x{count}")
+            by_count[count] = str(clip.id)
+            for reporter in reporters[:count]:
+                await _report(clip.id, "spam", reporter=reporter)
+
+        items = await _queue(client, admin, settings)
+
+        assert [i["clip_id"] for i in items] == [by_count[c] for c in (5, 4, 3, 2, 1)]
 
     async def test_unreviewed_automated_flags_are_queued(self, client, settings):
         admin = await _admin()
