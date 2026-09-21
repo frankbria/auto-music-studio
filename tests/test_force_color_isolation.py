@@ -11,18 +11,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = "tests/test_generate.py::TestGenerateCommand::test_generate_prints_duration"
 
 
-@pytest.mark.parametrize("var", ["FORCE_COLOR", "CLICOLOR_FORCE"])
-def test_cli_output_assertions_survive_forced_color(var):
+def test_cli_output_assertions_survive_forced_color():
+    # Only FORCE_COLOR is asserted: CLICOLOR_FORCE alone does not make this
+    # Rich version emit escapes, so a case for it would pass either way.
     result = subprocess.run(
         [sys.executable, "-m", "pytest", TARGET, "-p", "no:cacheprovider", "--no-cov", "-q"],
         cwd=REPO_ROOT,
-        env={**os.environ, var: "3"},
+        env={**os.environ, "FORCE_COLOR": "3"},
         capture_output=True,
         text=True,
     )
