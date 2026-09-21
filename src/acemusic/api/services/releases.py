@@ -223,10 +223,8 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     does not re-fetch. Visibility is a sharing preference, not part of the
     submission lifecycle, so it is editable in any state (unlike metadata, which
     locks after submission). The source clip's own ``visibility`` (US-20.7,
-    which gates non-owner audio access) is mirrored to match via
-    ``Clip.set_visibility``, which syncs the ``is_public`` denormalization
-    in-memory before the save (the after-validator does NOT run on a plain
-    assignment). A deleted source clip is tolerated (the release keeps its
+    which gates non-owner audio access) is mirrored to match, together with its
+    ``is_public`` denormalization. A deleted source clip is tolerated (the release keeps its
     visibility). A clip removed by moderation refuses anything but private (US-27.3).
     """
     if visibility != VisibilityState.PRIVATE:
@@ -235,10 +233,11 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     release.updated_at = utcnow()
     await release.save()
 
-    clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
-    if clip is not None and clip.visibility != visibility:
-        clip.set_visibility(visibility)
-        await clip.save()
+    # One conditional update, not read-then-save: a save would write back a stale snapshot and
+    # revert an admin removal landing in between. A deleted or removed clip simply matches nothing.
+    await Clip.find_one({"_id": release.clip_id, "user_id": release.user_id, "removed_at": None}).update(
+        {"$set": {"visibility": visibility.value, "is_public": visibility == VisibilityState.PUBLIC}}
+    )
     return release
 
 

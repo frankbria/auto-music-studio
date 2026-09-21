@@ -6,6 +6,7 @@ access; plain ``TestClient`` does not run the lifespan). The CRUD tests are
 MongoDB (``mongo_db``), mirroring ``tests/test_presets_api.py``.
 """
 
+import inspect
 import itertools
 import re
 
@@ -16,7 +17,8 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Release, ReleaseStatus, Workspace
+from acemusic.api.models import Clip, Release, ReleaseStatus, VisibilityState, Workspace
+from acemusic.api.services import releases as release_service
 from acemusic.api.services.identifiers import calculate_ean13_check_digit
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
@@ -511,3 +513,50 @@ class TestDanglingClip:
         listed = await client.get(RELEASES_URL, headers=_auth_headers(user, settings))
         assert listed.status_code == 200
         assert listed.json()["total"] == 1
+
+
+@pytest.mark.integration
+class TestVisibilityMirror:
+    @pytest.mark.parametrize("state,is_public", [("public", True), ("unlisted", False), ("private", False)])
+    async def test_release_visibility_is_mirrored_onto_the_clip(self, client, settings, state, is_public) -> None:
+        user = await make_user(f"rel-mirror-{state}@example.com")
+        clip = await _insert_clip(user)
+        release_id = (await _create_release(client, user, settings, clip)).json()["id"]
+        await client.patch(
+            f"{RELEASES_URL}/{release_id}/visibility", json={"state": "public"}, headers=_auth_headers(user, settings)
+        )
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}/visibility", json={"state": state}, headers=_auth_headers(user, settings)
+        )
+
+        assert resp.status_code == 200
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState(state)
+        assert stored.is_public is is_public
+
+    async def test_mirror_tolerates_a_deleted_source_clip(self, client, settings) -> None:
+        user = await make_user("rel-mirror-deleted@example.com")
+        clip = await _insert_clip(user)
+        release_id = (await _create_release(client, user, settings, clip)).json()["id"]
+        await clip.delete()
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}/visibility", json={"state": "public"}, headers=_auth_headers(user, settings)
+        )
+
+        assert resp.status_code == 200
+        assert (await Release.get(PydanticObjectId(release_id))).visibility == VisibilityState.PUBLIC
+
+
+def test_visibility_mirror_never_saves_the_whole_clip():
+    """The clip mirror must be one conditional update, never read-then-``save()`` (US-27.3).
+
+    A whole-document save writes back what it read, so an admin removal landing between
+    the read and the save would be reverted — the clip public again, ``removed_at`` wiped.
+    The window only opens under concurrency, so it is guarded by shape: the only document
+    ``update_visibility`` may save is the release it was handed.
+    """
+    source = inspect.getsource(release_service.update_visibility)
+    assert re.findall(r"(\w+)\.save\(\)", source) == ["release"]
+    assert '"removed_at": None' in source
