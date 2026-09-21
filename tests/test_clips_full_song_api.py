@@ -479,6 +479,17 @@ class TestFullSongHandler:
         await job.insert()
         return job
 
+    async def test_seed_lyrics_edited_after_enqueue_fail_the_job_before_submitting(self, storage) -> None:
+        # US-27.1: sections inherit the seed's stored lyrics, re-read when the worker runs.
+        from acemusic.api.tasks.common import JobProcessingError
+
+        user, workspace, clip = await self._seed(storage)
+        await clip.set({Clip.lyrics: "[Verse]\nheil hitler"})
+        ace = _RecordingAce(_wav_bytes(2.0))
+        with pytest.raises(JobProcessingError, match="hate speech"):
+            await self._run(await self._job(user, workspace, clip), ace, storage)
+        assert ace.submits == []
+
     async def test_runs_one_extend_per_section(self, storage) -> None:
         user, workspace, clip = await self._seed(storage)
         ace = _RecordingAce(_wav_bytes(2.0))

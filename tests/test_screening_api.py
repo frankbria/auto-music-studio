@@ -229,6 +229,13 @@ class TestOtherEntryPoints:
         assert resp.status_code == 422
         assert await _balance(user) == 10.0
 
+    async def test_full_song_screens_the_seed_lyrics_it_inherits(self, client, settings):
+        user, clip = await _user_with_clip("screen-fullsong@example.com")
+        await clip.set({Clip.lyrics: "[Chorus]\nwhite power"})
+        resp = await client.post(f"{API_V1_PREFIX}/clips/{clip.id}/full-song", json={}, headers=_auth(user, settings))
+        assert resp.status_code == 422, resp.text
+        assert await _balance(user) == 10.0
+
     async def test_mashup_flags_a_borderline_tag_on_any_source(self, client, settings):
         user, first = await _user_with_clip("screen-mashup@example.com")
         second = Clip(

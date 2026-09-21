@@ -548,3 +548,51 @@ class TestService:
             )
         # The just-inserted job is deleted so the poller never runs an orphan.
         assert await Job.count() == before
+
+
+# ---------------------------------------------------------------------------
+# US-27.1: prompts built from live clip metadata are re-screened in the worker
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerRescreensLiveClipMetadata:
+    """The router screens the source at enqueue; the owner can rename it before the worker runs."""
+
+    @pytest.mark.parametrize(
+        ("job_type", "handler", "extra"),
+        [
+            (tasks.EXTEND_JOB_TYPE, "process_extend_job", {"duration": "2s", "from_point": "end"}),
+            (tasks.ADD_VOCAL_JOB_TYPE, "process_add_vocal_job", {"lyrics": "sing this"}),
+        ],
+    )
+    async def test_renamed_source_fails_the_job_before_submitting(self, storage, job_type, handler, extra) -> None:
+        job, source = await _make_clip(storage, email=f"t-rescreen-{job_type}@example.com")
+        await source.set({Clip.style_tags: ["sieg heil march"]})
+        job.job_type = job_type
+        job.input_params = {"clip_id": str(source.id), **extra}
+        client = FakeAce(_wav_bytes(5.0))
+
+        with pytest.raises(tasks.JobProcessingError, match="hate speech"):
+            await getattr(tasks, handler)(job, storage=storage, client=client, poll=_make_poll())
+        assert client.submitted == []
+
+    async def test_mashup_rescreens_source_titles(self, storage) -> None:
+        job, primary = await _make_clip(storage, email="t-rescreen-mashup@example.com", title="White Power")
+        secondary = Clip(
+            user_id=primary.user_id,
+            workspace_id=primary.workspace_id,
+            file_path=primary.file_path,
+            format="wav",
+            duration=3.0,
+            bpm=120,
+            key="C",
+            title="Other",
+        )
+        await secondary.insert()
+        job.job_type = tasks.MASHUP_JOB_TYPE
+        job.input_params = {"clip_ids": [str(primary.id), str(secondary.id)], "blend_mode": "layered", "style": None}
+        client = FakeAce(_wav_bytes(3.0))
+
+        with pytest.raises(tasks.JobProcessingError, match="hate speech"):
+            await tasks.process_mashup_job(job, storage=storage, client=client, poll=_make_poll())
+        assert client.submitted == []
