@@ -34,16 +34,20 @@ class RefreshToken(Document):
     #: are retired at startup by ``retire_untagged_refresh_tokens`` rather than
     #: guessed at, so an untaggable plugin token cannot linger unlistable.
     kind: str = "web"
-    #: The hash this document held before its last rotation, and when that
-    #: rotation happened (#525). Rotating in place erases the spent hash, which
-    #: is the only thing that tells a replayed token apart from a random string —
-    #: keeping it here restores OAuth refresh-token reuse detection without
-    #: handing the lineage a new document id on every refresh (#515 AC2).
+    #: The hashes this lineage has already spent, oldest first, and when it last
+    #: rotated (#525). Rotating in place erases the spent hash, which is the only
+    #: thing that tells a replayed token apart from a random string — keeping the
+    #: history here restores OAuth refresh-token reuse detection without handing
+    #: the lineage a new document id on every refresh (#515 AC2).
     #:
-    #: ``None`` on a token that has never rotated, and absent entirely from a
+    #: Capped at ``REUSE_LEEWAY``-independent ``REUSE_HISTORY_DEPTH`` entries: a
+    #: session that is used daily never expires (rotation pushes ``expires_at``
+    #: out), so an uncapped list would grow for the life of the account.
+    #:
+    #: Empty on a token that has never rotated, and absent entirely from a
     #: document written before this field existed. Neither is a replay candidate:
     #: nothing has been spent yet.
-    previous_token_hash: str | None = None
+    previous_token_hashes: list[str] = Field(default_factory=list)
     rotated_at: datetime | None = None
 
     class Settings:
@@ -51,9 +55,10 @@ class RefreshToken(Document):
         indexes = [
             IndexModel([("token_hash", ASCENDING)], unique=True),
             IndexModel([("user_id", ASCENDING)]),
-            # Not unique: every un-rotated document carries a null here, and a
-            # unique index would let the first one block every later insert.
-            IndexModel([("previous_token_hash", ASCENDING)]),
+            # Multikey (one entry per spent hash) and deliberately not unique: the
+            # array is empty on every un-rotated document, and a unique index would
+            # let the first of those block every later insert.
+            IndexModel([("previous_token_hashes", ASCENDING)]),
             # TTL index: MongoDB deletes documents once ``expires_at`` is in the
             # past (expireAfterSeconds=0 means "expire at the stored time").
             IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),

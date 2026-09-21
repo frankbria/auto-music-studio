@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 #: family. Three seconds is Auth0's default for the same trade-off.
 REUSE_LEEWAY_SECONDS = 3
 
+#: How many spent hashes a lineage remembers (#525). A thief typically sits on a
+#: stolen token while the real client keeps refreshing, so remembering only the
+#: last rotation would miss the ordinary case. It is capped rather than complete
+#: because rotation pushes ``expires_at`` out: a session used daily never expires,
+#: and an unbounded list would grow for the life of the account. At the usual
+#: refresh cadence this covers days of rotations — a replay older than that is
+#: still refused, it just is not attributed to a theft.
+REUSE_HISTORY_DEPTH = 100
+
 
 def _hash_token(raw_token: str) -> str:
     """Return the hex SHA-256 digest used as the stored lookup key."""
@@ -107,9 +116,11 @@ async def rotate_refresh_token(
             "$set": {
                 "token_hash": _hash_token(new_raw),
                 "expires_at": expires_at,
-                "previous_token_hash": old_hash,
                 "rotated_at": now,
-            }
+            },
+            # ``$slice`` keeps the newest ``REUSE_HISTORY_DEPTH`` and drops the rest
+            # in the same atomic update, so the history can never outgrow its cap.
+            "$push": {"previous_token_hashes": {"$each": [old_hash], "$slice": -REUSE_HISTORY_DEPTH}},
         },
     )
     if doc is None:
@@ -134,15 +145,19 @@ async def _detect_refresh_token_reuse(spent_hash: str) -> bool:
     the plugin's own lineage is unaffected by the theft.
 
     Revoke, rather than delete: the TTL index reaps the document on schedule, and until
-    then the spent hash keeps answering this question for any further replays.
+    then the spent history keeps answering this question for any further replays.
+
+    Bounded by ``REUSE_HISTORY_DEPTH``: a replay older than that many rotations is
+    refused like any other dead token, it simply is not recognised as a theft.
     """
     result = await RefreshToken.get_pymongo_collection().find_one_and_update(
         {
-            "previous_token_hash": spent_hash,
+            # Matches any element of the array — every hash this lineage has spent.
+            "previous_token_hashes": spent_hash,
             "revoked": False,
             # Outside the leeway only. A document missing ``rotated_at`` cannot match
-            # here, which is correct: it also has no ``previous_token_hash``, so it
-            # never reaches this filter in the first place.
+            # here, which is correct: its spent history is empty too, so it never
+            # reaches this filter in the first place.
             "rotated_at": {"$lt": datetime.now(timezone.utc) - timedelta(seconds=REUSE_LEEWAY_SECONDS)},
         },
         {"$set": {"revoked": True}},
@@ -158,13 +173,18 @@ async def _detect_refresh_token_reuse(spent_hash: str) -> bool:
 
 
 async def revoke_refresh_token(raw_token: str) -> bool:
-    """Revoke a single token. Return ``True`` if a token was revoked."""
-    token = await RefreshToken.find_one(RefreshToken.token_hash == _hash_token(raw_token))
-    if token is None or token.revoked:
-        return False
-    token.revoked = True
-    await token.save()
-    return True
+    """Revoke a single token. Return ``True`` if a token was revoked.
+
+    One atomic update rather than a read-modify-``save()``: ``save()`` writes the
+    whole document back, so a logout that read the document just before a rotation
+    landed would silently undo that rotation's hash swap and spent history (#525),
+    handing a spent token back its validity.
+    """
+    result = await RefreshToken.get_pymongo_collection().update_one(
+        {"token_hash": _hash_token(raw_token), "revoked": False},
+        {"$set": {"revoked": True}},
+    )
+    return result.modified_count == 1
 
 
 async def retire_untagged_refresh_tokens() -> int:

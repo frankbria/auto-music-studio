@@ -11,6 +11,7 @@ import pytest
 from beanie import PydanticObjectId
 
 from acemusic.api.auth.services import (
+    REUSE_HISTORY_DEPTH,
     REUSE_LEEWAY_SECONDS,
     list_plugin_tokens,
     retire_untagged_refresh_tokens,
@@ -314,7 +315,7 @@ class TestReuseDetection:
     """Replaying a spent refresh token kills the lineage it came from (#525).
 
     In-place rotation means a spent token no longer resolves to any document, so a
-    replay would be indistinguishable from a random string. ``previous_token_hash``
+    replay would be indistinguishable from a random string. ``previous_token_hashes``
     keeps the spent hash on the same document, which is what makes the replay
     recognisable without handing the lineage a new id on every refresh (#515 AC2).
     """
@@ -334,7 +335,7 @@ class TestReuseDetection:
         await rotate_refresh_token(old, new, _future())
 
         after = await RefreshToken.get(stored.id)
-        assert after.previous_token_hash == hashlib.sha256(old.encode()).hexdigest()
+        assert after.previous_token_hashes == [hashlib.sha256(old.encode()).hexdigest()]
         assert after.rotated_at is not None
 
     async def test_a_replay_kills_the_live_credential_in_the_lineage(self, mongo_db):
@@ -349,6 +350,53 @@ class TestReuseDetection:
 
         assert await validate_refresh_token(new) is None, "the live successor must be revoked, not just refused"
         assert (await RefreshToken.get(stored.id)).revoked is True
+
+    async def test_a_replay_is_caught_after_the_lineage_has_rotated_again(self, mongo_db):
+        """A thief sits on a stolen token while the real client keeps refreshing.
+
+        Remembering only the hash of the last rotation would let ``t0`` go unnoticed
+        the moment ``t1`` was itself spent, which is the common case rather than the
+        exotic one: a browser refreshes on every access-token expiry.
+        """
+        user_id = PydanticObjectId()
+        t0, t1, t2 = create_refresh_token(), create_refresh_token(), create_refresh_token()
+        stored = await store_refresh_token(user_id, t0, _future())
+        await rotate_refresh_token(t0, t1, _future())
+        await rotate_refresh_token(t1, t2, _future())
+        await self._backdate_rotation(stored.id, REUSE_LEEWAY_SECONDS + 5)
+
+        assert await rotate_refresh_token(t0, create_refresh_token(), _future()) is None
+
+        assert await validate_refresh_token(t2) is None, "the credential the client holds must die"
+        assert (await RefreshToken.get(stored.id)).revoked is True
+
+    async def test_the_spent_history_is_capped(self, mongo_db):
+        """The history is bounded, so a long-lived session cannot grow its document without limit."""
+        user_id = PydanticObjectId()
+        raw = create_refresh_token()
+        stored = await store_refresh_token(user_id, raw, _future())
+        for _ in range(REUSE_HISTORY_DEPTH + 3):
+            nxt = create_refresh_token()
+            assert await rotate_refresh_token(raw, nxt, _future()) == user_id
+            raw = nxt
+
+        assert len((await RefreshToken.get(stored.id)).previous_token_hashes) == REUSE_HISTORY_DEPTH
+
+    async def test_a_concurrent_logout_cannot_revert_the_rotation(self, mongo_db):
+        """Both writers must be atomic updates: a read-modify-save would lose the other's write."""
+        user_id = PydanticObjectId()
+        old, new = create_refresh_token(), create_refresh_token()
+        stored = await store_refresh_token(user_id, old, _future())
+
+        # The logout reads the document, then the rotation lands before it writes.
+        stale = await RefreshToken.get(stored.id)
+        assert stale is not None
+        await rotate_refresh_token(old, new, _future())
+        await revoke_refresh_token(old)
+
+        after = await RefreshToken.get(stored.id)
+        assert after.token_hash == hashlib.sha256(new.encode()).hexdigest(), "the rotation must survive"
+        assert after.previous_token_hashes == [hashlib.sha256(old.encode()).hexdigest()]
 
     async def test_an_unknown_token_revokes_nothing(self, mongo_db):
         """AC1: this is what makes a replay *distinguishable* — garbage input is inert."""
@@ -397,7 +445,7 @@ class TestReuseDetection:
         assert (await RefreshToken.get(stored.id)).revoked is False
 
     async def test_a_document_written_before_525_gains_the_substrate_when_it_rotates(self, mongo_db):
-        """A live session predating this field has no ``previous_token_hash`` key at all.
+        """A live session predating this field has no ``previous_token_hashes`` key at all.
 
         It cannot be replay-detected until it next rotates — there is no spent hash to
         recognise — and the lookup must not mistake its missing key for a match.

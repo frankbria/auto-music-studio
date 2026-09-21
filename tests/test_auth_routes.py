@@ -560,7 +560,7 @@ class TestRefresh:
 
         # Age the rotation past the leeway that keeps a client's own racing retry benign.
         await RefreshToken.get_pymongo_collection().update_one(
-            {"previous_token_hash": _hash_token(spent)},
+            {"previous_token_hashes": _hash_token(spent)},
             {"$set": {"rotated_at": datetime.now(timezone.utc) - timedelta(seconds=REUSE_LEEWAY_SECONDS + 5)}},
         )
 
