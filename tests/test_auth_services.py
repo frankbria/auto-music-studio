@@ -6,10 +6,12 @@ Run against a real local MongoDB via the ``mongo_db`` fixture (no mocking).
 import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from beanie import PydanticObjectId
 
+from acemusic.api.auth import services
 from acemusic.api.auth.services import (
     REUSE_HISTORY_DEPTH,
     REUSE_LEEWAY_SECONDS,
@@ -382,22 +384,6 @@ class TestReuseDetection:
 
         assert len((await RefreshToken.get(stored.id)).previous_token_hashes) == REUSE_HISTORY_DEPTH
 
-    async def test_a_concurrent_logout_cannot_revert_the_rotation(self, mongo_db):
-        """Both writers must be atomic updates: a read-modify-save would lose the other's write."""
-        user_id = PydanticObjectId()
-        old, new = create_refresh_token(), create_refresh_token()
-        stored = await store_refresh_token(user_id, old, _future())
-
-        # The logout reads the document, then the rotation lands before it writes.
-        stale = await RefreshToken.get(stored.id)
-        assert stale is not None
-        await rotate_refresh_token(old, new, _future())
-        await revoke_refresh_token(old)
-
-        after = await RefreshToken.get(stored.id)
-        assert after.token_hash == hashlib.sha256(new.encode()).hexdigest(), "the rotation must survive"
-        assert after.previous_token_hashes == [hashlib.sha256(old.encode()).hexdigest()]
-
     async def test_an_unknown_token_revokes_nothing(self, mongo_db):
         """AC1: this is what makes a replay *distinguishable* — garbage input is inert."""
         user_id = PydanticObjectId()
@@ -482,3 +468,17 @@ class TestReuseDetection:
         assert await rotate_refresh_token(old, create_refresh_token(), _future()) is None
 
         assert (await RefreshToken.get(stored.id)).revoked is False
+
+
+def test_no_writer_saves_the_whole_refresh_token_document():
+    """Every writer must be a targeted update — ``save()`` writes back what it read.
+
+    Rotation ``$set``s the hash and ``$push``es the spent history (#525). A sibling
+    writer that reads the document, edits a field and calls ``save()`` writes the
+    whole snapshot back, so one landing just after a rotation would silently undo
+    it and hand a spent token its validity back. That is invisible in a normal
+    test run — the window only opens under concurrency — so it is guarded here by
+    shape, the way ``tests/test_user_fixtures.py`` guards its own rule.
+    """
+    source = Path(services.__file__).read_text()
+    assert ".save()" not in source
