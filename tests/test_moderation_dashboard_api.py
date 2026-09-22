@@ -18,6 +18,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import (
     Clip,
     ClipReport,
+    Job,
     ModerationLogEntry,
     NotificationEvent,
     RefreshToken,
@@ -28,6 +29,7 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
+from acemusic.api.services import routing
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
@@ -456,6 +458,24 @@ class TestBan:
         plugin = await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=_auth(user, settings))
         assert plugin.status_code == 403
         assert plugin.json()["detail"] == SUSPENDED
+
+    async def test_a_live_access_token_cannot_spend_once_banned(self, client, settings, monkeypatch):
+        # /generate authenticates on the JWT alone, so the ban has to stop it at the charge.
+        async def _available(url, timeout=routing.LOCAL_AVAILABILITY_TIMEOUT):
+            return True
+
+        monkeypatch.setattr(routing, "check_local_availability", _available)
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        before = user.credits_balance
+
+        resp = await client.post(
+            f"{API_V1_PREFIX}/generate", json={"prompt": "a calm piano ballad"}, headers=_auth(user, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == SUSPENDED
+        assert (await User.get(user.id)).credits_balance == before
+        assert await Job.find({"user_id": user.id}).count() == 0
 
     async def test_refresh_with_a_live_token_is_rejected_once_banned(self, client, settings):
         user = await _user(banned_at=datetime.now(timezone.utc))

@@ -58,7 +58,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from ..auth import oauth, services
-from ..auth.dependencies import CurrentUser, get_current_user, reject_banned
+from ..auth.dependencies import CurrentUser, get_current_user
 from ..auth.oauth import (
     STATE_EXPIRE_MINUTES,
     OAuthError,
@@ -253,7 +253,7 @@ async def callback(provider: str, body: CallbackRequest, request: Request, respo
             detail="This email is already registered with a different sign-in provider.",
         ) from exc
 
-    reject_banned(user)
+    user_service.reject_banned(user)
 
     # Every account gets a default workspace at registration (US-9.4). The call
     # is an idempotent get-or-create, so repeat logins are a cheap lookup and
@@ -298,7 +298,7 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             detail="Invalid or expired refresh token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    reject_banned(user)
+    user_service.reject_banned(user)
 
     access = _mint_access_token(user, settings)
 
@@ -321,7 +321,7 @@ async def plugin_token(request: Request, current: CurrentUser = Depends(get_curr
     if user is None:
         # The access token outlived the account; nothing to mint for.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    reject_banned(user)
+    user_service.reject_banned(user)
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     # Tagged so it can be listed and revoked apart from the browser session (#515).

@@ -13,7 +13,6 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from ..models import User
 from ..services import credits as credits_service, tiers, users as user_service
 from ..services.tiers import Capability
 from ..settings import ApiSettings
@@ -22,12 +21,6 @@ from .tokens import TokenExpiredError, TokenInvalidError, decode_access_token
 # auto_error=False so we can craft our own 401 (with the WWW-Authenticate
 # challenge) and distinguish "no credentials" from "bad credentials".
 _bearer = HTTPBearer(auto_error=False)
-
-
-def reject_banned(user: User) -> None:
-    """403 for an account an admin suspended (US-27.3)."""
-    if user.banned_at is not None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been suspended.")
 
 
 class CurrentUser(BaseModel):
@@ -101,7 +94,7 @@ async def require_existing_user(current: CurrentUser = Depends(get_current_user)
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    reject_banned(user)
+    user_service.reject_banned(user)
     return current
 
 

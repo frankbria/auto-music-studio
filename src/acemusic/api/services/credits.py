@@ -16,6 +16,7 @@ from pymongo import DESCENDING, ReturnDocument
 
 from ..models import CreditTransaction, Job, JobStatus, User
 from ..models.user import DEFAULT_CREDITS_BALANCE
+from . import users
 
 logger = logging.getLogger(__name__)
 
@@ -384,7 +385,13 @@ async def charge_and_create(
       charges twice. A missing history row is the cheaper loss.
 
     ``cost <= 0`` skips the money entirely, so a free action can share this path.
+
+    A banned account is refused here, before any money moves (US-27.3): most job routes
+    authenticate on the access token alone, which outlives a ban by up to its TTL.
     """
+    user = await User.get(user_id)
+    if user is not None:
+        users.reject_banned(user)
     if cost <= 0:
         return await create()
 

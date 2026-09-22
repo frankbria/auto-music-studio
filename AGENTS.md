@@ -339,7 +339,7 @@ Package manager: `uv` with `hatchling` build backend
   `/api/v1/admin/moderation/{queue,clips,users,log}`. Removal stamps `Clip.removed_at`, and
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
-  `auth.dependencies.reject_banned` guards login, refresh, plugin-token, `require_existing_user` and
-  `require_admin`. Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
+  `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
+  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip` or `User` fetched before a moderation action could land
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)

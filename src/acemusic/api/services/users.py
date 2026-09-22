@@ -11,6 +11,7 @@ import re
 
 from beanie import PydanticObjectId
 from bson.errors import InvalidId
+from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import EmailAlreadyRegisteredError, HandleConflictError
@@ -255,3 +256,9 @@ async def update_user_profile(user_id: str | PydanticObjectId, updates: dict) ->
         # narrow this catch (inspect exc.details) so it isn't misreported as 409.
         raise HandleConflictError(fields.get("handle")) from exc
     return user
+
+
+def reject_banned(user: User) -> None:
+    """403 for an account an admin suspended (US-27.3)."""
+    if user.banned_at is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been suspended.")
