@@ -121,6 +121,7 @@ async def require_tier_capability(user_id: str | None, capability: Capability) -
         if user is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+        user_service.reject_banned(user)
         tier = user.subscription_tier
 
     if tiers.allows(tier, capability):

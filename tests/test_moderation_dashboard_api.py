@@ -477,6 +477,28 @@ class TestBan:
         assert (await User.get(user.id)).credits_balance == before
         assert await Job.find({"user_id": user.id}).count() == 0
 
+    @pytest.mark.parametrize(
+        "path,body",
+        [
+            ("/mastering/batch", {"profile": "streaming", "service": "dolby", "format": "wav"}),
+            ("/batch/stems", {}),
+            ("/distribution/soundcloud/upload", None),
+        ],
+    )
+    async def test_a_live_access_token_cannot_use_pro_routes_once_banned(self, client, settings, path, body):
+        # These gate on the tier read from the DB, not on require_existing_user; the ban rides on that read.
+        user = await _user(tier=PRO, banned_at=datetime.now(timezone.utc))
+        clip = await _clip(user, VisibilityState.PRIVATE)
+        before = user.credits_balance
+        payload = {"clip_id": str(clip.id)} if body is None else {**body, "clip_ids": [str(clip.id)]}
+
+        resp = await client.post(f"{API_V1_PREFIX}{path}", json=payload, headers=_auth(user, settings))
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == SUSPENDED
+        assert (await User.get(user.id)).credits_balance == before
+        assert await Job.find({"user_id": user.id}).count() == 0
+
     async def test_refresh_with_a_live_token_is_rejected_once_banned(self, client, settings):
         user = await _user(banned_at=datetime.now(timezone.utc))
         raw = create_refresh_token()

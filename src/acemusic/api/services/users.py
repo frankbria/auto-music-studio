@@ -11,10 +11,9 @@ import re
 
 from beanie import PydanticObjectId
 from bson.errors import InvalidId
-from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
-from ..exceptions import EmailAlreadyRegisteredError, HandleConflictError
+from ..exceptions import AccountSuspendedError, EmailAlreadyRegisteredError, HandleConflictError
 from ..models import OAuthIdentity, User
 from ..models.common import utcnow
 
@@ -259,6 +258,6 @@ async def update_user_profile(user_id: str | PydanticObjectId, updates: dict) ->
 
 
 def reject_banned(user: User) -> None:
-    """403 for an account an admin suspended (US-27.3)."""
+    """Refuse an account an admin suspended (US-27.3)."""
     if user.banned_at is not None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been suspended.")
+        raise AccountSuspendedError()

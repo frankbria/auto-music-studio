@@ -20,7 +20,7 @@ from acemusic import __version__
 from acemusic.runpod_client import RunPodClient
 
 from . import database
-from .exceptions import DuplicateIdentifierError, HandleConflictError
+from .exceptions import AccountSuspendedError, DuplicateIdentifierError, HandleConflictError
 from .routers import (
     admin,
     artwork,
@@ -233,6 +233,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.exception_handler(HandleConflictError)
     async def _handle_conflict(_request: Request, _exc: HandleConflictError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": "Handle already taken"})
+
+    # US-27.3: every ban check (auth, tier reads, charge_and_create) answers the same way.
+    @app.exception_handler(AccountSuspendedError)
+    async def _account_suspended(_request: Request, _exc: AccountSuspendedError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": "This account has been suspended."})
 
     # A release/clip identifier collision (US-13.4) surfaces from the service as a
     # domain exception; map it to 409 with the offending field named.
