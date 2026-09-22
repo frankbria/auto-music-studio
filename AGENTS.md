@@ -117,7 +117,7 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry
     routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
@@ -335,4 +335,11 @@ Package manager: `uv` with `hatchling` build backend
   `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Admins list reports via
   `GET /api/v1/admin/moderation/reports`. On the web, `ReportClipButton` reads `AuthContext` directly (not
   `useAuth`, which throws) so it renders nothing outside an `AuthProvider`, signed out, or on your own clip
+- **Moderation dashboard (US-27.3)**: `/admin/moderation` on the web; API in `services/moderation.py` behind
+  `/api/v1/admin/moderation/{queue,clips,users,log}`. Removal stamps `Clip.removed_at`, and
+  `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
+  SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
+  `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
+  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
+  never whole-document `save()` a `Clip` or `User` fetched before a moderation action could land
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)

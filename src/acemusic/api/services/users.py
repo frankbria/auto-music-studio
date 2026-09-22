@@ -13,7 +13,7 @@ from beanie import PydanticObjectId
 from bson.errors import InvalidId
 from pymongo.errors import DuplicateKeyError
 
-from ..exceptions import EmailAlreadyRegisteredError, HandleConflictError
+from ..exceptions import AccountSuspendedError, EmailAlreadyRegisteredError, HandleConflictError
 from ..models import OAuthIdentity, User
 from ..models.common import utcnow
 
@@ -255,3 +255,9 @@ async def update_user_profile(user_id: str | PydanticObjectId, updates: dict) ->
         # narrow this catch (inspect exc.details) so it isn't misreported as 409.
         raise HandleConflictError(fields.get("handle")) from exc
     return user
+
+
+def reject_banned(user: User) -> None:
+    """Refuse an account an admin suspended (US-27.3)."""
+    if user.banned_at is not None:
+        raise AccountSuspendedError()

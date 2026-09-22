@@ -33,6 +33,7 @@ from acemusic.api.auth.tokens import create_access_token, decode_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import User
 from acemusic.api.settings import ApiSettings
+from tests.users import make_user
 
 pytestmark = pytest.mark.integration
 
@@ -303,6 +304,24 @@ class TestCallback:
         assert claims["email"] == "bob@example.com"
         user = await User.find_one(User.oauth_provider == "discord", User.oauth_id == "d-1")
         assert user is not None
+
+    async def test_banned_user_cannot_sign_in(self, client, settings, monkeypatch):
+        await make_user("banned@example.com", banned_at=datetime.now(timezone.utc))
+        _fake_exchange(
+            monkeypatch,
+            OAuthUserInfo(
+                provider="google",
+                oauth_id="g-banned@example.com",
+                email="banned@example.com",
+                name="Banned",
+                email_verified=True,
+            ),
+        )
+        state = _bind_state(client, "google", settings)
+        resp = await client.post(f"{API_V1_PREFIX}/auth/callback/google", json={"code": "auth-code", "state": state})
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "This account has been suspended."
+        assert "refresh_token" not in resp.json()
 
     async def test_existing_user_is_updated_not_duplicated(self, client, settings, monkeypatch):
         _fake_exchange(

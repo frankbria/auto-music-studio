@@ -94,6 +94,7 @@ async def require_existing_user(current: CurrentUser = Depends(get_current_user)
     user = await user_service.get_user_by_id(current.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    user_service.reject_banned(user)
     return current
 
 
@@ -120,6 +121,7 @@ async def require_tier_capability(user_id: str | None, capability: Capability) -
         if user is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+        user_service.reject_banned(user)
         tier = user.subscription_tier
 
     if tiers.allows(tier, capability):
@@ -143,7 +145,7 @@ async def require_tier_capability(user_id: str | None, capability: Capability) -
 async def require_admin(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """403 unless the account is an admin. Read from the database, never token claims."""
     user = await user_service.get_user_by_id(current.user_id)
-    if user is None or not user.is_admin:
+    if user is None or not user.is_admin or user.banned_at is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
     return current
 

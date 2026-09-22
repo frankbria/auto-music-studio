@@ -25,7 +25,7 @@ from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
 from ..tasks.common import store_clip
-from . import daw_export as daw_export_service, workspaces as workspace_service
+from . import daw_export as daw_export_service, users as user_service, workspaces as workspace_service
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
@@ -213,15 +213,31 @@ async def get_clip_for_streaming(clip_id: str, current_user_id: str | None) -> C
     unlisted clip is link-shared, so its direct link must open for a signed-out
     recipient (US-20.7, AC5). A private or unknown clip is an indistinguishable
     404 so the endpoint never reveals a private clip's existence to a stranger.
+    An admin may reach any clip, so the moderation queue can play what it reviews (US-27.3).
     """
-    if current_user_id is not None:
-        return await get_clip_for_audio_access(clip_id, current_user_id)
-
     oid = coerce_object_id(clip_id)
     clip = await Clip.get(oid) if oid is not None else None
-    if clip is None or clip.visibility == VisibilityState.PRIVATE:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
-    return clip
+    if clip is None:
+        raise _clip_not_found()
+    if clip.visibility != VisibilityState.PRIVATE:
+        return clip
+    if current_user_id is None:
+        raise _clip_not_found()
+    if str(clip.user_id) == current_user_id or await _is_active_admin(current_user_id):
+        return clip
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip is private.")
+
+
+async def _is_active_admin(user_id: str) -> bool:
+    # Looked up only when access would otherwise be refused, so ordinary streams pay nothing (US-27.3).
+    user = await user_service.get_user_by_id(user_id)
+    return user is not None and user.is_admin and user.banned_at is None
+
+
+def ensure_not_removed(clip: Clip) -> None:
+    """403 for a clip moderation took down (US-27.3): its owner may not publish or distribute it again."""
+    if clip.removed_at is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip was removed by moderation.")
 
 
 def _clip_not_found() -> HTTPException:
@@ -444,6 +460,8 @@ async def update_clip_fields(
         # the boolean has no unlisted concept, and PRIVATE is the safe (more
         # restrictive) resolution. Modern clients send `visibility` and skip this.
         visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
+    if visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED):
+        ensure_not_removed(clip)
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
     if visibility is not None:

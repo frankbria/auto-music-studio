@@ -56,6 +56,11 @@ export type Clip = {
   play_count?: number
   like_count?: number
   share_count?: number
+  /**
+   * Set by a moderator's "flag" action (US-27.3): the clip stays up with a
+   * listener-visible label. Optional because mock/older reads omit it.
+   */
+  content_warning?: boolean
 }
 
 /**

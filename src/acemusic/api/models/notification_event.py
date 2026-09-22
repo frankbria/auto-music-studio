@@ -25,8 +25,9 @@ class NotificationEvent(Document):
     # working, and rewriting it to carry voice models is not what US-25.2 needs.
     release_id: PydanticObjectId | None = None
     voice_model_id: PydanticObjectId | None = None
+    clip_id: PydanticObjectId | None = None
 
-    event_type: str  # e.g. "status_live", "status_rejected", "voice_training_complete"
+    event_type: str  # e.g. "status_live", "voice_training_complete", "moderation_clip_removed"
     channel: str
     payload: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)

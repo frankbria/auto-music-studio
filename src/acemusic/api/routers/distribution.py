@@ -243,6 +243,7 @@ async def soundcloud_upload(
 ) -> UploadResponse:
     """Upload an owned clip to the user's linked SoundCloud account."""
     clip = await clip_service.get_owned_clip(body.clip_id, current.user_id)
+    clip_service.ensure_not_removed(clip)
 
     # Validate the optional release association before the upload, not after.
     release = None

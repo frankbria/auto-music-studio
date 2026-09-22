@@ -14,6 +14,8 @@ export type UserProfile = {
   style_tags: string[]
   avatar_url: string | null
   subscription_tier: string
+  /** Moderation access (US-27.3); only ever set in the database. */
+  is_admin: boolean
   default_model: string | null
   created_at: string
   updated_at: string | null

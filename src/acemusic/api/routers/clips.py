@@ -184,6 +184,7 @@ class ClipResponse(BaseModel):
     generation_mode: str | None
     is_public: bool
     visibility: VisibilityState
+    content_warning: bool
     created_at: datetime
 
     @classmethod
@@ -206,6 +207,7 @@ class ClipResponse(BaseModel):
             generation_mode=clip.generation_mode,
             is_public=clip.is_public,
             visibility=clip.visibility,
+            content_warning=clip.content_warning,
             created_at=clip.created_at,
         )
 

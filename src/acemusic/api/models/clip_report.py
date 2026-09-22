@@ -22,10 +22,13 @@ class ClipReport(Document):
     category: ReportCategory
     details: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
+    #: US-27.3: an admin acted on the clip. Kept for history; only open reports are queued.
+    resolved_at: datetime | None = None
 
     class Settings:
         name = "clip_reports"
         indexes = [
             IndexModel([("clip_id", ASCENDING), ("reporter_id", ASCENDING)], unique=True),
             IndexModel([("created_at", DESCENDING)]),
+            IndexModel([("resolved_at", ASCENDING), ("clip_id", ASCENDING)]),
         ]

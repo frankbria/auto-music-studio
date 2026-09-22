@@ -99,6 +99,9 @@ export function SongHeader({
       </div>
 
       <div className="flex flex-wrap items-center gap-1">
+        {clip.content_warning && (
+          <Badge variant="destructive">Content warning</Badge>
+        )}
         {version && <Badge variant="secondary">{version}</Badge>}
         {mode && <Badge variant="outline">{mode}</Badge>}
         {clip.style_tags.map((tag) => (

@@ -30,6 +30,12 @@ class Clip(Document):
     lyrics: str | None = None
     #: US-27.1: screening categories this clip's request was flagged for (borderline, allowed).
     moderation_flags: list[str] = Field(default_factory=list)
+    #: US-27.3: when an admin last cleared this clip from the queue; flags before it are reviewed.
+    moderation_reviewed_at: datetime | None = None
+    #: US-27.3: an admin kept the clip up but labelled it for listeners.
+    content_warning: bool = False
+    #: US-27.3: taken down by moderation. Forced private, and the owner cannot make it public again.
+    removed_at: datetime | None = None
     vocal_language: str | None = None
     model: str | None = None
     seed: int | None = None
@@ -104,6 +110,8 @@ class Clip(Document):
             # Multikey index over the parent list powers the children lookup
             # ("clips derived from this clip", US-10.6) without a collection scan.
             IndexModel([("parent_clip_ids", ASCENDING)]),
+            # The moderation queue's "clips with automated flags" read (US-27.3).
+            IndexModel([("moderation_flags", ASCENDING)]),
             # One ISRC per recording (US-13.4). Partial filter excludes the many
             # clips with no code so they don't collide on null.
             IndexModel(

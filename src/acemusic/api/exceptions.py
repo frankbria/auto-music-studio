@@ -10,6 +10,10 @@ class HandleConflictError(Exception):
     """A profile update tried to claim a handle already taken by another user."""
 
 
+class AccountSuspendedError(Exception):
+    """The account was banned by an admin (US-27.3); ``main.py`` maps it to 403."""
+
+
 class EmailAlreadyRegisteredError(Exception):
     """An email belongs to a different OAuth identity, and the caller cannot vouch for it.
 
