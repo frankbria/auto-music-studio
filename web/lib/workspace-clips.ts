@@ -61,6 +61,12 @@ export type Clip = {
    * listener-visible label. Optional because mock/older reads omit it.
    */
   content_warning?: boolean
+  /**
+   * Naive UTC ISO timestamp set by a moderator's "remove" action (US-27.3),
+   * null otherwise. Optional because mock/older reads omit it — use
+   * `clip.removed_at != null` to check, never destructure a default.
+   */
+  removed_at?: string | null
 }
 
 /**

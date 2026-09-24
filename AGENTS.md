@@ -117,7 +117,7 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry, ClipAppeal
     routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
@@ -342,4 +342,10 @@ Package manager: `uv` with `hatchling` build backend
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
   `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip` or `User` fetched before a moderation action could land
+- **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip
+  (its latest `remove`, else its latest `flag`), and the unique `ClipAppeal.action_id` is the one-appeal-per-decision
+  rule (409). A removal's log entry records `details.previous_visibility`, and reversing it restores that
+  visibility. Reversing a superseded decision is a 409. Owner routes are `POST/PATCH /clips/{id}/appeal` and
+  `GET /users/me/appeals`; admin routes are `/admin/moderation/appeals`. The web Library `ClipCard` shows appeal UI
+  only when passed an `appeal` prop. Outcomes are `NotificationEvent(moderation_appeal_*)`, and inbox delivery is #537
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)

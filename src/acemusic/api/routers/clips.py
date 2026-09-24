@@ -39,7 +39,7 @@ from ..auth.dependencies import (
     require_tier_capability,
 )
 from ..models import Clip, ReportCategory, VisibilityState
-from ..services import clips as clip_service, reports as report_service
+from ..services import appeals as appeal_service, clips as clip_service, reports as report_service
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
 from ..services.tiers import Capability
@@ -185,6 +185,7 @@ class ClipResponse(BaseModel):
     is_public: bool
     visibility: VisibilityState
     content_warning: bool
+    removed_at: datetime | None
     created_at: datetime
 
     @classmethod
@@ -208,6 +209,7 @@ class ClipResponse(BaseModel):
             is_public=clip.is_public,
             visibility=clip.visibility,
             content_warning=clip.content_warning,
+            removed_at=clip.removed_at,
             created_at=clip.created_at,
         )
 
@@ -457,6 +459,52 @@ async def report_clip(
     """Report a clip for moderation review (US-27.2). 409 if this user already reported it."""
     await report_service.report_clip(clip_id, current.user_id, body.category, body.details)
     return ClipReportResponse(detail="Report received. Our team will review it.")
+
+
+class ClipAppealRequest(BaseModel):
+    reason: str = Field(max_length=2000)
+    context: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def _require_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Tell us why the decision should be reviewed.")
+        return value.strip()
+
+    @field_validator("context")
+    @classmethod
+    def _strip_context(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+
+class ClipAppealInfoRequest(BaseModel):
+    context: str = Field(max_length=2000)
+
+    @field_validator("context")
+    @classmethod
+    def _require_context(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Add the information the moderator asked for.")
+        return value.strip()
+
+
+@router.post("/{clip_id}/appeal", response_model=appeal_service.AppealView, status_code=status.HTTP_201_CREATED)
+async def appeal_clip(
+    clip_id: str, body: ClipAppealRequest, current: CurrentUser = Depends(require_existing_user)
+) -> appeal_service.AppealView:
+    """Appeal the moderation decision on your own clip (US-27.4). 409 if this decision was already appealed."""
+    appeal = await appeal_service.submit_appeal(clip_id, current.user_id, body.reason, body.context)
+    return appeal_service.AppealView.of(appeal)
+
+
+@router.patch("/{clip_id}/appeal", response_model=appeal_service.AppealView)
+async def answer_appeal_info_request(
+    clip_id: str, body: ClipAppealInfoRequest, current: CurrentUser = Depends(require_existing_user)
+) -> appeal_service.AppealView:
+    """Send the information an admin asked for and put the appeal back in the queue (US-27.4)."""
+    appeal = await appeal_service.answer_info_request(clip_id, current.user_id, body.context)
+    return appeal_service.AppealView.of(appeal)
 
 
 @router.get("/{clip_id}/children", response_model=ClipChildrenResponse)

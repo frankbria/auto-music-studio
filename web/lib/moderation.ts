@@ -1,6 +1,7 @@
 // Admin moderation dashboard client (US-27.3). Every call goes through the
 // same-origin /api/admin proxy; the backend's require_admin is the real gate.
 
+import type { AppealView } from "@/lib/appeals"
 import type { ReportCategory } from "@/lib/reports"
 
 export type QueueSource = "report" | "automated"
@@ -167,6 +168,45 @@ export async function applyUserAction(
   })
 }
 
+/** An appeal as it appears in the admin queue (US-27.4): AppealView + clip/creator context. */
+export type AppealQueueItem = AppealView & {
+  clip_title: string | null
+  clip_deleted: boolean
+  creator_id: string
+  creator_name: string | null
+  action_reason: string | null
+  action_at: string | null
+}
+
+export type AppealStatusFilter = "open" | "all"
+export type AppealDecision = "uphold" | "reverse" | "request_info"
+
+export async function fetchAppeals(
+  token: string,
+  status: AppealStatusFilter = "open"
+): Promise<AppealQueueItem[]> {
+  return (
+    await request<{ appeals: AppealQueueItem[] }>(
+      `appeals?status=${status}`,
+      token
+    )
+  ).appeals
+}
+
+export async function decideAppeal(
+  token: string,
+  appealId: string,
+  decision: AppealDecision,
+  note?: string
+): Promise<AppealView> {
+  const trimmed = note?.trim()
+  return request<AppealView>(
+    `appeals/${encodeURIComponent(appealId)}`,
+    token,
+    trimmed ? { decision, note: trimmed } : { decision }
+  )
+}
+
 /** "reports" is the server's own order (report count, severity, recency). */
 export function sortQueue(items: QueueItem[], sort: QueueSort): QueueItem[] {
   if (sort === "reports") return items
@@ -198,6 +238,9 @@ const LOG_ACTION_LABELS: Record<string, string> = {
   warn: "Warned user",
   ban: "Banned user",
   update_screening_rules: "Updated screening rules",
+  appeal_upheld: "Upheld appeal",
+  appeal_reversed: "Reversed appeal",
+  appeal_info_requested: "Requested appeal info",
 }
 
 export function formatLogAction(action: string): string {

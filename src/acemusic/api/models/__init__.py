@@ -7,6 +7,7 @@ from .artwork import ArtworkOption
 from .batch_job import BatchClipEntry, BatchJob
 from .billing_event import BillingEvent
 from .clip import Clip
+from .clip_appeal import OPEN_APPEAL_STATUSES, AppealStatus, ClipAppeal
 from .clip_report import ClipReport, ReportCategory
 from .counter import Counter
 from .credit_transaction import CreditTransaction
@@ -46,6 +47,7 @@ ALL_MODELS = [
     ScreeningRulesDocument,
     ClipReport,
     ModerationLogEntry,
+    ClipAppeal,
 ]
 
 __all__ = [
@@ -58,6 +60,9 @@ __all__ = [
     "ClipReport",
     "ReportCategory",
     "ModerationLogEntry",
+    "ClipAppeal",
+    "AppealStatus",
+    "OPEN_APPEAL_STATUSES",
     "ArtworkOption",
     "BillingEvent",
     "CreditTransaction",

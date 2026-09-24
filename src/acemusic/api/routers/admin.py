@@ -6,18 +6,20 @@ A save applies to the next generation request — no deploy, no restart.
 ``GET /admin/moderation/queue`` groups open reports and automated flags per clip;
 ``POST /admin/moderation/clips`` and ``/users`` act on them in bulk, and every action
 (including a screening-rules save) is recorded in ``GET /admin/moderation/log``.
+``GET /admin/moderation/appeals`` is the creators' appeals queue (US-27.4); ``POST
+/admin/moderation/appeals/{id}`` upholds, reverses or asks for more information.
 """
 
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..auth.dependencies import CurrentUser, require_admin
 from ..models import ReportCategory
 from ..models.screening import ScreeningRules
-from ..services import moderation, reports as report_service, screening
+from ..services import appeals as appeal_service, moderation, reports as report_service, screening
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -161,4 +163,34 @@ async def get_moderation_log(
             )
             for e in entries
         ]
+    )
+
+
+class AppealQueueResponse(BaseModel):
+    appeals: list[appeal_service.AppealQueueItem]
+
+
+@router.get("/moderation/appeals", response_model=AppealQueueResponse)
+async def get_appeals(status: appeal_service.QueueFilter = "open") -> AppealQueueResponse:
+    return AppealQueueResponse(appeals=await appeal_service.list_queue(status))
+
+
+class AppealDecisionRequest(BaseModel):
+    decision: appeal_service.AppealDecision
+    note: Reason = None
+
+    @model_validator(mode="after")
+    def _question_for_request_info(self) -> "AppealDecisionRequest":
+        self.note = (self.note or "").strip() or None
+        if self.decision == "request_info" and self.note is None:
+            raise ValueError("Say what information the creator should send.")
+        return self
+
+
+@router.post("/moderation/appeals/{appeal_id}", response_model=appeal_service.AppealView)
+async def decide_appeal(
+    appeal_id: str, body: AppealDecisionRequest, current: CurrentUser = Depends(require_admin)
+) -> appeal_service.AppealView:
+    return appeal_service.AppealView.of(
+        await appeal_service.decide(current.user_id, appeal_id, body.decision, body.note)
     )

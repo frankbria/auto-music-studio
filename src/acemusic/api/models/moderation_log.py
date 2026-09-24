@@ -8,7 +8,7 @@ from datetime import datetime
 
 from beanie import Document, PydanticObjectId
 from pydantic import Field
-from pymongo import DESCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from .common import utcnow
 
@@ -24,4 +24,8 @@ class ModerationLogEntry(Document):
 
     class Settings:
         name = "moderation_log"
-        indexes = [IndexModel([("created_at", DESCENDING)])]
+        indexes = [
+            IndexModel([("created_at", DESCENDING)]),
+            # US-27.4: an appeal looks up the latest action on its clip.
+            IndexModel([("target_id", ASCENDING), ("created_at", DESCENDING)]),
+        ]

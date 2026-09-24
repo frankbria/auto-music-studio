@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { AppealsPanel } from "@/components/moderation/AppealsPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -270,6 +271,7 @@ export function ModerationDashboard({
       <Tabs defaultValue="queue">
         <TabsList>
           <TabsTrigger value="queue">Queue</TabsTrigger>
+          <TabsTrigger value="appeals">Appeals</TabsTrigger>
           <TabsTrigger value="log">Activity log</TabsTrigger>
         </TabsList>
 
@@ -444,6 +446,10 @@ export function ModerationDashboard({
               </table>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="appeals">
+          <AppealsPanel accessToken={accessToken} />
         </TabsContent>
 
         <TabsContent value="log">

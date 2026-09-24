@@ -10,8 +10,10 @@ import { PaginationControls } from "@/components/workspace/PaginationControls"
 import { SortDropdown } from "@/components/workspace/SortDropdown"
 import { WorkspaceBreadcrumb } from "@/components/workspace/WorkspaceBreadcrumb"
 import { usePlayer } from "@/contexts/player-context"
+import { useAuth } from "@/hooks/use-auth"
 import { useClips } from "@/hooks/use-clips"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
+import { useMyAppeals } from "@/hooks/use-my-appeals"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
 import { useWorkspaces } from "@/hooks/use-workspaces"
 import {
@@ -95,6 +97,8 @@ export function WorkspacePanel({
   )
 
   const { isFreeTier } = useSubscriptionTier()
+  const { accessToken } = useAuth()
+  const { byClip: appealsByClip } = useMyAppeals(accessToken)
   const { state } = usePlayer()
   const visibleClips = useMemo(
     () => applyClientFilters(data?.clips ?? [], filters, state.likedIds),
@@ -124,6 +128,7 @@ export function WorkspacePanel({
           clips={visibleClips}
           loading={loading}
           isFreeTier={isFreeTier}
+          appealsByClip={appealsByClip}
           onDeleted={() => setDeleteBump((n) => n + 1)}
           onGetFullSong={(id) => {
             const seed = visibleClips.find((c) => c.id === id)

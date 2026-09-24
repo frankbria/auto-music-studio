@@ -86,6 +86,8 @@ function stubBackend(backend: Backend) {
       )
     if (url.startsWith("/api/admin/moderation/log"))
       return json(200, { entries: backend.log ?? [] })
+    if (url.startsWith("/api/admin/moderation/appeals"))
+      return json(200, { appeals: [] })
     const body = JSON.parse(String(init?.body))
     const key = url.endsWith("/clips") ? "clip_id" : "user_id"
     const ids: string[] = body.clip_ids ?? body.user_ids
@@ -473,6 +475,21 @@ describe("ModerationDashboard", () => {
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === "/api/admin/moderation/log?limit=100"
+      )
+    ).toBe(true)
+  })
+
+  it("has an Appeals tab that loads the appeals queue (US-27.4)", async () => {
+    const fetchMock = stubBackend({ queue: [] })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+
+    await userEvent.click(screen.getByRole("tab", { name: "Appeals" }))
+
+    await screen.findByText("No appeals to review.")
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/admin/moderation/appeals?status=open")
       )
     ).toBe(true)
   })
