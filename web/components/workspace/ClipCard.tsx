@@ -16,6 +16,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ClipAppealStatus } from "@/components/moderation/ClipAppealStatus"
+import type { AppealView } from "@/lib/appeals"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,6 +90,8 @@ export type ClipCardProps = {
   isFreeTier?: boolean
   /** Called after this clip is deleted so the list can drop the card. */
   onDeleted?: (id: string) => void
+  /** The caller's latest appeal against this clip's moderation decision, if any (US-27.4). */
+  appeal?: AppealView | null
 }
 
 /** Map the clip-menu vocabulary to a registry action id (only remix-edit differs). */
@@ -137,6 +141,7 @@ export function ClipCard({
   onVisibilityChange,
   isFreeTier = false,
   onDeleted,
+  appeal = null,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
   // Registry-driven dispatch: modal / navigation / download / delete-confirm /
@@ -344,6 +349,10 @@ export function ClipCard({
             {styleText}
           </p>
         )}
+
+        {/* Moderation status + appeal entry point (US-27.4) — only for a
+            removed/flagged clip, or one with appeal history. */}
+        <ClipAppealStatus clip={clip} appeal={appeal} />
 
         {/* Action row. */}
         <div className="flex flex-wrap items-center gap-0.5">

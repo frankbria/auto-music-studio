@@ -4,12 +4,15 @@ import {
   ModerationError,
   applyClipAction,
   applyUserAction,
+  decideAppeal,
+  fetchAppeals,
   fetchModerationLog,
   fetchModerationQueue,
   filterQueue,
   formatLogAction,
   parseApiTime,
   sortQueue,
+  type AppealQueueItem,
   type QueueItem,
 } from "@/lib/moderation"
 
@@ -277,6 +280,14 @@ describe("formatLogAction", () => {
     )
     expect(formatLogAction("something_new")).toBe("something new")
   })
+
+  it("labels the appeal decision actions (US-27.4)", () => {
+    expect(formatLogAction("appeal_upheld")).toBe("Upheld appeal")
+    expect(formatLogAction("appeal_reversed")).toBe("Reversed appeal")
+    expect(formatLogAction("appeal_info_requested")).toBe(
+      "Requested appeal info"
+    )
+  })
 })
 
 describe("parseApiTime", () => {
@@ -295,5 +306,84 @@ describe("parseApiTime", () => {
     expect(parseApiTime("2026-09-21T23:32:56Z").toISOString()).toBe(
       "2026-09-21T23:32:56.000Z"
     )
+  })
+})
+
+function appealItem(overrides: Partial<AppealQueueItem> = {}): AppealQueueItem {
+  return {
+    id: "ap1",
+    clip_id: "c1",
+    action: "remove",
+    reason: "not spam",
+    context: null,
+    status: "pending",
+    admin_note: null,
+    created_at: "2026-09-01T00:00:00Z",
+    decided_at: null,
+    clip_title: "Song",
+    clip_deleted: false,
+    creator_id: "u2",
+    creator_name: "Creator",
+    action_reason: "spam",
+    action_at: "2026-08-30T00:00:00Z",
+    ...overrides,
+  }
+}
+
+describe("fetchAppeals", () => {
+  it("GETs the open queue by default", async () => {
+    const fetchMock = stubFetch(200, { appeals: [appealItem()] })
+    const items = await fetchAppeals("tok")
+    expect(items).toEqual([appealItem()])
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/admin/moderation/appeals?status=open")
+    expect(opts.headers.authorization).toBe("Bearer tok")
+  })
+
+  it("passes through an explicit status filter", async () => {
+    const fetchMock = stubFetch(200, { appeals: [] })
+    await fetchAppeals("tok", "all")
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/admin/moderation/appeals?status=all"
+    )
+  })
+
+  it("throws a ModerationError on failure", async () => {
+    stubFetch(403, { detail: "Admin access required." })
+    await expect(fetchAppeals("tok")).rejects.toMatchObject({
+      name: "ModerationError",
+      status: 403,
+    })
+  })
+})
+
+describe("decideAppeal", () => {
+  it("POSTs the decision and an optional trimmed note", async () => {
+    const fetchMock = stubFetch(200, appealItem({ status: "reversed" }))
+    const result = await decideAppeal("tok", "ap1", "reverse", "  looks fine  ")
+    expect(result).toEqual(appealItem({ status: "reversed" }))
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/admin/moderation/appeals/ap1")
+    expect(opts.method).toBe("POST")
+    expect(JSON.parse(opts.body)).toEqual({
+      decision: "reverse",
+      note: "looks fine",
+    })
+  })
+
+  it("omits note when blank", async () => {
+    const fetchMock = stubFetch(200, appealItem({ status: "upheld" }))
+    await decideAppeal("tok", "ap1", "uphold", "   ")
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      decision: "uphold",
+    })
+  })
+
+  it("throws a ModerationError carrying the 409 detail", async () => {
+    stubFetch(409, { detail: "This appeal has already been decided." })
+    await expect(decideAppeal("tok", "ap1", "uphold")).rejects.toMatchObject({
+      status: 409,
+      message: "This appeal has already been decided.",
+    })
   })
 })

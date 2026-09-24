@@ -621,3 +621,58 @@ describe("ClipCard", () => {
     expect(readDragTrackType(dataTransfer)).toBe("loop")
   })
 })
+
+describe("ClipCard moderation appeal (US-27.4)", () => {
+  it("shows no moderation status for a normal clip", () => {
+    renderCard()
+    expect(screen.queryByText("Removed by moderation")).not.toBeInTheDocument()
+    expect(screen.queryByText("Content warning")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Appeal" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows a removed badge and an Appeal entry for a removed clip", () => {
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ removed_at: "2026-01-01T00:00:00Z" })} />
+      </AllProviders>
+    )
+    expect(screen.getByText("Removed by moderation")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
+  })
+
+  it("shows a content warning badge for a flagged clip", () => {
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ content_warning: true })} />
+      </AllProviders>
+    )
+    expect(screen.getByText("Content warning")).toBeInTheDocument()
+  })
+
+  it("shows the pending status and hides the Appeal entry when passed a pending appeal", () => {
+    render(
+      <AllProviders>
+        <ClipCard
+          clip={clip({ removed_at: "2026-01-01T00:00:00Z" })}
+          appeal={{
+            id: "a1",
+            clip_id: "c1",
+            action: "remove",
+            reason: "not spam",
+            context: null,
+            status: "pending",
+            admin_note: null,
+            created_at: "2026-01-01T00:00:00Z",
+            decided_at: null,
+          }}
+        />
+      </AllProviders>
+    )
+    expect(screen.getByText("Appeal pending")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Appeal" })
+    ).not.toBeInTheDocument()
+  })
+})
