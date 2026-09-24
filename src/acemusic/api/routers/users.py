@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import CreditTransaction, User
-from ..services import credits as credits_service, users as user_service
+from ..services import appeals as appeal_service, credits as credits_service, users as user_service
 from ._validators import validate_model
 
 # Free-text profile fields are stored verbatim and re-served on every
@@ -165,6 +165,17 @@ async def get_me(current: CurrentUser = Depends(get_current_user)) -> UserProfil
     if user is None:
         raise _not_found()
     return UserProfileResponse.from_user(user)
+
+
+class MyAppealsResponse(BaseModel):
+    appeals: list[appeal_service.AppealView]
+
+
+@router.get("/me/appeals", response_model=MyAppealsResponse)
+async def get_my_appeals(current: CurrentUser = Depends(get_current_user)) -> MyAppealsResponse:
+    """Your moderation appeals and their outcomes, newest first (US-27.4)."""
+    appeals = await appeal_service.list_user_appeals(current.user_id)
+    return MyAppealsResponse(appeals=[appeal_service.AppealView.of(a) for a in appeals])
 
 
 @router.get("/me/credits", response_model=CreditsResponse)

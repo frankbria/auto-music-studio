@@ -150,7 +150,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
                 channel="in_app",
                 payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
             ).insert()
-    await _log(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved})
+    await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved})
     return ActionResult(ok=True)
 
 
@@ -176,7 +176,7 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
         details = await _ban(user)
-    await _log(actor_id, action, "user", str(oid), reason, details)
+    await log_action(actor_id, action, "user", str(oid), reason, details)
     return ActionResult(ok=True)
 
 
@@ -193,7 +193,9 @@ async def _ban(user: User) -> dict:
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:
-    await _log(actor_id, "update_screening_rules", "screening_rules", None, None, {"before": before, "after": after})
+    await log_action(
+        actor_id, "update_screening_rules", "screening_rules", None, None, {"before": before, "after": after}
+    )
 
 
 async def list_log(limit: int) -> list[ModerationLogEntry]:
@@ -205,7 +207,7 @@ async def list_log(limit: int) -> list[ModerationLogEntry]:
     )
 
 
-async def _log(
+async def log_action(
     actor_id: str, action: str, target_type: str, target_id: str | None, reason: str | None, details: dict
 ) -> None:
     await ModerationLogEntry(
