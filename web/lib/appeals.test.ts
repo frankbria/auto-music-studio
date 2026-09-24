@@ -134,4 +134,20 @@ describe("latestAppealsByClip", () => {
     expect(map.get("c1")).toEqual(appeal)
     expect(map.size).toBe(1)
   })
+
+  it("prefers an older open appeal over a newer decided one", () => {
+    const reversed: AppealView = {
+      ...appeal,
+      id: "a2",
+      action: "remove",
+      status: "reversed",
+    }
+    const open: AppealView = {
+      ...appeal,
+      id: "a1",
+      action: "flag",
+      status: "pending",
+    }
+    expect(latestAppealsByClip([reversed, open]).get("c1")).toEqual(open)
+  })
 })
