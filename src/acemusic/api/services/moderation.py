@@ -129,6 +129,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
         return ActionResult(ok=False, detail="Invalid clip id.")
     now = utcnow()
     clip = await Clip.get(oid)
+    details: dict = {}
     if clip is None:
         # A deleted clip's orphaned reports can still be dismissed, and nothing else.
         resolved = await _resolve_reports(oid, now) if action == "approve" else 0
@@ -137,6 +138,8 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
     else:
         updates: dict = {"moderation_reviewed_at": now}
         if action == "remove":
+            # US-27.4: a reversed appeal restores the visibility recorded here.
+            details["previous_visibility"] = clip.visibility.value
             updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
         elif action == "flag":
             updates["content_warning"] = True
@@ -150,7 +153,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
                 channel="in_app",
                 payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
             ).insert()
-    await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved})
+    await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved, **details})
     return ActionResult(ok=True)
 
 

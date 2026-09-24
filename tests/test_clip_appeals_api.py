@@ -223,17 +223,37 @@ class TestDecideAppeal:
         assert resp.json()["status"] == "reversed"
         restored = await Clip.get(clip.id)
         assert restored.removed_at is None
-        assert restored.visibility == VisibilityState.PRIVATE
-        # The owner can publish it again: the removal no longer blocks the PATCH.
-        republish = await client.patch(
-            f"{CLIPS_URL}/{clip.id}", json={"visibility": "public"}, headers=_auth(owner, settings)
-        )
-        assert republish.status_code == 200, republish.text
+        # The removal recorded the clip's visibility, so the reversal puts it back where it was.
+        assert restored.visibility == VisibilityState.PUBLIC
+        assert restored.is_public is True
         notice = await NotificationEvent.find_one({"user_id": owner.id, "event_type": "moderation_appeal_reversed"})
         assert notice is not None
         assert notice.clip_id == clip.id
         assert notice.payload["note"] == "Sample was licensed"
         assert notice.payload["appeal_id"] == appeal["id"]
+
+    async def test_reverse_of_a_removal_that_predates_the_snapshot_leaves_the_clip_private(self, client, settings):
+        owner, clip, appeal = await _appealed(client, settings)
+        await ModerationLogEntry.find({"target_id": str(clip.id)}).update({"$set": {"details": {}}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        restored = await Clip.get(clip.id)
+        assert restored.removed_at is None
+        assert restored.visibility == VisibilityState.PRIVATE
+        republish = await client.patch(
+            f"{CLIPS_URL}/{clip.id}", json={"visibility": "public"}, headers=_auth(owner, settings)
+        )
+        assert republish.status_code == 200, republish.text
+
+    async def test_reversing_a_stale_appeal_leaves_a_newer_decision_in_force(self, client, settings):
+        _, clip, appeal = await _appealed(client, settings, action="flag")
+        await _moderate(client, settings, "flag", clip, reason="Flagged again after review")
+
+        resp = await _decide(client, settings, appeal["id"], "reverse")
+
+        assert resp.status_code == 200
+        assert (await Clip.get(clip.id)).content_warning is True
 
     async def test_reverse_clears_a_content_warning(self, client, settings):
         _, clip, appeal = await _appealed(client, settings, action="flag")
@@ -311,6 +331,19 @@ class TestRequestMoreInformation:
         assert answer.status_code == 200, answer.text
         assert answer.json()["status"] == "pending"
         assert answer.json()["context"] == "License attached"
+
+    async def test_answer_keeps_the_original_context(self, client, settings):
+        owner = await _user()
+        clip = await _clip(owner)
+        await _moderate(client, settings, "remove", clip)
+        appeal = (await _appeal(client, settings, owner, clip, context="Original note")).json()
+        await _decide(client, settings, appeal["id"], "request_info", note="More?")
+
+        answer = await client.patch(
+            f"{CLIPS_URL}/{clip.id}/appeal", json={"context": "Follow-up"}, headers=_auth(owner, settings)
+        )
+
+        assert answer.json()["context"] == "Original note\n\nFollow-up"
 
     async def test_answering_without_a_request_is_409(self, client, settings):
         owner, clip, _ = await _appealed(client, settings)

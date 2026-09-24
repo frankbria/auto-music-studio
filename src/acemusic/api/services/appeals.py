@@ -23,6 +23,7 @@ from ..models import (
     ModerationLogEntry,
     NotificationEvent,
     User,
+    VisibilityState,
 )
 from ..models.clip_appeal import AppealedAction
 from ..models.common import utcnow
@@ -114,9 +115,18 @@ async def _appealable_action(clip: Clip) -> ModerationLogEntry | None:
 async def answer_info_request(clip_id: str, user_id: str, context: str) -> ClipAppeal:
     """Add the requested information and send the appeal back to the queue; 409 if none was requested."""
     clip = await get_owned_clip(clip_id, user_id)
-    appeal = await ClipAppeal.find_one({"clip_id": clip.id, "status": "info_requested"}).update(
-        {"$set": {"context": context, "status": "pending"}}, response_type=UpdateResponse.NEW_DOCUMENT
+    requested = (
+        await ClipAppeal.find({"clip_id": clip.id, "status": "info_requested"})
+        .sort(-ClipAppeal.created_at)
+        .first_or_none()
     )
+    appeal = None
+    if requested is not None:
+        # Appended, not replaced: the admin still sees what the creator first wrote.
+        combined = f"{requested.context}\n\n{context}" if requested.context else context
+        appeal = await ClipAppeal.find_one({"_id": requested.id, "status": "info_requested"}).update(
+            {"$set": {"context": combined, "status": "pending"}}, response_type=UpdateResponse.NEW_DOCUMENT
+        )
     if appeal is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="No more information was requested for this appeal."
@@ -180,10 +190,9 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
             raise _appeal_not_found()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
 
-    if decision == "reverse":
-        restore = {"removed_at": None} if appeal.action == "remove" else {"content_warning": False}
-        await Clip.find_one({"_id": appeal.clip_id}).update({"$set": restore})
     clip = await Clip.get(appeal.clip_id)
+    if decision == "reverse" and clip is not None:
+        await _restore(clip, appeal)
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
@@ -205,6 +214,22 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
         {"appeal_id": str(appeal.id), "appealed_action": appeal.action},
     )
     return appeal
+
+
+async def _restore(clip: Clip, appeal: ClipAppeal) -> None:
+    """Undo the appealed decision, unless a newer one has replaced it since the appeal was filed."""
+    in_force = await _appealable_action(clip)
+    if in_force is None or in_force.id != appeal.action_id:
+        return
+    if appeal.action == "flag":
+        restore: dict = {"content_warning": False}
+    else:
+        restore = {"removed_at": None}
+        # Removals logged before the snapshot existed stay private; the owner re-publishes.
+        previous = in_force.details.get("previous_visibility")
+        if previous is not None:
+            restore.update(visibility=previous, is_public=previous == VisibilityState.PUBLIC.value)
+    await Clip.find_one({"_id": clip.id, "removed_at": clip.removed_at}).update({"$set": restore})
 
 
 def _appeal_not_found() -> HTTPException:
