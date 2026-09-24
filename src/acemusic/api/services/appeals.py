@@ -230,8 +230,10 @@ async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry)
         previous = in_force.details.get("previous_visibility")
         if previous is not None:
             restore.update(visibility=previous, is_public=previous == VisibilityState.PUBLIC.value)
-    # Conditioned on the state read above, so a removal landing in between is not undone.
-    await Clip.find_one({"_id": clip.id, "removed_at": clip.removed_at}).update({"$set": restore})
+    # Every moderation action stamps moderation_reviewed_at, so one landing after the read above is not undone.
+    await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).update(
+        {"$set": restore}
+    )
 
 
 def _appeal_not_found() -> HTTPException:

@@ -247,6 +247,26 @@ describe("ClipAppealStatus", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("drops an old outcome once a different decision is in force", () => {
+    withAuth(
+      <ClipAppealStatus
+        clip={{
+          id: "c1",
+          removed_at: "2026-03-01T00:00:00Z",
+          content_warning: true,
+        }}
+        appeal={appeal({
+          action: "flag",
+          status: "upheld",
+          admin_note: "Old note",
+        })}
+      />
+    )
+    expect(screen.queryByText("Appeal denied")).not.toBeInTheDocument()
+    expect(screen.queryByText("Old note")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
+  })
+
   it("shows an approved notice for a reversed appeal even once the clip is clear", () => {
     withAuth(
       <ClipAppealStatus

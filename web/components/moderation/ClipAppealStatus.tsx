@@ -71,6 +71,12 @@ export function ClipAppealStatus({
       parseApiTime(clip.removed_at!).getTime() >
         parseApiTime(current.created_at).getTime()
     )
+  // A resolved appeal's outcome only describes the clip while no newer decision
+  // is in force; a reversal is still shown after the clip has been cleared.
+  const shownStatus =
+    coversCurrentDecision || (!removed && !flagged)
+      ? current?.status
+      : undefined
   const canAppeal =
     !!auth?.isAuthenticated &&
     !!auth.accessToken &&
@@ -125,22 +131,22 @@ export function ClipAppealStatus({
         )}
       </div>
 
-      {current?.status === "pending" && (
+      {shownStatus === "pending" && (
         <p className="text-xs text-muted-foreground">{STATUS_LABEL.pending}</p>
       )}
 
-      {current?.status === "upheld" && (
+      {shownStatus === "upheld" && (
         <div className="flex flex-col gap-0.5">
           <p className="text-xs text-muted-foreground">{STATUS_LABEL.upheld}</p>
-          {current.admin_note && (
+          {current?.admin_note && (
             <p className="text-xs text-muted-foreground italic">
-              {current.admin_note}
+              {current?.admin_note}
             </p>
           )}
         </div>
       )}
 
-      {current?.status === "reversed" && (
+      {shownStatus === "reversed" && (
         <p role="status" className="text-xs text-muted-foreground">
           {STATUS_LABEL.reversed}
         </p>
@@ -152,14 +158,14 @@ export function ClipAppealStatus({
         </p>
       )}
 
-      {!infoDone && current?.status === "info_requested" && (
+      {!infoDone && shownStatus === "info_requested" && (
         <div className="flex flex-col gap-1.5">
           <p className="text-xs text-muted-foreground">
             {STATUS_LABEL.info_requested}
           </p>
-          {current.admin_note && (
+          {current?.admin_note && (
             <p className="text-xs text-muted-foreground italic">
-              {current.admin_note}
+              {current?.admin_note}
             </p>
           )}
           <form

@@ -90,7 +90,11 @@ export type ClipCardProps = {
   isFreeTier?: boolean
   /** Called after this clip is deleted so the list can drop the card. */
   onDeleted?: (id: string) => void
-  /** The caller's latest appeal against this clip's moderation decision, if any (US-27.4). */
+  /**
+   * The owner's latest appeal on this clip (US-27.4): `null` when there is none.
+   * Leave it undefined outside the owner's Library (e.g. Related songs) to hide
+   * the moderation status and Appeal entry.
+   */
   appeal?: AppealView | null
 }
 
@@ -141,7 +145,7 @@ export function ClipCard({
   onVisibilityChange,
   isFreeTier = false,
   onDeleted,
-  appeal = null,
+  appeal,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
   // Registry-driven dispatch: modal / navigation / download / delete-confirm /
@@ -350,9 +354,9 @@ export function ClipCard({
           </p>
         )}
 
-        {/* Moderation status + appeal entry point (US-27.4) — only for a
-            removed/flagged clip, or one with appeal history. */}
-        <ClipAppealStatus clip={clip} appeal={appeal} />
+        {appeal !== undefined && (
+          <ClipAppealStatus clip={clip} appeal={appeal} />
+        )}
 
         {/* Action row. */}
         <div className="flex flex-wrap items-center gap-0.5">

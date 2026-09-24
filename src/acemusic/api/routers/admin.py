@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..auth.dependencies import CurrentUser, require_admin
 from ..models import ReportCategory
@@ -179,10 +179,18 @@ class AppealDecisionRequest(BaseModel):
     decision: appeal_service.AppealDecision
     note: Reason = None
 
+    @model_validator(mode="after")
+    def _question_for_request_info(self) -> "AppealDecisionRequest":
+        self.note = (self.note or "").strip() or None
+        if self.decision == "request_info" and self.note is None:
+            raise ValueError("Say what information the creator should send.")
+        return self
+
 
 @router.post("/moderation/appeals/{appeal_id}", response_model=appeal_service.AppealView)
 async def decide_appeal(
     appeal_id: str, body: AppealDecisionRequest, current: CurrentUser = Depends(require_admin)
 ) -> appeal_service.AppealView:
-    note = (body.note or "").strip() or None
-    return appeal_service.AppealView.of(await appeal_service.decide(current.user_id, appeal_id, body.decision, note))
+    return appeal_service.AppealView.of(
+        await appeal_service.decide(current.user_id, appeal_id, body.decision, body.note)
+    )

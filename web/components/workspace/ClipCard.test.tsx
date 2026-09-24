@@ -635,17 +635,32 @@ describe("ClipCard moderation appeal (US-27.4)", () => {
   it("shows a removed badge and an Appeal entry for a removed clip", () => {
     render(
       <AllProviders>
-        <ClipCard clip={clip({ removed_at: "2026-01-01T00:00:00Z" })} />
+        <ClipCard
+          clip={clip({ removed_at: "2026-01-01T00:00:00Z" })}
+          appeal={null}
+        />
       </AllProviders>
     )
     expect(screen.getByText("Removed by moderation")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
   })
 
+  it("shows no appeal controls outside the owner's library (no appeal prop)", () => {
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ removed_at: "2026-01-01T00:00:00Z" })} />
+      </AllProviders>
+    )
+    expect(
+      screen.queryByRole("button", { name: "Appeal" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Removed by moderation")).not.toBeInTheDocument()
+  })
+
   it("shows a content warning badge for a flagged clip", () => {
     render(
       <AllProviders>
-        <ClipCard clip={clip({ content_warning: true })} />
+        <ClipCard clip={clip({ content_warning: true })} appeal={null} />
       </AllProviders>
     )
     expect(screen.getByText("Content warning")).toBeInTheDocument()

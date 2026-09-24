@@ -318,6 +318,14 @@ class TestDecideAppeal:
 
 @pytest.mark.integration
 class TestRequestMoreInformation:
+    async def test_request_info_needs_a_note(self, client, settings):
+        _, _, appeal = await _appealed(client, settings)
+
+        resp = await _decide(client, settings, appeal["id"], "request_info")
+
+        assert resp.status_code == 422
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+
     async def test_request_info_notifies_and_the_creator_can_answer(self, client, settings):
         owner, clip, appeal = await _appealed(client, settings)
 
