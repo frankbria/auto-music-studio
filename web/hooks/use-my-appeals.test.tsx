@@ -34,7 +34,7 @@ describe("useMyAppeals", () => {
     stubFetch(200, { appeals: [appeal] })
     const { result } = renderHook(() => useMyAppeals("tok"))
     await waitFor(() => expect(result.current.appeals).toHaveLength(1))
-    expect(result.current.byClip.get("c1")).toEqual(appeal)
+    expect(result.current.byClip.get("c1")).toEqual([appeal])
   })
 
   it("never fetches without a token", () => {

@@ -1,7 +1,7 @@
 "use client"
 
 import { ClipCard } from "@/components/workspace/ClipCard"
-import type { AppealView } from "@/lib/appeals"
+import { appealFor, type AppealView } from "@/lib/appeals"
 import type { Clip } from "@/lib/workspace-clips"
 
 /** Renders clip cards, a loading skeleton, or an empty-state message. */
@@ -23,8 +23,8 @@ export function ClipList({
   isFreeTier?: boolean
   /** Drop a card after its clip is deleted from the context menu (US-17.5). */
   onDeleted?: (id: string) => void
-  /** The caller's latest appeal per clip id, keyed by clip id (US-27.4). */
-  appealsByClip?: Map<string, AppealView>
+  /** The caller's appeals per clip id, newest first (US-27.4). */
+  appealsByClip?: Map<string, AppealView[]>
 }) {
   if (loading) {
     return (
@@ -53,7 +53,7 @@ export function ClipList({
           onGetFullSong={onGetFullSong}
           isFreeTier={isFreeTier}
           onDeleted={onDeleted}
-          appeal={appealsByClip?.get(clip.id) ?? null}
+          appeal={appealFor(clip, appealsByClip?.get(clip.id) ?? [])}
         />
       ))}
     </div>

@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   addAppealContext,
   fetchMyAppeals,
-  latestAppealsByClip,
+  appealFor,
+  appealsByClip,
   submitClipAppeal,
   type AppealView,
 } from "@/lib/appeals"
@@ -127,27 +128,52 @@ describe("fetchMyAppeals", () => {
   })
 })
 
-describe("latestAppealsByClip", () => {
-  it("keeps the first (newest) appeal per clip", () => {
-    const older: AppealView = { ...appeal, id: "a0", status: "upheld" }
-    const map = latestAppealsByClip([appeal, older])
-    expect(map.get("c1")).toEqual(appeal)
+describe("appealsByClip / appealFor", () => {
+  const flagOpen: AppealView = {
+    ...appeal,
+    id: "a1",
+    action: "flag",
+    status: "pending",
+  }
+  const removeUpheld: AppealView = {
+    ...appeal,
+    id: "a2",
+    action: "remove",
+    status: "upheld",
+  }
+  const removeReversed: AppealView = { ...removeUpheld, status: "reversed" }
+  const byClip = (list: AppealView[]) => appealsByClip(list).get("c1") ?? []
+
+  it("groups newest-first appeals per clip", () => {
+    const map = appealsByClip([removeUpheld, flagOpen])
+    expect(map.get("c1")).toEqual([removeUpheld, flagOpen])
     expect(map.size).toBe(1)
   })
 
-  it("prefers an older open appeal over a newer decided one", () => {
-    const reversed: AppealView = {
-      ...appeal,
-      id: "a2",
-      action: "remove",
-      status: "reversed",
-    }
-    const open: AppealView = {
-      ...appeal,
-      id: "a1",
-      action: "flag",
-      status: "pending",
-    }
-    expect(latestAppealsByClip([reversed, open]).get("c1")).toEqual(open)
+  it("picks the removal appeal while the clip is removed, even over an open flag appeal", () => {
+    const clip = { removed_at: "2026-02-01T00:00:00Z", content_warning: true }
+    expect(appealFor(clip, byClip([removeUpheld, flagOpen]))).toEqual(
+      removeUpheld
+    )
+  })
+
+  it("picks the flag appeal once the removal is reversed and the flag remains", () => {
+    const clip = { removed_at: null, content_warning: true }
+    expect(appealFor(clip, byClip([removeReversed, flagOpen]))).toEqual(
+      flagOpen
+    )
+  })
+
+  it("falls back to the newest appeal once the clip is clear", () => {
+    const clip = { removed_at: null, content_warning: false }
+    expect(appealFor(clip, byClip([removeReversed, flagOpen]))).toEqual(
+      removeReversed
+    )
+  })
+
+  it("is null without appeals", () => {
+    expect(
+      appealFor({ removed_at: null, content_warning: false }, [])
+    ).toBeNull()
   })
 })

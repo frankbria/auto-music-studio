@@ -105,22 +105,31 @@ export async function fetchMyAppeals(
   }
 }
 
-const isOpen = (a: AppealView) =>
-  a.status === "pending" || a.status === "info_requested"
-
-/**
- * Newest-first input -> one appeal per clip id: the newest still-open one, else
- * the newest. A clip can hold one appeal per decision (a flag and a later
- * removal), and a decided newer appeal must not hide an older open one.
- */
-export function latestAppealsByClip(
+/** Newest-first input -> each clip's appeals, still newest first. */
+export function appealsByClip(
   appeals: readonly AppealView[]
-): Map<string, AppealView> {
-  const map = new Map<string, AppealView>()
+): Map<string, AppealView[]> {
+  const map = new Map<string, AppealView[]>()
   for (const appeal of appeals) {
-    const kept = map.get(appeal.clip_id)
-    if (!kept || (isOpen(appeal) && !isOpen(kept)))
-      map.set(appeal.clip_id, appeal)
+    const list = map.get(appeal.clip_id)
+    if (list) list.push(appeal)
+    else map.set(appeal.clip_id, [appeal])
   }
   return map
+}
+
+/**
+ * The appeal that describes the clip's current state. A clip holds one appeal
+ * per decision (a flag, then a removal), so pick the newest one on the decision
+ * in force, and fall back to the newest once the clip is clear.
+ */
+export function appealFor(
+  clip: { removed_at?: string | null; content_warning?: boolean },
+  appeals: readonly AppealView[]
+): AppealView | null {
+  const action =
+    clip.removed_at != null ? "remove" : clip.content_warning ? "flag" : null
+  return (
+    (action && appeals.find((a) => a.action === action)) || appeals[0] || null
+  )
 }

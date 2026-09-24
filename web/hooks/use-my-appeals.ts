@@ -2,11 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 
-import {
-  fetchMyAppeals,
-  latestAppealsByClip,
-  type AppealView,
-} from "@/lib/appeals"
+import { fetchMyAppeals, appealsByClip, type AppealView } from "@/lib/appeals"
 
 /**
  * The signed-in caller's own moderation appeals (US-27.4), fetched once and
@@ -29,7 +25,7 @@ export function useMyAppeals(accessToken: string | null) {
     }
   }, [accessToken, version])
 
-  const byClip = useMemo(() => latestAppealsByClip(appeals), [appeals])
+  const byClip = useMemo(() => appealsByClip(appeals), [appeals])
 
   return { appeals, byClip, refetch: () => setVersion((v) => v + 1) }
 }
