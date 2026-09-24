@@ -211,6 +211,42 @@ describe("ClipAppealStatus", () => {
     expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
   })
 
+  it("offers a new appeal when a clip is removed again after a denied appeal", () => {
+    withAuth(
+      <ClipAppealStatus
+        clip={{
+          id: "c1",
+          removed_at: "2026-03-01T00:00:00Z",
+          content_warning: false,
+        }}
+        appeal={appeal({
+          status: "upheld",
+          created_at: "2026-02-01T00:00:00Z",
+        })}
+      />
+    )
+    expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
+  })
+
+  it("keeps the Appeal entry hidden when the denied appeal covers the current removal", () => {
+    withAuth(
+      <ClipAppealStatus
+        clip={{
+          id: "c1",
+          removed_at: "2026-01-01T00:00:00Z",
+          content_warning: false,
+        }}
+        appeal={appeal({
+          status: "upheld",
+          created_at: "2026-02-01T00:00:00Z",
+        })}
+      />
+    )
+    expect(
+      screen.queryByRole("button", { name: "Appeal" })
+    ).not.toBeInTheDocument()
+  })
+
   it("shows an approved notice for a reversed appeal even once the clip is clear", () => {
     withAuth(
       <ClipAppealStatus

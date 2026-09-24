@@ -246,14 +246,22 @@ class TestDecideAppeal:
         )
         assert republish.status_code == 200, republish.text
 
-    async def test_reversing_a_stale_appeal_leaves_a_newer_decision_in_force(self, client, settings):
-        _, clip, appeal = await _appealed(client, settings, action="flag")
-        await _moderate(client, settings, "flag", clip, reason="Flagged again after review")
+    async def test_a_superseded_decision_cannot_be_reversed(self, client, settings):
+        owner, clip, appeal = await _appealed(client, settings, action="flag")
+        await _moderate(client, settings, "remove", clip, reason="Removed after review")
 
         resp = await _decide(client, settings, appeal["id"], "reverse")
 
-        assert resp.status_code == 200
-        assert (await Clip.get(clip.id)).content_warning is True
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "A newer moderation decision has replaced the one appealed."
+        restored = await Clip.get(clip.id)
+        assert restored.content_warning is True and restored.removed_at is not None
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+        assert (
+            await NotificationEvent.find_one({"user_id": owner.id, "event_type": "moderation_appeal_reversed"}) is None
+        )
+        # It can still be closed without touching the newer decision.
+        assert (await _decide(client, settings, appeal["id"], "uphold")).status_code == 200
 
     async def test_reverse_clears_a_content_warning(self, client, settings):
         _, clip, appeal = await _appealed(client, settings, action="flag")
@@ -344,6 +352,16 @@ class TestRequestMoreInformation:
         )
 
         assert answer.json()["context"] == "Original note\n\nFollow-up"
+
+    async def test_a_blank_answer_is_422(self, client, settings):
+        owner, clip, appeal = await _appealed(client, settings)
+        await _decide(client, settings, appeal["id"], "request_info", note="?")
+
+        resp = await client.patch(
+            f"{CLIPS_URL}/{clip.id}/appeal", json={"context": "   "}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 422
 
     async def test_answering_without_a_request_is_409(self, client, settings):
         owner, clip, _ = await _appealed(client, settings)

@@ -20,6 +20,7 @@ import {
   submitClipAppeal,
   type AppealView,
 } from "@/lib/appeals"
+import { parseApiTime } from "@/lib/moderation"
 import type { Clip } from "@/lib/workspace-clips"
 
 // Moderation status + appeal entry point for a single clip card (US-27.4).
@@ -60,14 +61,21 @@ export function ClipAppealStatus({
   const flagged = clip.content_warning === true
   if (!removed && !flagged && !current) return null
 
+  // An appeal only blocks the decision it was filed against. A later removal
+  // restamps removed_at, so a removal newer than the appeal is a new decision.
+  const coversCurrentDecision =
+    !!current &&
+    current.action === (removed ? "remove" : "flag") &&
+    !(
+      removed &&
+      parseApiTime(clip.removed_at!).getTime() >
+        parseApiTime(current.created_at).getTime()
+    )
   const canAppeal =
     !!auth?.isAuthenticated &&
     !!auth.accessToken &&
     (removed || flagged) &&
-    // An appeal only blocks the decision it was filed against; a later removal is a new one.
-    (!current ||
-      current.status === "reversed" ||
-      current.action !== (removed ? "remove" : "flag"))
+    (!coversCurrentDecision || current?.status === "reversed")
   const accessToken = auth?.accessToken ?? null
 
   const show = () => {

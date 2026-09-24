@@ -174,10 +174,18 @@ async def list_queue(which: QueueFilter) -> list[AppealQueueItem]:
 
 
 async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: str | None) -> ClipAppeal:
-    """404 unknown appeal, 409 already upheld or reversed."""
+    """404 unknown appeal, 409 already upheld or reversed, or (reverse) a newer decision replaced it."""
     oid = coerce_object_id(appeal_id)
-    if oid is None:
+    existing = await ClipAppeal.get(oid) if oid is not None else None
+    if existing is None:
         raise _appeal_not_found()
+    clip = await Clip.get(existing.clip_id)
+    in_force = await _appealable_action(clip) if clip is not None else None
+    if decision == "reverse" and clip is not None and (in_force is None or in_force.id != existing.action_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="A newer moderation decision has replaced the one appealed."
+        )
+
     new_status = _DECISION_STATUS[decision]
     updates: dict = {"status": new_status, "admin_note": note}
     if decision != "request_info":
@@ -186,13 +194,10 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
         {"$set": updates}, response_type=UpdateResponse.NEW_DOCUMENT
     )
     if appeal is None:
-        if await ClipAppeal.get(oid) is None:
-            raise _appeal_not_found()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
 
-    clip = await Clip.get(appeal.clip_id)
     if decision == "reverse" and clip is not None:
-        await _restore(clip, appeal)
+        await _restore(clip, appeal, in_force)
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
@@ -216,11 +221,7 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
     return appeal
 
 
-async def _restore(clip: Clip, appeal: ClipAppeal) -> None:
-    """Undo the appealed decision, unless a newer one has replaced it since the appeal was filed."""
-    in_force = await _appealable_action(clip)
-    if in_force is None or in_force.id != appeal.action_id:
-        return
+async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry) -> None:
     if appeal.action == "flag":
         restore: dict = {"content_warning": False}
     else:
@@ -229,6 +230,7 @@ async def _restore(clip: Clip, appeal: ClipAppeal) -> None:
         previous = in_force.details.get("previous_visibility")
         if previous is not None:
             restore.update(visibility=previous, is_public=previous == VisibilityState.PUBLIC.value)
+    # Conditioned on the state read above, so a removal landing in between is not undone.
     await Clip.find_one({"_id": clip.id, "removed_at": clip.removed_at}).update({"$set": restore})
 
 

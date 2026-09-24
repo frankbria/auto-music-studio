@@ -479,7 +479,14 @@ class ClipAppealRequest(BaseModel):
 
 
 class ClipAppealInfoRequest(BaseModel):
-    context: str = Field(min_length=1, max_length=2000)
+    context: str = Field(max_length=2000)
+
+    @field_validator("context")
+    @classmethod
+    def _require_context(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Add the information the moderator asked for.")
+        return value.strip()
 
 
 @router.post("/{clip_id}/appeal", response_model=appeal_service.AppealView, status_code=status.HTTP_201_CREATED)
@@ -496,7 +503,7 @@ async def answer_appeal_info_request(
     clip_id: str, body: ClipAppealInfoRequest, current: CurrentUser = Depends(require_existing_user)
 ) -> appeal_service.AppealView:
     """Send the information an admin asked for and put the appeal back in the queue (US-27.4)."""
-    appeal = await appeal_service.answer_info_request(clip_id, current.user_id, body.context.strip())
+    appeal = await appeal_service.answer_info_request(clip_id, current.user_id, body.context)
     return appeal_service.AppealView.of(appeal)
 
 
