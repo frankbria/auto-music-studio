@@ -6,16 +6,21 @@ borderline one generates, with the flag carried to the clip. Rules live in Mongo
 so an admin edit applies to the very next request.
 """
 
+import inspect
+
 import httpx
 import pytest
 from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Job, Workspace
-from acemusic.api.services import routing, screening, users as user_service
+from acemusic.api.models import Clip, Job, VisibilityState, VoiceModel, VoiceModelStatus, Workspace
+from acemusic.api.models.common import utcnow
+from acemusic.api.services import clips as clip_service, routing, screening, users as user_service
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
+from tests.test_voice_models_api import wav as voice_wav
 from tests.users import make_user
 
 GENERATE_URL = f"{API_V1_PREFIX}/generate"
@@ -369,3 +374,195 @@ class TestAdminRules:
         assert (await client.put(RULES_URL, json=bad, headers=_auth(admin, settings))).status_code == 422
         worse = {"rules": [{"term": "x", "category": "x", "action": "nuke"}], "allow_terms": [], "block_threshold": 0}
         assert (await client.put(RULES_URL, json=worse, headers=_auth(admin, settings))).status_code == 422
+
+
+@pytest.fixture
+def local_storage(monkeypatch, tmp_path):
+    monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ACEMUSIC_STORAGE_LOCAL_ROOT", str(tmp_path))
+    return tmp_path
+
+
+def _wav() -> bytes:
+    payload = b"\x00" * 64
+    return b"RIFF" + (36 + len(payload)).to_bytes(4, "little") + b"WAVEfmt " + payload
+
+
+def test_blocked_metadata_says_it_was_not_saved():
+    message = str(screening.ContentBlockedError(["hate speech"], saving=True))
+    assert message.startswith("This wasn't saved because")
+    assert "hate speech" in message
+    assert "prompt" not in message
+
+
+def test_clip_edits_never_whole_document_save():
+    # A whole-document save() of a Clip read before a moderation removal lands would undo it (AGENTS.md).
+    assert ".save(" not in inspect.getsource(clip_service.update_clip_fields)
+
+
+@pytest.mark.integration
+class TestClipMetadataScreening:
+    """US-27.1 follow-up (#531): text a clip only *displays* is screened like generation text."""
+
+    async def _upload(self, client, settings, user, **form):
+        workspace = Workspace(name="WS", user_id=user.id)
+        await workspace.insert()
+        return await client.post(
+            f"{API_V1_PREFIX}/clips/upload",
+            files={"file": ("clip.wav", _wav(), "audio/wav")},
+            data={"workspace_id": str(workspace.id), **form},
+            headers=_auth(user, settings),
+        )
+
+    async def test_upload_with_a_blocked_title_is_refused_and_stores_nothing(self, client, settings, local_storage):
+        user = await make_user("meta-upload-block@example.com")
+        resp = await self._upload(client, settings, user, title="Sieg Heil march")
+        assert resp.status_code == 422
+        assert "hate speech" in resp.json()["detail"]
+        assert "wasn't saved" in resp.json()["detail"]
+        assert await Clip.find(Clip.user_id == user.id).to_list() == []
+
+    async def test_upload_screens_tags_as_the_joined_string(self, client, settings, local_storage):
+        user = await make_user("meta-upload-tags@example.com")
+        resp = await self._upload(client, settings, user, title="March", style_tags="sieg, heil")
+        assert resp.status_code == 422
+
+    async def test_upload_with_a_borderline_tag_is_stored_with_the_flag(self, client, settings, local_storage):
+        user = await make_user("meta-upload-flag@example.com")
+        resp = await self._upload(client, settings, user, title="Grief", style_tags="suicide ballad")
+        assert resp.status_code == 201, resp.text
+        clip = await Clip.get(PydanticObjectId(resp.json()["id"]))
+        assert clip.moderation_flags == ["self-harm"]
+
+    async def test_clean_upload_passes_unflagged(self, client, settings, local_storage):
+        user = await make_user("meta-upload-clean@example.com")
+        resp = await self._upload(client, settings, user, title="Night drive", style_tags="synthwave")
+        assert resp.status_code == 201, resp.text
+        assert (await Clip.get(PydanticObjectId(resp.json()["id"]))).moderation_flags == []
+
+    async def _patch(self, client, settings, user, clip, body):
+        return await client.patch(f"{API_V1_PREFIX}/clips/{clip.id}", json=body, headers=_auth(user, settings))
+
+    async def test_a_blocked_rename_is_refused_and_the_title_is_unchanged(self, client, settings):
+        user, clip = await _user_with_clip("meta-rename-block@example.com")
+        await clip.set({Clip.title: "Old title"})
+        resp = await self._patch(client, settings, user, clip, {"title": "white power anthem"})
+        assert resp.status_code == 422
+        assert "wasn't saved" in resp.json()["detail"]
+        assert (await Clip.get(clip.id)).title == "Old title"
+
+    async def test_a_borderline_rename_is_saved_and_requeues_a_reviewed_clip(self, client, settings):
+        user, clip = await _user_with_clip("meta-rename-flag@example.com")
+        await clip.set({Clip.moderation_flags: ["self-harm"], Clip.moderation_reviewed_at: utcnow()})
+        resp = await self._patch(client, settings, user, clip, {"title": "Terrorist in my head"})
+        assert resp.status_code == 200, resp.text
+        stored = await Clip.get(clip.id)
+        assert stored.title == "Terrorist in my head"
+        assert stored.moderation_flags == ["self-harm", "violent extremism"]
+        assert stored.moderation_reviewed_at is None
+
+    async def test_a_clean_rename_passes_unflagged(self, client, settings):
+        user, clip = await _user_with_clip("meta-rename-clean@example.com")
+        resp = await self._patch(client, settings, user, clip, {"title": "Night drive"})
+        assert resp.status_code == 200, resp.text
+        stored = await Clip.get(clip.id)
+        assert (stored.title, stored.moderation_flags) == ("Night drive", [])
+
+    @pytest.mark.parametrize("visibility", ["public", "unlisted"])
+    async def test_going_visible_screens_text_written_before_screening_existed(self, client, settings, visibility):
+        user, clip = await _user_with_clip(f"meta-publish-block-{visibility}@example.com")
+        await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"], Clip.lyrics: "[Chorus]\nheil hitler"})
+        resp = await self._patch(client, settings, user, clip, {"visibility": visibility})
+        assert resp.status_code == 422
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
+
+    async def test_publishing_does_not_requeue_an_already_reviewed_flag(self, client, settings):
+        user, clip = await _user_with_clip("meta-publish-reviewed@example.com")
+        reviewed = utcnow()
+        await clip.set(
+            {
+                Clip.title: "Grief",
+                Clip.style_tags: ["folk"],
+                Clip.lyrics: "a song about suicide",
+                Clip.moderation_flags: ["self-harm"],
+                Clip.moderation_reviewed_at: reviewed,
+            }
+        )
+        resp = await self._patch(client, settings, user, clip, {"visibility": "public"})
+        assert resp.status_code == 200, resp.text
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState.PUBLIC and stored.is_public
+        assert stored.moderation_flags == ["self-harm"]
+        assert stored.moderation_reviewed_at is not None
+
+    async def test_a_clean_clip_publishes_unflagged(self, client, settings):
+        user, clip = await _user_with_clip("meta-publish-clean@example.com")
+        await clip.set({Clip.title: "Night drive", Clip.style_tags: ["synthwave"]})
+        resp = await self._patch(client, settings, user, clip, {"visibility": "public"})
+        assert resp.status_code == 200, resp.text
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.moderation_flags) == (VisibilityState.PUBLIC, [])
+
+
+@pytest.mark.integration
+class TestVoiceModelScreening:
+    async def _train(self, client, settings, user, **form):
+        files = [("files", (f"take{i}.wav", voice_wav(freq=200.0 + 10 * i), "audio/wav")) for i in range(3)]
+        return await client.post(
+            f"{API_V1_PREFIX}/voice-models/train", files=files, data=form, headers=_auth(user, settings)
+        )
+
+    async def test_a_blocked_name_is_refused_before_charging(self, client, settings, local_storage):
+        user = await make_user("voice-block@example.com", tier=PRO)
+        before = user.credits_balance
+        resp = await self._train(client, settings, user, name="Heil Hitler voice")
+        assert resp.status_code == 422
+        assert "wasn't saved" in resp.json()["detail"]
+        assert await VoiceModel.find(VoiceModel.user_id == user.id).to_list() == []
+        assert await _balance(user) == before
+
+    async def test_a_borderline_description_is_stored_with_the_flag(self, client, settings, local_storage):
+        user = await make_user("voice-flag@example.com", tier=PRO)
+        resp = await self._train(client, settings, user, name="Mine", description="for my genocide concept album")
+        assert resp.status_code == 202, resp.text
+        model = await VoiceModel.get(PydanticObjectId(resp.json()["voice_model"]["id"]))
+        assert model.moderation_flags == ["violent extremism"]
+
+    async def test_a_clean_voice_trains_unflagged(self, client, settings, local_storage):
+        user = await make_user("voice-clean@example.com", tier=PRO)
+        resp = await self._train(client, settings, user, name="Warm baritone")
+        assert resp.status_code == 202, resp.text
+        assert (await VoiceModel.get(PydanticObjectId(resp.json()["voice_model"]["id"]))).moderation_flags == []
+
+    async def _model(self, email):
+        user = await make_user(email, tier=PRO)
+        model = VoiceModel(user_id=user.id, name="Original", status=VoiceModelStatus.READY)
+        await model.insert()
+        return user, model
+
+    async def test_a_blocked_rename_is_refused(self, client, settings):
+        user, model = await self._model("voice-rename-block@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/voice-models/{model.id}",
+            json={"description": "sieg heil"},
+            headers=_auth(user, settings),
+        )
+        assert resp.status_code == 422
+        assert (await VoiceModel.get(model.id)).description is None
+
+    async def test_a_borderline_rename_adds_the_flag(self, client, settings):
+        user, model = await self._model("voice-rename-flag@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/voice-models/{model.id}", json={"name": "Rape survivor"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 200, resp.text
+        stored = await VoiceModel.get(model.id)
+        assert (stored.name, stored.moderation_flags) == ("Rape survivor", ["sexual violence"])
+
+    async def test_a_clean_rename_passes(self, client, settings):
+        user, model = await self._model("voice-rename-clean@example.com")
+        resp = await client.patch(
+            f"{API_V1_PREFIX}/voice-models/{model.id}", json={"name": "Tenor"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 200, resp.text
+        assert (await VoiceModel.get(model.id)).moderation_flags == []

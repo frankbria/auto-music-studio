@@ -28,7 +28,7 @@ from ..models.voice_model import (
     MIN_REFERENCE_SECONDS,
     MIN_SAMPLE_RATE_HZ,
 )
-from . import credits as credits_service
+from . import credits as credits_service, screening
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,7 @@ async def create_training_job(
         raise VoiceModelError("Give the voice model a name.")
 
     references = await validate_references(files)
+    moderation_flags = await screening.enforce(name, description, saving=True)
 
     uid = PydanticObjectId(user_id)
     cost = credits_service.VOICE_TRAINING_COST
@@ -221,6 +222,7 @@ async def create_training_job(
         description=(description or "").strip() or None,
         status=VoiceModelStatus.QUEUED,
         credits_charged=cost,
+        moderation_flags=moderation_flags,
     )
 
     storage = get_storage_backend()
@@ -476,6 +478,8 @@ async def rename_voice_model(
     if description is not None:
         model.description = description.strip() or None
 
+    flags = await screening.enforce(name, description, saving=True)
+    model.moderation_flags += [flag for flag in flags if flag not in model.moderation_flags]
     model.updated_at = utcnow()
     await model.save()
     return model

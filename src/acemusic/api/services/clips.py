@@ -25,7 +25,12 @@ from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
 from ..tasks.common import store_clip
-from . import daw_export as daw_export_service, users as user_service, workspaces as workspace_service
+from . import (
+    daw_export as daw_export_service,
+    screening,
+    users as user_service,
+    workspaces as workspace_service,
+)
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
@@ -428,6 +433,8 @@ async def upload_clip(
         model=model,
         generation_mode="imported",
     )
+    # US-27.1 (#531): an uploaded title or tag is displayed like a generated one, so it is screened too.
+    clip.moderation_flags = await screening.enforce(*screening.clip_texts(clip), saving=True)
 
     storage = get_storage_backend()
     return await store_clip(storage, clip, data)
@@ -460,14 +467,35 @@ async def update_clip_fields(
         # the boolean has no unlisted concept, and PRIVATE is the safe (more
         # restrictive) resolution. Modern clients send `visibility` and skip this.
         visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
-    if visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED):
+    going_visible = visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED)
+    if going_visible:
         ensure_not_removed(clip)
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
+    if title is None and visibility is None:
+        return clip
+
+    # US-27.1 (#531): a new title is screened as it is saved. Going visible screens everything the
+    # clip displays, which also catches text stored before screening existed or before a rule was added.
+    flags = await screening.enforce(*(screening.clip_texts(clip) if going_visible else [title]), saving=True)
+    updates: dict = {}
+    if title is not None:
+        updates["title"] = title
     if visibility is not None:
         clip.set_visibility(visibility)
-    if title is not None or visibility is not None:
-        await clip.save()
+        updates.update(visibility=clip.visibility, is_public=clip.is_public)
+    # Only a category the clip doesn't carry yet sends it back to the moderation queue.
+    new_flags = [flag for flag in flags if flag not in clip.moderation_flags]
+    update: dict = {"$set": updates}
+    if new_flags:
+        updates["moderation_reviewed_at"] = clip.moderation_reviewed_at = None
+        clip.moderation_flags = [*clip.moderation_flags, *new_flags]
+        update["$addToSet"] = {"moderation_flags": {"$each": new_flags}}
+
+    # Atomic, never a whole-document save(): that would undo a moderation action landing after the read.
+    result = await Clip.find_one({"_id": clip.id, **({"removed_at": None} if going_visible else {})}).update(update)
+    if not result.matched_count:
+        ensure_not_removed(await get_owned_clip(clip_id, user_id))
     return clip
 
 
