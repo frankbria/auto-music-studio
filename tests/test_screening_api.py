@@ -91,6 +91,127 @@ class TestMatch:
     def test_none_texts_are_ignored(self):
         assert screening.match(self.RULES, [None, ""]).flags == []
 
+    # Cyrillic е/і/Һ, Greek ε/ι/Η/ο, fullwidth and mathematical letters standing in for Latin ones (#532).
+    @pytest.mark.parametrize(
+        "text", ["sieg hеil", "sіeg heil", "SIEG ҺEIL", "siεg hειl", "ＳＩＥＧ ＨＥＩＬ", "𝐬𝐢𝐞𝐠 𝐡𝐞𝐢𝐥"]
+    )
+    def test_homoglyphs_do_not_evade(self, text):
+        assert screening.match(self.RULES, [text]).blocked is True
+
+    def test_a_rule_written_with_homoglyphs_still_matches_plain_text(self):
+        rules = screening.ScreeningRules(rules=[screening.Rule(term="hеil", category="hate speech", action="block")])
+        assert screening.match(rules, ["heil"]).blocked is True
+
+    # Zero-width space/joiner, word joiner, BOM and soft hyphen hidden inside a word.
+    @pytest.mark.parametrize("hidden", ["\u200b", "\u200d", "\u2060", "\ufeff", "\u00ad"])
+    def test_invisible_characters_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sie{hidden}g he{hidden}il"]).blocked is True
+
+    # Combining grapheme joiner and variation selectors: zero-width marks that combining() reports as 0.
+    @pytest.mark.parametrize("hidden", ["\u034f", "\ufe0f", "\ufe00"])
+    def test_zero_width_marks_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sieg he{hidden}il"]).blocked is True
+
+    # Hangul fillers render blank but are letters (category Lo), so no category rule catches them.
+    @pytest.mark.parametrize("hidden", ["\u115f", "\u1160", "\u3164", "\uffa0"])
+    def test_blank_filler_letters_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sie{hidden}g heil"]).blocked is True
+        assert screening.match(self.RULES, [f"sieg{hidden}heil"]).blocked is True
+
+    def test_an_invisible_character_still_separates_words(self):
+        assert screening.match(self.RULES, ["sieg\u200bheil"]).blocked is True
+
+    def test_invisible_characters_in_both_roles_in_one_field(self):
+        assert screening.match(self.RULES, ["chant si\u200beg\u200bheil"]).blocked is True
+
+    LEET = RULES.model_copy(update={"fold_leetspeak": True})
+
+    @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "r4p3"])
+    def test_leetspeak_evades_by_default(self, text):
+        assert screening.match(self.RULES, [text]).categories == []
+
+    @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "SIEG H3IL", "sie6 heil", "sie9 heil"])
+    def test_leetspeak_is_caught_when_the_rule_set_folds_it(self, text):
+        assert screening.match(self.LEET, [text]).blocked is True
+
+    def test_one_stands_for_both_i_and_l(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="kill list", category="violence", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["k1ll 1ist"]).flags == ["violence"]
+
+    def test_b_and_z_stand_ins_are_folded(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="blitz", category="violence", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["8li72"]).flags == ["violence"]
+
+    def test_leet_allow_terms_still_suppress(self):
+        assert screening.match(self.LEET, ["a r4pe awar3ness single"]).flags == []
+
+    def test_leet_fold_keeps_whole_word_matching(self):
+        assert screening.match(self.LEET, ["dr4pe the stage", "r4pes"]).flags == []
+
+    @pytest.mark.parametrize("text", ["sieg$heil", "sieg@heil"])
+    def test_leet_symbols_still_separate_words(self, text):
+        assert screening.match(self.LEET, [text]).blocked is True
+
+    def test_a_leet_symbol_in_both_roles_in_one_field(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="cash grab", category="fraud", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["ca$h$grab"]).flags == ["fraud"]
+
+    def test_removing_an_allow_term_does_not_join_the_words_around_it(self):
+        rules = screening.DEFAULT_RULES.model_copy(update={"allow_terms": ["house"]})
+        assert screening.match(rules, ["white house power"]).categories == []
+
+    @pytest.mark.parametrize("term", ["\u3164", "\u115f !!"])
+    def test_a_rule_of_only_blank_letters_matches_nothing(self, term):
+        rules = screening.ScreeningRules(rules=[screening.Rule(term=term, category="x", action="block")])
+        assert screening.match(rules, ["a prompt", "a style"]).categories == []
+
+    def test_an_allow_term_of_only_punctuation_suppresses_nothing(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="cash", category="fraud", action="flag")],
+            allow_terms=["!!!"],
+            fold_leetspeak=True,
+        )
+        assert screening.match(rules, ["c@\u200bsh"]).flags == ["fraud"]
+
+    def test_a_rule_containing_a_leet_symbol_matches_itself(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="ca$h out", category="fraud", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["ca$h out"]).flags == ["fraud"]
+
+    def test_an_allow_term_containing_a_leet_symbol_still_suppresses(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="nazi", category="hate speech", action="block")],
+            allow_terms=["n@zi"],
+            fold_leetspeak=True,
+        )
+        assert screening.match(rules, ["n@zi"]).categories == []
+
+
+# Everyday lyrics a fold must not turn into a rule hit: English with numbers and prices, and
+# ordinary Russian and Greek, whose letters the homoglyph table maps onto Latin (#532).
+ORDINARY_LYRICS = [
+    "[Verse 1]\nWe drove 405 miles at 3am, $5 in the tank and 1 last song\nSing it loud, sing it 4 me",
+    "Top 40 hits of 1999, 24/7 on the radio, 7 nights a week @ the club",
+    "[Chorus]\nОчи чёрные, очи страстные, очи жгучие и прекрасные\nКак люблю я вас, как боюсь я вас",
+    "Всё пройдёт, и печаль, и радость, солнце встанет над рекой",
+    "Σ' αγαπώ, σε θέλω, κάτω από τον ουρανό της Αθήνας\nΧόρεψε μαζί μου απόψε",
+    "Ruby Tuesday, heal my heart, the rapeseed fields are golden, sheila come home",
+]
+
+
+@pytest.mark.parametrize("fold_leetspeak", [False, True])
+@pytest.mark.parametrize("lyrics", ORDINARY_LYRICS)
+def test_folding_does_not_flag_ordinary_lyrics(lyrics, fold_leetspeak):
+    rules = screening.DEFAULT_RULES.model_copy(update={"fold_leetspeak": fold_leetspeak})
+    assert screening.match(rules, [lyrics]).categories == []
+
 
 @pytest.fixture(autouse=True)
 def _local_compute_available(monkeypatch):
@@ -378,6 +499,25 @@ class TestAdminRules:
         )
         job = await Job.get(PydanticObjectId(allowed.json()["job_id"]))
         assert "moderation_flags" not in job.input_params
+
+    async def test_leet_folding_is_off_until_an_admin_turns_it_on(self, client, settings):
+        admin = await make_user("screen-admin-leet@example.com", is_admin=True)
+        user = await make_user("screen-leet@example.com")
+        prompt = {"prompt": "a chant of s13g h31l"}
+        current = (await client.get(RULES_URL, headers=_auth(admin, settings))).json()
+        assert current["fold_leetspeak"] is False
+        assert (await client.post(GENERATE_URL, json=prompt, headers=_auth(user, settings))).status_code == 202
+
+        current["fold_leetspeak"] = True
+        assert (await client.put(RULES_URL, json=current, headers=_auth(admin, settings))).status_code == 200
+        assert (await client.get(RULES_URL, headers=_auth(admin, settings))).json()["fold_leetspeak"] is True
+        assert (await client.post(GENERATE_URL, json=prompt, headers=_auth(user, settings))).status_code == 422
+
+    async def test_a_rule_set_saved_before_leet_folding_existed_reads_as_off(self, client, settings):
+        admin = await make_user("screen-admin-legacy@example.com", is_admin=True)
+        legacy = {"key": "global", "rules": [], "allow_terms": [], "block_threshold": 0}
+        await screening.ScreeningRulesDocument.get_pymongo_collection().insert_one(legacy)
+        assert (await client.get(RULES_URL, headers=_auth(admin, settings))).json()["fold_leetspeak"] is False
 
     async def test_invalid_rules_are_rejected(self, client, settings):
         admin = await make_user("screen-admin-bad@example.com", is_admin=True)

@@ -334,7 +334,10 @@ Package manager: `uv` with `hatchling` build backend
   displays through `services/clips.screened_update`, which only re-queues a clip for a *new* flag category.
   Voice-model name/description are screened on train and rename (`VoiceModel.moderation_flags`)
   Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
-  admins are `User.is_admin=True`, set in the database only
+  admins are `User.is_admin=True`, set in the database only.
+  Matching folds case, accents, Cyrillic/Greek homoglyphs, fullwidth letters and invisible format characters
+  (#532), both in the text and in the rule terms, so a rule matches across scripts. Leetspeak folding
+  (`ScreeningRules.fold_leetspeak`) is off by default: turning it on catches `h3il`, at the cost of more false positives
 - **User reporting (US-27.2)**: `POST /api/v1/clips/{id}/report` writes a `ClipReport`; the unique
   `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Admins list reports via
   `GET /api/v1/admin/moderation/reports`. On the web, `ReportClipButton` reads `AuthContext` directly (not

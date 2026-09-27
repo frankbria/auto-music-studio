@@ -35,6 +35,8 @@ class ScreeningRules(BaseModel):
     allow_terms: list[str] = Field(default_factory=list, max_length=1000)
     #: This many distinct flag categories in one request escalate it to a block; 0 never does.
     block_threshold: int = Field(default=0, ge=0)
+    #: Also match digit/symbol stand-ins ("h3il", "$ieg"). Off by default: it trades false positives for recall.
+    fold_leetspeak: bool = False
 
 
 class ScreeningRulesDocument(ScreeningRules, Document):
