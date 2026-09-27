@@ -476,6 +476,22 @@ class TestClipMetadataScreening:
         assert resp.status_code == 422
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
 
+    async def test_a_removal_landing_mid_publish_is_not_undone(self, client, settings, monkeypatch):
+        user, clip = await _user_with_clip("meta-publish-race@example.com")
+        await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"]})
+        real_enforce = screening.enforce
+
+        async def removed_while_screening(*texts, **kwargs):
+            # The owner's PATCH has read the clip; a moderator removes it before the write.
+            await Clip.find_one(Clip.id == clip.id).update({"$set": {"removed_at": utcnow()}})
+            return await real_enforce(*texts, **kwargs)
+
+        monkeypatch.setattr(screening, "enforce", removed_while_screening)
+        resp = await self._patch(client, settings, user, clip, {"visibility": "public"})
+        assert resp.status_code == 403
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState.PRIVATE and stored.removed_at is not None
+
     async def test_publishing_does_not_requeue_an_already_reviewed_flag(self, client, settings):
         user, clip = await _user_with_clip("meta-publish-reviewed@example.com")
         reviewed = utcnow()
