@@ -71,15 +71,20 @@ _HOMOGLYPHS = str.maketrans(
 )
 
 #: Leet stand-ins per letter. Expanded on the rule side, so "1" can be both "i" and "l".
-_LEET = {"a": "4@", "e": "3", "i": "1", "l": "1", "o": "0", "s": "5$", "t": "7"}
+_LEET = {"a": "4@", "b": "8", "e": "3", "g": "69", "i": "1", "l": "1", "o": "0", "s": "5$", "t": "7", "z": "2"}
 
 
 def _normalise(text: str, *, keep: str = "") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
-    ``keep`` names punctuation that survives, for leet matching ("$ieg").
+    Invisible format characters (zero-width space, soft hyphen) are dropped rather than spaced, so
+    they can't split a word. ``keep`` names punctuation that survives, for leet matching ("$ieg").
     """
-    folded = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    folded = "".join(
+        c
+        for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
+    )
     return " ".join(re.sub(rf"[^\w{re.escape(keep)}]+|_", " ", folded.translate(_HOMOGLYPHS).lower()).split())
 
 

@@ -102,13 +102,18 @@ class TestMatch:
         rules = screening.ScreeningRules(rules=[screening.Rule(term="hеil", category="hate speech", action="block")])
         assert screening.match(rules, ["heil"]).blocked is True
 
+    # Zero-width space/joiner, word joiner, BOM and soft hyphen hidden inside a word.
+    @pytest.mark.parametrize("hidden", ["​", "‍", "⁠", "﻿", "­"])
+    def test_invisible_characters_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sie{hidden}g he{hidden}il"]).blocked is True
+
     LEET = RULES.model_copy(update={"fold_leetspeak": True})
 
     @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "r4p3"])
     def test_leetspeak_evades_by_default(self, text):
         assert screening.match(self.RULES, [text]).categories == []
 
-    @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "SIEG H3IL"])
+    @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "SIEG H3IL", "sie6 heil", "sie9 heil"])
     def test_leetspeak_is_caught_when_the_rule_set_folds_it(self, text):
         assert screening.match(self.LEET, [text]).blocked is True
 
@@ -117,6 +122,12 @@ class TestMatch:
             rules=[screening.Rule(term="kill list", category="violence", action="flag")], fold_leetspeak=True
         )
         assert screening.match(rules, ["k1ll 1ist"]).flags == ["violence"]
+
+    def test_b_and_z_stand_ins_are_folded(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="blitz", category="violence", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["8li72"]).flags == ["violence"]
 
     def test_leet_allow_terms_still_suppress(self):
         assert screening.match(self.LEET, ["a r4pe awar3ness single"]).flags == []
