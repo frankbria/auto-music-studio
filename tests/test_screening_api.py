@@ -107,6 +107,11 @@ class TestMatch:
     def test_invisible_characters_do_not_split_a_word(self, hidden):
         assert screening.match(self.RULES, [f"sie{hidden}g he{hidden}il"]).blocked is True
 
+    # Combining grapheme joiner and variation selectors: zero-width marks that combining() reports as 0.
+    @pytest.mark.parametrize("hidden", ["͏", "️", "︀"])
+    def test_zero_width_marks_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sieg he{hidden}il"]).blocked is True
+
     def test_an_invisible_character_still_separates_words(self):
         assert screening.match(self.RULES, ["sieg​heil"]).blocked is True
 
@@ -147,6 +152,14 @@ class TestMatch:
             rules=[screening.Rule(term="ca$h out", category="fraud", action="flag")], fold_leetspeak=True
         )
         assert screening.match(rules, ["ca$h out"]).flags == ["fraud"]
+
+    def test_an_allow_term_containing_a_leet_symbol_still_suppresses(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="nazi", category="hate speech", action="block")],
+            allow_terms=["n@zi"],
+            fold_leetspeak=True,
+        )
+        assert screening.match(rules, ["n@zi"]).categories == []
 
 
 # Everyday lyrics a fold must not turn into a rule hit: English with numbers and prices, and

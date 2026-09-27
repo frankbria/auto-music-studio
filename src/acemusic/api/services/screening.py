@@ -78,10 +78,11 @@ def _normalise(text: str, *, keep: str = "", invisible: str = " ") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
     ``keep`` names punctuation that survives, for leet matching ("$ieg"); ``invisible`` replaces
-    format characters such as a zero-width space.
+    zero-width characters: format characters such as a zero-width space, and the non-combining
+    marks (grapheme joiner, variation selectors) that NFKD leaves behind.
     """
     folded = "".join(
-        invisible if unicodedata.category(c) == "Cf" else c
+        invisible if unicodedata.category(c) in ("Cf", "Mn") else c
         for c in unicodedata.normalize("NFKD", text)
         if not unicodedata.combining(c)
     )
@@ -95,9 +96,17 @@ def _readings(text: str, leet: bool) -> Iterable[str]:
     return dict.fromkeys(_normalise(text, keep=k, invisible=i) for k in keeps for i in ("", " "))
 
 
-def _phrase(term: str, leet: bool = False) -> re.Pattern[str]:
-    body = "".join(f"[{re.escape(c + _LEET[c])}]" if leet and c in _LEET else re.escape(c) for c in _normalise(term))
-    return re.compile(rf"(?<!\w){body}(?!\w)")
+def _letter(c: str, leet: bool) -> str:
+    return f"[{re.escape(c + _LEET[c])}]" if leet and c in _LEET else re.escape(c)
+
+
+def _phrases(term: str, leet: bool) -> list[re.Pattern[str]]:
+    """A whole-word pattern per reading of ``term``, so "ca$h" and "n@zi" match the text read the same way."""
+    return [
+        re.compile(rf"(?<!\w){''.join(_letter(c, leet) for c in reading)}(?!\w)")
+        for reading in _readings(term, leet)
+        if reading
+    ]
 
 
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
@@ -106,14 +115,14 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     leet = rules.fold_leetspeak
     text = " | ".join(reading for t in texts if t for reading in _readings(t, leet))
     for allowed in rules.allow_terms:
-        if _normalise(allowed):
-            text = _phrase(allowed, leet).sub(" ", text)
+        for phrase in _phrases(allowed, leet):
+            text = phrase.sub(" ", text)
 
     blocked: list[str] = []
     flagged: list[str] = []
     for rule in rules.rules:
         hits = blocked if rule.action == "block" else flagged
-        if rule.category not in hits and _phrase(rule.term, leet).search(text):
+        if rule.category not in hits and any(phrase.search(text) for phrase in _phrases(rule.term, leet)):
             hits.append(rule.category)
 
     if blocked:
