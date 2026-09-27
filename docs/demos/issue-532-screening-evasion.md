@@ -180,4 +180,4 @@ All five criteria verified against the live API and a real local MongoDB. Server
 
 ## Note
 
-Recorded at commit 70d9747. The follow-up commit, which screens text both with invisible characters and leet symbols dropped and with them read as separators (`sieg<ZWSP>heil`, `sieg$heil`), only adds matches. It is covered by `TestMatch` in `tests/test_screening_api.py`.
+Recorded at commit 70d9747. The later commits (c381ba2, 0c68d8c) change only which readings get screened. They screen text, rule terms and allow terms in every reading: invisible characters dropped and read as a space, leet symbols kept and read as a separator. That covers `sieg<ZWSP>heil`, `sieg$heil` and an `n@zi` allow-term, and is tested in `TestMatch` in `tests/test_screening_api.py`.
