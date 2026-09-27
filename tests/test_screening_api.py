@@ -103,17 +103,20 @@ class TestMatch:
         assert screening.match(rules, ["heil"]).blocked is True
 
     # Zero-width space/joiner, word joiner, BOM and soft hyphen hidden inside a word.
-    @pytest.mark.parametrize("hidden", ["​", "‍", "⁠", "﻿", "­"])
+    @pytest.mark.parametrize("hidden", ["\u200b", "\u200d", "\u2060", "\ufeff", "\u00ad"])
     def test_invisible_characters_do_not_split_a_word(self, hidden):
         assert screening.match(self.RULES, [f"sie{hidden}g he{hidden}il"]).blocked is True
 
     # Combining grapheme joiner and variation selectors: zero-width marks that combining() reports as 0.
-    @pytest.mark.parametrize("hidden", ["͏", "️", "︀"])
+    @pytest.mark.parametrize("hidden", ["\u034f", "\ufe0f", "\ufe00"])
     def test_zero_width_marks_do_not_split_a_word(self, hidden):
         assert screening.match(self.RULES, [f"sieg he{hidden}il"]).blocked is True
 
     def test_an_invisible_character_still_separates_words(self):
-        assert screening.match(self.RULES, ["sieg​heil"]).blocked is True
+        assert screening.match(self.RULES, ["sieg\u200bheil"]).blocked is True
+
+    def test_invisible_characters_in_both_roles_in_one_field(self):
+        assert screening.match(self.RULES, ["chant si\u200beg\u200bheil"]).blocked is True
 
     LEET = RULES.model_copy(update={"fold_leetspeak": True})
 
@@ -146,6 +149,12 @@ class TestMatch:
     @pytest.mark.parametrize("text", ["sieg$heil", "sieg@heil"])
     def test_leet_symbols_still_separate_words(self, text):
         assert screening.match(self.LEET, [text]).blocked is True
+
+    def test_a_leet_symbol_in_both_roles_in_one_field(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="cash grab", category="fraud", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["ca$h$grab"]).flags == ["fraud"]
 
     def test_a_rule_containing_a_leet_symbol_matches_itself(self):
         rules = screening.ScreeningRules(

@@ -74,55 +74,59 @@ _HOMOGLYPHS = str.maketrans(
 _LEET = {"a": "4@", "b": "8", "e": "3", "g": "69", "i": "1", "l": "1", "o": "0", "s": "5$", "t": "7", "z": "2"}
 
 
-def _normalise(text: str, *, keep: str = "", invisible: str = " ") -> str:
+#: Stands in for a zero-width character. A rule may find it inside a word ("sie\u200bg") or between
+#: two ("sieg\u200bheil"), so one reading of the text covers both, however they are mixed.
+_INVISIBLE = "\x00"
+
+
+def _normalise(text: str, *, keep: str = "") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
-    ``keep`` names punctuation that survives, for leet matching ("$ieg"); ``invisible`` replaces
-    zero-width characters: format characters such as a zero-width space, and the non-combining
-    marks (grapheme joiner, variation selectors) that NFKD leaves behind.
+    Zero-width characters (format characters such as a zero-width space, and the non-combining
+    marks NFKD leaves, like variation selectors) become ``_INVISIBLE``. ``keep`` names punctuation
+    that survives, for leet matching ("$ieg").
     """
     folded = "".join(
-        invisible if unicodedata.category(c) in ("Cf", "Mn") else c
+        _INVISIBLE if unicodedata.category(c) in ("Cf", "Mn") else c
         for c in unicodedata.normalize("NFKD", text)
         if not unicodedata.combining(c)
     )
-    return " ".join(re.sub(rf"[^\w{re.escape(keep)}]+|_", " ", folded.translate(_HOMOGLYPHS).lower()).split())
+    return " ".join(
+        re.sub(rf"[^\w{re.escape(keep + _INVISIBLE)}]+|_", " ", folded.translate(_HOMOGLYPHS).lower()).split()
+    )
 
 
-def _readings(text: str, leet: bool) -> Iterable[str]:
-    """Every way ``text`` can be read: a zero-width space may hide inside one word or stand between
-    two, and in leet mode "$" may be a letter ("$ieg") or a separator ("sieg$heil")."""
-    keeps = ("", "@$") if leet else ("",)
-    return dict.fromkeys(_normalise(text, keep=k, invisible=i) for k in keeps for i in ("", " "))
+def _words(term: str) -> list[str]:
+    return _normalise(term).replace(_INVISIBLE, "").split()
 
 
 def _letter(c: str, leet: bool) -> str:
     return f"[{re.escape(c + _LEET[c])}]" if leet and c in _LEET else re.escape(c)
 
 
-def _phrases(term: str, leet: bool) -> list[re.Pattern[str]]:
-    """A whole-word pattern per reading of ``term``, so "ca$h" and "n@zi" match the text read the same way."""
-    return [
-        re.compile(rf"(?<!\w){''.join(_letter(c, leet) for c in reading)}(?!\w)")
-        for reading in _readings(term, leet)
-        if reading
-    ]
+def _phrase(term: str, leet: bool) -> re.Pattern[str]:
+    """Whole-word pattern for ``term``: invisibles may sit between its letters, and a space may be any run of
+    spaces and invisibles, plus "@"/"$" under leet ("sieg$heil"), since those are letters only by position."""
+    gap = re.escape(_INVISIBLE) + "*"
+    separator = f"[ {re.escape(_INVISIBLE + ('@$' if leet else ''))}]+"
+    body = separator.join(gap.join(_letter(c, leet) for c in word) for word in _words(term))
+    return re.compile(rf"(?<!\w){body}(?!\w)")
 
 
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
     """Screen ``texts`` against ``rules``. Pure — no storage, so it is cheap to test."""
     # ponytail: regexes compiled per call; cache per rule set if rule lists grow to thousands.
     leet = rules.fold_leetspeak
-    text = " | ".join(reading for t in texts if t for reading in _readings(t, leet))
+    text = " | ".join(_normalise(t, keep="@$" if leet else "") for t in texts if t)
     for allowed in rules.allow_terms:
-        for phrase in _phrases(allowed, leet):
-            text = phrase.sub(" ", text)
+        if _words(allowed):
+            text = _phrase(allowed, leet).sub(" ", text)
 
     blocked: list[str] = []
     flagged: list[str] = []
     for rule in rules.rules:
         hits = blocked if rule.action == "block" else flagged
-        if rule.category not in hits and any(phrase.search(text) for phrase in _phrases(rule.term, leet)):
+        if rule.category not in hits and _phrase(rule.term, leet).search(text):
             hits.append(rule.category)
 
     if blocked:
