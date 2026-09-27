@@ -19,7 +19,9 @@ optional description.
 **Every rejection names the file**, because "invalid file" is useless when ten were
 uploaded: `thin.wav: sample rate is 8000 Hz, below the 16000 Hz minimum.`
 
-**Validation runs before the charge.** A rejected upload costs nothing. Training costs
+**Validation runs before the charge.** A rejected upload costs nothing. The name and
+description are content-screened too (#531): a blocked one is a `422` that names the category,
+and a borderline one is stored on the model's `moderation_flags`. Renames are screened the same way. Training costs
 **10 credits**, deducted only once every check that can reject the request has passed, and
 **refunded on any failure** — using the amount actually charged, so a later price change
 cannot alter what you get back.
