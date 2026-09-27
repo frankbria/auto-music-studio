@@ -74,18 +74,25 @@ _HOMOGLYPHS = str.maketrans(
 _LEET = {"a": "4@", "b": "8", "e": "3", "g": "69", "i": "1", "l": "1", "o": "0", "s": "5$", "t": "7", "z": "2"}
 
 
-def _normalise(text: str, *, keep: str = "") -> str:
+def _normalise(text: str, *, keep: str = "", invisible: str = " ") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
-    Invisible format characters (zero-width space, soft hyphen) are dropped rather than spaced, so
-    they can't split a word. ``keep`` names punctuation that survives, for leet matching ("$ieg").
+    ``keep`` names punctuation that survives, for leet matching ("$ieg"); ``invisible`` replaces
+    format characters such as a zero-width space.
     """
     folded = "".join(
-        c
+        invisible if unicodedata.category(c) == "Cf" else c
         for c in unicodedata.normalize("NFKD", text)
-        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
+        if not unicodedata.combining(c)
     )
     return " ".join(re.sub(rf"[^\w{re.escape(keep)}]+|_", " ", folded.translate(_HOMOGLYPHS).lower()).split())
+
+
+def _readings(text: str, leet: bool) -> Iterable[str]:
+    """Every way ``text`` can be read: a zero-width space may hide inside one word or stand between
+    two, and in leet mode "$" may be a letter ("$ieg") or a separator ("sieg$heil")."""
+    keeps = ("", "@$") if leet else ("",)
+    return dict.fromkeys(_normalise(text, keep=k, invisible=i) for k in keeps for i in ("", " "))
 
 
 def _phrase(term: str, leet: bool = False) -> re.Pattern[str]:
@@ -97,7 +104,7 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     """Screen ``texts`` against ``rules``. Pure — no storage, so it is cheap to test."""
     # ponytail: regexes compiled per call; cache per rule set if rule lists grow to thousands.
     leet = rules.fold_leetspeak
-    text = " | ".join(_normalise(t, keep="@$" if leet else "") for t in texts if t)
+    text = " | ".join(reading for t in texts if t for reading in _readings(t, leet))
     for allowed in rules.allow_terms:
         if _normalise(allowed):
             text = _phrase(allowed, leet).sub(" ", text)

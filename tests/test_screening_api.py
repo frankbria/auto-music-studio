@@ -107,6 +107,9 @@ class TestMatch:
     def test_invisible_characters_do_not_split_a_word(self, hidden):
         assert screening.match(self.RULES, [f"sie{hidden}g he{hidden}il"]).blocked is True
 
+    def test_an_invisible_character_still_separates_words(self):
+        assert screening.match(self.RULES, ["sieg​heil"]).blocked is True
+
     LEET = RULES.model_copy(update={"fold_leetspeak": True})
 
     @pytest.mark.parametrize("text", ["s13g h31l", "5ieg he1l", "$ieg h3il", "r4p3"])
@@ -134,6 +137,16 @@ class TestMatch:
 
     def test_leet_fold_keeps_whole_word_matching(self):
         assert screening.match(self.LEET, ["dr4pe the stage", "r4pes"]).flags == []
+
+    @pytest.mark.parametrize("text", ["sieg$heil", "sieg@heil"])
+    def test_leet_symbols_still_separate_words(self, text):
+        assert screening.match(self.LEET, [text]).blocked is True
+
+    def test_a_rule_containing_a_leet_symbol_matches_itself(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="ca$h out", category="fraud", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["ca$h out"]).flags == ["fraud"]
 
 
 # Everyday lyrics a fold must not turn into a rule hit: English with numbers and prices, and
