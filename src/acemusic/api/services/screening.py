@@ -123,13 +123,14 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     text = " | ".join(_normalise(t, keep="@$" if leet else "") for t in texts if t)
     for allowed in rules.allow_terms:
         if _words(allowed):
-            text = _phrase(allowed, leet).sub(" ", text)
+            # Replaced by the field joiner, which no pattern spans: a space would let "white [house] power" join up.
+            text = _phrase(allowed, leet).sub(" | ", text)
 
     blocked: list[str] = []
     flagged: list[str] = []
     for rule in rules.rules:
         hits = blocked if rule.action == "block" else flagged
-        if rule.category not in hits and _phrase(rule.term, leet).search(text):
+        if rule.category not in hits and _words(rule.term) and _phrase(rule.term, leet).search(text):
             hits.append(rule.category)
 
     if blocked:

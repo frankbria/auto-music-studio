@@ -162,6 +162,15 @@ class TestMatch:
         )
         assert screening.match(rules, ["ca$h$grab"]).flags == ["fraud"]
 
+    def test_removing_an_allow_term_does_not_join_the_words_around_it(self):
+        rules = screening.DEFAULT_RULES.model_copy(update={"allow_terms": ["house"]})
+        assert screening.match(rules, ["white house power"]).categories == []
+
+    @pytest.mark.parametrize("term", ["\u3164", "\u115f !!"])
+    def test_a_rule_of_only_blank_letters_matches_nothing(self, term):
+        rules = screening.ScreeningRules(rules=[screening.Rule(term=term, category="x", action="block")])
+        assert screening.match(rules, ["a prompt", "a style"]).categories == []
+
     def test_an_allow_term_of_only_punctuation_suppresses_nothing(self):
         rules = screening.ScreeningRules(
             rules=[screening.Rule(term="cash", category="fraud", action="flag")],
