@@ -329,6 +329,10 @@ Package manager: `uv` with `hatchling` build backend
   on its free text *before* `charge_and_create`, so a blocked request (422, string `detail`) never
   charges. Borderline matches ride in `job.input_params["moderation_flags"]` and are copied to
   `Clip.moderation_flags` by the clip builders. A new generative endpoint must screen its text too.
+  Display metadata is screened as well (#531): clip upload and title PATCH screen what they store, and any
+  path that makes a clip public/unlisted (clip PATCH, release visibility) re-screens everything the clip
+  displays through `services/clips.screened_update`, which only re-queues a clip for a *new* flag category.
+  Voice-model name/description are screened on train and rename (`VoiceModel.moderation_flags`)
   Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
   admins are `User.is_admin=True`, set in the database only
 - **User reporting (US-27.2)**: `POST /api/v1/clips/{id}/report` writes a `ClipReport`; the unique

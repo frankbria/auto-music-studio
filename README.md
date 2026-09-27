@@ -291,7 +291,7 @@ The queue is owner-scoped (one document per user, unique on `user_id`). Repeat i
 | --- | --- |
 | `GET /api/v1/clips` | Paginated clip list with search, filter, and sort |
 | `GET /api/v1/clips/{id}` | Get clip metadata (404 if missing or not owned) |
-| `PATCH /api/v1/clips/{id}` | Rename a clip (`title` is the only writable field; empty body is a no-op) |
+| `PATCH /api/v1/clips/{id}` | Rename a clip and/or set its `visibility` (empty body is a no-op). A new title is content-screened, and going public/unlisted re-screens the clip's title, tags and lyrics (`422` naming the category when blocked) |
 | `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
 | `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
 | `GET /api/v1/clips/{id}/stream` | Streams a clip for the web player — optional auth, full range support, rate-limited |
@@ -393,7 +393,7 @@ Because LANDR, DistroKid, and TuneCore have no public submission API, the platfo
 | `GET /api/v1/releases` | Each release in the listing now carries `channel_statuses` (per-channel status map) and `visibility` |
 | `GET /api/v1/releases/{id}/status` | Per-channel status breakdown: `channels` (`[{channel, status}]`), `visibility`, and `soundcloud_last_polled` |
 | `PATCH /api/v1/releases/{id}/channels/{channel}/status` | Manually set a **guided** channel's status (`landr`/`distrokid`/`tunecore`); `soundcloud` or an unknown channel → `400`, an out-of-sequence step → `409` |
-| `PATCH /api/v1/releases/{id}/visibility` | Set release visibility (`private`/`unlisted`/`public`); syncs the source clip's `is_public` and, if uploaded, the SoundCloud track's sharing |
+| `PATCH /api/v1/releases/{id}/visibility` | Set release visibility (`private`/`unlisted`/`public`); syncs the source clip's `is_public` and, if uploaded, the SoundCloud track's sharing. Going public/unlisted content-screens the source clip first (`422` when blocked) |
 
 Each channel tracks its own status through the sequence `draft → ready → submitted → in_review → live | rejected` (no skipping — enforced by an atomic, guarded write). SoundCloud is driven automatically: `POST /distribution/soundcloud/upload` accepts an optional `release_id` to record the track id and start the channel at `submitted`, and a background `SoundCloudStatusPoller` advances it from the live track state (`processing`→`in_review`, `finished`+`public`→`live`, `failed`→`rejected`). Reaching `live`/`rejected` records a `NotificationEvent` (delivery is out of scope). The poller is gated by `ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED` (default on) with `ACEMUSIC_API_SOUNDCLOUD_POLL_INTERVAL` (default 60s, floor 5s) and `ACEMUSIC_API_SOUNDCLOUD_POLL_BATCH_SIZE` (default 20); it orders by `soundcloud_last_polled` so no release starves. `unlisted` maps to SoundCloud `private` (SoundCloud has no unlisted state).
 

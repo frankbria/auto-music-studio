@@ -1,4 +1,4 @@
-"""Automated content screening for generation requests (US-27.1).
+"""Automated content screening for generation requests (US-27.1) and the text clips display (#531).
 
 Keyword and phrase matching over the request's prompt, style and lyrics, run before
 any credit is charged. Deliberately conservative: creative expression comes first, so
@@ -39,12 +39,16 @@ DEFAULT_RULES = ScreeningRules(
 class ContentBlockedError(Exception):
     """The request's text matched a blocking rule. ``categories`` is what the user is told."""
 
-    def __init__(self, categories: list[str]) -> None:
+    def __init__(self, categories: list[str], *, saving: bool = False) -> None:
         self.categories = categories
+        outcome, fix = (
+            ("This wasn't saved", "rephrasing it")
+            if saving
+            else ("This request wasn't generated", "rephrasing the prompt, style or lyrics")
+        )
         super().__init__(
-            f"This request wasn't generated because parts of it look like {' / '.join(categories)} content, "
-            "which our content policy doesn't allow. If we misread your intent, try rephrasing the prompt, "
-            "style or lyrics."
+            f"{outcome} because parts of it look like {' / '.join(categories)} content, "
+            f"which our content policy doesn't allow. If we misread your intent, try {fix}."
         )
 
 
@@ -114,12 +118,15 @@ async def save_rules(rules: ScreeningRules) -> ScreeningRules:
     return rules
 
 
-async def enforce(*texts: str | None) -> list[str]:
+async def enforce(*texts: str | None, saving: bool = False) -> list[str]:
     """Raise :class:`ContentBlockedError` for blocked text; return the flag categories otherwise.
 
-    Call before charging credits, so a blocked request never costs anything.
+    Call before charging credits, so a blocked request never costs anything. ``saving``
+    words the refusal for metadata a user stores (a title, a voice name) rather than generates.
     """
+    if not any(texts):
+        return []
     result = match(await get_rules(), texts)
     if result.blocked:
-        raise ContentBlockedError(result.categories)
+        raise ContentBlockedError(result.categories, saving=saving)
     return result.flags

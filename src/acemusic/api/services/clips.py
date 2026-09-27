@@ -25,7 +25,12 @@ from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
 from ..tasks.common import store_clip
-from . import daw_export as daw_export_service, users as user_service, workspaces as workspace_service
+from . import (
+    daw_export as daw_export_service,
+    screening,
+    users as user_service,
+    workspaces as workspace_service,
+)
 from .common import coerce_object_id
 
 logger = logging.getLogger(__name__)
@@ -428,9 +433,30 @@ async def upload_clip(
         model=model,
         generation_mode="imported",
     )
+    # US-27.1 (#531): an uploaded title or tag is displayed like a generated one, so it is screened too.
+    clip.moderation_flags = await screening.enforce(*screening.clip_texts(clip), saving=True)
 
     storage = get_storage_backend()
     return await store_clip(storage, clip, data)
+
+
+async def screened_update(clip: Clip, texts: list[str | None], fields: dict) -> dict:
+    """The Mongo update that ``$set``s ``fields`` once ``texts`` pass screening (US-27.1, #531).
+
+    For any path that changes what a clip shows the world. Screening everything a clip displays
+    when it goes visible also catches text stored before screening existed or before a rule was
+    added. Only a flag category the clip doesn't carry yet sends it back to the moderation queue.
+    """
+    flags = await screening.enforce(*texts, saving=True)
+    new_flags = [flag for flag in flags if flag not in clip.moderation_flags]
+    if not new_flags:
+        return {"$set": fields}
+    clip.moderation_flags = [*clip.moderation_flags, *new_flags]
+    clip.moderation_reviewed_at = None
+    return {
+        "$set": {**fields, "moderation_reviewed_at": None},
+        "$addToSet": {"moderation_flags": {"$each": new_flags}},
+    }
 
 
 async def update_clip_fields(
@@ -460,14 +486,27 @@ async def update_clip_fields(
         # the boolean has no unlisted concept, and PRIVATE is the safe (more
         # restrictive) resolution. Modern clients send `visibility` and skip this.
         visibility = VisibilityState.PUBLIC if is_public else VisibilityState.PRIVATE
-    if visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED):
+    going_visible = visibility in (VisibilityState.PUBLIC, VisibilityState.UNLISTED)
+    if going_visible:
         ensure_not_removed(clip)
     if visibility == VisibilityState.PUBLIC:
         _enforce_publish_guard(clip)
+    if title is None and visibility is None:
+        return clip
+
+    fields: dict = {}
+    if title is not None:
+        fields["title"] = title
     if visibility is not None:
         clip.set_visibility(visibility)
-    if title is not None or visibility is not None:
-        await clip.save()
+        fields.update(visibility=clip.visibility, is_public=clip.is_public)
+    # A new title is screened as it is saved; going visible screens everything the clip displays.
+    update = await screened_update(clip, screening.clip_texts(clip) if going_visible else [title], fields)
+
+    # Atomic, never a whole-document save(): that would undo a moderation action landing after the read.
+    result = await Clip.find_one({"_id": clip.id, **({"removed_at": None} if going_visible else {})}).update(update)
+    if not result.matched_count:
+        ensure_not_removed(await get_owned_clip(clip_id, user_id))
     return clip
 
 

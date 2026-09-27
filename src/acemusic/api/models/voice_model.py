@@ -72,6 +72,9 @@ class VoiceModel(Document):
     #: and a price change cannot retroactively alter what someone gets back.
     credits_charged: float = 0.0
 
+    #: Borderline content categories screening found in the name or description (#531).
+    moderation_flags: list[str] = Field(default_factory=list)
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

@@ -385,12 +385,12 @@ async def update_visibility(
 ) -> ReleaseStatusResponse:
     """Change a release's visibility (US-13.6); sync SoundCloud sharing if it's uploaded there."""
     release = await release_service.get_owned_release(release_id, current.user_id)
-    if body.state != VisibilityState.PRIVATE:
-        # Before the SoundCloud sync, so a removed clip's track is never re-shared (US-27.3).
-        await release_service.ensure_source_not_removed(release)
+    # Both before the SoundCloud sync, so a removed (US-27.3) or blocked (#531) clip's track is never
+    # re-shared — including when a removal lands mid-request, which update_visibility refuses with a 403.
+    clip_update = await release_service.source_clip_visibility_update(release, body.state)
+    release = await release_service.update_visibility(release, body.state, clip_update)
     if release.soundcloud_track_id:
         await _sync_soundcloud_sharing(release, body.state, settings)
-    release = await release_service.update_visibility(release, body.state)
     return ReleaseStatusResponse.from_release(release)
 
 
