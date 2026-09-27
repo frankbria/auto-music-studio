@@ -78,16 +78,19 @@ _LEET = {"a": "4@", "b": "8", "e": "3", "g": "69", "i": "1", "l": "1", "o": "0",
 #: two ("sieg\u200bheil"), so one reading of the text covers both, however they are mixed.
 _INVISIBLE = "\x00"
 
+#: Hangul fillers render blank but are letters (category Lo). NFKD maps U+3164 and U+FFA0 onto U+1160.
+_BLANK_LETTERS = "\u115f\u1160"
+
 
 def _normalise(text: str, *, keep: str = "") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
-    Zero-width characters (format characters such as a zero-width space, and the non-combining
-    marks NFKD leaves, like variation selectors) become ``_INVISIBLE``. ``keep`` names punctuation
-    that survives, for leet matching ("$ieg").
+    Zero-width characters (format characters such as a zero-width space, the non-combining marks
+    NFKD leaves, like variation selectors, and blank filler letters) become ``_INVISIBLE``.
+    ``keep`` names punctuation that survives, for leet matching ("$ieg").
     """
     folded = "".join(
-        _INVISIBLE if unicodedata.category(c) in ("Cf", "Mn") else c
+        _INVISIBLE if unicodedata.category(c) in ("Cf", "Mn") or c in _BLANK_LETTERS else c
         for c in unicodedata.normalize("NFKD", text)
         if not unicodedata.combining(c)
     )

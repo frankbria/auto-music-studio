@@ -112,6 +112,12 @@ class TestMatch:
     def test_zero_width_marks_do_not_split_a_word(self, hidden):
         assert screening.match(self.RULES, [f"sieg he{hidden}il"]).blocked is True
 
+    # Hangul fillers render blank but are letters (category Lo), so no category rule catches them.
+    @pytest.mark.parametrize("hidden", ["\u115f", "\u1160", "\u3164", "\uffa0"])
+    def test_blank_filler_letters_do_not_split_a_word(self, hidden):
+        assert screening.match(self.RULES, [f"sie{hidden}g heil"]).blocked is True
+        assert screening.match(self.RULES, [f"sieg{hidden}heil"]).blocked is True
+
     def test_an_invisible_character_still_separates_words(self):
         assert screening.match(self.RULES, ["sieg\u200bheil"]).blocked is True
 
