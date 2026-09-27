@@ -124,6 +124,8 @@ async def enforce(*texts: str | None, saving: bool = False) -> list[str]:
     Call before charging credits, so a blocked request never costs anything. ``saving``
     words the refusal for metadata a user stores (a title, a voice name) rather than generates.
     """
+    if not any(texts):
+        return []
     result = match(await get_rules(), texts)
     if result.blocked:
         raise ContentBlockedError(result.categories, saving=saving)

@@ -557,6 +557,19 @@ class TestReleaseVisibilityScreening:
         assert (clip.visibility, clip.moderation_flags) == (VisibilityState.PUBLIC, ["self-harm"])
         assert clip.moderation_reviewed_at is None
 
+    async def test_a_removal_landing_mid_publish_keeps_the_release_private(self, client, settings, monkeypatch):
+        real_enforce = screening.enforce
+
+        async def removed_while_screening(*texts, **kwargs):
+            # The router has checked the source clip; a moderator removes it before the write.
+            await Clip.find({"title": "Song", "lyrics": "a quiet folk song"}).update({"$set": {"removed_at": utcnow()}})
+            return await real_enforce(*texts, **kwargs)
+
+        monkeypatch.setattr(screening, "enforce", removed_while_screening)
+        resp, clip, release = await self._publish(client, settings, "a quiet folk song")
+        assert resp.status_code == 403
+        assert (clip.visibility, release.visibility) == (VisibilityState.PRIVATE, VisibilityState.PRIVATE)
+
 
 @pytest.mark.integration
 class TestVoiceModelScreening:

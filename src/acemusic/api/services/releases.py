@@ -240,13 +240,19 @@ async def update_visibility(release: Release, visibility: VisibilityState, clip_
     which gates non-owner audio access) is mirrored to match, together with its
     ``is_public`` denormalization, via ``clip_update`` from :func:`source_clip_visibility_update`.
     """
+    # One conditional update, not read-then-save: a save would write back a stale snapshot and
+    # revert an admin removal landing in between. A deleted or removed clip simply matches nothing;
+    # a removal that landed since the router's check refuses the release too, rather than leaving
+    # it public over a private clip.
+    result = await Clip.find_one({"_id": release.clip_id, "user_id": release.user_id, "removed_at": None}).update(
+        clip_update
+    )
+    if not result.matched_count and visibility != VisibilityState.PRIVATE:
+        await ensure_source_not_removed(release)
+
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
-
-    # One conditional update, not read-then-save: a save would write back a stale snapshot and
-    # revert an admin removal landing in between. A deleted or removed clip simply matches nothing.
-    await Clip.find_one({"_id": release.clip_id, "user_id": release.user_id, "removed_at": None}).update(clip_update)
     return release
 
 
