@@ -440,6 +440,25 @@ async def upload_clip(
     return await store_clip(storage, clip, data)
 
 
+async def screened_update(clip: Clip, texts: list[str | None], fields: dict) -> dict:
+    """The Mongo update that ``$set``s ``fields`` once ``texts`` pass screening (US-27.1, #531).
+
+    For any path that changes what a clip shows the world. Screening everything a clip displays
+    when it goes visible also catches text stored before screening existed or before a rule was
+    added. Only a flag category the clip doesn't carry yet sends it back to the moderation queue.
+    """
+    flags = await screening.enforce(*texts, saving=True)
+    new_flags = [flag for flag in flags if flag not in clip.moderation_flags]
+    if not new_flags:
+        return {"$set": fields}
+    clip.moderation_flags = [*clip.moderation_flags, *new_flags]
+    clip.moderation_reviewed_at = None
+    return {
+        "$set": {**fields, "moderation_reviewed_at": None},
+        "$addToSet": {"moderation_flags": {"$each": new_flags}},
+    }
+
+
 async def update_clip_fields(
     clip_id: str,
     user_id: str,
@@ -475,22 +494,14 @@ async def update_clip_fields(
     if title is None and visibility is None:
         return clip
 
-    # US-27.1 (#531): a new title is screened as it is saved. Going visible screens everything the
-    # clip displays, which also catches text stored before screening existed or before a rule was added.
-    flags = await screening.enforce(*(screening.clip_texts(clip) if going_visible else [title]), saving=True)
-    updates: dict = {}
+    fields: dict = {}
     if title is not None:
-        updates["title"] = title
+        fields["title"] = title
     if visibility is not None:
         clip.set_visibility(visibility)
-        updates.update(visibility=clip.visibility, is_public=clip.is_public)
-    # Only a category the clip doesn't carry yet sends it back to the moderation queue.
-    new_flags = [flag for flag in flags if flag not in clip.moderation_flags]
-    update: dict = {"$set": updates}
-    if new_flags:
-        updates["moderation_reviewed_at"] = clip.moderation_reviewed_at = None
-        clip.moderation_flags = [*clip.moderation_flags, *new_flags]
-        update["$addToSet"] = {"moderation_flags": {"$each": new_flags}}
+        fields.update(visibility=clip.visibility, is_public=clip.is_public)
+    # A new title is screened as it is saved; going visible screens everything the clip displays.
+    update = await screened_update(clip, screening.clip_texts(clip) if going_visible else [title], fields)
 
     # Atomic, never a whole-document save(): that would undo a moderation action landing after the read.
     result = await Clip.find_one({"_id": clip.id, **({"removed_at": None} if going_visible else {})}).update(update)

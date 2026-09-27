@@ -18,7 +18,7 @@ from ..models import Clip, Release, ReleaseStatus
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers
+from . import clips as clip_service, identifiers, screening
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
 
@@ -215,7 +215,22 @@ async def ensure_source_not_removed(release: Release) -> None:
         clip_service.ensure_not_removed(clip)
 
 
-async def update_visibility(release: Release, visibility: VisibilityState) -> Release:
+async def source_clip_visibility_update(release: Release, visibility: VisibilityState) -> dict:
+    """The update that mirrors ``visibility`` onto ``release``'s source clip, for :func:`update_visibility`.
+
+    Run before anything is shared: a clip removed by moderation refuses anything but private
+    (US-27.3), and a clip going visible has its text screened (#531) — 403 / 422 respectively.
+    A deleted source clip is tolerated (the release keeps its visibility).
+    """
+    fields = {"visibility": visibility.value, "is_public": visibility == VisibilityState.PUBLIC}
+    clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
+    if clip is None or visibility == VisibilityState.PRIVATE:
+        return {"$set": fields}
+    clip_service.ensure_not_removed(clip)
+    return await clip_service.screened_update(clip, screening.clip_texts(clip), fields)
+
+
+async def update_visibility(release: Release, visibility: VisibilityState, clip_update: dict) -> Release:
     """Set ``release``'s visibility and mirror it onto the source clip (US-13.6).
 
     Takes an already-owned ``release`` (the router has validated ownership), so it
@@ -223,20 +238,15 @@ async def update_visibility(release: Release, visibility: VisibilityState) -> Re
     submission lifecycle, so it is editable in any state (unlike metadata, which
     locks after submission). The source clip's own ``visibility`` (US-20.7,
     which gates non-owner audio access) is mirrored to match, together with its
-    ``is_public`` denormalization. A deleted source clip is tolerated (the release keeps its
-    visibility). A clip removed by moderation refuses anything but private (US-27.3).
+    ``is_public`` denormalization, via ``clip_update`` from :func:`source_clip_visibility_update`.
     """
-    if visibility != VisibilityState.PRIVATE:
-        await ensure_source_not_removed(release)
     release.visibility = visibility
     release.updated_at = utcnow()
     await release.save()
 
     # One conditional update, not read-then-save: a save would write back a stale snapshot and
     # revert an admin removal landing in between. A deleted or removed clip simply matches nothing.
-    await Clip.find_one({"_id": release.clip_id, "user_id": release.user_id, "removed_at": None}).update(
-        {"$set": {"visibility": visibility.value, "is_public": visibility == VisibilityState.PUBLIC}}
-    )
+    await Clip.find_one({"_id": release.clip_id, "user_id": release.user_id, "removed_at": None}).update(clip_update)
     return release
 
 

@@ -14,12 +14,13 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Job, VisibilityState, VoiceModel, VoiceModelStatus, Workspace
+from acemusic.api.models import Clip, Job, Release, VisibilityState, VoiceModel, VoiceModelStatus, Workspace
 from acemusic.api.models.common import utcnow
 from acemusic.api.services import clips as clip_service, routing, screening, users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
+from tests.test_releases_api import FULL_METADATA as RELEASE_METADATA, RELEASES_URL
 from tests.test_voice_models_api import wav as voice_wav
 from tests.users import make_user
 
@@ -518,6 +519,35 @@ class TestClipMetadataScreening:
         assert resp.status_code == 200, resp.text
         stored = await Clip.get(clip.id)
         assert (stored.visibility, stored.moderation_flags) == (VisibilityState.PUBLIC, [])
+
+
+@pytest.mark.integration
+class TestReleaseVisibilityScreening:
+    """A release's visibility is mirrored onto its source clip, so it is a second way to publish one."""
+
+    async def _publish(self, client, settings, lyrics):
+        user, clip = await _user_with_clip(f"meta-release-{len(lyrics)}@example.com")
+        await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"], Clip.lyrics: lyrics})
+        created = await client.post(
+            RELEASES_URL, json={"clip_id": str(clip.id), **RELEASE_METADATA}, headers=_auth(user, settings)
+        )
+        assert created.status_code == 201, created.text
+        resp = await client.patch(
+            f"{RELEASES_URL}/{created.json()['id']}/visibility", json={"state": "public"}, headers=_auth(user, settings)
+        )
+        return resp, await Clip.get(clip.id), await Release.get(PydanticObjectId(created.json()["id"]))
+
+    async def test_blocked_source_text_keeps_the_release_and_clip_private(self, client, settings):
+        resp, clip, release = await self._publish(client, settings, "[Chorus]\ngas the jews")
+        assert resp.status_code == 422
+        assert "wasn't saved" in resp.json()["detail"]
+        assert (clip.visibility, release.visibility) == (VisibilityState.PRIVATE, VisibilityState.PRIVATE)
+
+    async def test_borderline_source_text_publishes_and_flags_the_clip(self, client, settings):
+        resp, clip, _ = await self._publish(client, settings, "a song about self harm")
+        assert resp.status_code == 200, resp.text
+        assert (clip.visibility, clip.moderation_flags) == (VisibilityState.PUBLIC, ["self-harm"])
+        assert clip.moderation_reviewed_at is None
 
 
 @pytest.mark.integration
