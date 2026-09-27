@@ -156,6 +156,14 @@ class TestMatch:
         )
         assert screening.match(rules, ["ca$h$grab"]).flags == ["fraud"]
 
+    def test_an_allow_term_of_only_punctuation_suppresses_nothing(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="cash", category="fraud", action="flag")],
+            allow_terms=["!!!"],
+            fold_leetspeak=True,
+        )
+        assert screening.match(rules, ["c@\u200bsh"]).flags == ["fraud"]
+
     def test_a_rule_containing_a_leet_symbol_matches_itself(self):
         rules = screening.ScreeningRules(
             rules=[screening.Rule(term="ca$h out", category="fraud", action="flag")], fold_leetspeak=True
