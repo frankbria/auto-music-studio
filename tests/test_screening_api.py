@@ -7,6 +7,7 @@ so an admin edit applies to the very next request.
 """
 
 import inspect
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -14,9 +15,18 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, Job, Release, VisibilityState, VoiceModel, VoiceModelStatus, Workspace
+from acemusic.api.models import (
+    Clip,
+    Job,
+    Release,
+    SoundCloudConnection,
+    VisibilityState,
+    VoiceModel,
+    VoiceModelStatus,
+    Workspace,
+)
 from acemusic.api.models.common import utcnow
-from acemusic.api.services import clips as clip_service, routing, screening, users as user_service
+from acemusic.api.services import clips as clip_service, routing, screening, soundcloud, users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
@@ -533,13 +543,24 @@ class TestClipMetadataScreening:
 class TestReleaseVisibilityScreening:
     """A release's visibility is mirrored onto its source clip, so it is a second way to publish one."""
 
-    async def _publish(self, client, settings, lyrics):
+    async def _publish(self, client, settings, lyrics, *, on_soundcloud=False):
         user, clip = await _user_with_clip(f"meta-release-{len(lyrics)}@example.com")
         await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"], Clip.lyrics: lyrics})
         created = await client.post(
             RELEASES_URL, json={"clip_id": str(clip.id), **RELEASE_METADATA}, headers=_auth(user, settings)
         )
         assert created.status_code == 201, created.text
+        if on_soundcloud:
+            await Release.find_one(Release.id == PydanticObjectId(created.json()["id"])).update(
+                {"$set": {"soundcloud_track_id": "789"}}
+            )
+            await SoundCloudConnection(
+                user_id=user.id,
+                soundcloud_user_id="sc-1",
+                access_token="tok",
+                refresh_token="ref",
+                token_expires_at=utcnow() + timedelta(hours=1),
+            ).insert()
         resp = await client.patch(
             f"{RELEASES_URL}/{created.json()['id']}/visibility", json={"state": "public"}, headers=_auth(user, settings)
         )
@@ -565,10 +586,19 @@ class TestReleaseVisibilityScreening:
             await Clip.find({"title": "Song", "lyrics": "a quiet folk song"}).update({"$set": {"removed_at": utcnow()}})
             return await real_enforce(*texts, **kwargs)
 
+        shared: list[str] = []
+
+        async def update_track_sharing(_token, track_id, sharing):
+            shared.append(f"{track_id}:{sharing}")
+            return {}
+
         monkeypatch.setattr(screening, "enforce", removed_while_screening)
-        resp, clip, release = await self._publish(client, settings, "a quiet folk song")
+        monkeypatch.setattr(soundcloud, "update_track_sharing", update_track_sharing)
+        resp, clip, release = await self._publish(client, settings, "a quiet folk song", on_soundcloud=True)
         assert resp.status_code == 403
         assert (clip.visibility, release.visibility) == (VisibilityState.PRIVATE, VisibilityState.PRIVATE)
+        # The removed clip's SoundCloud track is never re-shared.
+        assert shared == []
 
 
 @pytest.mark.integration
