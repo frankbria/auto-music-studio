@@ -62,29 +62,46 @@ class ScreeningResult:
         return [] if self.blocked else self.categories
 
 
-def _normalise(text: str) -> str:
-    """Lowercase, fold accents ("heíl" -> "heil") and treat punctuation as spaces ("child-porn")."""
+#: Cyrillic and Greek letters that render like Latin ones, applied before lowercasing because the
+#: capitals differ ("Н" is H, "н" isn't). NFKD already folds fullwidth and mathematical letters.
+#: ponytail: a hand-picked subset of Unicode's confusables.txt; load that table if evasion moves to other scripts.
+_HOMOGLYPHS = str.maketrans(
+    "АВЕКМНОРСТУХІЈЅҺԚԜӀ" "аеорсухіјѕһԁӏԛԝ" "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ" "αεικνορτυχ",
+    "ABEKMHOPCTYXIJSHQWl" "aeopcyxijshdlqw" "ABEZHIKMNOPTYX" "aeikvoptux",
+)
+
+#: Leet stand-ins per letter. Expanded on the rule side, so "1" can be both "i" and "l".
+_LEET = {"a": "4@", "e": "3", "i": "1", "l": "1", "o": "0", "s": "5$", "t": "7"}
+
+
+def _normalise(text: str, *, keep: str = "") -> str:
+    """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
+
+    ``keep`` names punctuation that survives, for leet matching ("$ieg").
+    """
     folded = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
-    return " ".join(re.sub(r"[\W_]+", " ", folded.lower()).split())
+    return " ".join(re.sub(rf"[^\w{re.escape(keep)}]+|_", " ", folded.translate(_HOMOGLYPHS).lower()).split())
 
 
-def _phrase(term: str) -> re.Pattern[str]:
-    return re.compile(rf"(?<!\w){re.escape(_normalise(term))}(?!\w)")
+def _phrase(term: str, leet: bool = False) -> re.Pattern[str]:
+    body = "".join(f"[{re.escape(c + _LEET[c])}]" if leet and c in _LEET else re.escape(c) for c in _normalise(term))
+    return re.compile(rf"(?<!\w){body}(?!\w)")
 
 
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
     """Screen ``texts`` against ``rules``. Pure — no storage, so it is cheap to test."""
     # ponytail: regexes compiled per call; cache per rule set if rule lists grow to thousands.
-    text = " | ".join(_normalise(t) for t in texts if t)
+    leet = rules.fold_leetspeak
+    text = " | ".join(_normalise(t, keep="@$" if leet else "") for t in texts if t)
     for allowed in rules.allow_terms:
         if _normalise(allowed):
-            text = _phrase(allowed).sub(" ", text)
+            text = _phrase(allowed, leet).sub(" ", text)
 
     blocked: list[str] = []
     flagged: list[str] = []
     for rule in rules.rules:
         hits = blocked if rule.action == "block" else flagged
-        if rule.category not in hits and _phrase(rule.term).search(text):
+        if rule.category not in hits and _phrase(rule.term, leet).search(text):
             hits.append(rule.category)
 
     if blocked:
