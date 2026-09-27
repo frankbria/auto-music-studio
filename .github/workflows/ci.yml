@@ -38,9 +38,14 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # Longest job in the file at ~11m (integration suite included); 30 leaves headroom for
-    # a slow runner while still bounding a hang well under the 6h default.
-    timeout-minutes: 30
+    # Longest job in the file: 12–20m, of which the integration step is 11–16m. Some runners
+    # are ~2.3x slower across the whole integration step (no single slow test), and 30 cut
+    # them off ~85% through at 25.5–25.9m of integration — on either Python leg (#557).
+    # Such a job needs ~35m, so 45 keeps headroom while still bounding a hang well under
+    # the 6h default. Raising the ceiling was picked over sharding the integration step,
+    # which shares one Mongo database. Once a normal run passes ~22m, a slow runner reaches
+    # 45 again; shard it then instead of raising this further.
+    timeout-minutes: 45
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
