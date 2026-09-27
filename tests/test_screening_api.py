@@ -477,6 +477,14 @@ class TestClipMetadataScreening:
         assert resp.status_code == 422
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
 
+    async def test_a_blocked_title_sent_with_publish_is_screened(self, client, settings):
+        user, clip = await _user_with_clip("meta-rename-publish@example.com")
+        await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"]})
+        resp = await self._patch(client, settings, user, clip, {"title": "white power anthem", "visibility": "public"})
+        assert resp.status_code == 422
+        stored = await Clip.get(clip.id)
+        assert (stored.title, stored.visibility) == ("Song", VisibilityState.PRIVATE)
+
     async def test_a_removal_landing_mid_publish_is_not_undone(self, client, settings, monkeypatch):
         user, clip = await _user_with_clip("meta-publish-race@example.com")
         await clip.set({Clip.title: "Song", Clip.style_tags: ["folk"]})
