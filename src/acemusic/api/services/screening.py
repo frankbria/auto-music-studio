@@ -1,4 +1,4 @@
-"""Automated content screening for generation requests (US-27.1).
+"""Automated content screening for generation requests (US-27.1) and the text clips display (#531).
 
 Keyword and phrase matching over the request's prompt, style and lyrics, run before
 any credit is charged. Deliberately conservative: creative expression comes first, so
