@@ -16,11 +16,11 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import DuplicateIdentifierError
-from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus
+from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus, User
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers, screening, soundcloud as sc
+from . import clips as clip_service, identifiers, screening, soundcloud as sc, users as user_service
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
 
@@ -264,15 +264,21 @@ async def unshare_if_source_removed(
     release_id: PydanticObjectId | None = None,
     track_id: str | None = None,
 ) -> None:
-    """Undo a share if moderation removed the source clip meanwhile (#538), then 403.
+    """Undo a share if moderation took the source clip down meanwhile (#538), then 403.
 
     Called after a route has shared a release (``release_id``) or a bare track (``track_id``) out. A removal
-    landing mid-request ran its own un-share before this request's SoundCloud call, so it's repeated here.
-    A failure gets its own moderation log entry: the removal's entry was written without it.
+    or ban landing mid-request ran its own un-share before this request's SoundCloud call, so it's repeated here.
+    A ban's sweep skips a clip that was still private, so a banned owner counts too, and this clip is taken down
+    the way the sweep would have. A failure gets its own moderation log entry: the action's entry was written
+    without it.
     """
     clip = await clip_service.find_owned_clip(str(clip_id), str(user_id))
-    if clip is None or clip.removed_at is None:
+    owner = await User.get(PydanticObjectId(str(user_id)))
+    banned = owner is not None and owner.banned_at is not None
+    if not banned and (clip is None or clip.removed_at is None):
         return
+    if banned:
+        await clip_service.take_down_visible({"_id": PydanticObjectId(str(clip_id))})
     if release_id is not None:
         failed = (await unshare_releases({"_id": release_id}, settings))["soundcloud_unshare_failed"]
     else:
@@ -282,9 +288,11 @@ async def unshare_if_source_removed(
         await ModerationLogEntry(
             action="soundcloud_unshare_failed",
             target_type="clip",
-            target_id=str(clip.id),
+            target_id=str(clip_id),
             details={"soundcloud_unshare_failed": failed},
         ).insert()
+    if banned:
+        user_service.reject_banned(owner)
     clip_service.ensure_not_removed(clip)
 
 
@@ -296,7 +304,9 @@ async def unshare_releases(query: dict, settings: ApiSettings) -> dict:
     """
     # Write, then read: a track id recorded before the write is seen; one recorded after it is the
     # uploader's to un-share (unshare_if_source_removed).
-    await Release.find(query).update({"$set": {"visibility": VisibilityState.PRIVATE.value, "updated_at": utcnow()}})
+    privatized = await Release.find({**query, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
+        {"$set": {"visibility": VisibilityState.PRIVATE.value, "updated_at": utcnow()}}
+    )
     releases = await Release.find(query).to_list()
     unshared: list[str] = []
     failed: list[dict] = []
@@ -308,7 +318,11 @@ async def unshare_releases(query: dict, settings: ApiSettings) -> dict:
             unshared.append(release.soundcloud_track_id)
         else:
             failed.append({"track_id": release.soundcloud_track_id, "error": error})
-    return {"releases_privatized": len(releases), "soundcloud_unshared": unshared, "soundcloud_unshare_failed": failed}
+    return {
+        "releases_privatized": privatized.modified_count,
+        "soundcloud_unshared": unshared,
+        "soundcloud_unshare_failed": failed,
+    }
 
 
 async def unshare_track(user_id: str, track_id: str, settings: ApiSettings) -> str | None:

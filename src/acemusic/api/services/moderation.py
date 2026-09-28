@@ -17,7 +17,7 @@ from ..auth.services import revoke_all_user_tokens
 from ..models import Clip, ClipReport, ModerationLogEntry, NotificationEvent, User, Video, VisibilityState
 from ..models.common import utcnow
 from ..settings import ApiSettings
-from . import releases as release_service
+from . import clips as clip_service, releases as release_service
 from .common import coerce_object_id
 
 ClipAction = Literal["approve", "remove", "flag"]
@@ -203,12 +203,10 @@ async def _ban(user: User, settings: ApiSettings) -> dict:
     if user.banned_at is None:
         await user.set({"banned_at": now})
     await revoke_all_user_tokens(user.id)
-    clips = await Clip.find({"user_id": user.id, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
-        {"$set": {"visibility": VisibilityState.PRIVATE.value, "is_public": False, "removed_at": now}}
-    )
+    clips_removed = await clip_service.take_down_visible({"user_id": user.id})
     videos = await Video.find({"user_id": user.id, "published": True}).update({"$set": {"published": False}})
     releases = await release_service.unshare_releases({"user_id": user.id}, settings)
-    return {"clips_removed": clips.modified_count, "videos_unpublished": videos.modified_count, **releases}
+    return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:

@@ -30,7 +30,7 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import moderation, routing, soundcloud
+from acemusic.api.services import moderation, routing, screening, soundcloud
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
@@ -807,6 +807,7 @@ class TestRemovalUnsharesSoundCloud:
         await _sc_connection(owner)
         shared = await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-1")
         unshipped = await _release(clip, visibility=VisibilityState.UNLISTED)
+        await _release(clip)  # already private: not counted as privatized
 
         [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
 
@@ -898,3 +899,39 @@ class TestRemovalUnsharesSoundCloud:
         assert calls[-1] == "private"
         assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
+
+    async def test_a_ban_landing_mid_publish_of_a_private_clip_leaves_the_track_private(
+        self, client, settings, monkeypatch
+    ):
+        owner, admin = await _user(), await _admin()
+        clip = await _clip(owner, visibility=VisibilityState.PRIVATE)
+        await _sc_connection(owner)
+        release = await _release(clip, soundcloud_track_id="sc-ban")
+        real_enforce = screening.enforce
+        calls: list[str] = []
+
+        async def banned_while_screening(*texts, **kwargs):
+            # After the route read the clip, before it writes it public: the ban's sweep skips a private clip.
+            if not calls:
+                calls.append("ban")
+                await moderation.act_on_user(str(admin.id), "ban", str(owner.id), None, settings)
+            return await real_enforce(*texts, **kwargs)
+
+        async def update_track_sharing(_token, track_id, sharing):
+            calls.append(sharing)
+            return {}
+
+        monkeypatch.setattr(screening, "enforce", banned_while_screening)
+        monkeypatch.setattr(soundcloud, "update_track_sharing", update_track_sharing)
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": "public"}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == SUSPENDED
+        assert calls[-1] == "private"
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        stored = await Clip.get(clip.id)
+        # Taken down the way the ban would have, had its sweep seen the clip public.
+        assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)

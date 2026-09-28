@@ -18,7 +18,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, ModerationLogEntry, Release, SoundCloudConnection, VisibilityState
 from acemusic.api.routers import distribution as dist
-from acemusic.api.services import soundcloud as sc
+from acemusic.api.services import moderation, soundcloud as sc
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -621,3 +621,32 @@ class TestRemovalMidUpload:
         # The platform wrote it, not an admin; the clip's owner is never recorded as the actor.
         assert entry.actor_id is None
         assert [f["track_id"] for f in entry.details["soundcloud_unshare_failed"]] == ["808"]
+
+    async def test_a_ban_during_the_upload_of_a_private_clip_unshares_the_track(
+        self, client, settings, local_storage, monkeypatch
+    ):
+        user = await make_user("up-race-ban@example.com", tier=PRO)
+        admin = await make_user("up-race-ban-admin@example.com", is_admin=True)
+        clip = await _make_clip(user, b"RIFFaudio")
+        await Clip.find_one(Clip.id == clip.id).update({"$set": {"visibility": VisibilityState.PRIVATE.value}})
+        await _make_connection(user)
+        shared: list[tuple[str, str]] = []
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            # A ban skips a private clip, so the clip is never marked removed.
+            await moderation.act_on_user(str(admin.id), "ban", str(user.id), None, settings)
+            return {"id": 909}
+
+        async def _sharing(token, track_id, sharing):
+            shared.append((track_id, sharing))
+            return {}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        monkeypatch.setattr(sc, "update_track_sharing", _sharing)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "This account has been suspended."
+        assert shared == [("909", "private")]
