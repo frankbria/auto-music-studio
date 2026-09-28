@@ -81,8 +81,13 @@ export function NotificationsProvider({
     tokenRef.current = auth?.accessToken ?? null
   }, [auth?.accessToken])
 
+  // Bumped on every (re)load, so a "Show older" page requested by a previous
+  // session (sign-out, another user, retry) is dropped rather than appended.
+  const session = useRef(0)
+
   useEffect(() => {
     let cancelled = false
+    session.current += 1
     const load = async () => {
       const token = tokenRef.current
       if (!token) {
@@ -116,8 +121,10 @@ export function NotificationsProvider({
   const loadMore = useCallback(() => {
     const token = tokenRef.current
     if (!token) return
+    const requestedIn = session.current
     void fetchNotifications(token, serverCount)
-      .then((page) =>
+      .then((page) => {
+        if (session.current !== requestedIn) return
         setStore((s) => {
           // Offset paging: a notice that arrived since page 1 shifts older rows down,
           // so drop the repeats.
@@ -125,7 +132,7 @@ export function NotificationsProvider({
           const fresh = page.notifications.filter((n) => !seen.has(n.id))
           return { ...s, items: [...s.items, ...fresh], hasMore: page.hasMore }
         })
-      )
+      })
       .catch(() => undefined)
   }, [serverCount])
 

@@ -189,6 +189,42 @@ describe("NotificationsProvider load vs notify (#537)", () => {
   })
 })
 
+describe("NotificationsProvider sign-out (#537)", () => {
+  it("drops an older page that lands after the user signed out", async () => {
+    const serve = stubNotificationsApi([
+      [notificationEvent("a")],
+      [notificationEvent("b")],
+    ])
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]).includes("offset=1")) await gate
+        return serve(...args)
+      })
+    )
+    let auth: AuthValue | null = SIGNED_IN
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SignedIn value={auth}>
+        <NotificationsProvider>{children}</NotificationsProvider>
+      </SignedIn>
+    )
+    const { result, rerender } = renderHook(() => useNotifications(), {
+      wrapper,
+    })
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+
+    act(() => result.current.loadMore())
+    auth = null
+    rerender()
+    await waitFor(() => expect(result.current.notifications).toEqual([]))
+    await act(async () => release())
+
+    expect(result.current.notifications).toEqual([])
+  })
+})
+
 describe("useNotify", () => {
   it("degrades to a no-op outside a provider (no throw)", () => {
     const { result } = renderHook(() => useNotify())
