@@ -140,7 +140,7 @@ async def moderate_users(
 
 class ModerationLogItem(BaseModel):
     id: str
-    actor_id: str
+    actor_id: str | None
     action: str
     target_type: str
     target_id: str | None
@@ -162,7 +162,7 @@ async def get_moderation_log(
         entries=[
             ModerationLogItem(
                 id=str(e.id),
-                actor_id=str(e.actor_id),
+                actor_id=str(e.actor_id) if e.actor_id else None,
                 action=e.action,
                 target_type=e.target_type,
                 target_id=e.target_id,

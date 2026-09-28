@@ -618,4 +618,6 @@ class TestRemovalMidUpload:
         assert resp.status_code == 403
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.target_id == str(clip.id))
         assert entry.action == "soundcloud_unshare_failed"
+        # The platform wrote it, not an admin; the clip's owner is never recorded as the actor.
+        assert entry.actor_id is None
         assert [f["track_id"] for f in entry.details["soundcloud_unshare_failed"]] == ["808"]

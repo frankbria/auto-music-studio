@@ -635,6 +635,16 @@ class TestModerationLog:
         assert entry["details"]["after"]["rules"][0]["term"] == "badword"
         assert "before" in entry["details"]
 
+    async def test_a_platform_entry_has_no_actor(self, client, settings):
+        admin = await _admin()
+        await ModerationLogEntry(action="soundcloud_unshare_failed", target_type="clip", target_id="c1").insert()
+
+        resp = await client.get(LOG_URL, headers=_auth(admin, settings))
+
+        assert resp.status_code == 200
+        [entry] = resp.json()["entries"]
+        assert (entry["action"], entry["actor_id"]) == ("soundcloud_unshare_failed", None)
+
     async def test_limit(self, client, settings):
         admin = await _admin()
         for _ in range(3):

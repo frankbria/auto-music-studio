@@ -27,7 +27,7 @@ export type QueueItem = {
 
 export type ModerationLogEntry = {
   id: string
-  actor_id: string
+  actor_id: string | null
   action: string
   target_type: string
   target_id: string
@@ -241,6 +241,7 @@ const LOG_ACTION_LABELS: Record<string, string> = {
   appeal_upheld: "Upheld appeal",
   appeal_reversed: "Reversed appeal",
   appeal_info_requested: "Requested appeal info",
+  soundcloud_unshare_failed: "SoundCloud un-share failed",
 }
 
 export function formatLogAction(action: string): string {

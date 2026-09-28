@@ -516,6 +516,34 @@ describe("ModerationDashboard", () => {
     ).toBe(true)
   })
 
+  it("labels a platform-written log entry with no actor as system (#538)", async () => {
+    stubBackend({
+      queue: [],
+      log: [
+        {
+          id: "l2",
+          actor_id: null,
+          action: "soundcloud_unshare_failed",
+          target_type: "clip",
+          target_id: "c9",
+          reason: null,
+          details: {},
+          created_at: "2026-09-20T12:00:00Z",
+        },
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    const row = (await screen.findByText("SoundCloud un-share failed")).closest(
+      "tr"
+    ) as HTMLElement
+    expect(row).toHaveTextContent("clip c9")
+    expect(row).toHaveTextContent("system")
+  })
+
   it("has an Appeals tab that loads the appeals queue (US-27.4)", async () => {
     const fetchMock = stubBackend({ queue: [] })
     render(<ModerationDashboard accessToken="tok" />)

@@ -489,7 +489,7 @@ export function ModerationDashboard({
                         {entry.target_type} {entry.target_id}
                       </td>
                       <td className="py-2 pr-3 font-mono text-xs">
-                        {entry.actor_id}
+                        {entry.actor_id ?? "system"}
                       </td>
                       <td className="py-2">{entry.reason ?? "-"}</td>
                     </tr>

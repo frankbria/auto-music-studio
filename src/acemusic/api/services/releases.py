@@ -280,7 +280,6 @@ async def unshare_if_source_removed(
         failed = [] if error is None else [{"track_id": track_id, "error": error}]
     if failed:
         await ModerationLogEntry(
-            actor_id=clip.user_id,
             action="soundcloud_unshare_failed",
             target_type="clip",
             target_id=str(clip.id),
