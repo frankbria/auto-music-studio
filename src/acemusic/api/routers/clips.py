@@ -458,8 +458,9 @@ async def report_clip(
 ) -> ClipReportResponse:
     """Report a clip for moderation review (US-27.2). 409 if this user already reported it.
 
-    429 past the per-user hourly limit (#534). Every attempt counts, failed ones too,
-    so scripting reports against guessed clip IDs is capped as well.
+    429 past the per-user hourly limit (#534). Every attempt that reaches the handler
+    counts, 404/403/400/409 included, so scripting reports against guessed clip IDs is
+    capped as well. A malformed body is a 422 before this runs and costs nothing.
     """
     request.app.state.report_limiter.check(current.user_id)
     await report_service.report_clip(clip_id, current.user_id, body.category, body.details)
