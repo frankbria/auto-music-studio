@@ -4,7 +4,8 @@ import { BACKEND_URL } from "@/lib/auth-server"
 import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST /api/v1/clips/{id}/report (US-27.2). Auth required;
-// status/body pass through verbatim (201, 400 own clip, 403 private, 404, 409 duplicate).
+// status/body pass through verbatim (201, 400 own clip, 403 private, 404, 409 duplicate,
+// 429 per-user report limit).
 
 export async function POST(
   request: NextRequest,

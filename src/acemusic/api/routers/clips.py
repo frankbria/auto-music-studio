@@ -454,9 +454,14 @@ class ClipReportResponse(BaseModel):
 
 @router.post("/{clip_id}/report", response_model=ClipReportResponse, status_code=status.HTTP_201_CREATED)
 async def report_clip(
-    clip_id: str, body: ClipReportRequest, current: CurrentUser = Depends(require_existing_user)
+    clip_id: str, body: ClipReportRequest, request: Request, current: CurrentUser = Depends(require_existing_user)
 ) -> ClipReportResponse:
-    """Report a clip for moderation review (US-27.2). 409 if this user already reported it."""
+    """Report a clip for moderation review (US-27.2). 409 if this user already reported it.
+
+    429 past the per-user hourly limit (#534). Every attempt counts, failed ones too,
+    so scripting reports against guessed clip IDs is capped as well.
+    """
+    request.app.state.report_limiter.check(current.user_id)
     await report_service.report_clip(clip_id, current.user_id, body.category, body.details)
     return ClipReportResponse(detail="Report received. Our team will review it.")
 

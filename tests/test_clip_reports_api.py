@@ -174,6 +174,55 @@ class TestReportClip:
 
 
 @pytest.mark.integration
+class TestReportRateLimit:
+    @pytest.fixture
+    def settings(self, settings) -> ApiSettings:
+        return settings.model_copy(update={"report_rate_limit_per_hour": 2})
+
+    async def test_report_over_the_limit_is_429_and_stores_nothing(self, client, settings):
+        owner, reporter = await _user(), await _user()
+        clips = [await _clip(owner) for _ in range(3)]
+
+        responses = []
+        for c in clips:
+            url = f"{CLIPS_URL}/{c.id}/report"
+            responses.append(await client.post(url, json={"category": "spam"}, headers=_auth(reporter, settings)))
+
+        assert [r.status_code for r in responses] == [201, 201, 429]
+        assert responses[2].json()["detail"] == "You have sent too many reports. Please try again later."
+        assert int(responses[2].headers["Retry-After"]) > 0
+        assert await ClipReport.find(ClipReport.clip_id == clips[2].id).count() == 0
+
+    async def test_failed_attempts_count_toward_the_limit(self, client, settings):
+        reporter = await _user()
+        for _ in range(2):
+            await client.post(
+                f"{CLIPS_URL}/{PydanticObjectId()}/report", json={"category": "spam"}, headers=_auth(reporter, settings)
+            )
+        clip = await _clip(await _user())
+
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/report", json={"category": "spam"}, headers=_auth(reporter, settings)
+        )
+
+        assert resp.status_code == 429
+        assert await ClipReport.find(ClipReport.clip_id == clip.id).count() == 0
+
+    async def test_limit_is_per_user(self, client, settings):
+        owner, spammer, other = await _user(), await _user(), await _user()
+        clips = [await _clip(owner) for _ in range(3)]
+        for c in clips:
+            await client.post(f"{CLIPS_URL}/{c.id}/report", json={"category": "spam"}, headers=_auth(spammer, settings))
+
+        resp = await client.post(
+            f"{CLIPS_URL}/{clips[2].id}/report", json={"category": "spam"}, headers=_auth(other, settings)
+        )
+
+        assert resp.status_code == 201
+        assert await ClipReport.find(ClipReport.clip_id == clips[2].id).count() == 1
+
+
+@pytest.mark.integration
 class TestModerationQueue:
     async def test_admin_sees_reports_newest_first(self, client, settings):
         owner, admin = await _user(), await _user(is_admin=True)

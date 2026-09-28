@@ -1,9 +1,9 @@
-"""In-memory per-client rate limiting for the streaming endpoint (US-14.2).
+"""In-memory fixed-window rate limiting: per client IP for streaming (US-14.2), per user for clip reports (#534).
 
-A fixed-window counter keyed by client IP. Deliberately tiny and dependency-free:
-the public ``/clips/{id}/stream`` endpoint only needs a single-process ceiling to
-curb abuse. Swap for a Redis-backed limiter (e.g. slowapi) if the API ever runs
-multiple workers that must share one limit.
+A fixed-window counter keyed by client IP or user ID. Deliberately tiny and
+dependency-free: both callers only need a single-process ceiling to curb abuse.
+Swap for a Redis-backed limiter (e.g. slowapi) if the API ever runs multiple
+workers that must share one limit.
 """
 
 import ipaddress
@@ -30,9 +30,12 @@ def _normalize_ip(value: str) -> str:
 class FixedWindowRateLimiter:
     """Count requests per key within fixed wall-clock windows; reject over the cap."""
 
-    def __init__(self, limit: int, window_seconds: float = 60.0) -> None:
+    def __init__(
+        self, limit: int, window_seconds: float = 60.0, detail: str = "Too many streaming requests; slow down."
+    ) -> None:
         self._limit = limit
         self._window = window_seconds
+        self._detail = detail
         self._hits: dict[str, tuple[float, int]] = {}
         self._last_prune = 0.0
         self._lock = Lock()
@@ -56,7 +59,7 @@ class FixedWindowRateLimiter:
                 retry_after = max(1, int(self._window - (now - window_start)))
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many streaming requests; slow down.",
+                    detail=self._detail,
                     headers={"Retry-After": str(retry_after)},
                 )
 
