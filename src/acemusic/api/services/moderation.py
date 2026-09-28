@@ -16,6 +16,8 @@ from pydantic import BaseModel
 from ..auth.services import revoke_all_user_tokens
 from ..models import Clip, ClipReport, ModerationLogEntry, NotificationEvent, User, Video, VisibilityState
 from ..models.common import utcnow
+from ..settings import ApiSettings
+from . import releases as release_service
 from .common import coerce_object_id
 
 ClipAction = Literal["approve", "remove", "flag"]
@@ -123,7 +125,9 @@ def _queue_item(
     )
 
 
-async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: str | None) -> ActionResult:
+async def act_on_clip(
+    actor_id: str, action: ClipAction, clip_id: str, reason: str | None, settings: ApiSettings
+) -> ActionResult:
     oid = coerce_object_id(clip_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid clip id.")
@@ -146,6 +150,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
+            details.update(await release_service.unshare_releases({"clip_id": oid}, settings))
             await NotificationEvent(
                 user_id=clip.user_id,
                 clip_id=clip.id,
@@ -154,7 +159,15 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
                 payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
             ).insert()
     await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved, **details})
-    return ActionResult(ok=True)
+    return ActionResult(ok=True, detail=_unshare_failure(details))
+
+
+def _unshare_failure(details: dict) -> str | None:
+    failed = [f["track_id"] for f in details.get("soundcloud_unshare_failed", [])]
+    if not failed:
+        return None
+    noun, pronoun = ("track", "it") if len(failed) == 1 else ("tracks", "they")
+    return f"Couldn't make SoundCloud {noun} {', '.join(failed)} private; {pronoun} may still be public on the owner's account."
 
 
 async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
@@ -162,7 +175,9 @@ async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
     return result.modified_count
 
 
-async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: str | None) -> ActionResult:
+async def act_on_user(
+    actor_id: str, action: UserAction, user_id: str, reason: str | None, settings: ApiSettings
+) -> ActionResult:
     oid = coerce_object_id(user_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid user id.")
@@ -178,12 +193,12 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
     else:
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
-        details = await _ban(user)
+        details = await _ban(user, settings)
     await log_action(actor_id, action, "user", str(oid), reason, details)
-    return ActionResult(ok=True)
+    return ActionResult(ok=True, detail=_unshare_failure(details))
 
 
-async def _ban(user: User) -> dict:
+async def _ban(user: User, settings: ApiSettings) -> dict:
     now = utcnow()
     if user.banned_at is None:
         await user.set({"banned_at": now})
@@ -192,7 +207,8 @@ async def _ban(user: User) -> dict:
         {"$set": {"visibility": VisibilityState.PRIVATE.value, "is_public": False, "removed_at": now}}
     )
     videos = await Video.find({"user_id": user.id, "published": True}).update({"$set": {"published": False}})
-    return {"clips_removed": clips.modified_count, "videos_unpublished": videos.modified_count}
+    releases = await release_service.unshare_releases({"user_id": user.id}, settings)
+    return {"clips_removed": clips.modified_count, "videos_unpublished": videos.modified_count, **releases}
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:

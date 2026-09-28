@@ -7,6 +7,8 @@ Pydantic schema layer (422); this layer enforces clip ownership and the
 post-submission edit lock (409).
 """
 
+import logging
+
 from beanie import PydanticObjectId
 from beanie.operators import Eq
 from fastapi import HTTPException, status
@@ -14,13 +16,15 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import DuplicateIdentifierError
-from ..models import Clip, Release, ReleaseStatus
+from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers, screening
+from . import clips as clip_service, identifiers, screening, soundcloud as sc
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
+
+logger = logging.getLogger(__name__)
 
 # Releases are editable only before they leave the user's hands.
 _EDITABLE_STATUSES = {ReleaseStatus.DRAFT, ReleaseStatus.READY}
@@ -176,8 +180,8 @@ def compute_warnings(clip: Clip | None) -> list[str]:
 async def update_release(release_id: str, user_id: str, updates: dict) -> Release:
     """Apply ``updates`` to an owned release. Raises 404 if not owned, 409 once submitted.
 
-    ``updates`` must come from a validated ``ReleaseUpdate`` dump — the setattr
-    loop trusts its keys, so a raw dict could reassign identity fields like
+    ``updates`` must come from a validated ``ReleaseUpdate`` dump — the ``$set``
+    trusts its keys, so a raw dict could reassign identity fields like
     ``user_id`` (same contract as ``create_release``).
     """
     release = await get_owned_release(release_id, user_id)
@@ -187,14 +191,11 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     # clip (below) and then have the release write roll back on the unique index.
     # With this pre-check both sequential failure directions stay clean: a UPC
     # clash 409s here before any write; an ISRC clash 409s in the clip sync below,
-    # before release.save(). The residual is a true-concurrency TOCTOU that only a
+    # before the release write. The residual is a true-concurrency TOCTOU that only a
     # multi-doc transaction could close (unavailable on standalone MongoDB); the
     # unique indexes still guarantee no duplicate is ever persisted.
     if updates.get("upc") is not None:
         await _ensure_upc_unused(updates["upc"], release.id)
-    for field, value in updates.items():
-        setattr(release, field, value)
-    release.updated_at = utcnow()
     # A manual ISRC *override* re-identifies the recording, so mirror it onto the
     # clip before persisting the release (so the two never diverge on a clash).
     # Clearing it (isrc=None) only drops the release's copy: the recording keeps
@@ -202,7 +203,8 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     if updates.get("isrc") is not None:
         await _sync_isrc_to_clip(release.clip_id, user_id, updates["isrc"])
     try:
-        await release.save()
+        # $set, not save(): a whole-document write would revert a moderation privatization (#538).
+        await release.set({**updates, "updated_at": utcnow()})
     except DuplicateKeyError as exc:  # manual UPC already used by another release
         raise DuplicateIdentifierError(_duplicate_field(exc)) from exc
     return release
@@ -250,10 +252,75 @@ async def update_visibility(release: Release, visibility: VisibilityState, clip_
     if not result.matched_count and visibility != VisibilityState.PRIVATE:
         await ensure_source_not_removed(release)
 
-    release.visibility = visibility
-    release.updated_at = utcnow()
-    await release.save()
+    await release.set({"visibility": visibility, "updated_at": utcnow()})
     return release
+
+
+async def unshare_if_source_removed(
+    clip_id: PydanticObjectId,
+    user_id: PydanticObjectId | str,
+    settings: ApiSettings,
+    *,
+    release_id: PydanticObjectId | None = None,
+    track_id: str | None = None,
+) -> None:
+    """Undo a share if moderation removed the source clip meanwhile (#538), then 403.
+
+    Called after a route has shared a release (``release_id``) or a bare track (``track_id``) out. A removal
+    landing mid-request ran its own un-share before this request's SoundCloud call, so it's repeated here.
+    A failure gets its own moderation log entry: the removal's entry was written without it.
+    """
+    clip = await clip_service.find_owned_clip(str(clip_id), str(user_id))
+    if clip is None or clip.removed_at is None:
+        return
+    if release_id is not None:
+        failed = (await unshare_releases({"_id": release_id}, settings))["soundcloud_unshare_failed"]
+    else:
+        error = await unshare_track(str(user_id), track_id, settings)
+        failed = [] if error is None else [{"track_id": track_id, "error": error}]
+    if failed:
+        await ModerationLogEntry(
+            actor_id=clip.user_id,
+            action="soundcloud_unshare_failed",
+            target_type="clip",
+            target_id=str(clip.id),
+            details={"soundcloud_unshare_failed": failed},
+        ).insert()
+    clip_service.ensure_not_removed(clip)
+
+
+async def unshare_releases(query: dict, settings: ApiSettings) -> dict:
+    """Make every release matching ``query`` private and best-effort un-share its SoundCloud track (#538).
+
+    The local write always stands. A track that can't be reached (unlinked account, revoked grant,
+    SoundCloud down) is returned in ``soundcloud_unshare_failed`` for the caller to surface.
+    """
+    # Write, then read: a track id recorded before the write is seen; one recorded after it is the
+    # uploader's to un-share (unshare_if_source_removed).
+    await Release.find(query).update({"$set": {"visibility": VisibilityState.PRIVATE.value, "updated_at": utcnow()}})
+    releases = await Release.find(query).to_list()
+    unshared: list[str] = []
+    failed: list[dict] = []
+    for release in releases:
+        if not release.soundcloud_track_id:
+            continue
+        error = await unshare_track(str(release.user_id), release.soundcloud_track_id, settings)
+        if error is None:
+            unshared.append(release.soundcloud_track_id)
+        else:
+            failed.append({"track_id": release.soundcloud_track_id, "error": error})
+    return {"releases_privatized": len(releases), "soundcloud_unshared": unshared, "soundcloud_unshare_failed": failed}
+
+
+async def unshare_track(user_id: str, track_id: str, settings: ApiSettings) -> str | None:
+    """Set a SoundCloud track private on ``user_id``'s account; the error message on failure, else ``None``."""
+    try:
+        connection = await sc.get_valid_connection(user_id, settings)
+        await sc.update_track_sharing(connection.access_token, track_id, "private")
+    except sc.SoundCloudError as exc:
+        logger.warning("Un-sharing SoundCloud track %s failed: %s", track_id, exc)
+        return str(exc)
+    return None
 
 
 # A submission can only be confirmed once the package is assembled, and re-confirmed

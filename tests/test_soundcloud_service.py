@@ -214,6 +214,14 @@ async def test_update_track_sharing_puts_sharing_field() -> None:
     assert b"track%5Bsharing%5D=private" in request.content  # urlencoded track[sharing]=private
 
 
+@respx.mock
+async def test_update_track_sharing_wraps_a_malformed_body() -> None:
+    # A 200 with a non-JSON body must not escape as ValueError and abort a moderation action (#538).
+    respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/555").mock(return_value=httpx.Response(200, text="<html>"))
+    with pytest.raises(sc.SoundCloudError):
+        await sc.update_track_sharing("tok", "555", "private")
+
+
 async def test_update_track_sharing_rejects_invalid_value() -> None:
     with pytest.raises(sc.SoundCloudError):
         await sc.update_track_sharing("tok", "555", "secret")

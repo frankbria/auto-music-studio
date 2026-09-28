@@ -67,7 +67,7 @@ const CONFIRMED: Partial<
   remove: {
     verb: "Remove",
     description:
-      "Removed clips are made private and cannot be published again. Their creators are notified.",
+      "Removed clips are made private and cannot be published again. Their releases go private and their SoundCloud tracks are un-shared. Their creators are notified.",
     destructive: true,
   },
   warn: {
@@ -79,7 +79,7 @@ const CONFIRMED: Partial<
   ban: {
     verb: "Ban",
     description:
-      "Banned accounts are signed out, cannot sign back in, and their public clips are taken down.",
+      "Banned accounts are signed out, cannot sign back in, and their public clips, releases and SoundCloud tracks are taken down.",
     destructive: true,
   },
 }
@@ -213,8 +213,9 @@ export function ModerationDashboard({
         status: ok
           ? `${VERBS[pending.action]} ${plural(ok, nounFor(pending.kind))}.`
           : null,
+        // An ok result can still carry a detail: e.g. a removal whose SoundCloud track stayed shared.
         failures: results
-          .filter((r) => !r.ok)
+          .filter((r) => !r.ok || r.detail)
           .map(
             (r) =>
               `${describeTarget(pending.kind, r.id)}: ${r.detail ?? "Failed."}`

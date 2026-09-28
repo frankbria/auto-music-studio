@@ -407,6 +407,43 @@ describe("ModerationDashboard", () => {
     )
   })
 
+  it("warns when a removal succeeded but its SoundCloud track stayed shared (#538)", async () => {
+    stubBackend({
+      queue: [SONG_A, SONG_B],
+      results: [
+        {
+          ok: true,
+          detail:
+            "Couldn't make SoundCloud track sc-1 private; it may still be public on the owner's account.",
+        },
+        { ok: true },
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all" }))
+    await userEvent.click(
+      within(screen.getByRole("toolbar", { name: "Bulk actions" })).getByRole(
+        "button",
+        { name: "Remove" }
+      )
+    )
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Remove 2 clips?" })).getByRole(
+        "button",
+        { name: "Remove" }
+      )
+    )
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Removed 2 clips."
+    )
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Song A: Couldn't make SoundCloud track sc-1 private"
+    )
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Song B")
+  })
+
   it("sorts by severity or recency and filters by source and category", async () => {
     stubBackend({ queue: [SONG_A, SONG_B, SONG_C] })
     render(<ModerationDashboard accessToken="tok" />)

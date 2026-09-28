@@ -391,6 +391,11 @@ async def update_visibility(
     release = await release_service.update_visibility(release, body.state, clip_update)
     if release.soundcloud_track_id:
         await _sync_soundcloud_sharing(release, body.state, settings)
+    if body.state != VisibilityState.PRIVATE:
+        # A removal landing after the local write (#538) un-shared first; this request's share came after it.
+        await release_service.unshare_if_source_removed(
+            release.clip_id, release.user_id, settings, release_id=release.id
+        )
     return ReleaseStatusResponse.from_release(release)
 
 

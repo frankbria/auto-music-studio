@@ -16,10 +16,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, model_validator
 
-from ..auth.dependencies import CurrentUser, require_admin
+from ..auth.dependencies import CurrentUser, get_settings, require_admin
 from ..models import ReportCategory
 from ..models.screening import ScreeningRules
 from ..services import appeals as appeal_service, moderation, reports as report_service, screening
+from ..settings import ApiSettings
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -98,10 +99,14 @@ class ClipActionResponse(BaseModel):
 
 
 @router.post("/moderation/clips", response_model=ClipActionResponse)
-async def moderate_clips(body: ClipActionRequest, current: CurrentUser = Depends(require_admin)) -> ClipActionResponse:
+async def moderate_clips(
+    body: ClipActionRequest,
+    current: CurrentUser = Depends(require_admin),
+    settings: ApiSettings = Depends(get_settings),
+) -> ClipActionResponse:
     results = []
     for clip_id in body.clip_ids:
-        outcome = await moderation.act_on_clip(current.user_id, body.action, clip_id, body.reason)
+        outcome = await moderation.act_on_clip(current.user_id, body.action, clip_id, body.reason, settings)
         results.append(ClipActionResult(clip_id=clip_id, **outcome.model_dump()))
     return ClipActionResponse(results=results)
 
@@ -121,10 +126,14 @@ class UserActionResponse(BaseModel):
 
 
 @router.post("/moderation/users", response_model=UserActionResponse)
-async def moderate_users(body: UserActionRequest, current: CurrentUser = Depends(require_admin)) -> UserActionResponse:
+async def moderate_users(
+    body: UserActionRequest,
+    current: CurrentUser = Depends(require_admin),
+    settings: ApiSettings = Depends(get_settings),
+) -> UserActionResponse:
     results = []
     for user_id in body.user_ids:
-        outcome = await moderation.act_on_user(current.user_id, body.action, user_id, body.reason)
+        outcome = await moderation.act_on_user(current.user_id, body.action, user_id, body.reason, settings)
         results.append(UserActionResult(user_id=user_id, **outcome.model_dump()))
     return UserActionResponse(results=results)
 
