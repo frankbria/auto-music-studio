@@ -88,6 +88,11 @@ async def select_artwork(clip: Clip, artwork_id: str) -> Clip:
         raise ArtworkNotFoundError("Artwork option not found.")
     # $set, never save(): the clip was read before a moderation takedown could land (#539).
     await clip.set({"artwork_path": option.storage_path})
+    # A moderation drop deletes the option before it clears the cover, so an option gone by
+    # now means a drop's clear may have run before the write above: undo it (#539).
+    if await ArtworkOption.get(option.id) is None:
+        await Clip.find({"_id": clip.id, "artwork_path": option.storage_path}).update({"$set": {"artwork_path": None}})
+        raise ArtworkNotFoundError("Artwork option not found.")
     return clip
 
 
