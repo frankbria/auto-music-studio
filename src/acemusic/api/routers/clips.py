@@ -314,9 +314,11 @@ class SimilarClipsResponse(BaseModel):
 
     ``total`` is the number of candidates that matched before ``limit`` was
     applied, so a client can tell a truncated radio queue from an exhausted one.
+    Candidates include other users' public clips, so each is served as a
+    :class:`PublicClipResponse` (``is_owner``, recipe blanked for non-owners).
     """
 
-    clips: list[ClipResponse]
+    clips: list[PublicClipResponse]
     total: int
     limit: int
 
@@ -432,7 +434,7 @@ async def get_similar_clips(
     """
     clips, total = await clip_service.find_similar_clips(clip_id, current.user_id, scope, limit)
     return SimilarClipsResponse(
-        clips=[ClipResponse.from_clip(clip) for clip in clips],
+        clips=[PublicClipResponse.from_clip_for(clip, current.user_id) for clip in clips],
         total=total,
         limit=limit,
     )
