@@ -45,8 +45,8 @@ export type Clip = {
    * Server-computed viewer ownership, present only on the public read (US-20.0)
    * and the similar-clips read (#535); the owner-scoped reads omit it because
    * everything they return is already the caller's. Undefined therefore means
-   * "not from those reads", so gate on `=== true` rather than treating absence as
-   * ownership.
+   * "not from those reads": gate owner-only UI on `=== true` and stranger-only UI
+   * (e.g. Report) on `=== false`, so an absent value shows neither.
    */
   is_owner?: boolean
   /**

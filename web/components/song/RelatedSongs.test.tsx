@@ -21,7 +21,10 @@ function renderRail(similar: Clip[]) {
     "fetch",
     vi.fn(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ clips: similar }), { status: 200 })
+        new Response(
+          JSON.stringify({ clips: similar, total: similar.length, limit: 6 }),
+          { status: 200 }
+        )
       )
     )
   )
