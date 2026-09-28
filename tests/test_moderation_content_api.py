@@ -179,6 +179,16 @@ class TestQueue:
         assert (item["sources"], item["severity"], item["report_count"]) == (["automated"], 3, 0)
         assert item["published"] is False
 
+    async def test_an_edited_video_is_queued_with_its_edit_prompt(self, client, settings):
+        video = await _video()
+        await Job.find_one(Job.id == video.job_id).update(
+            {"$set": {"input_params": {"edit": {"operation": "replace_scene", "prompt": "a burning flag"}}}}
+        )
+
+        [item] = await _queue(client, await _admin(), settings)
+
+        assert item["description"] == "a burning flag"
+
     async def test_flagged_artwork_is_queued_with_its_prompt(self, client, settings):
         option, clip = await _artwork()
 
@@ -268,6 +278,21 @@ class TestVideoActions:
     async def test_a_ban_stops_a_live_token_republishing_its_videos(self, client, settings):
         owner = await _user()
         video = await _video(owner, flags=(), published=True)
+        resp = await client.post(
+            f"{ADMIN_URL}/users",
+            json={"action": "ban", "user_ids": [str(owner.id)]},
+            headers=_auth(await _admin(), settings),
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
+
+        assert resp.status_code == 403
+        assert (await Video.get(video.id)).published is False
+
+    async def test_a_banned_owner_cannot_publish_a_video_that_was_never_published(self, client, settings):
+        owner = await _user()
+        video = await _video(owner, flags=())
         resp = await client.post(
             f"{ADMIN_URL}/users",
             json={"action": "ban", "user_ids": [str(owner.id)]},

@@ -130,7 +130,9 @@ async def get_queue() -> list[QueueItem]:
     for kind, docs in (("video", videos), ("artwork", artwork)):
         for doc in docs:
             job = jobs.get(doc.job_id)
-            prompt = (job.input_params or {}).get("prompt") if job else None
+            params = (job.input_params or {}) if job else {}
+            # A replace_scene edit keeps its prompt inside the edit spec.
+            prompt = params.get("prompt") or (params.get("edit") or {}).get("prompt")
             items.append(_content_item(kind, doc, clips.get(doc.clip_id), creators, prompt))
     items.extend(_content_item("voice_model", voice, None, creators, voice.description) for voice in voices)
     items.sort(key=lambda i: (i.report_count, i.severity, i.latest_at), reverse=True)

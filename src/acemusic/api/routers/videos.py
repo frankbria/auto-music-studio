@@ -22,7 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_tier_capability
+from ..auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_current_user_optional,
+    require_existing_user,
+    require_tier_capability,
+)
 from ..models import JobStatus, Video
 from ..services import (
     clips as clip_service,
@@ -306,7 +312,8 @@ async def _resolve_viewable_video(video_id: str, viewer_id: str | None) -> Video
 @router.post("/{video_id}/publish", response_model=VideoDetailResponse)
 async def publish_video(
     video_id: str,
-    current: CurrentUser = Depends(get_current_user),
+    # #539: a banned account's still-live access token must not make anything public.
+    current: CurrentUser = Depends(require_existing_user),
 ) -> VideoDetailResponse:
     """Publish the owner's rendered video so it appears on the song detail page.
 
