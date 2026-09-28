@@ -113,18 +113,29 @@ describe("NotificationsView (US-20.6, #537)", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("says the load failed rather than showing an empty inbox", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("{}", { status: 502 }))
-    )
+  it("says the load failed, and Try again reloads the inbox", async () => {
+    const user = userEvent.setup()
+    const serve = stubNotificationsApi([[removed]])
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 502 }))
+      .mockImplementation(serve)
+    vi.stubGlobal("fetch", fetchMock)
     renderView()
+
     expect(
-      await screen.findByText(
-        "Could not load your notifications. Try again later."
-      )
+      await screen.findByText("Could not load your notifications.")
     ).toBeInTheDocument()
     expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Try again" }))
+
+    expect(
+      await screen.findByText(/Moderation removed "Takedown"/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Could not load your notifications.")
+    ).not.toBeInTheDocument()
   })
 
   it("shows the empty state when there are no notices", async () => {

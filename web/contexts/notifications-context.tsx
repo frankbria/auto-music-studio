@@ -39,6 +39,8 @@ type NotificationsContextValue = {
   hasMore: boolean
   /** The first page could not be loaded, so an empty list does not mean "no notices". */
   loadFailed: boolean
+  /** Re-request the first page after a failed load. */
+  retry: () => void
   loadMore: () => void
   markRead: (id: string) => void
   markAllRead: () => void
@@ -69,6 +71,8 @@ export function NotificationsProvider({
   const auth = useContext(AuthContext)
   const userId = auth?.user?.id ?? null
   const [store, setStore] = useState<Store>(EMPTY)
+  const [attempt, setAttempt] = useState(0)
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   // The access token rotates mid-session; keying the load on the user (not the
   // token) keeps a rotation from reloading page 1 over pages already revealed.
@@ -106,7 +110,7 @@ export function NotificationsProvider({
     return () => {
       cancelled = true
     }
-  }, [userId])
+  }, [userId, attempt])
 
   const serverCount = store.items.filter((n) => !isLive(n)).length
   const loadMore = useCallback(() => {
@@ -169,12 +173,13 @@ export function NotificationsProvider({
       unreadCount: store.unread,
       hasMore: store.hasMore,
       loadFailed: store.loadFailed,
+      retry,
       loadMore,
       markRead,
       markAllRead,
       notify,
     }),
-    [store, loadMore, markRead, markAllRead, notify]
+    [store, retry, loadMore, markRead, markAllRead, notify]
   )
 
   return (

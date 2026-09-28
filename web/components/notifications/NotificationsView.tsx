@@ -17,6 +17,7 @@ export function NotificationsView() {
     unreadCount,
     hasMore,
     loadFailed,
+    retry,
     loadMore,
     markAllRead,
   } = useNotifications()
@@ -40,11 +41,16 @@ export function NotificationsView() {
         </Button>
       </header>
 
-      {notifications.length === 0 ? (
+      {notifications.length === 0 && loadFailed ? (
+        <div className="flex flex-col items-center gap-3 py-16 text-sm text-muted-foreground">
+          <p>Could not load your notifications.</p>
+          <Button variant="outline" size="sm" onClick={retry}>
+            Try again
+          </Button>
+        </div>
+      ) : notifications.length === 0 ? (
         <p className="py-16 text-center text-sm text-muted-foreground">
-          {loadFailed
-            ? "Could not load your notifications. Try again later."
-            : "No notifications yet."}
+          No notifications yet.
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
