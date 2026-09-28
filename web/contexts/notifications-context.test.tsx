@@ -160,6 +160,35 @@ describe("NotificationsProvider.notify", () => {
   })
 })
 
+describe("NotificationsProvider load vs notify (#537)", () => {
+  it("keeps a live notice raised while the first page was loading", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const serve = stubNotificationsApi([[notificationEvent("a")]])
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (...args: Parameters<typeof fetch>) => {
+        await gate
+        return serve(...args)
+      })
+    )
+    const { result } = renderStore()
+
+    act(() =>
+      result.current.notify({ type: "system", message: "live", href: "/" })
+    )
+    await act(async () => release())
+
+    await waitFor(() =>
+      expect(result.current.notifications.map((n) => n.message)).toEqual([
+        "live",
+        'Moderation removed "Song a". Reason: Reason a',
+      ])
+    )
+    expect(result.current.unreadCount).toBe(2)
+  })
+})
+
 describe("useNotify", () => {
   it("degrades to a no-op outside a provider (no throw)", () => {
     const { result } = renderHook(() => useNotify())
