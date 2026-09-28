@@ -1,79 +1,146 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { NotificationsView, PAGE_SIZE } from "@/components/notifications/NotificationsView"
+import { NotificationsView } from "@/components/notifications/NotificationsView"
 import { NotificationsProvider } from "@/contexts/notifications-context"
-import { initialNotifications, unreadCount } from "@/lib/notifications"
+import {
+  notificationEvent,
+  readCalls,
+  stubNotificationsApi,
+} from "@/test/notifications-api"
+import { SignedIn } from "@/test/signed-in"
 
-const firstPage = initialNotifications.slice(0, PAGE_SIZE)
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+const removed = notificationEvent("r1", {
+  clip_id: "c1",
+  payload: { clip_id: "c1", title: "Takedown", reason: "Copyrighted sample" },
+})
+const warning = notificationEvent("w1", {
+  event_type: "moderation_warning",
+  clip_id: null,
+  payload: { reason: "Mislabelled uploads" },
+})
+const live = notificationEvent("d1", {
+  event_type: "status_live",
+  channel: "soundcloud",
+  clip_id: null,
+  payload: { title: "Neon" },
+  read: true,
+})
 
 function renderView() {
   return render(
-    <NotificationsProvider>
-      <NotificationsView />
-    </NotificationsProvider>
+    <SignedIn>
+      <NotificationsProvider>
+        <NotificationsView />
+      </NotificationsProvider>
+    </SignedIn>
   )
 }
 
-describe("NotificationsView (US-20.6)", () => {
-  it("lists the first page of notifications with a message per row, all types on page 1 (AC1)", () => {
+describe("NotificationsView (US-20.6, #537)", () => {
+  it("shows a removed-clip notice and a warning with their reasons, linked to the content", async () => {
+    stubNotificationsApi([[removed, warning, live]])
     renderView()
-    for (const n of firstPage) {
-      expect(screen.getByText(n.message)).toBeInTheDocument()
-    }
-    expect(screen.getAllByTestId("notification-item").length).toBe(firstPage.length)
-    // AC1: every notification type is represented on the first page.
-    expect(new Set(firstPage.map((n) => n.type)).size).toBe(7)
+
+    const removal = await screen.findByText(
+      'Moderation removed "Takedown". Reason: Copyrighted sample'
+    )
+    expect(removal.closest("a")).toHaveAttribute("href", "/song/c1")
+    expect(
+      screen.getByText(
+        "You received a moderation warning. Reason: Mislabelled uploads"
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('"Neon" is now live on soundcloud.')
+    ).toBeInTheDocument()
+    expect(screen.getByText("2 unread")).toBeInTheDocument()
   })
 
-  it("each row links to the relevant content (AC2)", () => {
+  it("shows an unread indicator on unread notifications only (AC3)", async () => {
+    stubNotificationsApi([[removed, warning, live]])
     renderView()
-    const rows = screen.getAllByTestId("notification-item")
-    firstPage.forEach((n, i) => {
-      expect(rows[i]).toHaveAttribute("href", n.href)
-    })
+    await screen.findAllByTestId("notification-item")
+    expect(screen.getAllByTestId("unread-dot")).toHaveLength(2)
   })
 
-  it("shows an unread indicator on unread notifications only (AC3)", () => {
-    renderView()
-    const unreadInPage = firstPage.filter((n) => !n.read).length
-    expect(screen.getAllByTestId("unread-dot").length).toBe(unreadInPage)
-  })
-
-  it("marks a single notification read on click, clearing its dot (AC3)", async () => {
+  it("marks a single notification read on click, clearing its dot and saving it (AC3)", async () => {
     const user = userEvent.setup()
+    const fetchMock = stubNotificationsApi([[removed, warning]])
     renderView()
-    const firstUnread = initialNotifications.find((n) => !n.read)!
-    const before = screen.getAllByTestId("unread-dot").length
-    await user.click(screen.getByText(firstUnread.message))
-    expect(screen.getAllByTestId("unread-dot").length).toBe(before - 1)
+
+    await user.click(await screen.findByText(/Moderation removed "Takedown"/))
+
+    expect(screen.getAllByTestId("unread-dot")).toHaveLength(1)
+    expect(readCalls(fetchMock)).toEqual([{ ids: ["r1"] }])
   })
 
   it('"Mark all as read" clears every unread indicator and disables itself (AC4)', async () => {
     const user = userEvent.setup()
+    const fetchMock = stubNotificationsApi([[removed, warning]])
     renderView()
-    expect(unreadCount(initialNotifications)).toBeGreaterThan(0)
     const button = screen.getByRole("button", { name: "Mark all as read" })
-    expect(button).toBeEnabled()
+    await waitFor(() => expect(button).toBeEnabled())
+
     await user.click(button)
+
     expect(screen.queryAllByTestId("unread-dot")).toHaveLength(0)
     expect(button).toBeDisabled()
     expect(screen.getByText("You're all caught up")).toBeInTheDocument()
+    expect(readCalls(fetchMock)).toEqual([{}])
   })
 
-  it("reveals older notifications in pages (infinite-scroll substitute)", async () => {
+  it("pages older notifications from the API", async () => {
     const user = userEvent.setup()
+    stubNotificationsApi([[removed], [warning]])
     renderView()
-    expect(screen.getAllByTestId("notification-item").length).toBe(PAGE_SIZE)
-    expect(initialNotifications.length).toBeGreaterThan(PAGE_SIZE) // reveal is real
-    await user.click(screen.getByRole("button", { name: "Show older notifications" }))
-    expect(screen.getAllByTestId("notification-item").length).toBe(
-      initialNotifications.length
+
+    await user.click(
+      await screen.findByRole("button", { name: "Show older notifications" })
     )
-    // All revealed → the reveal button is gone.
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("notification-item")).toHaveLength(2)
+    )
     expect(
       screen.queryByRole("button", { name: "Show older notifications" })
     ).not.toBeInTheDocument()
+  })
+
+  it("says the load failed, and Try again reloads the inbox", async () => {
+    const user = userEvent.setup()
+    const serve = stubNotificationsApi([[removed]])
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 502 }))
+      .mockImplementation(serve)
+    vi.stubGlobal("fetch", fetchMock)
+    renderView()
+
+    expect(
+      await screen.findByText("Could not load your notifications.")
+    ).toBeInTheDocument()
+    expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Try again" }))
+
+    expect(
+      await screen.findByText(/Moderation removed "Takedown"/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Could not load your notifications.")
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows the empty state when there are no notices", async () => {
+    stubNotificationsApi([[]])
+    renderView()
+    expect(await screen.findByText("No notifications yet.")).toBeInTheDocument()
   })
 })

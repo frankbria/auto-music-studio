@@ -327,9 +327,8 @@ TRAINING_PHASES = ("preprocessing", "training", "finalizing")
 async def notify_training_finished(model: VoiceModel, *, succeeded: bool) -> NotificationEvent:
     """Record the in-app notification for a finished training run.
 
-    Recorded, not delivered: ``delivered_at`` is left for the delivery worker the
-    platform does not have yet. Email is listed as optional in the story and there
-    is no mail path here, so none is claimed.
+    It reaches the user through the in-app inbox (#537). Email is listed as optional
+    in the story and there is no mail path here, so none is claimed.
     """
     event = NotificationEvent(
         user_id=model.user_id,

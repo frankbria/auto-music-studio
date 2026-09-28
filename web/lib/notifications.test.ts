@@ -1,18 +1,16 @@
 import { describe, expect, it } from "vitest"
 
-import { getAllClips } from "@/lib/explore"
 import {
   addNotification,
-  initialNotifications,
   markAllRead,
   markRead,
   NOTIFICATION_META,
   relativeTime,
-  unreadCount,
+  toAppNotification,
   type AppNotification,
+  type NotificationEventView,
   type NotificationType,
 } from "@/lib/notifications"
-import { getProfileByHandle } from "@/lib/profiles"
 
 const ALL_TYPES: NotificationType[] = [
   "like",
@@ -21,37 +19,155 @@ const ALL_TYPES: NotificationType[] = [
   "generation_complete",
   "mastering_complete",
   "distribution_update",
+  "moderation",
   "system",
 ]
 
-describe("notifications seam", () => {
-  it("seeds one of every notification type, each with an href and message (AC1, AC2)", () => {
-    const types = new Set(initialNotifications.map((n) => n.type))
-    for (const t of ALL_TYPES) expect(types.has(t)).toBe(true)
-    expect(initialNotifications.every((n) => n.message && n.href)).toBe(true)
+const list: AppNotification[] = ["a", "b", "c"].map((id) => ({
+  id,
+  type: "system",
+  message: `message ${id}`,
+  href: "/notifications",
+  createdAt: "2026-09-28T00:00:00Z",
+  read: false,
+}))
+
+function event(
+  overrides: Partial<NotificationEventView>
+): NotificationEventView {
+  return {
+    id: "e1",
+    event_type: "moderation_clip_removed",
+    channel: "in_app",
+    clip_id: null,
+    release_id: null,
+    voice_model_id: null,
+    payload: {},
+    read: false,
+    created_at: "2026-09-28T10:00:00Z",
+    ...overrides,
+  }
+}
+
+describe("toAppNotification (#537)", () => {
+  it("shows a removed clip's title and reason, linking to the song", () => {
+    const row = toAppNotification(
+      event({
+        clip_id: "c1",
+        payload: {
+          clip_id: "c1",
+          title: "Takedown",
+          reason: "Copyrighted sample",
+        },
+      })
+    )
+    expect(row).toEqual({
+      id: "e1",
+      type: "moderation",
+      message: 'Moderation removed "Takedown". Reason: Copyrighted sample',
+      href: "/song/c1",
+      createdAt: "2026-09-28T10:00:00Z",
+      read: false,
+    })
   })
 
-  it("every notification links to real, resolvable content — no dead ends (AC2)", () => {
-    // Guards against linking a Genre.id (g-*) or unknown handle as a /song or
-    // /@profile target, which would dead-end on "not found".
-    const clipIds = new Set(getAllClips().map((c) => c.id))
-    const staticRoutes = new Set(["/release", "/explore"])
-    for (const n of initialNotifications) {
-      const where = `${n.id} → ${n.href}`
-      if (n.href.startsWith("/song/")) {
-        expect(clipIds.has(n.href.slice("/song/".length)), where).toBe(true)
-      } else if (n.href.startsWith("/@")) {
-        expect(getProfileByHandle(n.href.slice(1)), where).not.toBeNull()
-      } else {
-        expect(staticRoutes.has(n.href), where).toBe(true)
-      }
-    }
+  it("shows a warning's reason", () => {
+    const row = toAppNotification(
+      event({
+        event_type: "moderation_warning",
+        payload: { reason: "Mislabelled uploads" },
+      })
+    )
+    expect(row.type).toBe("moderation")
+    expect(row.message).toBe(
+      "You received a moderation warning. Reason: Mislabelled uploads"
+    )
   })
 
+  it("omits the reason clause when an admin gave none", () => {
+    const row = toAppNotification(
+      event({ clip_id: "c1", payload: { title: "Takedown", reason: null } })
+    )
+    expect(row.message).toBe('Moderation removed "Takedown".')
+    const blank = toAppNotification(
+      event({ clip_id: "c1", payload: { title: "Takedown", reason: "   " } })
+    )
+    expect(blank.message).toBe('Moderation removed "Takedown".')
+  })
+
+  it.each([
+    [
+      "moderation_appeal_upheld",
+      'Your appeal for "Song" was reviewed and the decision stands. Note: Still infringing',
+    ],
+    [
+      "moderation_appeal_reversed",
+      'Your appeal for "Song" was accepted and the decision reversed. Note: Still infringing',
+    ],
+    [
+      "moderation_appeal_info_requested",
+      'Moderation needs more information about your appeal for "Song". Note: Still infringing',
+    ],
+  ])("words the %s appeal outcome with the admin note", (type, message) => {
+    const row = toAppNotification(
+      event({
+        event_type: type,
+        clip_id: "c1",
+        payload: { title: "Song", note: "Still infringing" },
+      })
+    )
+    expect(row).toMatchObject({ type: "moderation", message, href: "/song/c1" })
+  })
+
+  it("maps voice training and distribution events", () => {
+    expect(
+      toAppNotification(
+        event({
+          event_type: "voice_training_failed",
+          payload: { name: "Alto", error: "Too short" },
+        })
+      )
+    ).toMatchObject({
+      type: "system",
+      message: 'Training failed for voice model "Alto". Error: Too short',
+      href: "/me",
+    })
+    expect(
+      toAppNotification(
+        event({
+          event_type: "status_live",
+          channel: "soundcloud",
+          payload: { title: "Neon" },
+        })
+      )
+    ).toMatchObject({
+      type: "distribution_update",
+      message: '"Neon" is now live on soundcloud.',
+      href: "/release",
+    })
+  })
+
+  it("falls back to a generic system row for an unknown event", () => {
+    expect(
+      toAppNotification(event({ event_type: "something_new" }))
+    ).toMatchObject({
+      type: "system",
+      href: "/notifications",
+    })
+  })
+
+  it("carries the server read flag", () => {
+    expect(toAppNotification(event({ read: true })).read).toBe(true)
+  })
+})
+
+describe("notifications helpers", () => {
   it("maps every type to a distinct icon + label (AC1)", () => {
     const icons = ALL_TYPES.map((t) => NOTIFICATION_META[t].icon)
     expect(new Set(icons).size).toBe(ALL_TYPES.length)
-    expect(ALL_TYPES.every((t) => NOTIFICATION_META[t].label.length > 0)).toBe(true)
+    expect(ALL_TYPES.every((t) => NOTIFICATION_META[t].label.length > 0)).toBe(
+      true
+    )
   })
 
   it("carries meta for the video_complete type (US-22.3)", () => {
@@ -60,17 +176,7 @@ describe("notifications seam", () => {
     expect(NOTIFICATION_META.video_complete.tone.length).toBeGreaterThan(0)
   })
 
-  it("counts only unread (AC5)", () => {
-    const list = [
-      { ...initialNotifications[0], read: false },
-      { ...initialNotifications[1], read: true },
-      { ...initialNotifications[2], read: false },
-    ]
-    expect(unreadCount(list)).toBe(2)
-  })
-
   it("markRead flips one item immutably, leaving the rest untouched", () => {
-    const list = initialNotifications.map((n) => ({ ...n, read: false }))
     const next = markRead(list, list[1].id)
     expect(next[1].read).toBe(true)
     expect(next[0].read).toBe(false)
@@ -81,8 +187,7 @@ describe("notifications seam", () => {
   })
 
   it("markAllRead clears every unread indicator (AC4)", () => {
-    const list = initialNotifications.map((n) => ({ ...n, read: false }))
-    expect(unreadCount(markAllRead(list))).toBe(0)
+    expect(markAllRead(list).every((n) => n.read)).toBe(true)
   })
 
   it("relativeTime buckets ages deterministically", () => {
@@ -96,7 +201,7 @@ describe("notifications seam", () => {
   })
 
   it("addNotification prepends immutably (newest first)", () => {
-    const base = initialNotifications.slice(0, 2)
+    const base = list.slice(0, 2)
     const entry: AppNotification = {
       id: "n-live-1",
       type: "mastering_complete",

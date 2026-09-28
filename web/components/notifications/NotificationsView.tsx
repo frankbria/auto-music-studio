@@ -1,26 +1,26 @@
 "use client"
 
-import { useState } from "react"
-
 import { NotificationItem } from "@/components/notifications/NotificationItem"
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/contexts/notifications-context"
 
-// Notifications page body (US-20.6). Lists activity (likes, remixes, followers,
-// generation/mastering/distribution updates, system) with per-type icons, unread
+// Notifications page body (US-20.6, #537). Lists activity (moderation notices,
+// appeal outcomes, voice training, distribution updates, system) with per-type icons, unread
 // indicators, and "Mark all as read". Data + mutations come from the root
 // NotificationsProvider, shared with the sidebar bell badge.
 
-// "Infinite scroll" is a Show-older reveal in PAGE_SIZE chunks rather than an
-// IntersectionObserver — the real feed (US-20.4) already has the observer; swap
-// this for a cursor fetch when the API lands. PAGE_SIZE covers all seven types on
-// the first page; older history reveals on demand.
-export const PAGE_SIZE = 7
-
+// "Infinite scroll" is a Show-older button that fetches the next API page rather
+// than an IntersectionObserver.
 export function NotificationsView() {
-  const { notifications, unreadCount, markAllRead } = useNotifications()
-  const [visible, setVisible] = useState(PAGE_SIZE)
-  const shown = notifications.slice(0, visible)
+  const {
+    notifications,
+    unreadCount,
+    hasMore,
+    loadFailed,
+    retry,
+    loadMore,
+    markAllRead,
+  } = useNotifications()
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-8">
@@ -41,13 +41,20 @@ export function NotificationsView() {
         </Button>
       </header>
 
-      {notifications.length === 0 ? (
+      {notifications.length === 0 && loadFailed ? (
+        <div className="flex flex-col items-center gap-3 py-16 text-sm text-muted-foreground">
+          <p>Could not load your notifications.</p>
+          <Button variant="outline" size="sm" onClick={retry}>
+            Try again
+          </Button>
+        </div>
+      ) : notifications.length === 0 ? (
         <p className="py-16 text-center text-sm text-muted-foreground">
           No notifications yet.
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
-          {shown.map((notification) => (
+          {notifications.map((notification) => (
             <li key={notification.id}>
               <NotificationItem notification={notification} />
             </li>
@@ -55,13 +62,9 @@ export function NotificationsView() {
         </ul>
       )}
 
-      {visible < notifications.length && (
+      {hasMore && (
         <div className="mt-4 flex justify-center">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setVisible((v) => v + PAGE_SIZE)}
-          >
+          <Button variant="ghost" size="sm" onClick={loadMore}>
             Show older notifications
           </Button>
         </div>
