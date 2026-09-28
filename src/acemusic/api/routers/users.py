@@ -4,6 +4,7 @@ Endpoints (all require a valid Bearer access token):
 
 * ``GET  /users/me``  → the authenticated user's full profile
 * ``PATCH /users/me`` → partial profile update (display_name, handle, bio, style_tags)
+* ``GET  /users/me/notifications`` / ``POST /users/me/notifications/read`` → in-app inbox (#537)
 
 Avatar upload (``PUT /users/me/avatar``) is intentionally deferred to US-8.5
 (file storage) and is not part of this surface yet.
@@ -15,12 +16,18 @@ handle validator is reused from the service layer so the rules have one home.
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from beanie import PydanticObjectId
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth.dependencies import CurrentUser, get_current_user
 from ..models import CreditTransaction, User
-from ..services import appeals as appeal_service, credits as credits_service, users as user_service
+from ..services import (
+    appeals as appeal_service,
+    credits as credits_service,
+    notifications as notification_service,
+    users as user_service,
+)
 from ._validators import validate_model
 
 # Free-text profile fields are stored verbatim and re-served on every
@@ -176,6 +183,43 @@ async def get_my_appeals(current: CurrentUser = Depends(get_current_user)) -> My
     """Your moderation appeals and their outcomes, newest first (US-27.4)."""
     appeals = await appeal_service.list_user_appeals(current.user_id)
     return MyAppealsResponse(appeals=[appeal_service.AppealView.of(a) for a in appeals])
+
+
+class MyNotificationsResponse(BaseModel):
+    notifications: list[notification_service.NotificationView]
+    unread_count: int
+    has_more: bool
+
+
+@router.get("/me/notifications", response_model=MyNotificationsResponse)
+async def get_my_notifications(
+    limit: int = Query(default=20, ge=1, le=notification_service.MAX_PAGE),
+    offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(get_current_user),
+) -> MyNotificationsResponse:
+    """Your notices (moderation, appeals, voice training, distribution), newest first (#537)."""
+    events, has_more, unread = await notification_service.list_for_user(current.user_id, limit, offset)
+    return MyNotificationsResponse(
+        notifications=[notification_service.NotificationView.of(e) for e in events],
+        unread_count=unread,
+        has_more=has_more,
+    )
+
+
+class MarkNotificationsReadRequest(BaseModel):
+    ids: list[PydanticObjectId] | None = Field(default=None, max_length=notification_service.MAX_PAGE)
+
+
+class MarkNotificationsReadResponse(BaseModel):
+    updated: int
+
+
+@router.post("/me/notifications/read", response_model=MarkNotificationsReadResponse)
+async def mark_my_notifications_read(
+    body: MarkNotificationsReadRequest, current: CurrentUser = Depends(get_current_user)
+) -> MarkNotificationsReadResponse:
+    """Mark the given notices read, or all of them when ``ids`` is omitted (#537)."""
+    return MarkNotificationsReadResponse(updated=await notification_service.mark_read(current.user_id, body.ids))
 
 
 @router.get("/me/credits", response_model=CreditsResponse)

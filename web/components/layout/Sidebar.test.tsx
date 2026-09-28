@@ -7,7 +7,10 @@ import { AuthProvider } from "@/contexts/auth-context"
 import { NotificationsProvider } from "@/contexts/notifications-context"
 import { mainNav } from "@/config/navigation"
 import { LAYOUT } from "@/lib/constants/layout"
-import { initialNotifications, unreadCount } from "@/lib/notifications"
+import {
+  notificationEvent,
+  stubNotificationsApi,
+} from "@/test/notifications-api"
 import { routerMock } from "@/test/router-mock"
 import { SignedIn } from "@/test/signed-in"
 
@@ -25,7 +28,9 @@ beforeEach(() => {
   // AuthProvider attempts a session refresh on mount; resolve it as signed-out.
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) })
+    vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 401, json: async () => ({}) })
   )
 })
 
@@ -41,9 +46,7 @@ describe("Sidebar navigation (US-15.3)", () => {
       "href",
       "/labs"
     )
-    expect(
-      screen.getByRole("button", { name: "Account" })
-    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Account" })).toBeInTheDocument()
   })
 
   it("marks the active route and only the active route", () => {
@@ -144,9 +147,11 @@ describe("Sidebar navigation (US-15.3)", () => {
   ])(
     "shows the Moderation link only to an admin (is_admin=%s) (US-27.3)",
     async (isAdmin, shown) => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ is_admin: isAdmin }), { status: 200 })
-      )
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ is_admin: isAdmin }), { status: 200 })
+        )
       vi.stubGlobal("fetch", fetchMock)
       const user = userEvent.setup()
       render(
@@ -155,7 +160,9 @@ describe("Sidebar navigation (US-15.3)", () => {
         </SignedIn>
       )
 
-      await user.click(screen.getByRole("button", { name: "Open account menu" }))
+      await user.click(
+        screen.getByRole("button", { name: "Open account menu" })
+      )
       await screen.findByRole("menuitem", { name: "Profile" })
 
       if (shown) {
@@ -183,16 +190,16 @@ describe("Sidebar navigation (US-15.3)", () => {
 })
 
 describe("Sidebar notifications badge (US-20.6, AC5)", () => {
-  it("shows the unread count on the Notifications item when a provider is present", () => {
+  it("shows the server's unread count on the Notifications item when a provider is present", async () => {
+    stubNotificationsApi([[notificationEvent("a")]], 3)
     render(
-      <AuthProvider>
+      <SignedIn>
         <NotificationsProvider>
           <Sidebar />
         </NotificationsProvider>
-      </AuthProvider>
+      </SignedIn>
     )
-    const badge = screen.getByTestId("nav-unread-badge")
-    expect(badge).toHaveTextContent(String(unreadCount(initialNotifications)))
+    expect(await screen.findByTestId("nav-unread-badge")).toHaveTextContent("3")
   })
 
   it("renders no badge without a provider (degrades to 0)", () => {

@@ -1,78 +1,182 @@
 "use client"
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 
+import { AuthContext } from "@/contexts/auth-context"
 import {
   addNotification as addNotificationIn,
-  initialNotifications,
+  fetchNotifications,
   markAllRead as markAllReadIn,
+  markNotificationsRead,
   markRead as markReadIn,
-  unreadCount as countUnread,
   type AppNotification,
   type NotifyInput,
 } from "@/lib/notifications"
 
-// In-memory notifications store (US-20.6). Lives in the ROOT layout — unlike the
-// route-scoped Playlists store — because the unread-count badge renders in the
-// Sidebar (root layout) while the list + mutations live on /notifications, and
-// both must read one reactive source so "mark all as read" clears the badge.
-// Each action runs the matching pure helper from lib/notifications. Swap the seed
-// for a fetch and the actions for PATCH calls when the API exists; surface stays.
+// Notifications store (US-20.6, #537). Lives in the ROOT layout because the unread
+// badge renders in the Sidebar while the list + mutations live on /notifications,
+// and both must read one reactive source so "mark all as read" clears the badge.
+//
+// Server rows load when a user signs in; reads are applied optimistically and sent
+// to the API. `notify()` rows (e.g. a mastering job completing) are session-only:
+// they have no server id, so marking them read stays local.
+//
+// Reads AuthContext directly (not useAuth, which throws) so suites that render the
+// provider without an AuthProvider get an empty, signed-out store.
 
 type NotificationsContextValue = {
   notifications: AppNotification[]
   unreadCount: number
+  /** True when older server notifications exist beyond the loaded pages. */
+  hasMore: boolean
+  loadMore: () => void
   markRead: (id: string) => void
   markAllRead: () => void
   /** Raise a new (unread) notification now — e.g. a mastering job completing (US-21.3). */
   notify: (input: NotifyInput) => void
 }
 
-const NotificationsContext = createContext<NotificationsContextValue | null>(null)
+const NotificationsContext = createContext<NotificationsContextValue | null>(
+  null
+)
 
-export function NotificationsProvider({ children }: { children: React.ReactNode }) {
-  const [notifications, setNotifications] = useState<AppNotification[]>(initialNotifications)
+const LIVE_PREFIX = "n-live-"
+const isLive = (n: AppNotification) => n.id.startsWith(LIVE_PREFIX)
+
+type Store = { items: AppNotification[]; unread: number; hasMore: boolean }
+const EMPTY: Store = { items: [], unread: 0, hasMore: false }
+
+export function NotificationsProvider({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const auth = useContext(AuthContext)
+  const userId = auth?.user?.id ?? null
+  const [store, setStore] = useState<Store>(EMPTY)
+
+  // The access token rotates mid-session; keying the load on the user (not the
+  // token) keeps a rotation from reloading page 1 over pages already revealed.
+  const tokenRef = useRef<string | null>(null)
+  useEffect(() => {
+    tokenRef.current = auth?.accessToken ?? null
+  }, [auth?.accessToken])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      const token = tokenRef.current
+      if (!userId || !token) {
+        if (!cancelled) setStore(EMPTY)
+        return
+      }
+      const page = await fetchNotifications(token).catch(() => null)
+      if (cancelled || !page) return
+      // Keep any live rows raised while the request was in flight.
+      setStore((s) => {
+        const live = s.items.filter(isLive)
+        return {
+          items: [...live, ...page.notifications],
+          unread: page.unreadCount + live.filter((n) => !n.read).length,
+          hasMore: page.hasMore,
+        }
+      })
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
+  const serverCount = store.items.filter((n) => !isLive(n)).length
+  const loadMore = useCallback(() => {
+    const token = tokenRef.current
+    if (!token) return
+    void fetchNotifications(token, serverCount)
+      .then((page) =>
+        setStore((s) => {
+          // Offset paging: a notice that arrived since page 1 shifts older rows down,
+          // so drop the repeats.
+          const seen = new Set(s.items.map((n) => n.id))
+          const fresh = page.notifications.filter((n) => !seen.has(n.id))
+          return { ...s, items: [...s.items, ...fresh], hasMore: page.hasMore }
+        })
+      )
+      .catch(() => undefined)
+  }, [serverCount])
 
   const markRead = useCallback((id: string) => {
-    setNotifications((list) => markReadIn(list, id))
+    setStore((s) => {
+      const item = s.items.find((n) => n.id === id)
+      if (!item || item.read) return s
+      return {
+        ...s,
+        items: markReadIn(s.items, id),
+        unread: Math.max(0, s.unread - 1),
+      }
+    })
+    const token = tokenRef.current
+    if (token && !id.startsWith(LIVE_PREFIX))
+      void markNotificationsRead(token, [id])
   }, [])
 
   const markAllRead = useCallback(() => {
-    setNotifications((list) => markAllReadIn(list))
+    setStore((s) => ({ ...s, items: markAllReadIn(s.items), unread: 0 }))
+    const token = tokenRef.current
+    if (token) void markNotificationsRead(token)
   }, [])
 
-  // Monotonic id source for live notifications (distinct from the seed's "n-*-N").
+  // Monotonic id source for live notifications, distinct from server ids.
   const seq = useRef(0)
   const notify = useCallback((input: NotifyInput) => {
     seq.current += 1
     const entry: AppNotification = {
-      id: `n-live-${seq.current}`,
+      id: `${LIVE_PREFIX}${seq.current}`,
       read: false,
       createdAt: new Date().toISOString(),
       ...input,
     }
-    setNotifications((list) => addNotificationIn(list, entry))
+    setStore((s) => ({
+      ...s,
+      items: addNotificationIn(s.items, entry),
+      unread: s.unread + 1,
+    }))
   }, [])
 
   const value = useMemo<NotificationsContextValue>(
     () => ({
-      notifications,
-      unreadCount: countUnread(notifications),
+      notifications: store.items,
+      unreadCount: store.unread,
+      hasMore: store.hasMore,
+      loadMore,
       markRead,
       markAllRead,
       notify,
     }),
-    [notifications, markRead, markAllRead, notify]
+    [store, loadMore, markRead, markAllRead, notify]
   )
 
   return (
-    <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>
+    <NotificationsContext.Provider value={value}>
+      {children}
+    </NotificationsContext.Provider>
   )
 }
 
 export function useNotifications(): NotificationsContextValue {
   const ctx = useContext(NotificationsContext)
-  if (!ctx) throw new Error("useNotifications must be used within a NotificationsProvider")
+  if (!ctx)
+    throw new Error(
+      "useNotifications must be used within a NotificationsProvider"
+    )
   return ctx
 }
 
