@@ -265,6 +265,21 @@ class TestVideoActions:
         assert resp.json()["detail"] == VIDEO_REMOVED
         assert (await Video.get(video.id)).published is False
 
+    async def test_a_ban_stops_a_live_token_republishing_its_videos(self, client, settings):
+        owner = await _user()
+        video = await _video(owner, flags=(), published=True)
+        resp = await client.post(
+            f"{ADMIN_URL}/users",
+            json={"action": "ban", "user_ids": [str(owner.id)]},
+            headers=_auth(await _admin(), settings),
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
+
+        assert resp.status_code == 403
+        assert (await Video.get(video.id)).published is False
+
     async def test_owner_can_still_publish_an_unmoderated_video(self, client, settings):
         owner = await _user()
         video = await _video(owner, flags=())

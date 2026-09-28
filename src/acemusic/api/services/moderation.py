@@ -319,7 +319,10 @@ async def _ban(user: User, settings: ApiSettings) -> dict:
         await user.set({"banned_at": now})
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id})
-    videos = await Video.find({"user_id": user.id, "published": True}).update({"$set": {"published": False}})
+    # #539: removed, like the clips, so a still-live access token can't publish them again.
+    videos = await Video.find({"user_id": user.id, "published": True}).update(
+        {"$set": {"published": False, "removed_at": now}}
+    )
     releases = await release_service.unshare_releases({"user_id": user.id}, settings)
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
