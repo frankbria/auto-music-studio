@@ -191,6 +191,10 @@ class ApiSettings(BaseSettings):
     # deployments (swap for a shared store if the API runs multiple workers).
     stream_rate_limit_per_minute: int = Field(default=100, ge=1)
 
+    # Clip reports per user per hour (#534). The unique (clip, reporter) index
+    # stops a repeat report, not one account reporting every public clip.
+    report_rate_limit_per_hour: int = Field(default=20, ge=1)
+
     # Reverse proxies whose forwarded client-IP header the limiter trusts (#283).
     # A same-origin BFF proxy calls the backend server-side, so every visitor
     # arrives as the proxy's egress IP and the per-IP limiter collapses to one

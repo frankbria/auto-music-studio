@@ -339,7 +339,8 @@ Package manager: `uv` with `hatchling` build backend
   (#532), both in the text and in the rule terms, so a rule matches across scripts. Leetspeak folding
   (`ScreeningRules.fold_leetspeak`) is off by default: turning it on catches `h3il`, at the cost of more false positives
 - **User reporting (US-27.2)**: `POST /api/v1/clips/{id}/report` writes a `ClipReport`; the unique
-  `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Admins list reports via
+  `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Submissions are capped per user by
+  `app.state.report_limiter` (`ACEMUSIC_API_REPORT_RATE_LIMIT_PER_HOUR`, default 20, 429 over it; failed attempts count too) (#534). Admins list reports via
   `GET /api/v1/admin/moderation/reports`. On the web, `ReportClipButton` reads `AuthContext` directly (not
   `useAuth`, which throws) so it renders nothing outside an `AuthProvider`, signed out, or on your own clip
 - **Moderation dashboard (US-27.3)**: `/admin/moderation` on the web; API in `services/moderation.py` behind
