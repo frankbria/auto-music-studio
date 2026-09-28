@@ -14,7 +14,8 @@ from .common import utcnow
 
 
 class ModerationLogEntry(Document):
-    actor_id: PydanticObjectId
+    # None when the platform wrote the entry rather than an admin (#538: a failed SoundCloud un-share).
+    actor_id: PydanticObjectId | None = None
     action: str
     target_type: str  # "clip", "user" or "screening_rules"
     target_id: str | None = None

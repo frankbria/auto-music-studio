@@ -328,7 +328,7 @@ async def update_track_sharing(access_token: str, track_id: str, sharing: str) -
             )
             resp.raise_for_status()
             return resp.json()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:  # ValueError: a 2xx with a non-JSON body
         raise SoundCloudError("Updating the SoundCloud track sharing failed.") from exc
 
 

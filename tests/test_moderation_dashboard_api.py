@@ -24,12 +24,13 @@ from acemusic.api.models import (
     RefreshToken,
     Release,
     ReleaseStatus,
+    SoundCloudConnection,
     User,
     Video,
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import routing
+from acemusic.api.services import moderation, routing, screening, soundcloud
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
@@ -607,7 +608,13 @@ class TestModerationLog:
 
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "ban")
         assert entry.target_id == str(user.id)
-        assert entry.details == {"clips_removed": 1, "videos_unpublished": 0}
+        assert entry.details == {
+            "clips_removed": 1,
+            "videos_unpublished": 0,
+            "releases_privatized": 0,
+            "soundcloud_unshared": [],
+            "soundcloud_unshare_failed": [],
+        }
 
     async def test_screening_rules_update_is_logged_with_before_and_after(self, client, settings):
         admin = await _admin()
@@ -627,6 +634,16 @@ class TestModerationLog:
         assert entry["actor_id"] == str(admin.id)
         assert entry["details"]["after"]["rules"][0]["term"] == "badword"
         assert "before" in entry["details"]
+
+    async def test_a_platform_entry_has_no_actor(self, client, settings):
+        admin = await _admin()
+        await ModerationLogEntry(action="soundcloud_unshare_failed", target_type="clip", target_id="c1").insert()
+
+        resp = await client.get(LOG_URL, headers=_auth(admin, settings))
+
+        assert resp.status_code == 200
+        [entry] = resp.json()["entries"]
+        assert (entry["action"], entry["actor_id"]) == ("soundcloud_unshare_failed", None)
 
     async def test_limit(self, client, settings):
         admin = await _admin()
@@ -748,3 +765,173 @@ class TestRemovedClipStaysDown:
         for url in (f"{VIDEOS_URL}/{video.id}", f"{VIDEOS_URL}/for-clip/{clip.id}"):
             assert (await client.get(url)).status_code == 404
             assert (await client.get(url, headers=_auth(stranger, settings))).status_code == 403
+
+
+async def _sc_connection(owner) -> SoundCloudConnection:
+    connection = SoundCloudConnection(
+        user_id=owner.id,
+        soundcloud_user_id=f"sc-{owner.id}",
+        access_token="at",
+        refresh_token="rt",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    await connection.insert()
+    return connection
+
+
+@pytest.fixture
+def sharing_calls(monkeypatch) -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+
+    async def update_track_sharing(_token, track_id, sharing):
+        calls.append((track_id, sharing))
+        return {}
+
+    monkeypatch.setattr(soundcloud, "update_track_sharing", update_track_sharing)
+    return calls
+
+
+async def _latest_log(action: str) -> ModerationLogEntry:
+    return (
+        await ModerationLogEntry.find(ModerationLogEntry.action == action).sort(-ModerationLogEntry.id).first_or_none()
+    )
+
+
+@pytest.mark.integration
+class TestRemovalUnsharesSoundCloud:
+    """#538: taking a clip down also takes down what was already distributed from it."""
+
+    async def test_remove_makes_releases_private_and_unshares_their_tracks(self, client, settings, sharing_calls):
+        owner = await _user()
+        clip = await _clip(owner)
+        await _sc_connection(owner)
+        shared = await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-1")
+        unshipped = await _release(clip, visibility=VisibilityState.UNLISTED)
+        await _release(clip)  # already private: not counted as privatized
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result == {"clip_id": str(clip.id), "ok": True, "detail": None}
+        assert sharing_calls == [("sc-1", "private")]
+        for release in (shared, unshipped):
+            assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        details = (await _latest_log("remove")).details
+        assert details["releases_privatized"] == 2
+        assert details["soundcloud_unshared"] == ["sc-1"]
+        assert details["soundcloud_unshare_failed"] == []
+
+    async def test_a_failed_unshare_is_logged_and_surfaced_to_the_admin(self, client, settings, sharing_calls):
+        owner = await _user()
+        clip = await _clip(owner)
+        # No SoundCloud connection: the owner unlinked their account, so the track can't be reached.
+        release = await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-9")
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result["ok"] is True
+        assert "sc-9" in result["detail"] and "SoundCloud" in result["detail"]
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        assert (await Clip.get(clip.id)).removed_at is not None
+        details = (await _latest_log("remove")).details
+        assert details["soundcloud_unshared"] == []
+        assert [f["track_id"] for f in details["soundcloud_unshare_failed"]] == ["sc-9"]
+        assert details["soundcloud_unshare_failed"][0]["error"]
+
+    async def test_other_clips_releases_are_untouched(self, client, settings, sharing_calls):
+        owner = await _user()
+        clip, other = await _clip(owner), await _clip(owner)
+        await _sc_connection(owner)
+        kept = await _release(other, visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-other")
+
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert sharing_calls == []
+        assert (await Release.get(kept.id)).visibility == VisibilityState.PUBLIC
+
+    async def test_ban_makes_every_release_private_and_unshares_its_tracks(self, client, settings, sharing_calls):
+        owner = await _user()
+        await _sc_connection(owner)
+        first = await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-a")
+        second = await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-b")
+
+        [result] = await _act_on_users(client, await _admin(), settings, "ban", [owner.id])
+
+        assert result == {"user_id": str(owner.id), "ok": True, "detail": None}
+        assert sorted(sharing_calls) == [("sc-a", "private"), ("sc-b", "private")]
+        for release in (first, second):
+            assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        details = (await _latest_log("ban")).details
+        assert sorted(details["soundcloud_unshared"]) == ["sc-a", "sc-b"]
+
+    async def test_ban_surfaces_a_failed_unshare(self, client, settings, sharing_calls):
+        owner = await _user()
+        await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-x")
+
+        [result] = await _act_on_users(client, await _admin(), settings, "ban", [owner.id])
+
+        assert result["ok"] is True
+        assert "sc-x" in result["detail"]
+        assert (await User.get(owner.id)).banned_at is not None
+
+    async def test_a_removal_landing_mid_share_leaves_the_track_private(self, client, settings, monkeypatch):
+        owner, admin = await _user(), await _admin()
+        clip = await _clip(owner, visibility=VisibilityState.PRIVATE)
+        await _sc_connection(owner)
+        release = await _release(clip, soundcloud_track_id="sc-race")
+        calls: list[str] = []
+
+        async def update_track_sharing(_token, track_id, sharing):
+            if sharing == "public" and not calls:
+                # The admin removes the clip after the route's local write; the moderation un-share
+                # reaches SoundCloud first and the route's "public" PUT lands after it.
+                await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), None, settings)
+            calls.append(sharing)
+            return {}
+
+        monkeypatch.setattr(soundcloud, "update_track_sharing", update_track_sharing)
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": "public"}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+        assert calls[-1] == "private"
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
+
+    async def test_a_ban_landing_mid_publish_of_a_private_clip_leaves_the_track_private(
+        self, client, settings, monkeypatch
+    ):
+        owner, admin = await _user(), await _admin()
+        clip = await _clip(owner, visibility=VisibilityState.PRIVATE)
+        await _sc_connection(owner)
+        release = await _release(clip, soundcloud_track_id="sc-ban")
+        real_enforce = screening.enforce
+        calls: list[str] = []
+
+        async def banned_while_screening(*texts, **kwargs):
+            # After the route read the clip, before it writes it public: the ban's sweep skips a private clip.
+            if not calls:
+                calls.append("ban")
+                await moderation.act_on_user(str(admin.id), "ban", str(owner.id), None, settings)
+            return await real_enforce(*texts, **kwargs)
+
+        async def update_track_sharing(_token, track_id, sharing):
+            calls.append(sharing)
+            return {}
+
+        monkeypatch.setattr(screening, "enforce", banned_while_screening)
+        monkeypatch.setattr(soundcloud, "update_track_sharing", update_track_sharing)
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": "public"}, headers=_auth(owner, settings)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == SUSPENDED
+        assert calls[-1] == "private"
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        stored = await Clip.get(clip.id)
+        # Taken down the way the ban would have, had its sweep seen the clip public.
+        assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)

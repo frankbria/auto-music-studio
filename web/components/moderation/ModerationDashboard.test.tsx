@@ -407,6 +407,43 @@ describe("ModerationDashboard", () => {
     )
   })
 
+  it("warns when a removal succeeded but its SoundCloud track stayed shared (#538)", async () => {
+    stubBackend({
+      queue: [SONG_A, SONG_B],
+      results: [
+        {
+          ok: true,
+          detail:
+            "Couldn't make SoundCloud track sc-1 private; it may still be public on the owner's account.",
+        },
+        { ok: true },
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all" }))
+    await userEvent.click(
+      within(screen.getByRole("toolbar", { name: "Bulk actions" })).getByRole(
+        "button",
+        { name: "Remove" }
+      )
+    )
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Remove 2 clips?" })).getByRole(
+        "button",
+        { name: "Remove" }
+      )
+    )
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Removed 2 clips."
+    )
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Song A: Couldn't make SoundCloud track sc-1 private"
+    )
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Song B")
+  })
+
   it("sorts by severity or recency and filters by source and category", async () => {
     stubBackend({ queue: [SONG_A, SONG_B, SONG_C] })
     render(<ModerationDashboard accessToken="tok" />)
@@ -477,6 +514,34 @@ describe("ModerationDashboard", () => {
         ([url]) => url === "/api/admin/moderation/log?limit=100"
       )
     ).toBe(true)
+  })
+
+  it("labels a platform-written log entry with no actor as system (#538)", async () => {
+    stubBackend({
+      queue: [],
+      log: [
+        {
+          id: "l2",
+          actor_id: null,
+          action: "soundcloud_unshare_failed",
+          target_type: "clip",
+          target_id: "c9",
+          reason: null,
+          details: {},
+          created_at: "2026-09-20T12:00:00Z",
+        },
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    const row = (await screen.findByText("SoundCloud un-share failed")).closest(
+      "tr"
+    ) as HTMLElement
+    expect(row).toHaveTextContent("clip c9")
+    expect(row).toHaveTextContent("system")
   })
 
   it("has an Appeals tab that loads the appeals queue (US-27.4)", async () => {

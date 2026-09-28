@@ -24,6 +24,7 @@ from acemusic.constants import BPM_MAX, BPM_MIN
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, VisibilityState
+from ..models.common import utcnow
 from ..tasks.common import store_clip
 from . import (
     daw_export as daw_export_service,
@@ -243,6 +244,17 @@ def ensure_not_removed(clip: Clip) -> None:
     """403 for a clip moderation took down (US-27.3): its owner may not publish or distribute it again."""
     if clip.removed_at is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip was removed by moderation.")
+
+
+async def take_down_visible(query: dict) -> int:
+    """Make every non-private clip matching ``query`` private and removed (the US-27.3 ban sweep); returns how many.
+
+    A private clip is left alone, so its owner keeps it if the ban is lifted.
+    """
+    result = await Clip.find({**query, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
+        {"$set": {"visibility": VisibilityState.PRIVATE.value, "is_public": False, "removed_at": utcnow()}}
+    )
+    return result.modified_count
 
 
 def _clip_not_found() -> HTTPException:

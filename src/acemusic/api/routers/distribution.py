@@ -295,14 +295,21 @@ async def soundcloud_upload(
 
     if release is not None:
         # Persist the track id, then start the SoundCloud channel at ``submitted``
-        # so the poller (US-13.6) can advance it as the upload is processed. The
-        # save persists the track id (apply_channel_status only sets the channel
-        # field atomically); validate is off — this is the channel's initial state.
-        release.soundcloud_track_id = str(track_id)
-        await release.save()
+        # so the poller (US-13.6) can advance it as the upload is processed. Both are
+        # targeted writes, so a concurrent moderation privatization isn't reverted;
+        # validate is off — this is the channel's initial state.
+        await release.set({"soundcloud_track_id": str(track_id)})
         await status_service.apply_channel_status(
             release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
         )
+    # A removal landing mid-upload (#538) had no track id to un-share, so the new track is taken down here.
+    await release_service.unshare_if_source_removed(
+        clip.id,
+        current.user_id,
+        _settings(request),
+        release_id=release.id if release is not None else None,
+        track_id=str(track_id),
+    )
 
     return UploadResponse(track_id=str(track_id), permalink_url=track.get("permalink_url"))
 
