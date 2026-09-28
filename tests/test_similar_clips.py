@@ -280,6 +280,31 @@ class TestSimilarClips:
         resp = await client.get(f"{CLIPS_URL}/{seed.id}/similar?scope=all", headers=_auth_headers(owner, settings))
         assert set(_ids(resp.json())) == {str(mine.id), str(pub.id)}
 
+    async def test_is_owner_set_and_others_recipe_blanked(self, client, settings) -> None:
+        # #535: the Related songs rail needs is_owner to hide Report on the caller's
+        # own clips, and another user's clip must not leak its recipe or ancestry.
+        owner = await make_user("sim-own-owner@example.com")
+        other = await make_user("sim-own-other@example.com")
+        ws = await _make_workspace(owner)
+        ws_other = await _make_workspace(other)
+        seed = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100)
+        mine = await _insert_clip(owner, ws, style_tags=["lofi"], bpm=100)
+        pub = await _insert_clip(other, ws_other, style_tags=["lofi"], bpm=100, is_public=True)
+        recipe = {"seed": 42, "inference_steps": 8, "parent_clip_ids": [PydanticObjectId()]}
+        await mine.set(recipe)
+        await pub.set(recipe)
+
+        resp = await client.get(f"{CLIPS_URL}/{seed.id}/similar", headers=_auth_headers(owner, settings))
+        by_id = {c["id"]: c for c in resp.json()["clips"]}
+        own, theirs = by_id[str(mine.id)], by_id[str(pub.id)]
+
+        assert own["is_owner"] is True
+        assert (own["workspace_id"], own["seed"], own["inference_steps"]) == (str(ws.id), 42, 8)
+        assert len(own["parent_clip_ids"]) == 1
+        assert theirs["is_owner"] is False
+        assert (theirs["workspace_id"], theirs["seed"], theirs["inference_steps"]) == (None, None, None)
+        assert theirs["parent_clip_ids"] == []
+
     async def test_limit_respected(self, client, settings) -> None:
         user = await make_user("sim-limit@example.com")
         ws = await _make_workspace(user)

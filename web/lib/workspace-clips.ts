@@ -42,10 +42,11 @@ export type Clip = {
   visibility?: Visibility
   created_at: string
   /**
-   * Server-computed viewer ownership, present only on the public read (US-20.0);
-   * the owner-scoped reads omit it because everything they return is already the
-   * caller's. Undefined therefore means "not from the public read", so gate on
-   * `=== true` rather than treating absence as ownership.
+   * Server-computed viewer ownership, present only on the public read (US-20.0)
+   * and the similar-clips read (#535); the owner-scoped reads omit it because
+   * everything they return is already the caller's. Undefined therefore means
+   * "not from those reads", so gate on `=== true` rather than treating absence as
+   * ownership.
    */
   is_owner?: boolean
   /**
