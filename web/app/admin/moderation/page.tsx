@@ -34,8 +34,8 @@ export default function AdminModerationPage() {
       <div>
         <h1 className="text-2xl font-semibold">Moderation</h1>
         <p className="text-sm text-muted-foreground">
-          Review reported and automatically flagged clips, act on them, and see
-          every moderation action taken.
+          Review reported clips and automatically flagged clips, videos, artwork
+          and voice models, act on them, and see every moderation action taken.
         </p>
       </div>
       <ModerationDashboard accessToken={accessToken} />

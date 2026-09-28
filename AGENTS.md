@@ -356,6 +356,13 @@ Package manager: `uv` with `hatchling` build backend
   call, because a removal or ban can land while that call is in flight. A ban counts as a takedown there even for a
   clip that was still private, which the ban's own sweep skips. A failure on that path writes its own log entry
   with `actor_id=None`, which means the platform wrote it rather than an admin
+- **Flagged non-clip content (#539)**: `Video` and `ArtworkOption` copy `moderation_flags` from their job at creation
+  (a new generative output must too), and they and `VoiceModel` carry `moderation_reviewed_at`. The queue lists them with
+  `target_type`/`target_id`; `POST /api/v1/admin/moderation/content` acts on them under `moderation.CONTENT_ACTIONS`
+  (video approve|unpublish, artwork approve|drop, voice_model approve). Unpublish stamps `Video.removed_at`, which
+  `publish_video` refuses in the same conditional write, and a ban and a video edit carry it too. Voice rename re-screens
+  the whole name + description. `VoiceModel`, `Video` and the artwork `Clip` writers are `$set`-only, pinned by
+  `test_moderated_documents_are_never_whole_document_saved`
 - **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip
   (its latest `remove`, else its latest `flag`), and the unique `ClipAppeal.action_id` is the one-appeal-per-decision
   rule (409). A removal's log entry records `details.previous_visibility`, and reversing it restores that
