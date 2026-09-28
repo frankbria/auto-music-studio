@@ -353,7 +353,8 @@ Package manager: `uv` with `hatchling` build backend
   Remove and ban also make the releases private and best-effort un-share their SoundCloud tracks
   (`services/releases.unshare_releases`, #538). A failure is logged in the action's details and returned as its
   `detail`. A route that shares a release or track out must call `unshare_if_source_removed` after the external
-  call, because a removal can land while that call is in flight. A failure on that path writes its own log entry
+  call, because a removal or ban can land while that call is in flight. A ban counts as a takedown there even for a
+  clip that was still private, which the ban's own sweep skips. A failure on that path writes its own log entry
   with `actor_id=None`, which means the platform wrote it rather than an admin
 - **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip
   (its latest `remove`, else its latest `flag`), and the unique `ClipAppeal.action_id` is the one-appeal-per-decision
