@@ -42,10 +42,13 @@ export function RelatedSongs({
             <div className="min-w-0 flex-1">
               <ClipCard clip={clip} isFreeTier={isFreeTier} />
             </div>
-            <ReportClipButton
-              clipId={clip.id}
-              isOwner={clip.is_owner !== false}
-            />
+            {/* Fixed gutter keeps cards the same width whether or not Report shows. */}
+            <div className="w-8 shrink-0">
+              <ReportClipButton
+                clipId={clip.id}
+                isOwner={clip.is_owner !== false}
+              />
+            </div>
           </li>
         ))}
       </ul>
