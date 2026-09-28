@@ -37,6 +37,8 @@ type NotificationsContextValue = {
   unreadCount: number
   /** True when older server notifications exist beyond the loaded pages. */
   hasMore: boolean
+  /** The first page could not be loaded, so an empty list does not mean "no notices". */
+  loadFailed: boolean
   loadMore: () => void
   markRead: (id: string) => void
   markAllRead: () => void
@@ -51,8 +53,13 @@ const NotificationsContext = createContext<NotificationsContextValue | null>(
 const LIVE_PREFIX = "n-live-"
 const isLive = (n: AppNotification) => n.id.startsWith(LIVE_PREFIX)
 
-type Store = { items: AppNotification[]; unread: number; hasMore: boolean }
-const EMPTY: Store = { items: [], unread: 0, hasMore: false }
+type Store = {
+  items: AppNotification[]
+  unread: number
+  hasMore: boolean
+  loadFailed: boolean
+}
+const EMPTY: Store = { items: [], unread: 0, hasMore: false, loadFailed: false }
 
 export function NotificationsProvider({
   children,
@@ -79,7 +86,11 @@ export function NotificationsProvider({
         return
       }
       const page = await fetchNotifications(token).catch(() => null)
-      if (cancelled || !page) return
+      if (cancelled) return
+      if (!page) {
+        setStore((s) => ({ ...s, loadFailed: true }))
+        return
+      }
       // Keep any live rows raised while the request was in flight.
       setStore((s) => {
         const live = s.items.filter(isLive)
@@ -87,6 +98,7 @@ export function NotificationsProvider({
           items: [...live, ...page.notifications],
           unread: page.unreadCount + live.filter((n) => !n.read).length,
           hasMore: page.hasMore,
+          loadFailed: false,
         }
       })
     }
@@ -156,6 +168,7 @@ export function NotificationsProvider({
       notifications: store.items,
       unreadCount: store.unread,
       hasMore: store.hasMore,
+      loadFailed: store.loadFailed,
       loadMore,
       markRead,
       markAllRead,

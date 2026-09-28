@@ -113,6 +113,20 @@ describe("NotificationsView (US-20.6, #537)", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("says the load failed rather than showing an empty inbox", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{}", { status: 502 }))
+    )
+    renderView()
+    expect(
+      await screen.findByText(
+        "Could not load your notifications. Try again later."
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument()
+  })
+
   it("shows the empty state when there are no notices", async () => {
     stubNotificationsApi([[]])
     renderView()

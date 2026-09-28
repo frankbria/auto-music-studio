@@ -12,8 +12,14 @@ import { useNotifications } from "@/contexts/notifications-context"
 // "Infinite scroll" is a Show-older button that fetches the next API page rather
 // than an IntersectionObserver.
 export function NotificationsView() {
-  const { notifications, unreadCount, hasMore, loadMore, markAllRead } =
-    useNotifications()
+  const {
+    notifications,
+    unreadCount,
+    hasMore,
+    loadFailed,
+    loadMore,
+    markAllRead,
+  } = useNotifications()
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-8">
@@ -36,7 +42,9 @@ export function NotificationsView() {
 
       {notifications.length === 0 ? (
         <p className="py-16 text-center text-sm text-muted-foreground">
-          No notifications yet.
+          {loadFailed
+            ? "Could not load your notifications. Try again later."
+            : "No notifications yet."}
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
