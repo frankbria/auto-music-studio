@@ -90,6 +90,7 @@ async def process_artwork_job(job: Job, *, storage: StorageBackend, client: Imag
                 job_id=job.id,
                 storage_path=path,
                 option_index=idx,
+                moderation_flags=(job.input_params or {}).get("moderation_flags", []),
             )
             await option.insert()
             option_ids.append(str(option.id))

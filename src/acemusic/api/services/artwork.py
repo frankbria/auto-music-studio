@@ -86,8 +86,8 @@ async def select_artwork(clip: Clip, artwork_id: str) -> Clip:
     option = await ArtworkOption.get(oid) if oid is not None else None
     if option is None or option.user_id != clip.user_id or option.clip_id != clip.id:
         raise ArtworkNotFoundError("Artwork option not found.")
-    clip.artwork_path = option.storage_path
-    await clip.save()
+    # $set, never save(): the clip was read before a moderation takedown could land (#539).
+    await clip.set({"artwork_path": option.storage_path})
     return clip
 
 
@@ -126,6 +126,5 @@ async def upload_custom_artwork(clip: Clip, data: bytes) -> Clip:
         await asyncio.to_thread(storage.delete, other)
     except Exception:  # pragma: no cover - cleanup is best-effort, must not fail the upload
         logger.warning("Failed to delete prior upload %s while replacing artwork for clip %s", other, clip.id)
-    clip.artwork_path = path
-    await clip.save()
+    await clip.set({"artwork_path": path})
     return clip

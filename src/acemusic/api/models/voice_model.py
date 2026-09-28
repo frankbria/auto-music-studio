@@ -74,6 +74,7 @@ class VoiceModel(Document):
 
     #: Borderline content categories screening found in the name or description (#531).
     moderation_flags: list[str] = Field(default_factory=list)
+    moderation_reviewed_at: datetime | None = None
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -93,4 +94,5 @@ class VoiceModel(Document):
             # Every listing is "this user's models, newest first" (US-25.3).
             IndexModel([("user_id", ASCENDING), ("created_at", ASCENDING)]),
             IndexModel([("job_id", ASCENDING)]),
+            IndexModel([("moderation_flags", ASCENDING)]),
         ]

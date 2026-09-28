@@ -229,12 +229,12 @@ async def get_clip_for_streaming(clip_id: str, current_user_id: str | None) -> C
         return clip
     if current_user_id is None:
         raise _clip_not_found()
-    if str(clip.user_id) == current_user_id or await _is_active_admin(current_user_id):
+    if str(clip.user_id) == current_user_id or await is_active_admin(current_user_id):
         return clip
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip is private.")
 
 
-async def _is_active_admin(user_id: str) -> bool:
+async def is_active_admin(user_id: str) -> bool:
     # Looked up only when access would otherwise be refused, so ordinary streams pay nothing (US-27.3).
     user = await user_service.get_user_by_id(user_id)
     return user is not None and user.is_admin and user.banned_at is None

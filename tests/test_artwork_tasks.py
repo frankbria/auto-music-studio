@@ -127,6 +127,22 @@ class TestProcessArtworkJob:
             _fmt, width, height = validate_image(storage.download(option.storage_path))
             assert (width, height) == (ARTWORK_FINAL_SIZE, ARTWORK_FINAL_SIZE)
 
+    async def test_screening_flags_are_copied_to_every_option(self, storage) -> None:
+        # #539: the moderation queue reads flags off the option, not its job.
+        job, clip = await _make_job_and_clip()
+        await job.set({"input_params.moderation_flags": ["violent extremism"]})
+
+        await tasks.process_artwork_job(job, storage=storage, client=FakeImageClient())
+
+        options = await ArtworkOption.find(ArtworkOption.clip_id == clip.id).to_list()
+        assert [o.moderation_flags for o in options] == [["violent extremism"]] * ARTWORK_OPTIONS_COUNT
+
+    async def test_unflagged_job_stores_unflagged_options(self, storage) -> None:
+        job, clip = await _make_job_and_clip()
+        await tasks.process_artwork_job(job, storage=storage, client=FakeImageClient())
+        options = await ArtworkOption.find(ArtworkOption.clip_id == clip.id).to_list()
+        assert all(o.moderation_flags == [] for o in options)
+
     async def test_missing_prompt_fails(self, storage) -> None:
         job, _clip = await _make_job_and_clip(prompt=None)
         with pytest.raises(JobProcessingError):

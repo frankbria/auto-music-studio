@@ -9,6 +9,7 @@ import {
   fetchModerationLog,
   fetchModerationQueue,
   filterQueue,
+  applyQueueAction,
   formatLogAction,
   parseApiTime,
   sortQueue,
@@ -18,6 +19,8 @@ import {
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
   return {
+    target_type: "clip",
+    target_id: overrides.clip_id ?? "c1",
     clip_id: "c1",
     clip_deleted: false,
     title: "Song",
@@ -272,7 +275,93 @@ describe("filterQueue", () => {
   })
 })
 
+describe("applyQueueAction (#539)", () => {
+  it("sends clips and each content type to their own endpoint, in one result list", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      const results = url.endsWith("/clips")
+        ? body.clip_ids.map((id: string) => ({ clip_id: id, ok: true }))
+        : body.ids.map((id: string) => ({ id, ok: true }))
+      return new Response(JSON.stringify({ results }), { status: 200 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const results = await applyQueueAction(
+      "tok",
+      "approve",
+      [
+        { type: "clip", id: "c1" },
+        { type: "video", id: "v1" },
+        { type: "artwork", id: "a1" },
+        { type: "video", id: "v2" },
+        { type: "voice_model", id: "m1" },
+      ],
+      "fine"
+    )
+
+    expect(results.map((r) => r.id)).toEqual(["c1", "v1", "v2", "a1", "m1"])
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => [
+        url,
+        JSON.parse(String(init?.body)),
+      ])
+    ).toEqual([
+      [
+        "/api/admin/moderation/clips",
+        { action: "approve", clip_ids: ["c1"], reason: "fine" },
+      ],
+      [
+        "/api/admin/moderation/content",
+        {
+          target_type: "video",
+          action: "approve",
+          ids: ["v1", "v2"],
+          reason: "fine",
+        },
+      ],
+      [
+        "/api/admin/moderation/content",
+        {
+          target_type: "artwork",
+          action: "approve",
+          ids: ["a1"],
+          reason: "fine",
+        },
+      ],
+      [
+        "/api/admin/moderation/content",
+        {
+          target_type: "voice_model",
+          action: "approve",
+          ids: ["m1"],
+          reason: "fine",
+        },
+      ],
+    ])
+  })
+
+  it("normalises a content failure's detail", async () => {
+    stubFetch(200, {
+      results: [{ id: "v1", ok: false, detail: "Video not found." }],
+    })
+    expect(
+      await applyQueueAction("tok", "unpublish", [{ type: "video", id: "v1" }])
+    ).toEqual([{ id: "v1", ok: false, detail: "Video not found." }])
+  })
+})
+
 describe("formatLogAction", () => {
+  it("names the kind of content an action targeted (#539)", () => {
+    expect(formatLogAction("approve", "clip")).toBe("Approved clip")
+    expect(formatLogAction("remove", "clip")).toBe("Removed clip")
+    expect(formatLogAction("approve", "video")).toBe("Approved video")
+    expect(formatLogAction("unpublish", "video")).toBe("Unpublished video")
+    expect(formatLogAction("drop", "artwork")).toBe("Dropped artwork")
+    expect(formatLogAction("approve", "voice_model")).toBe(
+      "Approved voice model"
+    )
+  })
+
   it("labels known actions and falls back for new ones", () => {
     expect(formatLogAction("ban")).toBe("Banned user")
     expect(formatLogAction("update_screening_rules")).toBe(

@@ -18,49 +18,63 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { clipAudioUrl } from "@/lib/clips"
 import {
-  applyClipAction,
+  applyQueueAction,
   applyUserAction,
   fetchModerationLog,
   fetchModerationQueue,
   filterQueue,
   formatLogAction,
   sortQueue,
+  TARGET_LABELS,
   type CategoryFilter,
-  type ClipAction,
   type ModerationLogEntry,
   type QueueItem,
   type QueueSort,
+  type QueueTarget,
+  type QueueTargetRef,
   type SourceFilter,
+  type TargetAction,
   type UserAction,
   parseApiTime,
 } from "@/lib/moderation"
 import { REPORT_CATEGORIES } from "@/lib/reports"
+import { videoStreamUrl } from "@/lib/video"
 
 // Admin moderation dashboard (US-27.3): the review queue (reported and
-// auto-flagged clips) with per-row and bulk actions, and the activity log.
-// Remove, Warn and Ban go through a reason dialog; Approve and Flag are one click.
+// auto-flagged clips, plus flagged videos, artwork and voice models since #539)
+// with per-row and bulk actions, and the activity log. Remove, Unpublish, Drop,
+// Warn and Ban go through a reason dialog; Approve and Flag are one click.
 // After any action the queue and log are refetched rather than patched locally,
 // so what the admin sees is always what the backend now holds.
 
 type Pending =
-  | { kind: "clip"; action: ClipAction; ids: string[] }
+  | { kind: "target"; action: TargetAction; targets: QueueTargetRef[] }
   | { kind: "user"; action: UserAction; ids: string[] }
 
 type Notice = { status: string | null; failures: string[] }
 
-const VERBS: Record<ClipAction | UserAction, string> = {
+const VERBS: Record<TargetAction | UserAction, string> = {
   approve: "Approved",
   remove: "Removed",
   flag: "Flagged",
+  unpublish: "Unpublished",
+  drop: "Dropped",
   warn: "Warned",
   ban: "Banned",
+}
+
+const NOUNS: Record<QueueTarget, string> = {
+  clip: "clip",
+  video: "video",
+  artwork: "artwork image",
+  voice_model: "voice model",
 }
 
 // Actions that open the reason dialog before running. Warn has no side effect
 // beyond the notice, but a notice with no reason tells the creator nothing.
 const CONFIRMED: Partial<
   Record<
-    ClipAction | UserAction,
+    TargetAction | UserAction,
     { verb: string; description: string; destructive: boolean }
   >
 > = {
@@ -68,6 +82,18 @@ const CONFIRMED: Partial<
     verb: "Remove",
     description:
       "Removed clips are made private and cannot be published again. Their releases go private and their SoundCloud tracks are un-shared. Their creators are notified.",
+    destructive: true,
+  },
+  unpublish: {
+    verb: "Unpublish",
+    description:
+      "Unpublished videos come off their song pages and cannot be published again.",
+    destructive: true,
+  },
+  drop: {
+    verb: "Drop",
+    description:
+      "Dropped artwork is deleted, and taken off its song if it was the selected cover.",
     destructive: true,
   },
   warn: {
@@ -97,8 +123,22 @@ function plural(n: number, noun: string) {
   return `${n} ${noun}${n === 1 ? "" : "s"}`
 }
 
-function nounFor(kind: Pending["kind"]) {
-  return kind === "clip" ? "clip" : "creator"
+function countOf(pending: Pending) {
+  return pending.kind === "user" ? pending.ids.length : pending.targets.length
+}
+
+function nounFor(pending: Pending) {
+  if (pending.kind === "user") return "creator"
+  const types = new Set(pending.targets.map((t) => t.type))
+  return types.size === 1 ? NOUNS[[...types][0]] : "item"
+}
+
+function keyOf(item: QueueItem) {
+  return `${item.target_type}:${item.target_id}`
+}
+
+function refOf(item: QueueItem): QueueTargetRef {
+  return { type: item.target_type, id: item.target_id }
 }
 
 function formatTime(iso: string) {
@@ -124,7 +164,8 @@ function load(token: string) {
 type Loaded = Awaited<ReturnType<typeof load>>
 
 function clipLabel(item: QueueItem) {
-  if (item.clip_deleted) return "Clip deleted"
+  if (item.target_type === "clip" && item.clip_deleted) return "Clip deleted"
+  if (item.clip_deleted) return item.title ?? "Song deleted"
   return item.title ?? "Untitled clip"
 }
 
@@ -174,7 +215,7 @@ export function ModerationDashboard({
     [items, source, category, sort]
   )
   // Bulk actions only ever touch rows the admin can currently see.
-  const chosen = visible.filter((i) => selected.has(i.clip_id))
+  const chosen = visible.filter((i) => selected.has(keyOf(i)))
   const allChosen = visible.length > 0 && chosen.length === visible.length
 
   function toggle(id: string) {
@@ -187,31 +228,36 @@ export function ModerationDashboard({
   }
 
   function toggleAll() {
-    setSelected(allChosen ? new Set() : new Set(visible.map((i) => i.clip_id)))
+    setSelected(allChosen ? new Set() : new Set(visible.map(keyOf)))
   }
 
   function describeTarget(kind: Pending["kind"], id: string) {
     const all = items ?? []
-    if (kind === "clip") {
-      const hit = all.find((i) => i.clip_id === id)
+    if (kind === "target") {
+      const hit = all.find((i) => i.target_id === id)
       return hit ? clipLabel(hit) : id
     }
     return all.find((i) => i.creator_id === id)?.creator_name ?? id
   }
 
   async function run(pending: Pending, why?: string) {
-    if (!accessToken || pending.ids.length === 0) return
+    if (!accessToken || countOf(pending) === 0) return
     setBusy(true)
     setNotice(null)
     try {
       const results =
-        pending.kind === "clip"
-          ? await applyClipAction(accessToken, pending.action, pending.ids, why)
+        pending.kind === "target"
+          ? await applyQueueAction(
+              accessToken,
+              pending.action,
+              pending.targets,
+              why
+            )
           : await applyUserAction(accessToken, pending.action, pending.ids, why)
       const ok = results.filter((r) => r.ok).length
       setNotice({
         status: ok
-          ? `${VERBS[pending.action]} ${plural(ok, nounFor(pending.kind))}.`
+          ? `${VERBS[pending.action]} ${plural(ok, nounFor(pending))}.`
           : null,
         // An ok result can still carry a detail: e.g. a removal whose SoundCloud track stayed shared.
         failures: results
@@ -246,7 +292,13 @@ export function ModerationDashboard({
 
   const copy = confirming ? CONFIRMED[confirming.action] : undefined
 
-  const liveIds = chosen.filter((i) => !i.clip_deleted).map((i) => i.clip_id)
+  const liveClips = chosen
+    .filter((i) => i.target_type === "clip" && !i.clip_deleted)
+    .map(refOf)
+  const chosenOf = (type: QueueTarget) =>
+    chosen.filter((i) => i.target_type === type).map(refOf)
+  const videos = chosenOf("video")
+  const artwork = chosenOf("artwork")
   const creatorIds = unique(chosen.map((i) => i.creator_id))
   const bannableIds = unique(
     chosen.filter((i) => !i.creator_banned).map((i) => i.creator_id)
@@ -337,9 +389,9 @@ export function ModerationDashboard({
                 disabled={busy}
                 onClick={() =>
                   request({
-                    kind: "clip",
+                    kind: "target",
                     action: "approve",
-                    ids: chosen.map((i) => i.clip_id),
+                    targets: chosen.map(refOf),
                   })
                 }
               >
@@ -348,9 +400,13 @@ export function ModerationDashboard({
               <Button
                 size="sm"
                 variant="destructive"
-                disabled={busy || liveIds.length === 0}
+                disabled={busy || liveClips.length === 0}
                 onClick={() =>
-                  request({ kind: "clip", action: "remove", ids: liveIds })
+                  request({
+                    kind: "target",
+                    action: "remove",
+                    targets: liveClips,
+                  })
                 }
               >
                 Remove
@@ -358,13 +414,49 @@ export function ModerationDashboard({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={busy || liveIds.length === 0}
+                disabled={busy || liveClips.length === 0}
                 onClick={() =>
-                  request({ kind: "clip", action: "flag", ids: liveIds })
+                  request({
+                    kind: "target",
+                    action: "flag",
+                    targets: liveClips,
+                  })
                 }
               >
                 Flag
               </Button>
+              {videos.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() =>
+                    request({
+                      kind: "target",
+                      action: "unpublish",
+                      targets: videos,
+                    })
+                  }
+                >
+                  Unpublish videos
+                </Button>
+              )}
+              {artwork.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() =>
+                    request({
+                      kind: "target",
+                      action: "drop",
+                      targets: artwork,
+                    })
+                  }
+                >
+                  Drop artwork
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -398,7 +490,7 @@ export function ModerationDashboard({
             <p className="text-sm text-muted-foreground">
               {items.length === 0
                 ? "Nothing to review."
-                : "No clips match these filters."}
+                : "Nothing matches these filters."}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -414,24 +506,29 @@ export function ModerationDashboard({
                         className="size-4 accent-primary"
                       />
                     </th>
-                    <th className="pr-3 pb-2 font-medium">Clip</th>
+                    <th className="pr-3 pb-2 font-medium">Content</th>
+                    <th className="pr-3 pb-2 font-medium">Type</th>
                     <th className="pr-3 pb-2 font-medium">Creator</th>
                     <th className="pr-3 pb-2 font-medium">Reports</th>
                     <th className="pr-3 pb-2 font-medium">Source</th>
-                    <th className="pr-3 pb-2 font-medium">Listen</th>
+                    <th className="pr-3 pb-2 font-medium">Preview</th>
                     <th className="pb-2 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visible.map((item) => (
                     <QueueRow
-                      key={item.clip_id}
+                      key={keyOf(item)}
                       item={item}
-                      checked={selected.has(item.clip_id)}
+                      checked={selected.has(keyOf(item))}
                       busy={busy}
-                      onToggle={() => toggle(item.clip_id)}
-                      onClipAction={(action) =>
-                        request({ kind: "clip", action, ids: [item.clip_id] })
+                      onToggle={() => toggle(keyOf(item))}
+                      onTargetAction={(action) =>
+                        request({
+                          kind: "target",
+                          action,
+                          targets: [refOf(item)],
+                        })
                       }
                       onUserAction={(action) =>
                         item.creator_id &&
@@ -483,7 +580,7 @@ export function ModerationDashboard({
                         {formatTime(entry.created_at)}
                       </td>
                       <td className="py-2 pr-3">
-                        {formatLogAction(entry.action)}
+                        {formatLogAction(entry.action, entry.target_type)}
                       </td>
                       <td className="py-2 pr-3 font-mono text-xs">
                         {entry.target_type} {entry.target_id}
@@ -512,8 +609,8 @@ export function ModerationDashboard({
             <>
               <DialogHeader>
                 <DialogTitle>
-                  {copy.verb}{" "}
-                  {plural(confirming.ids.length, nounFor(confirming.kind))}?
+                  {copy.verb} {plural(countOf(confirming), nounFor(confirming))}
+                  ?
                 </DialogTitle>
                 <DialogDescription>{copy.description}</DialogDescription>
               </DialogHeader>
@@ -563,16 +660,17 @@ function QueueRow({
   checked,
   busy,
   onToggle,
-  onClipAction,
+  onTargetAction,
   onUserAction,
 }: {
   item: QueueItem
   checked: boolean
   busy: boolean
   onToggle: () => void
-  onClipAction: (action: ClipAction) => void
+  onTargetAction: (action: TargetAction) => void
   onUserAction: (action: UserAction) => void
 }) {
+  const isClip = item.target_type === "clip"
   const label = clipLabel(item)
   const categories = Object.entries(item.categories).filter(
     ([, count]) => (count ?? 0) > 0
@@ -607,12 +705,25 @@ function QueueRow({
               </Badge>
             ))}
           </div>
+          {item.description && (
+            <span className="text-xs text-muted-foreground">
+              {item.description}
+            </span>
+          )}
           {item.visibility && (
             <span className="text-xs text-muted-foreground">
               {item.visibility}
             </span>
           )}
+          {item.published != null && (
+            <span className="text-xs text-muted-foreground">
+              {item.published ? "published" : "unpublished"}
+            </span>
+          )}
         </div>
+      </td>
+      <td className="py-2 pr-3">
+        <Badge variant="outline">{TARGET_LABELS[item.target_type]}</Badge>
       </td>
       <td className="py-2 pr-3">
         <div className="flex flex-col items-start gap-1">
@@ -653,13 +764,22 @@ function QueueRow({
         </div>
       </td>
       <td className="py-2 pr-3">
-        {!item.clip_deleted && (
+        {isClip && item.clip_id && !item.clip_deleted && (
           <audio
             controls
             preload="none"
             src={clipAudioUrl(item.clip_id)}
             aria-label={`Play ${label}`}
             className="h-8 w-48"
+          />
+        )}
+        {item.target_type === "video" && (
+          <video
+            controls
+            preload="none"
+            src={videoStreamUrl(item.target_id)}
+            aria-label={`Play video for ${label}`}
+            className="h-24 w-40"
           />
         )}
       </td>
@@ -669,17 +789,17 @@ function QueueRow({
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => onClipAction("approve")}
+            onClick={() => onTargetAction("approve")}
           >
             Approve
           </Button>
-          {!item.clip_deleted && (
+          {isClip && !item.clip_deleted && (
             <>
               <Button
                 size="sm"
                 variant="destructive"
                 disabled={busy}
-                onClick={() => onClipAction("remove")}
+                onClick={() => onTargetAction("remove")}
               >
                 Remove
               </Button>
@@ -687,11 +807,31 @@ function QueueRow({
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onClick={() => onClipAction("flag")}
+                onClick={() => onTargetAction("flag")}
               >
                 Flag
               </Button>
             </>
+          )}
+          {item.target_type === "video" && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => onTargetAction("unpublish")}
+            >
+              Unpublish
+            </Button>
+          )}
+          {item.target_type === "artwork" && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => onTargetAction("drop")}
+            >
+              Drop
+            </Button>
           )}
           {item.creator_id && (
             <>

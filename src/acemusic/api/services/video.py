@@ -15,6 +15,10 @@ from .jobs import create_job
 VIDEO_JOB_TYPE = "video"
 
 
+class VideoRemovedError(Exception):
+    """The video was taken down by moderation (#539); its owner may not publish it again."""
+
+
 async def create_video_job(
     *,
     user_id: PydanticObjectId,
@@ -85,14 +89,17 @@ async def publish_video(video_id: str, user_id: str) -> Video | None:
     """Mark the owner's video published (visible on the song page); idempotent.
 
     Returns the updated video, or ``None`` if it does not exist or is not owned
-    by ``user_id`` (the router maps that to 404).
+    by ``user_id`` (the router maps that to 404). A video moderation took down is a 403.
     """
     video = await get_owned_video(video_id, user_id)
     if video is None:
         return None
-    if not video.published:
-        video.published = True
-        await video.save()
+    # #539: conditional on the takedown in the same write, so a moderation unpublish that lands
+    # after the read above can't be reverted.
+    result = await Video.find({"_id": video.id, "removed_at": None}).update({"$set": {"published": True}})
+    if result.matched_count == 0:
+        raise VideoRemovedError("This video was removed by moderation.")
+    video.published = True
     return video
 
 

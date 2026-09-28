@@ -42,6 +42,11 @@ class Video(Document):
     # actual video being edited rather than the full song. ``None`` for videos
     # rendered before this field existed (validation then falls back to the clip).
     duration: float | None = None
+    # #539: borderline screening categories from the job's prompt, for the moderation queue.
+    moderation_flags: list[str] = Field(default_factory=list)
+    moderation_reviewed_at: datetime | None = None
+    # Set when moderation unpublishes it; the owner may not publish it again.
+    removed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:
@@ -54,4 +59,5 @@ class Video(Document):
             # the same job (a stale-requeue race) then fail loudly on the second
             # insert instead of leaving two documents over one storage object.
             IndexModel([("job_id", ASCENDING)], unique=True),
+            IndexModel([("moderation_flags", ASCENDING)]),
         ]
