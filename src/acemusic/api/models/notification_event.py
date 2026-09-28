@@ -1,9 +1,9 @@
 """Notification event document model (US-13.6).
 
-Records a notification-worthy distribution event (a channel went ``live`` or was
-``rejected``) so it can be delivered later. This is deliberately just the
-*recorder*: actual delivery (email/push/in-app) is out of scope for US-13.6, so
-``delivered_at`` stays null and a future delivery worker fills it in.
+Records a notification-worthy event (a distribution channel went ``live`` or was
+``rejected``, a voice model finished training, a moderation decision) for the
+user it concerns. Delivery is the in-app inbox (#537, ``services/notifications``):
+``delivered_at`` is set when the user reads it there.
 """
 
 from datetime import datetime
@@ -16,7 +16,7 @@ from .common import utcnow
 
 
 class NotificationEvent(Document):
-    """A recorded status-change event awaiting (future) delivery."""
+    """A recorded event for one user's in-app inbox."""
 
     user_id: PydanticObjectId
 
@@ -31,7 +31,7 @@ class NotificationEvent(Document):
     channel: str
     payload: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
-    delivered_at: datetime | None = None  # set by a future delivery worker
+    delivered_at: datetime | None = None  # set when the user reads it in the inbox
 
     class Settings:
         name = "notification_events"

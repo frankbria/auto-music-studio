@@ -355,5 +355,11 @@ Package manager: `uv` with `hatchling` build backend
   rule (409). A removal's log entry records `details.previous_visibility`, and reversing it restores that
   visibility. Reversing a superseded decision is a 409. Owner routes are `POST/PATCH /clips/{id}/appeal` and
   `GET /users/me/appeals`; admin routes are `/admin/moderation/appeals`. The web Library `ClipCard` shows appeal UI
-  only when passed an `appeal` prop. Outcomes are `NotificationEvent(moderation_appeal_*)`, and inbox delivery is #537
+  only when passed an `appeal` prop. Outcomes are `NotificationEvent(moderation_appeal_*)`
+- **Notification inbox (#537)**: `services/notifications.py` behind `GET /api/v1/users/me/notifications`
+  (newest first, `limit`/`offset`, global `unread_count`) and `POST /api/v1/users/me/notifications/read`
+  (`ids`, or all). Reading a notice sets `NotificationEvent.delivered_at`. Every writer (moderation, appeals,
+  voice training, distribution) shows up there, so a new `event_type` needs a case in the web
+  `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
+  `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)
