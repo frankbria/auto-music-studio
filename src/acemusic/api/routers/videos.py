@@ -22,7 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_tier_capability
+from ..auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_current_user_optional,
+    require_existing_user,
+    require_tier_capability,
+)
 from ..models import JobStatus, Video
 from ..services import (
     clips as clip_service,
@@ -31,7 +37,7 @@ from ..services import (
     users as user_service,
     video as video_service,
 )
-from ..services.clips import get_clip_for_streaming
+from ..services.clips import get_clip_for_streaming, is_active_admin
 from ..services.tiers import Capability
 from ..settings import ApiSettings
 from ..utils.range_requests import stream_stored_object
@@ -282,7 +288,7 @@ class VideoDetailResponse(BaseModel):
 async def _resolve_viewable_video(video_id: str, viewer_id: str | None) -> Video:
     """Return the video if the viewer may see it, else raise 404.
 
-    The owner always may. Everyone else may only see it once it is *published*,
+    The owner and an active admin always may. Everyone else may only see it once it is *published*,
     and then only if they could view the source clip anyway
     (:func:`get_clip_for_streaming` enforces the clip's own visibility — private
     clips 404 for strangers). An unpublished, unowned video is an
@@ -294,6 +300,9 @@ async def _resolve_viewable_video(video_id: str, viewer_id: str | None) -> Video
     if viewer_id is not None and str(video.user_id) == viewer_id:
         return video
     if not video.published:
+        # #539: an admin reviews unpublished flagged videos from the moderation queue.
+        if viewer_id is not None and await is_active_admin(viewer_id):
+            return video
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
     # Published: defer to the clip's visibility rules (may 404/403 for strangers).
     await get_clip_for_streaming(str(video.clip_id), viewer_id)
@@ -303,7 +312,8 @@ async def _resolve_viewable_video(video_id: str, viewer_id: str | None) -> Video
 @router.post("/{video_id}/publish", response_model=VideoDetailResponse)
 async def publish_video(
     video_id: str,
-    current: CurrentUser = Depends(get_current_user),
+    # #539: a banned account's still-live access token must not make anything public.
+    current: CurrentUser = Depends(require_existing_user),
 ) -> VideoDetailResponse:
     """Publish the owner's rendered video so it appears on the song detail page.
 
@@ -311,7 +321,10 @@ async def publish_video(
     reveals another user's video), and re-publishing an already-published video
     simply returns its current state.
     """
-    video = await video_service.publish_video(video_id, current.user_id)
+    try:
+        video = await video_service.publish_video(video_id, current.user_id)
+    except video_service.VideoRemovedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     if video is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
     return VideoDetailResponse.from_video(video)

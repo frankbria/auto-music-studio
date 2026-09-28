@@ -207,6 +207,9 @@ async def process_video_job(
             duration = float(edit["end_seconds"]) - float(edit["start_seconds"])
         else:
             duration = source.duration
+        # #539: an edit is the source's footage, so it keeps the source's takedown and unreviewed flags.
+        inherited_flags = source.moderation_flags if source.moderation_reviewed_at is None else []
+        removed_at = source.removed_at
     else:
         clip = await load_source_clip(job)
         media = await download_clip(storage, clip)
@@ -221,6 +224,7 @@ async def process_video_job(
         parent_video_id = None
         edit = None
         duration = clip.duration
+        inherited_flags, removed_at = [], None
 
     try:
         provider_job_id = await asyncio.to_thread(client.submit, media, filename, provider_params)
@@ -264,6 +268,8 @@ async def process_video_job(
         parent_video_id=parent_video_id,
         edit=edit or None,
         duration=duration,
+        moderation_flags=list(dict.fromkeys([*params.get("moderation_flags", []), *inherited_flags])),
+        removed_at=removed_at,
     )
     try:
         await video.insert()

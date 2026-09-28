@@ -24,6 +24,9 @@ class ArtworkOption(Document):
     job_id: PydanticObjectId
     storage_path: str
     option_index: int
+    # #539: borderline screening categories from the job's prompt, for the moderation queue.
+    moderation_flags: list[str] = Field(default_factory=list)
+    moderation_reviewed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     class Settings:
@@ -32,4 +35,5 @@ class ArtworkOption(Document):
             # Serves "options for this clip owned by this user" (the listing the
             # job-status endpoint resolves and the select endpoint validates).
             IndexModel([("clip_id", ASCENDING), ("user_id", ASCENDING)]),
+            IndexModel([("moderation_flags", ASCENDING)]),
         ]

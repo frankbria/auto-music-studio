@@ -5,9 +5,15 @@ import type { AppealView } from "@/lib/appeals"
 import type { ReportCategory } from "@/lib/reports"
 
 export type QueueSource = "report" | "automated"
+/** #539: flagged videos, generated artwork and voice models share the queue with clips. */
+export type ContentType = "video" | "artwork" | "voice_model"
+export type QueueTarget = "clip" | ContentType
 
 export type QueueItem = {
-  clip_id: string
+  target_type: QueueTarget
+  target_id: string
+  /** The clip itself, or the song a video or artwork was made for; null for a voice model. */
+  clip_id: string | null
   /** Reports can outlive their clip; title and creator are null then. */
   clip_deleted: boolean
   title: string | null
@@ -23,6 +29,9 @@ export type QueueItem = {
   sources: QueueSource[]
   severity: number
   latest_at: string
+  /** A video or artwork job's prompt, or a voice model's description. */
+  description?: string | null
+  published?: boolean | null
 }
 
 export type ModerationLogEntry = {
@@ -37,7 +46,10 @@ export type ModerationLogEntry = {
 }
 
 export type ClipAction = "approve" | "remove" | "flag"
+export type ContentAction = "approve" | "unpublish" | "drop"
+export type TargetAction = ClipAction | ContentAction
 export type UserAction = "warn" | "ban"
+export type QueueTargetRef = { type: QueueTarget; id: string }
 
 /** One target's outcome; a bulk action can partly fail. */
 export type ActionResult = { id: string; ok: boolean; detail: string | null }
@@ -150,6 +162,57 @@ export async function applyClipAction(
   })
 }
 
+async function applyContentAction(
+  token: string,
+  targetType: ContentType,
+  action: ContentAction,
+  ids: string[],
+  reason?: string
+): Promise<ActionResult[]> {
+  return inBatches(ids, async (batch) => {
+    const { results } = await request<{
+      results: (RawResult & { id: string })[]
+    }>(
+      "content",
+      token,
+      withReason({ target_type: targetType, action, ids: batch }, reason)
+    )
+    return results.map((r) => ({
+      id: r.id,
+      ok: r.ok,
+      detail: r.detail ?? null,
+    }))
+  })
+}
+
+const QUEUE_TARGETS: QueueTarget[] = ["clip", "video", "artwork", "voice_model"]
+
+/** Acts on a mixed selection: one request per target type, results in type order. */
+export async function applyQueueAction(
+  token: string,
+  action: TargetAction,
+  targets: QueueTargetRef[],
+  reason?: string
+): Promise<ActionResult[]> {
+  const results: ActionResult[] = []
+  for (const type of QUEUE_TARGETS) {
+    const ids = targets.filter((t) => t.type === type).map((t) => t.id)
+    if (ids.length === 0) continue
+    results.push(
+      ...(type === "clip"
+        ? await applyClipAction(token, action as ClipAction, ids, reason)
+        : await applyContentAction(
+            token,
+            type,
+            action as ContentAction,
+            ids,
+            reason
+          ))
+    )
+  }
+  return results
+}
+
 export async function applyUserAction(
   token: string,
   action: UserAction,
@@ -231,10 +294,22 @@ export function filterQueue(
   )
 }
 
+export const TARGET_LABELS: Record<QueueTarget, string> = {
+  clip: "Clip",
+  video: "Video",
+  artwork: "Artwork",
+  voice_model: "Voice model",
+}
+
+const TARGET_VERBS: Record<string, string> = {
+  approve: "Approved",
+  remove: "Removed",
+  flag: "Flagged",
+  unpublish: "Unpublished",
+  drop: "Dropped",
+}
+
 const LOG_ACTION_LABELS: Record<string, string> = {
-  approve: "Approved clip",
-  remove: "Removed clip",
-  flag: "Flagged clip",
   warn: "Warned user",
   ban: "Banned user",
   update_screening_rules: "Updated screening rules",
@@ -244,7 +319,10 @@ const LOG_ACTION_LABELS: Record<string, string> = {
   soundcloud_unshare_failed: "SoundCloud un-share failed",
 }
 
-export function formatLogAction(action: string): string {
+export function formatLogAction(action: string, targetType = "clip"): string {
+  const verb = TARGET_VERBS[action]
+  const target = TARGET_LABELS[targetType as QueueTarget]
+  if (verb && target) return `${verb} ${target.toLowerCase()}`
   return LOG_ACTION_LABELS[action] ?? action.replaceAll("_", " ")
 }
 

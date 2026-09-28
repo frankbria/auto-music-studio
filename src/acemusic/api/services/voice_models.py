@@ -240,8 +240,7 @@ async def _store_and_queue(storage: StorageBackend, model: VoiceModel, reference
     """Persist the model and its references and queue the run — or leave none of it behind."""
     try:
         await model.insert()
-        model.reference_paths = await _store_references(storage, model, references)
-        await model.save()
+        await model.set({"reference_paths": await _store_references(storage, model, references)})
 
         job = Job(
             user_id=model.user_id,
@@ -257,8 +256,7 @@ async def _store_and_queue(storage: StorageBackend, model: VoiceModel, reference
         )
         await job.insert()
 
-        model.job_id = job.id
-        await model.save()
+        await model.set({"job_id": job.id})
     except BaseException:
         # charge_and_create gives the credits back; the half-written model is ours to remove.
         await _cleanup_partial(storage, model)
@@ -301,9 +299,7 @@ async def fail_training(model: VoiceModel, reason: str) -> VoiceModel:
     The refund uses ``credits_charged`` rather than the current price, so a
     change to the cost table cannot alter what someone already paid gets back.
     """
-    model.status = VoiceModelStatus.FAILED
-    model.error = reason
-    await model.save()
+    await model.set({"status": VoiceModelStatus.FAILED, "error": reason})
 
     if model.credits_charged > 0:
         # refund_credits ledgers the movement itself (US-26.1), so this no longer
@@ -477,10 +473,20 @@ async def rename_voice_model(
     if description is not None:
         model.description = description.strip() or None
 
-    flags = await screening.enforce(name, description, saving=True)
-    model.moderation_flags += [flag for flag in flags if flag not in model.moderation_flags]
-    model.updated_at = utcnow()
-    await model.save()
+    # #539: screen the whole name + description, so text stored before a rule existed is caught too.
+    # Only a category the model doesn't carry yet sends it back to the moderation queue.
+    flags = await screening.enforce(model.name, model.description, saving=True)
+    new_flags = [flag for flag in flags if flag not in model.moderation_flags]
+    fields = {"name": model.name, "description": model.description, "updated_at": utcnow()}
+    update: dict = {"$set": fields}
+    if new_flags:
+        update = {
+            "$set": {**fields, "moderation_reviewed_at": None},
+            "$addToSet": {"moderation_flags": {"$each": new_flags}},
+        }
+        model.moderation_flags = [*model.moderation_flags, *new_flags]
+        model.moderation_reviewed_at = None
+    await VoiceModel.find_one(VoiceModel.id == model.id).update(update)
     return model
 
 

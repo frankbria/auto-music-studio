@@ -1,11 +1,16 @@
 """The admin moderation dashboard (US-27.3): review queue, clip and user actions, audit log.
 
+The queue also carries flagged videos, generated artwork and voice models (#539), each
+with the actions that fit it (see ``CONTENT_ACTIONS``).
+
 Actions are bulk-native and per-target: a malformed or unknown id fails in its own
 result instead of failing the batch, and every target acted on gets one log entry.
 Writes are targeted ``$set`` updates, never whole-document saves, so an action cannot
 revert a concurrent edit to the same clip or user.
 """
 
+import asyncio
+import logging
 from datetime import datetime
 from typing import Literal
 
@@ -13,16 +18,42 @@ from beanie import PydanticObjectId
 from beanie.operators import In
 from pydantic import BaseModel
 
+from acemusic.storage import get_storage_backend
+
 from ..auth.services import revoke_all_user_tokens
-from ..models import Clip, ClipReport, ModerationLogEntry, NotificationEvent, User, Video, VisibilityState
+from ..models import (
+    ArtworkOption,
+    Clip,
+    ClipReport,
+    Job,
+    ModerationLogEntry,
+    NotificationEvent,
+    User,
+    Video,
+    VisibilityState,
+    VoiceModel,
+)
 from ..models.common import utcnow
 from ..settings import ApiSettings
 from . import clips as clip_service, releases as release_service
 from .common import coerce_object_id
 
+logger = logging.getLogger(__name__)
+
 ClipAction = Literal["approve", "remove", "flag"]
 UserAction = Literal["warn", "ban"]
 QueueSource = Literal["report", "automated"]
+# #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
+ContentType = Literal["video", "artwork", "voice_model"]
+ContentAction = Literal["approve", "unpublish", "drop"]
+CONTENT_ACTIONS: dict[str, tuple[str, ...]] = {
+    "video": ("approve", "unpublish"),
+    "artwork": ("approve", "drop"),
+    "voice_model": ("approve",),
+}
+_CONTENT_DOCS = {"video": Video, "artwork": ArtworkOption, "voice_model": VoiceModel}
+_CONTENT_NOUNS = {"video": "video", "artwork": "artwork", "voice_model": "voice model"}
+_UNREVIEWED = {"moderation_flags": {"$type": "string"}, "moderation_reviewed_at": None}
 
 MAX_QUEUE_ITEMS = 500
 MAX_LOG_LIMIT = 500
@@ -31,7 +62,10 @@ AUTOMATED_SEVERITY = 3
 
 
 class QueueItem(BaseModel):
-    clip_id: str
+    target_type: Literal["clip"] | ContentType = "clip"
+    target_id: str
+    # The clip itself, or the song a video or artwork was made for. None for a voice model.
+    clip_id: str | None
     clip_deleted: bool
     title: str | None
     style_tags: list[str]
@@ -46,6 +80,9 @@ class QueueItem(BaseModel):
     sources: list[QueueSource]
     severity: int
     latest_at: datetime
+    # A video or artwork job's prompt, or a voice model's description: the text screening flagged.
+    description: str | None = None
+    published: bool | None = None
 
 
 class ActionResult(BaseModel):
@@ -54,7 +91,8 @@ class ActionResult(BaseModel):
 
 
 async def get_queue() -> list[QueueItem]:
-    """One item per clip with open reports and/or unreviewed automated flags, most urgent first."""
+    """One item per clip with open reports and/or unreviewed automated flags, and per flagged
+    video, artwork option or voice model, most urgent first."""
     groups = await ClipReport.aggregate(
         [
             {"$match": {"resolved_at": None}},
@@ -73,27 +111,67 @@ async def get_queue() -> list[QueueItem]:
         entry["categories"][group["_id"]["category"]] = group["count"]
         entry["latest"] = max(entry["latest"], group["latest"])
 
-    flagged = (
-        await Clip.find({"moderation_flags": {"$type": "string"}, "moderation_reviewed_at": None})
-        .sort(-Clip.created_at)
-        .limit(MAX_QUEUE_ITEMS)
-        .to_list()
-    )
+    flagged = await _unreviewed(Clip)
+    videos = await _unreviewed(Video)
+    artwork = await _unreviewed(ArtworkOption)
+    voices = await _unreviewed(VoiceModel)
     clips = {clip.id: clip for clip in flagged}
-    missing = [cid for cid in reports if cid not in clips]
+    missing = {cid for cid in [*reports, *(d.clip_id for d in [*videos, *artwork])] if cid not in clips}
     if missing:
-        clips.update({clip.id: clip for clip in await Clip.find(In(Clip.id, missing)).to_list()})
-    creators = {
-        user.id: user
-        for user in await User.find(In(User.id, list({clip.user_id for clip in clips.values()}))).to_list()
-    }
+        clips.update({clip.id: clip for clip in await Clip.find(In(Clip.id, list(missing))).to_list()})
+    owners = {clip.user_id for clip in clips.values()} | {d.user_id for d in [*videos, *artwork, *voices]}
+    creators = {user.id: user for user in await User.find(In(User.id, list(owners))).to_list()}
+    jobs = {job.id: job for job in await Job.find(In(Job.id, [d.job_id for d in [*videos, *artwork]])).to_list()}
 
     items = [
         _queue_item(clip_id, clips.get(clip_id), reports.get(clip_id), creators)
         for clip_id in {*reports, *(c.id for c in flagged)}
     ]
+    for kind, docs in (("video", videos), ("artwork", artwork)):
+        for doc in docs:
+            job = jobs.get(doc.job_id)
+            params = (job.input_params or {}) if job else {}
+            # A replace_scene edit keeps its prompt inside the edit spec.
+            prompt = params.get("prompt") or (params.get("edit") or {}).get("prompt")
+            items.append(_content_item(kind, doc, clips.get(doc.clip_id), creators, prompt))
+    items.extend(_content_item("voice_model", voice, None, creators, voice.description) for voice in voices)
     items.sort(key=lambda i: (i.report_count, i.severity, i.latest_at), reverse=True)
     return items[:MAX_QUEUE_ITEMS]
+
+
+async def _unreviewed(document: type) -> list:
+    return await document.find(_UNREVIEWED).sort(-document.created_at).limit(MAX_QUEUE_ITEMS).to_list()
+
+
+def _creator_name(creator: User | None) -> str | None:
+    return (creator.display_name or creator.name or creator.email) if creator else None
+
+
+def _content_item(
+    kind: ContentType, doc, clip: Clip | None, creators: dict[PydanticObjectId, User], description: str | None
+) -> QueueItem:
+    creator = creators.get(doc.user_id)
+    return QueueItem(
+        target_type=kind,
+        target_id=str(doc.id),
+        clip_id=str(doc.clip_id) if kind != "voice_model" else None,
+        clip_deleted=kind != "voice_model" and clip is None,
+        title=doc.name if kind == "voice_model" else (clip.title if clip else None),
+        style_tags=clip.style_tags if clip else [],
+        creator_id=str(doc.user_id),
+        creator_name=_creator_name(creator),
+        creator_banned=bool(creator and creator.banned_at),
+        visibility=None,
+        content_warning=False,
+        report_count=0,
+        categories={},
+        moderation_flags=doc.moderation_flags,
+        sources=["automated"],
+        severity=AUTOMATED_SEVERITY,
+        latest_at=doc.created_at,
+        description=description,
+        published=doc.published if kind == "video" else None,
+    )
 
 
 def _queue_item(
@@ -107,12 +185,13 @@ def _queue_item(
     )
     creator = creators.get(clip.user_id) if clip is not None else None
     return QueueItem(
+        target_id=str(clip_id),
         clip_id=str(clip_id),
         clip_deleted=clip is None,
         title=clip.title if clip else None,
         style_tags=clip.style_tags if clip else [],
         creator_id=str(clip.user_id) if clip else None,
-        creator_name=(creator.display_name or creator.name or creator.email) if creator else None,
+        creator_name=_creator_name(creator),
         creator_banned=bool(creator and creator.banned_at),
         visibility=clip.visibility if clip else None,
         content_warning=bool(clip and clip.content_warning),
@@ -162,6 +241,44 @@ async def act_on_clip(
     return ActionResult(ok=True, detail=_unshare_failure(details))
 
 
+async def act_on_content(
+    actor_id: str, target_type: ContentType, action: ContentAction, target_id: str, reason: str | None
+) -> ActionResult:
+    """Approve, unpublish (video) or drop (artwork) one flagged non-clip output (#539)."""
+    noun = _CONTENT_NOUNS[target_type]
+    oid = coerce_object_id(target_id)
+    if oid is None:
+        return ActionResult(ok=False, detail=f"Invalid {noun} id.")
+    doc = await _CONTENT_DOCS[target_type].get(oid)
+    if doc is None:
+        return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
+    now = utcnow()
+    details: dict = {}
+    if action == "drop":
+        details = await _drop_artwork(doc)
+    else:
+        updates: dict = {"moderation_reviewed_at": now}
+        if action == "unpublish":
+            details["was_published"] = doc.published
+            updates.update(published=False, removed_at=now)
+        await doc.set(updates)
+    await log_action(actor_id, action, target_type, str(oid), reason, details)
+    return ActionResult(ok=True)
+
+
+async def _drop_artwork(option: ArtworkOption) -> dict:
+    """Delete a generated cover option, and clear the clip's cover if it was that option."""
+    await option.delete()
+    cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
+        {"$set": {"artwork_path": None}}
+    )
+    try:
+        await asyncio.to_thread(get_storage_backend().delete, option.storage_path)
+    except Exception:  # best-effort: the option can no longer be selected or served either way
+        logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
+    return {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
+
+
 def _unshare_failure(details: dict) -> str | None:
     failed = [f["track_id"] for f in details.get("soundcloud_unshare_failed", [])]
     if not failed:
@@ -204,7 +321,10 @@ async def _ban(user: User, settings: ApiSettings) -> dict:
         await user.set({"banned_at": now})
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id})
-    videos = await Video.find({"user_id": user.id, "published": True}).update({"$set": {"published": False}})
+    # #539: removed, like the clips, so a still-live access token can't publish them again.
+    videos = await Video.find({"user_id": user.id, "published": True}).update(
+        {"$set": {"published": False, "removed_at": now}}
+    )
     releases = await release_service.unshare_releases({"user_id": user.id}, settings)
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 

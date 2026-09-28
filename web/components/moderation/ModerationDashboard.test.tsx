@@ -7,6 +7,8 @@ import type { ModerationLogEntry, QueueItem } from "@/lib/moderation"
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
   return {
+    target_type: "clip",
+    target_id: overrides.clip_id ?? "c1",
     clip_id: "c1",
     clip_deleted: false,
     title: "Song A",
@@ -51,6 +53,47 @@ const SONG_C = item({
   severity: 3,
   latest_at: "2026-09-02T00:00:00Z",
 })
+const VIDEO = item({
+  target_type: "video",
+  target_id: "v1",
+  clip_id: "c9",
+  title: "Song V",
+  description: "war footage",
+  published: true,
+  visibility: null,
+  report_count: 0,
+  categories: {},
+  sources: ["automated"],
+  moderation_flags: ["violent extremism"],
+  severity: 3,
+})
+const ARTWORK = item({
+  target_type: "artwork",
+  target_id: "a1",
+  clip_id: "c8",
+  title: "Song Art",
+  description: "burning city",
+  visibility: null,
+  report_count: 0,
+  categories: {},
+  sources: ["automated"],
+  moderation_flags: ["violent extremism"],
+  severity: 3,
+})
+const VOICE = item({
+  target_type: "voice_model",
+  target_id: "m1",
+  clip_id: null,
+  title: "Dark Tenor",
+  description: "grim themes",
+  style_tags: [],
+  visibility: null,
+  report_count: 0,
+  categories: {},
+  sources: ["automated"],
+  moderation_flags: ["sexual violence"],
+  severity: 3,
+})
 const DELETED = item({
   clip_id: "gone",
   clip_deleted: true,
@@ -89,8 +132,12 @@ function stubBackend(backend: Backend) {
     if (url.startsWith("/api/admin/moderation/appeals"))
       return json(200, { appeals: [] })
     const body = JSON.parse(String(init?.body))
-    const key = url.endsWith("/clips") ? "clip_id" : "user_id"
-    const ids: string[] = body.clip_ids ?? body.user_ids
+    const key = url.endsWith("/clips")
+      ? "clip_id"
+      : url.endsWith("/users")
+        ? "user_id"
+        : "id"
+    const ids: string[] = body.clip_ids ?? body.user_ids ?? body.ids
     return json(200, {
       results: ids.map((id, i) => ({
         [key]: id,
@@ -172,6 +219,170 @@ describe("ModerationDashboard", () => {
         within(row).queryByRole("button", { name })
       ).not.toBeInTheDocument()
     expect(row.querySelector("audio")).toBeNull()
+  })
+
+  it("shows each item's type, and a flagged video's prompt and player (#539)", async () => {
+    stubBackend({ queue: [SONG_A, VIDEO, ARTWORK, VOICE] })
+    render(<ModerationDashboard accessToken="tok" />)
+
+    expect(within(await rowFor("Song A")).getByText("Clip")).toBeInTheDocument()
+
+    const video = await rowFor("Song V")
+    expect(within(video).getByText("Video")).toBeInTheDocument()
+    expect(within(video).getByText("war footage")).toBeInTheDocument()
+    expect(within(video).getByText("violent extremism")).toBeInTheDocument()
+    expect(video.querySelector("video")).toHaveAttribute(
+      "src",
+      "/api/videos/v1/stream"
+    )
+    expect(video.querySelector("audio")).toBeNull()
+
+    const art = await rowFor("Song Art")
+    expect(within(art).getByText("Artwork")).toBeInTheDocument()
+    expect(within(art).getByText("burning city")).toBeInTheDocument()
+
+    const voice = await rowFor("Dark Tenor")
+    expect(within(voice).getByText("Voice model")).toBeInTheDocument()
+    expect(within(voice).getByText("grim themes")).toBeInTheDocument()
+  })
+
+  it("offers each type only the actions that fit it (#539)", async () => {
+    stubBackend({ queue: [VIDEO, ARTWORK, VOICE] })
+    render(<ModerationDashboard accessToken="tok" />)
+    const names = (row: HTMLElement) =>
+      within(row)
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+
+    expect(names(await rowFor("Song V"))).toEqual([
+      "Approve",
+      "Unpublish",
+      "Warn creator",
+      "Ban creator",
+    ])
+    expect(names(await rowFor("Song Art"))).toEqual([
+      "Approve",
+      "Drop",
+      "Warn creator",
+      "Ban creator",
+    ])
+    expect(names(await rowFor("Dark Tenor"))).toEqual([
+      "Approve",
+      "Warn creator",
+      "Ban creator",
+    ])
+  })
+
+  it("unpublishes a video after confirmation, with the reason (#539)", async () => {
+    const fetchMock = stubBackend({ queue: [VIDEO] })
+    render(<ModerationDashboard accessToken="tok" />)
+    const row = await rowFor("Song V")
+
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Unpublish" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Unpublish 1 video?")
+    await userEvent.type(within(dialog).getByLabelText(/Reason/), "gore")
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Unpublish" })
+    )
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Unpublished 1 video."
+    )
+    expect(actionCalls(fetchMock)).toEqual([
+      {
+        url: "/api/admin/moderation/content",
+        body: {
+          target_type: "video",
+          action: "unpublish",
+          ids: ["v1"],
+          reason: "gore",
+        },
+      },
+    ])
+  })
+
+  it("drops artwork after confirmation (#539)", async () => {
+    const fetchMock = stubBackend({ queue: [ARTWORK] })
+    render(<ModerationDashboard accessToken="tok" />)
+
+    await userEvent.click(
+      within(await rowFor("Song Art")).getByRole("button", { name: "Drop" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.click(within(dialog).getByRole("button", { name: "Drop" }))
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Dropped 1 artwork image."
+    )
+    expect(actionCalls(fetchMock)).toEqual([
+      {
+        url: "/api/admin/moderation/content",
+        body: { target_type: "artwork", action: "drop", ids: ["a1"] },
+      },
+    ])
+  })
+
+  it("bulk-approves a mixed selection across endpoints (#539)", async () => {
+    const fetchMock = stubBackend({ queue: [SONG_A, VIDEO, VOICE] })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all" }))
+    const toolbar = screen.getByRole("toolbar", { name: "Bulk actions" })
+    expect(
+      within(toolbar).getByRole("button", { name: "Unpublish videos" })
+    ).toBeInTheDocument()
+    expect(
+      within(toolbar).queryByRole("button", { name: "Drop artwork" })
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      within(toolbar).getByRole("button", { name: "Approve" })
+    )
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Approved 3 items."
+    )
+    expect(actionCalls(fetchMock)).toEqual([
+      {
+        url: "/api/admin/moderation/clips",
+        body: { action: "approve", clip_ids: ["c1"] },
+      },
+      {
+        url: "/api/admin/moderation/content",
+        body: { target_type: "video", action: "approve", ids: ["v1"] },
+      },
+      {
+        url: "/api/admin/moderation/content",
+        body: { target_type: "voice_model", action: "approve", ids: ["m1"] },
+      },
+    ])
+  })
+
+  it("labels a content action in the activity log by its type (#539)", async () => {
+    stubBackend({
+      queue: [],
+      log: [
+        {
+          id: "l1",
+          actor_id: "admin-1",
+          action: "unpublish",
+          target_type: "video",
+          target_id: "v1",
+          reason: null,
+          details: {},
+          created_at: "2026-09-20T12:00:00Z",
+        },
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    expect(await screen.findByText("Unpublished video")).toBeInTheDocument()
   })
 
   it("shows an empty state when nothing is waiting", async () => {

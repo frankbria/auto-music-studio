@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import UTC, datetime
 
 import pytest
 from beanie import PydanticObjectId
@@ -200,6 +201,19 @@ class TestProcessVideoJob:
         assert "moderation_flags" not in params
         assert params["prompt"] == "neon city"
 
+    async def test_screening_flags_are_copied_to_the_video(self, storage) -> None:
+        # #539: the moderation queue reads flags off the video, not its job.
+        job, clip = await _make_job_and_clip(tier=PRO)
+        await job.set({"input_params.moderation_flags": ["violent extremism"]})
+        storage.upload(clip.file_path, FAKE_AUDIO)
+
+        result = await tasks.process_video_job(
+            job, storage=storage, client=FakeVideoService(_updates_to_complete()), poll_interval=0
+        )
+
+        video = await Video.get(PydanticObjectId(result["video_ids"][0]))
+        assert (video.moderation_flags, video.moderation_reviewed_at) == (["violent extremism"], None)
+
     async def test_progress_detail_written_during_polling(self, storage, monkeypatch) -> None:
         """Each poll persists the provider's state so the status endpoint can serve it live."""
         job, clip = await _make_job_and_clip(tier=PRO)
@@ -337,6 +351,51 @@ class TestProcessVideoEditJob:
         # The source document and its object are untouched.
         assert (await Video.get(source.id)).parent_video_id is None
         assert storage.download(source.storage_path) == FAKE_MP4
+
+    async def test_edit_carries_its_own_and_the_sources_unreviewed_flags(self, storage) -> None:
+        # #539: an edit is the same footage, so a flag nobody has reviewed yet travels with it.
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
+        await source.set({"moderation_flags": ["violent extremism"]})
+        await job.set({"input_params.moderation_flags": ["sexual violence"]})
+
+        result = await tasks.process_video_job(
+            job,
+            storage=storage,
+            client=FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4),
+            poll_interval=0,
+        )
+
+        new = await Video.get(PydanticObjectId(result["video_ids"][0]))
+        assert new.moderation_flags == ["sexual violence", "violent extremism"]
+        assert new.removed_at is None
+
+    async def test_edit_of_a_reviewed_source_carries_only_its_own_flags(self, storage) -> None:
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
+        await source.set({"moderation_flags": ["violent extremism"], "moderation_reviewed_at": datetime.now(UTC)})
+
+        result = await tasks.process_video_job(
+            job,
+            storage=storage,
+            client=FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4),
+            poll_interval=0,
+        )
+
+        assert (await Video.get(PydanticObjectId(result["video_ids"][0]))).moderation_flags == []
+
+    async def test_edit_of_a_taken_down_video_stays_taken_down(self, storage) -> None:
+        # #539: otherwise a one-frame trim would launder a moderation takedown.
+        job, source = await _make_edit_job_and_source(storage, tier=PRO)
+        removed_at = datetime(2026, 9, 1, tzinfo=UTC)
+        await source.set({"removed_at": removed_at, "moderation_reviewed_at": removed_at})
+
+        result = await tasks.process_video_job(
+            job,
+            storage=storage,
+            client=FakeVideoService(_updates_to_complete(), expect_media=FAKE_MP4),
+            poll_interval=0,
+        )
+
+        assert (await Video.get(PydanticObjectId(result["video_ids"][0]))).removed_at is not None
 
     async def test_non_trim_edit_inherits_source_duration(self, storage) -> None:
         # A lyrics-overlay edit keeps the source video's length (only trim resizes).

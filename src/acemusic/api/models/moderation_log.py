@@ -17,7 +17,7 @@ class ModerationLogEntry(Document):
     # None when the platform wrote the entry rather than an admin (#538: a failed SoundCloud un-share).
     actor_id: PydanticObjectId | None = None
     action: str
-    target_type: str  # "clip", "user" or "screening_rules"
+    target_type: str  # "clip", "user", "video", "artwork", "voice_model" or "screening_rules"
     target_id: str | None = None
     reason: str | None = None
     details: dict = Field(default_factory=dict)

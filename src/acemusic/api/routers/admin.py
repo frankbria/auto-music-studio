@@ -3,8 +3,9 @@
 ``GET/PUT /admin/screening-rules`` read and replace the live content-screening rules.
 A save applies to the next generation request — no deploy, no restart.
 ``GET /admin/moderation/reports`` lists listener reports, newest first.
-``GET /admin/moderation/queue`` groups open reports and automated flags per clip;
-``POST /admin/moderation/clips`` and ``/users`` act on them in bulk, and every action
+``GET /admin/moderation/queue`` groups open reports and automated flags per clip, and lists
+flagged videos, artwork and voice models (#539); ``POST /admin/moderation/clips``, ``/content``
+and ``/users`` act on them in bulk, and every action
 (including a screening-rules save) is recorded in ``GET /admin/moderation/log``.
 ``GET /admin/moderation/appeals`` is the creators' appeals queue (US-27.4); ``POST
 /admin/moderation/appeals/{id}`` upholds, reverses or asks for more information.
@@ -109,6 +110,41 @@ async def moderate_clips(
         outcome = await moderation.act_on_clip(current.user_id, body.action, clip_id, body.reason, settings)
         results.append(ClipActionResult(clip_id=clip_id, **outcome.model_dump()))
     return ClipActionResponse(results=results)
+
+
+class ContentActionRequest(BaseModel):
+    target_type: moderation.ContentType
+    action: moderation.ContentAction
+    ids: list[str] = Field(min_length=1, max_length=MAX_BATCH)
+    reason: Reason = None
+
+    @model_validator(mode="after")
+    def _action_fits_type(self) -> "ContentActionRequest":
+        allowed = moderation.CONTENT_ACTIONS[self.target_type]
+        if self.action not in allowed:
+            raise ValueError(f"A {self.target_type} takes only: {', '.join(allowed)}.")
+        return self
+
+
+class ContentActionResult(moderation.ActionResult):
+    id: str
+
+
+class ContentActionResponse(BaseModel):
+    results: list[ContentActionResult]
+
+
+@router.post("/moderation/content", response_model=ContentActionResponse)
+async def moderate_content(
+    body: ContentActionRequest, current: CurrentUser = Depends(require_admin)
+) -> ContentActionResponse:
+    results = []
+    for target_id in body.ids:
+        outcome = await moderation.act_on_content(
+            current.user_id, body.target_type, body.action, target_id, body.reason
+        )
+        results.append(ContentActionResult(id=target_id, **outcome.model_dump()))
+    return ContentActionResponse(results=results)
 
 
 class UserActionRequest(BaseModel):

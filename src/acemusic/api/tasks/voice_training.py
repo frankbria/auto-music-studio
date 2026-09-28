@@ -219,8 +219,7 @@ async def process_voice_training_job(
         # Refunding here would either give the credits back for a run that then
         # succeeds, or -- refunds not being idempotent -- refund the same charge
         # twice when the retry also fails.
-        model.status = VoiceModelStatus.QUEUED
-        await model.save()
+        await model.set({"status": VoiceModelStatus.QUEUED})
         raise
     except Exception as exc:
         reason = str(exc) or exc.__class__.__name__
@@ -263,8 +262,7 @@ async def _train(
     poll_interval: float,
     poll_timeout: float,
 ) -> dict[str, Any]:
-    model.status = VoiceModelStatus.TRAINING
-    await model.save()
+    await model.set({"status": VoiceModelStatus.TRAINING})
 
     # Server-side paths: ACE-Step preprocesses, trains and exports on its own
     # filesystem, so these name directories on that host rather than storage keys.
@@ -374,10 +372,7 @@ async def _train(
         # the status said.
         raise VoiceTrainingError("Training finished but produced no weights")
 
-    model.weights_path = str(weights)
-    model.status = VoiceModelStatus.READY
-    model.error = None
-    await model.save()
+    await model.set({"weights_path": str(weights), "status": VoiceModelStatus.READY, "error": None})
 
     # Best-effort, and deliberately after the model is saved READY. A transient
     # notification_events insert failure raised from here would propagate into
