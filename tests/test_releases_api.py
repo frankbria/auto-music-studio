@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, Release, ReleaseStatus, VisibilityState, Workspace
+from acemusic.api.routers import distribution as distribution_router
 from acemusic.api.services import releases as release_service
 from acemusic.api.services.identifiers import calculate_ean13_check_digit
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
@@ -554,11 +555,11 @@ def test_visibility_mirror_never_saves_the_whole_clip():
 
     A whole-document save writes back what it read, so an admin removal landing between
     the read and the save would be reverted — the clip public again, ``removed_at`` wiped.
-    The window only opens under concurrency, so it is guarded by shape: the only document
-    ``update_visibility`` may save is the release it was handed.
+    The window only opens under concurrency, so it is guarded by shape: ``update_visibility``
+    saves no whole document, not even the release, which moderation now privatizes too (#538).
     """
     source = inspect.getsource(release_service.update_visibility)
-    assert re.findall(r"(\w+)\.save\(\)", source) == ["release"]
+    assert re.findall(r"(\w+)\.save\(\)", source) == []
     assert '"removed_at": None' in source
 
 
@@ -570,3 +571,10 @@ def test_release_service_never_saves_a_whole_clip():
     """
     source = inspect.getsource(release_service)
     assert "clip.save()" not in source
+
+
+def test_no_release_writer_saves_a_whole_release():
+    """Moderation privatizes releases with a ``$set`` (#538); a whole-release ``save()`` of an
+    earlier read would make one public again. Guarded by shape, like the clip mirror above."""
+    for module in (release_service, distribution_router):
+        assert "release.save()" not in inspect.getsource(module)
