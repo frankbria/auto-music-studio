@@ -74,7 +74,7 @@ export function NotificationsProvider({
     let cancelled = false
     const load = async () => {
       const token = tokenRef.current
-      if (!userId || !token) {
+      if (!token) {
         if (!cancelled) setStore(EMPTY)
         return
       }

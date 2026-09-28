@@ -89,6 +89,10 @@ describe("toAppNotification (#537)", () => {
       event({ clip_id: "c1", payload: { title: "Takedown", reason: null } })
     )
     expect(row.message).toBe('Moderation removed "Takedown".')
+    const blank = toAppNotification(
+      event({ clip_id: "c1", payload: { title: "Takedown", reason: "   " } })
+    )
+    expect(blank.message).toBe('Moderation removed "Takedown".')
   })
 
   it.each([

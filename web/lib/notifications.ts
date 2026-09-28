@@ -280,6 +280,6 @@ export async function markNotificationsRead(
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(ids ? { ids } : {}),
+    body: JSON.stringify({ ids }),
   }).catch(() => undefined)
 }
