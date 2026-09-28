@@ -349,7 +349,12 @@ Package manager: `uv` with `hatchling` build backend
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
   `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
-  never whole-document `save()` a `Clip` or `User` fetched before a moderation action could land
+  never whole-document `save()` a `Clip`, `User` or `Release` fetched before a moderation action could land.
+  Remove and ban also make the releases private and best-effort un-share their SoundCloud tracks
+  (`services/releases.unshare_releases`, #538). A failure is logged in the action's details and returned as its
+  `detail`. A route that shares a release or track out must call `unshare_if_source_removed` after the external
+  call, because a removal can land while that call is in flight. A failure on that path writes its own log entry
+  with `actor_id=None`, which means the platform wrote it rather than an admin
 - **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip
   (its latest `remove`, else its latest `flag`), and the unique `ClipAppeal.action_id` is the one-appeal-per-decision
   rule (409). A removal's log entry records `details.previous_visibility`, and reversing it restores that
