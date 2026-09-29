@@ -1,6 +1,10 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import {
+  NotificationsProvider,
+  useNotify,
+} from "@/contexts/notifications-context"
 import { useMyAppeals } from "@/hooks/use-my-appeals"
 import type { AppealView } from "@/lib/appeals"
 
@@ -50,5 +54,36 @@ describe("useMyAppeals", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     result.current.refetch()
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it("refetches when a moderation notice arrives, not on other notices (#543)", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ appeals: [] }))
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const { result } = renderHook(
+      () => ({ appeals: useMyAppeals("tok"), notify: useNotify() }),
+      { wrapper: NotificationsProvider }
+    )
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    act(() =>
+      result.current.notify({
+        type: "mastering_complete",
+        message: "m",
+        href: "/",
+      })
+    )
+    act(() =>
+      result.current.notify({
+        type: "moderation",
+        message: "Appeal approved",
+        href: "/",
+      })
+    )
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

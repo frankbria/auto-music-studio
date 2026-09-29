@@ -176,13 +176,18 @@ async def get_me(current: CurrentUser = Depends(get_current_user)) -> UserProfil
 
 class MyAppealsResponse(BaseModel):
     appeals: list[appeal_service.AppealView]
+    next_cursor: str | None
 
 
 @router.get("/me/appeals", response_model=MyAppealsResponse)
-async def get_my_appeals(current: CurrentUser = Depends(get_current_user)) -> MyAppealsResponse:
-    """Your moderation appeals and their outcomes, newest first (US-27.4)."""
-    appeals = await appeal_service.list_user_appeals(current.user_id)
-    return MyAppealsResponse(appeals=[appeal_service.AppealView.of(a) for a in appeals])
+async def get_my_appeals(
+    limit: int = Query(default=100, ge=1, le=appeal_service.MAX_APPEALS),
+    cursor: str | None = None,
+    current: CurrentUser = Depends(get_current_user),
+) -> MyAppealsResponse:
+    """Your moderation appeals and their outcomes, newest first (US-27.4), paged by ``next_cursor`` (#543)."""
+    appeals, next_cursor = await appeal_service.list_user_appeals(current.user_id, limit, cursor)
+    return MyAppealsResponse(appeals=[appeal_service.AppealView.of(a) for a in appeals], next_cursor=next_cursor)
 
 
 class MyNotificationsResponse(BaseModel):
