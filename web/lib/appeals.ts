@@ -90,19 +90,30 @@ export async function addAppealContext(
   )
 }
 
+/**
+ * Every appeal the caller has made, newest first. Walks the server's pages
+ * (#543) because the Library matches each clip card to its appeal; a failed
+ * page ends the walk with what was already read.
+ */
 export async function fetchMyAppeals(
   accessToken: string
 ): Promise<AppealView[]> {
-  try {
-    const res = await fetch("/api/users/me/appeals", {
-      headers: { authorization: `Bearer ${accessToken}` },
-    })
-    if (!res.ok) return []
-    const body = await res.json().catch(() => null)
-    return (body as { appeals?: AppealView[] } | null)?.appeals ?? []
-  } catch {
-    return []
-  }
+  const appeals: AppealView[] = []
+  let cursor: string | null = null
+  do {
+    const params = new URLSearchParams({ limit: "500" })
+    if (cursor) params.set("cursor", cursor)
+    const page: { appeals?: AppealView[]; next_cursor?: string | null } | null =
+      await fetch(`/api/users/me/appeals?${params}`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null)
+    if (!page) break
+    appeals.push(...(page.appeals ?? []))
+    cursor = page.next_cursor ?? null
+  } while (cursor)
+  return appeals
 }
 
 /** Newest-first input -> each clip's appeals, still newest first. */
