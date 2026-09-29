@@ -22,6 +22,7 @@ function item(overrides: Partial<AppealQueueItem> = {}): AppealQueueItem {
     creator_name: "Creator Two",
     action_reason: "Flagged as spam",
     action_at: "2026-08-30T00:00:00Z",
+    superseded: false,
     ...overrides,
   }
 }
@@ -35,7 +36,7 @@ function stubBackend(
     const json = (status: number, body: unknown) =>
       new Response(JSON.stringify(body), { status })
     if (url.startsWith("/api/admin/moderation/appeals?"))
-      return json(200, { appeals })
+      return json(200, { appeals, next_cursor: null })
     if (
       url.startsWith("/api/admin/moderation/appeals/") &&
       init?.method === "POST"
@@ -168,6 +169,50 @@ describe("AppealsPanel", () => {
     expect(submit).toBeDisabled()
     await userEvent.type(screen.getByLabelText(/note/i), "Need lyric proof")
     expect(submit).toBeEnabled()
+  })
+
+  it("marks a superseded appeal and only offers to close it (#543)", async () => {
+    stubBackend([item({ superseded: true })])
+    render(<AppealsPanel accessToken="tok" />)
+
+    expect(await screen.findByText("Superseded")).toBeInTheDocument()
+    expect(
+      screen.getByText(/A newer moderation decision replaced this one/)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Uphold" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Reverse" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Request info" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("pages the queue with Load more (#543)", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const page = url.includes("cursor=n1")
+        ? {
+            appeals: [item({ id: "ap2", clip_title: "Song B" })],
+            next_cursor: null,
+          }
+        : { appeals: [item()], next_cursor: "n1" }
+      return new Response(JSON.stringify(page), { status: 200 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<AppealsPanel accessToken="tok" />)
+
+    await screen.findByText("Song A")
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }))
+
+    expect(await screen.findByText("Song B")).toBeInTheDocument()
+    expect(screen.getByText("Song A")).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/moderation/appeals?status=open&cursor=n1",
+      expect.anything()
+    )
+    expect(
+      screen.queryByRole("button", { name: "Load more" })
+    ).not.toBeInTheDocument()
   })
 
   it("shows an alert when the queue fails to load", async () => {

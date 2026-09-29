@@ -122,6 +122,42 @@ describe("fetchMyAppeals", () => {
     expect(await fetchMyAppeals("tok")).toEqual([])
   })
 
+  it("walks every page, since the Library needs each clip's appeal (#543)", async () => {
+    const older = { ...appeal, id: "a0", clip_id: "c0" }
+    const pages: Record<string, unknown> = {
+      "/api/users/me/appeals?limit=500": {
+        appeals: [appeal],
+        next_cursor: "next 1",
+      },
+      "/api/users/me/appeals?limit=500&cursor=next+1": {
+        appeals: [older],
+        next_cursor: null,
+      },
+    }
+    const fetchMock = vi.fn(
+      async (url: string) =>
+        new Response(JSON.stringify(pages[url] ?? {}), {
+          status: url in pages ? 200 : 404,
+        })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    expect(await fetchMyAppeals("tok")).toEqual([appeal, older])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the pages it has when a later one fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ appeals: [appeal], next_cursor: "n" }))
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 500 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    expect(await fetchMyAppeals("tok")).toEqual([appeal])
+  })
+
   it("never throws — returns [] on a network error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")))
     expect(await fetchMyAppeals("tok")).toEqual([])

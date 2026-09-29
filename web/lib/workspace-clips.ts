@@ -63,6 +63,11 @@ export type Clip = {
    */
   content_warning?: boolean
   /**
+   * Naive UTC ISO timestamp of the latest "flag" action (#543), restamped by a
+   * re-flag. Null for clips flagged before it existed.
+   */
+  flagged_at?: string | null
+  /**
    * Naive UTC ISO timestamp set by a moderator's "remove" action (US-27.3),
    * null otherwise. Optional because mock/older reads omit it — use
    * `clip.removed_at != null` to check, never destructure a default.

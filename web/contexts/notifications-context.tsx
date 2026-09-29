@@ -18,6 +18,7 @@ import {
   markNotificationsRead,
   markRead as markReadIn,
   type AppNotification,
+  type NotificationType,
   type NotifyInput,
 } from "@/lib/notifications"
 
@@ -210,6 +211,14 @@ export function useNotifications(): NotificationsContextValue {
  *  hidden) rather than throwing, so those suites need no provider wrapper. */
 export function useUnreadCount(): number {
   return useContext(NotificationsContext)?.unreadCount ?? 0
+}
+
+/** Id of the newest loaded notice of `type`, or null (also outside the provider).
+ *  Changes when a new one arrives, so a view can refetch what it describes —
+ *  e.g. the Library's appeal status on a moderation notice (#543). */
+export function useLatestNoticeId(type: NotificationType): string | null {
+  const items = useContext(NotificationsContext)?.notifications
+  return items?.find((n) => n.type === type)?.id ?? null
 }
 
 const noop = () => {}

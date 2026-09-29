@@ -355,15 +355,19 @@ function appealItem(overrides: Partial<AppealQueueItem> = {}): AppealQueueItem {
     creator_name: "Creator",
     action_reason: "spam",
     action_at: "2026-08-30T00:00:00Z",
+    superseded: false,
     ...overrides,
   }
 }
 
 describe("fetchAppeals", () => {
   it("GETs the open queue by default", async () => {
-    const fetchMock = stubFetch(200, { appeals: [appealItem()] })
-    const items = await fetchAppeals("tok")
-    expect(items).toEqual([appealItem()])
+    const fetchMock = stubFetch(200, {
+      appeals: [appealItem()],
+      next_cursor: "n1",
+    })
+    const page = await fetchAppeals("tok")
+    expect(page).toEqual({ items: [appealItem()], next_cursor: "n1" })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe("/api/admin/moderation/appeals?status=open")
     expect(opts.headers.authorization).toBe("Bearer tok")
@@ -374,6 +378,14 @@ describe("fetchAppeals", () => {
     await fetchAppeals("tok", "all")
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/admin/moderation/appeals?status=all"
+    )
+  })
+
+  it("asks for the page after a cursor (#543)", async () => {
+    const fetchMock = stubFetch(200, { appeals: [], next_cursor: null })
+    await fetchAppeals("tok", "open", "n 1")
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/admin/moderation/appeals?status=open&cursor=n+1"
     )
   })
 

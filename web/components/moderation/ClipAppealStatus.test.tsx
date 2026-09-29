@@ -247,6 +247,50 @@ describe("ClipAppealStatus", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("offers a new appeal when the clip is flagged again after a denied flag appeal (#543)", () => {
+    withAuth(
+      <ClipAppealStatus
+        clip={{
+          id: "c1",
+          removed_at: null,
+          content_warning: true,
+          flagged_at: "2026-03-01T00:00:00",
+        }}
+        appeal={appeal({
+          action: "flag",
+          status: "upheld",
+          admin_note: "Old note",
+          created_at: "2026-02-01T00:00:00Z",
+        })}
+      />
+    )
+    expect(screen.queryByText("Appeal denied")).not.toBeInTheDocument()
+    expect(screen.queryByText("Old note")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Appeal" })).toBeInTheDocument()
+  })
+
+  it("keeps the Appeal entry hidden when the denied appeal covers the current flag", () => {
+    withAuth(
+      <ClipAppealStatus
+        clip={{
+          id: "c1",
+          removed_at: null,
+          content_warning: true,
+          flagged_at: "2026-01-01T00:00:00",
+        }}
+        appeal={appeal({
+          action: "flag",
+          status: "upheld",
+          created_at: "2026-02-01T00:00:00Z",
+        })}
+      />
+    )
+    expect(screen.getByText("Appeal denied")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Appeal" })
+    ).not.toBeInTheDocument()
+  })
+
   it("drops an old outcome once a different decision is in force", () => {
     withAuth(
       <ClipAppealStatus

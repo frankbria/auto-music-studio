@@ -41,7 +41,7 @@ export function ClipAppealStatus({
   clip,
   appeal,
 }: {
-  clip: Pick<Clip, "id" | "removed_at" | "content_warning">
+  clip: Pick<Clip, "id" | "removed_at" | "content_warning" | "flagged_at">
   /** The caller's latest appeal against this clip's current (or most recent) decision. */
   appeal: AppealView | null
 }) {
@@ -62,13 +62,15 @@ export function ClipAppealStatus({
   if (!removed && !flagged && !current) return null
 
   // An appeal only blocks the decision it was filed against. A later removal
-  // restamps removed_at, so a removal newer than the appeal is a new decision.
+  // restamps removed_at, and a re-flag flagged_at (#543), so a decision newer
+  // than the appeal is a new one.
+  const decidedAt = removed ? clip.removed_at : clip.flagged_at
   const coversCurrentDecision =
     !!current &&
     current.action === (removed ? "remove" : "flag") &&
     !(
-      removed &&
-      parseApiTime(clip.removed_at!).getTime() >
+      decidedAt != null &&
+      parseApiTime(decidedAt).getTime() >
         parseApiTime(current.created_at).getTime()
     )
   // A resolved appeal's outcome only describes the clip while no newer decision
