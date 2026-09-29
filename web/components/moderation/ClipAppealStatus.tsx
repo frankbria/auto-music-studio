@@ -46,7 +46,12 @@ export function ClipAppealStatus({
   appeal: AppealView | null
 }) {
   const auth = useContext(AuthContext)
-  const [override, setOverride] = useState<AppealView | null>(null)
+  // What this card last submitted, and the `appeal` prop it replaced. A refetch
+  // hands down a new prop object, which supersedes it (#543).
+  const [override, setOverride] = useState<{
+    over: AppealView | null
+    value: AppealView
+  } | null>(null)
   const [open, setOpen] = useState(false)
   const [reason, setReason] = useState("")
   const [context, setContext] = useState("")
@@ -56,7 +61,7 @@ export function ClipAppealStatus({
   const [infoPhase, setInfoPhase] = useState<Phase>({ kind: "form" })
   const [infoDone, setInfoDone] = useState<string | null>(null)
 
-  const current = override ?? appeal
+  const current = override?.over === appeal ? override.value : appeal
   const removed = clip.removed_at != null
   const flagged = clip.content_warning === true
   if (!removed && !flagged && !current) return null
@@ -99,7 +104,7 @@ export function ClipAppealStatus({
     setPhase({ kind: "submitting" })
     const result = await submitClipAppeal(clip.id, reason, context, accessToken)
     if (result.status === "submitted") {
-      setOverride(result.appeal)
+      setOverride({ over: appeal, value: result.appeal })
       setDoneMessage(result.message)
       setPhase({ kind: "form" })
     } else {
@@ -112,7 +117,7 @@ export function ClipAppealStatus({
     setInfoPhase({ kind: "submitting" })
     const result = await addAppealContext(clip.id, infoContext, accessToken)
     if (result.status === "submitted") {
-      setOverride(result.appeal)
+      setOverride({ over: appeal, value: result.appeal })
       setInfoDone(result.message)
       setInfoPhase({ kind: "form" })
       setInfoContext("")

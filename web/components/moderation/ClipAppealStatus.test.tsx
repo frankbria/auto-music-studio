@@ -179,6 +179,67 @@ describe("ClipAppealStatus", () => {
     expect(JSON.parse(opts.body)).toEqual({ context: "Here is more detail" })
   })
 
+  it("lets a refetched appeal replace the one just submitted (#543)", async () => {
+    stubFetch(201, appeal())
+    const removedClip = {
+      id: "c1",
+      removed_at: "2026-01-01T00:00:00Z",
+      content_warning: false,
+    }
+    const { rerender } = withAuth(
+      <ClipAppealStatus clip={removedClip} appeal={null} />
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Appeal" }))
+    await userEvent.type(
+      screen.getByLabelText(/reason for appeal/i),
+      "This was a mistake"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Submit appeal" }))
+    await screen.findByText("Appeal submitted. Our team will review it.")
+    expect(screen.getByText("Appeal pending")).toBeInTheDocument()
+
+    rerender(
+      <SignedIn value={SIGNED_IN}>
+        <ClipAppealStatus
+          clip={removedClip}
+          appeal={appeal({ status: "upheld", admin_note: "Stands" })}
+        />
+      </SignedIn>
+    )
+
+    expect(screen.getByText("Appeal denied")).toBeInTheDocument()
+    expect(screen.queryByText("Appeal pending")).not.toBeInTheDocument()
+  })
+
+  it("keeps an answered info request until the appeal is refetched (#543)", async () => {
+    stubFetch(200, appeal({ status: "pending" }))
+    const removedClip = {
+      id: "c1",
+      removed_at: "2026-01-01T00:00:00Z",
+      content_warning: false,
+    }
+    const requested = appeal({ status: "info_requested" })
+    const view = (a: AppealView) => (
+      <SignedIn value={SIGNED_IN}>
+        <ClipAppealStatus clip={removedClip} appeal={a} />
+      </SignedIn>
+    )
+    const { rerender } = render(view(requested))
+    await userEvent.type(
+      screen.getByLabelText(/additional context/i),
+      "Here is more detail"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Send" }))
+    await screen.findByText("Additional information sent.")
+
+    rerender(view(requested))
+    expect(screen.getByText("Appeal pending")).toBeInTheDocument()
+
+    rerender(view(appeal({ status: "reversed" })))
+    expect(screen.getByText("Appeal approved")).toBeInTheDocument()
+    expect(screen.queryByText("Appeal pending")).not.toBeInTheDocument()
+  })
+
   it("shows the denial notice and admin note for an upheld appeal, with no Appeal entry", () => {
     withAuth(
       <ClipAppealStatus
