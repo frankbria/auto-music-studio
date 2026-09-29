@@ -344,7 +344,10 @@ Package manager: `uv` with `hatchling` build backend
   `GET /api/v1/admin/moderation/reports`. On the web, `ReportClipButton` reads `AuthContext` directly (not
   `useAuth`, which throws) so it renders nothing outside an `AuthProvider`, signed out, or on your own clip
 - **Moderation dashboard (US-27.3)**: `/admin/moderation` on the web; API in `services/moderation.py` behind
-  `/api/v1/admin/moderation/{queue,clips,users,log}`. Removal stamps `Clip.removed_at`, and
+  `/api/v1/admin/moderation/{queue,clips,users,log}`. Queue and log are paged by keyset cursor (#540): a
+  response's `next_cursor` goes back as `?cursor=`, and a malformed one or one minted under another sort is a 422. The queue sorts
+  (`reports|severity|newest`) and filters (`source`, `category`) on the server, and log entries carry `actor_name`
+  and `target_label`. Removal stamps `Clip.removed_at`, and
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,

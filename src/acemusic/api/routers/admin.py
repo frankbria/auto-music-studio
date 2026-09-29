@@ -6,7 +6,8 @@ A save applies to the next generation request — no deploy, no restart.
 ``GET /admin/moderation/queue`` groups open reports and automated flags per clip, and lists
 flagged videos, artwork and voice models (#539); ``POST /admin/moderation/clips``, ``/content``
 and ``/users`` act on them in bulk, and every action
-(including a screening-rules save) is recorded in ``GET /admin/moderation/log``.
+(including a screening-rules save) is recorded in ``GET /admin/moderation/log``. The queue and
+the log are paged by keyset cursor (#540); the queue sorts and filters on the server.
 ``GET /admin/moderation/appeals`` is the creators' appeals queue (US-27.4); ``POST
 /admin/moderation/appeals/{id}`` upholds, reverses or asks for more information.
 """
