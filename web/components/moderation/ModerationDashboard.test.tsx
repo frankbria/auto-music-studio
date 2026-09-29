@@ -796,7 +796,7 @@ describe("ModerationDashboard", () => {
     expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual(["Song C"])
   })
 
-  it("keeps Load more disabled until the post-action reload lands (#540)", async () => {
+  it("keeps Load more and the filters disabled until the post-action reload lands (#540)", async () => {
     let reloadArmed = false
     let reloadRequested = false
     let releaseReload: (items: QueueItem[]) => void = () => {}
@@ -821,12 +821,16 @@ describe("ModerationDashboard", () => {
 
     await waitFor(() => expect(reloadRequested).toBe(true))
     expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled()
+    // A filter change here would be superseded by the reload's click-time query.
+    for (const label of ["Sort by", "Source", "Category"])
+      expect(screen.getByLabelText(label)).toBeDisabled()
 
     releaseReload([SONG_B])
     await waitFor(() =>
       expect(screen.queryByText("Song A")).not.toBeInTheDocument()
     )
     expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled()
+    expect(screen.getByLabelText("Sort by")).toBeEnabled()
   })
 
   it("goes back to the first page after an action (#540)", async () => {
