@@ -10,13 +10,15 @@ revert a concurrent edit to the same clip or user.
 """
 
 import asyncio
+import base64
 import logging
 from datetime import datetime
 from typing import Literal
 
 from beanie import PydanticObjectId
 from beanie.operators import In
-from pydantic import BaseModel
+from fastapi import HTTPException, status
+from pydantic import BaseModel, ConfigDict, NaiveDatetime, TypeAdapter
 
 from acemusic.storage import get_storage_backend
 
@@ -28,6 +30,7 @@ from ..models import (
     Job,
     ModerationLogEntry,
     NotificationEvent,
+    ReportCategory,
     User,
     Video,
     VisibilityState,
@@ -43,6 +46,7 @@ logger = logging.getLogger(__name__)
 ClipAction = Literal["approve", "remove", "flag"]
 UserAction = Literal["warn", "ban"]
 QueueSource = Literal["report", "automated"]
+QueueSort = Literal["reports", "severity", "newest"]
 # #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
 ContentType = Literal["video", "artwork", "voice_model"]
 ContentAction = Literal["approve", "unpublish", "drop"]
@@ -55,7 +59,7 @@ _CONTENT_DOCS = {"video": Video, "artwork": ArtworkOption, "voice_model": VoiceM
 _CONTENT_NOUNS = {"video": "video", "artwork": "artwork", "voice_model": "voice model"}
 _UNREVIEWED = {"moderation_flags": {"$type": "string"}, "moderation_reviewed_at": None}
 
-MAX_QUEUE_ITEMS = 500
+MAX_QUEUE_LIMIT = 500
 MAX_LOG_LIMIT = 500
 CATEGORY_SEVERITY = {"inappropriate": 3, "copyright": 2, "spam": 1, "other": 1}
 AUTOMATED_SEVERITY = 3
@@ -85,14 +89,59 @@ class QueueItem(BaseModel):
     published: bool | None = None
 
 
+# Keyset cursors (#540): the last row's sort key, so a page boundary survives rows being acted
+# on (the queue shrinks) or logged (the log grows at the head) between requests. Each cursor
+# leads with its kind: a reports key and a severity key have the same shape, and replaying
+# one under the other sort would silently skip or repeat rows instead of failing. Times are
+# NaiveDatetime because pymongo hands back naive UTC, and the keys are built from what it read.
+def _cursor(kind: str, *key: type) -> TypeAdapter:
+    return TypeAdapter(tuple[(Literal[kind], *key)], config=ConfigDict(strict=True))
+
+
+_CURSORS: dict[str, TypeAdapter] = {
+    "reports": _cursor("reports", int, int, NaiveDatetime, str, str),
+    "severity": _cursor("severity", int, int, NaiveDatetime, str, str),
+    "newest": _cursor("newest", NaiveDatetime, str, str),
+    "log": _cursor("log", NaiveDatetime, str),
+}
+
+
+def _encode_cursor(kind: str, key: tuple) -> str:
+    return base64.urlsafe_b64encode(_CURSORS[kind].dump_json((kind, *key))).decode()
+
+
+def _decode_cursor(kind: str, cursor: str) -> tuple:
+    try:
+        return _CURSORS[kind].validate_json(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))[1:]
+    except ValueError:  # bad base64, bad JSON, a wrong shape and another kind's cursor are all ValueErrors
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+
+
+def _queue_key(item: "QueueItem", sort: QueueSort) -> tuple:
+    rank = {
+        "reports": (item.report_count, item.severity, item.latest_at),
+        "severity": (item.severity, item.report_count, item.latest_at),
+        "newest": (item.latest_at,),
+    }[sort]
+    return (*rank, item.target_type, item.target_id)
+
+
 class ActionResult(BaseModel):
     ok: bool
     detail: str | None = None
 
 
-async def get_queue() -> list[QueueItem]:
+async def get_queue(
+    sort: QueueSort = "reports",
+    source: Literal["all"] | QueueSource = "all",
+    category: Literal["all"] | ReportCategory = "all",
+    limit: int = 100,
+    cursor: str | None = None,
+) -> tuple[list[QueueItem], str | None]:
     """One item per clip with open reports and/or unreviewed automated flags, and per flagged
-    video, artwork option or voice model, most urgent first."""
+    video, artwork option or voice model: a page of them in ``sort`` order, plus the cursor
+    for the next page (None on the last)."""
+    after = _decode_cursor(sort, cursor) if cursor else None
     groups = await ClipReport.aggregate(
         [
             {"$match": {"resolved_at": None}},
@@ -135,12 +184,22 @@ async def get_queue() -> list[QueueItem]:
             prompt = params.get("prompt") or (params.get("edit") or {}).get("prompt")
             items.append(_content_item(kind, doc, clips.get(doc.clip_id), creators, prompt))
     items.extend(_content_item("voice_model", voice, None, creators, voice.description) for voice in voices)
-    items.sort(key=lambda i: (i.report_count, i.severity, i.latest_at), reverse=True)
-    return items[:MAX_QUEUE_ITEMS]
+    items = [
+        i
+        for i in items
+        if (source == "all" or source in i.sources)
+        and (category == "all" or i.categories.get(category, 0) > 0)
+        and (after is None or _queue_key(i, sort) < after)
+    ]
+    items.sort(key=lambda i: _queue_key(i, sort), reverse=True)
+    page = items[:limit]
+    return page, _encode_cursor(sort, _queue_key(page[-1], sort)) if len(items) > limit else None
 
 
+# ponytail: every open report and unreviewed flag is read and ranked in memory on each page;
+# move to a $unionWith aggregation that sorts and limits in Mongo if the backlog reaches thousands.
 async def _unreviewed(document: type) -> list:
-    return await document.find(_UNREVIEWED).sort(-document.created_at).limit(MAX_QUEUE_ITEMS).to_list()
+    return await document.find(_UNREVIEWED).to_list()
 
 
 def _creator_name(creator: User | None) -> str | None:
@@ -335,13 +394,90 @@ async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -
     )
 
 
-async def list_log(limit: int) -> list[ModerationLogEntry]:
-    return (
-        await ModerationLogEntry.find_all()
+class LogItem(BaseModel):
+    id: str
+    actor_id: str | None
+    # Display names resolved at read time (#540); None when the admin or target is gone.
+    actor_name: str | None
+    action: str
+    target_type: str
+    target_id: str | None
+    target_label: str | None
+    reason: str | None
+    details: dict
+    created_at: datetime
+
+
+async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem], str | None]:
+    """A page of the log, newest first, plus the cursor for the next page (None on the last)."""
+    query = {}
+    if cursor:
+        at, last_id = _decode_cursor("log", cursor)
+        oid = coerce_object_id(last_id)
+        if oid is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+        query = {"$or": [{"created_at": {"$lt": at}}, {"created_at": at, "_id": {"$lt": oid}}]}
+    entries = (
+        await ModerationLogEntry.find(query)
         .sort(-ModerationLogEntry.created_at, -ModerationLogEntry.id)
-        .limit(limit)
+        .limit(limit + 1)
         .to_list()
     )
+    page = entries[:limit]
+    actors, labels = await _log_names(page)
+    items = [
+        LogItem(
+            id=str(e.id),
+            actor_id=str(e.actor_id) if e.actor_id else None,
+            actor_name=_creator_name(actors.get(e.actor_id)),
+            action=e.action,
+            target_type=e.target_type,
+            target_id=e.target_id,
+            target_label=labels.get((e.target_type, e.target_id)),
+            reason=e.reason,
+            details=e.details,
+            created_at=e.created_at,
+        )
+        for e in page
+    ]
+    more = len(entries) > limit
+    return items, _encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
+
+
+async def _log_names(
+    entries: list[ModerationLogEntry],
+) -> tuple[dict[PydanticObjectId, User], dict[tuple[str, str | None], str | None]]:
+    """The admins who acted, and a label per (target_type, target_id): a clip's title, a user's
+    name, the title of the song a video or artwork was made for, a voice model's name."""
+    targets: dict[str, set[PydanticObjectId]] = {}
+    for e in entries:
+        if (oid := coerce_object_id(e.target_id or "")) is not None:
+            targets.setdefault(e.target_type, set()).add(oid)
+
+    async def load(document: type, ids: set[PydanticObjectId]) -> dict:
+        return {d.id: d for d in await document.find(In(document.id, list(ids))).to_list()} if ids else {}
+
+    users, videos, artwork, voices = await asyncio.gather(
+        load(User, {e.actor_id for e in entries if e.actor_id} | targets.get("user", set())),
+        load(Video, targets.get("video", set())),
+        load(ArtworkOption, targets.get("artwork", set())),
+        load(VoiceModel, targets.get("voice_model", set())),
+    )
+    songs = {d.id: d.clip_id for d in [*videos.values(), *artwork.values()]}
+    clips = await load(Clip, targets.get("clip", set()) | set(songs.values()))
+
+    def title(clip_id: PydanticObjectId | None) -> str | None:
+        return clips[clip_id].title if clip_id in clips else None
+
+    by_kind = {
+        "user": lambda oid: _creator_name(users.get(oid)),
+        "clip": title,
+        "video": lambda oid: title(songs.get(oid)),
+        "artwork": lambda oid: title(songs.get(oid)),
+        "voice_model": lambda oid: voices[oid].name if oid in voices else None,
+    }
+    labels = {(kind, str(oid)): by_kind[kind](oid) for kind, oids in targets.items() if kind in by_kind for oid in oids}
+    return users, labels
 
 
 async def log_action(

@@ -108,8 +108,16 @@ const DELETED = item({
 })
 
 type Backend = {
-  queue: QueueItem[]
+  /** The queue's rows, or a function of the request's sort/filter/cursor params. */
+  queue:
+    | QueueItem[]
+    | ((params: URLSearchParams) => QueueItem[] | Promise<QueueItem[]>)
+  /** Answered as next_cursor when the request carries no cursor (#540). */
+  queueNext?: string
   log?: ModerationLogEntry[]
+  /** The log page served for a request carrying this cursor. */
+  logPages?: Record<string, ModerationLogEntry[]>
+  logNext?: string
   results?: { ok: boolean; detail?: string }[]
   queueStatus?: number
 }
@@ -120,15 +128,28 @@ function stubBackend(backend: Backend) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const json = (status: number, body: unknown) =>
       new Response(JSON.stringify(body), { status })
-    if (url === "/api/admin/moderation/queue")
+    const params = new URL(url, "http://bff").searchParams
+    const cursor = params.get("cursor")
+    if (url.startsWith("/api/admin/moderation/queue"))
       return json(
         backend.queueStatus ?? 200,
         backend.queueStatus
           ? { detail: "Admin access required." }
-          : { items: backend.queue }
+          : {
+              items:
+                typeof backend.queue === "function"
+                  ? await backend.queue(params)
+                  : backend.queue,
+              next_cursor: cursor ? null : (backend.queueNext ?? null),
+            }
       )
     if (url.startsWith("/api/admin/moderation/log"))
-      return json(200, { entries: backend.log ?? [] })
+      return json(200, {
+        entries: cursor
+          ? (backend.logPages?.[cursor] ?? [])
+          : (backend.log ?? []),
+        next_cursor: cursor ? null : (backend.logNext ?? null),
+      })
     if (url.startsWith("/api/admin/moderation/appeals"))
       return json(200, { appeals: [] })
     const body = JSON.parse(String(init?.body))
@@ -155,10 +176,32 @@ function actionCalls(fetchMock: ReturnType<typeof stubBackend>) {
     .map(([url, init]) => ({ url, body: JSON.parse(String(init?.body)) }))
 }
 
+function queueUrls(fetchMock: ReturnType<typeof stubBackend>) {
+  return fetchMock.mock.calls
+    .map(([url]) => url)
+    .filter((url) => url.startsWith("/api/admin/moderation/queue"))
+}
+
 function queueCalls(fetchMock: ReturnType<typeof stubBackend>) {
-  return fetchMock.mock.calls.filter(
-    ([url]) => url === "/api/admin/moderation/queue"
-  ).length
+  return queueUrls(fetchMock).length
+}
+
+function logEntry(
+  overrides: Partial<ModerationLogEntry> = {}
+): ModerationLogEntry {
+  return {
+    id: "l1",
+    actor_id: "admin-1",
+    actor_name: null,
+    action: "ban",
+    target_type: "user",
+    target_id: "u2",
+    target_label: null,
+    reason: null,
+    details: {},
+    created_at: "2026-09-20T12:00:00Z",
+    ...overrides,
+  }
 }
 
 async function rowFor(title: string) {
@@ -365,16 +408,11 @@ describe("ModerationDashboard", () => {
     stubBackend({
       queue: [],
       log: [
-        {
-          id: "l1",
-          actor_id: "admin-1",
+        logEntry({
           action: "unpublish",
           target_type: "video",
           target_id: "v1",
-          reason: null,
-          details: {},
-          created_at: "2026-09-20T12:00:00Z",
-        },
+        }),
       ],
     })
     render(<ModerationDashboard accessToken="tok" />)
@@ -655,58 +693,210 @@ describe("ModerationDashboard", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent("Song B")
   })
 
-  it("sorts by severity or recency and filters by source and category", async () => {
-    stubBackend({ queue: [SONG_A, SONG_B, SONG_C] })
+  it("asks the server for the chosen sort and filters, and shows its answer (#540)", async () => {
+    const fetchMock = stubBackend({
+      queue: (params) =>
+        params.get("source") === "automated" ? [SONG_C] : [SONG_A, SONG_B],
+    })
     render(<ModerationDashboard accessToken="tok" />)
     await rowFor("Song A")
-    expect(renderedTitles()).toEqual([
-      expect.stringContaining("Song A"),
-      expect.stringContaining("Song B"),
-      expect.stringContaining("Song C"),
-    ])
 
     await userEvent.selectOptions(screen.getByLabelText("Sort by"), "newest")
-    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual([
-      "Song B",
-      "Song C",
-      "Song A",
-    ])
-
-    await userEvent.selectOptions(screen.getByLabelText("Sort by"), "severity")
-    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual([
-      "Song B",
-      "Song C",
-      "Song A",
-    ])
-
     await userEvent.selectOptions(screen.getByLabelText("Source"), "automated")
-    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual([
-      "Song B",
-      "Song C",
-    ])
+    await rowFor("Song C")
+    expect(screen.queryByText("Song A")).not.toBeInTheDocument()
 
-    await userEvent.selectOptions(screen.getByLabelText("Source"), "all")
     await userEvent.selectOptions(
       screen.getByLabelText("Category"),
       "copyright"
     )
-    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual(["Song A"])
+    await waitFor(() =>
+      expect(queueUrls(fetchMock).at(-1)).toBe(
+        "/api/admin/moderation/queue?sort=newest&source=automated&category=copyright"
+      )
+    )
   })
 
-  it("shows the activity log with each action's target and reason (AC5)", async () => {
+  it("says nothing matches when a filtered queue comes back empty", async () => {
+    stubBackend({
+      queue: (params) => (params.get("category") === "all" ? [SONG_A] : []),
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+
+    await userEvent.selectOptions(screen.getByLabelText("Category"), "spam")
+
+    expect(
+      await screen.findByText("Nothing matches these filters.")
+    ).toBeInTheDocument()
+  })
+
+  it("appends the next queue page on Load more, then hides the button (#540)", async () => {
+    const fetchMock = stubBackend({
+      queue: (params) => (params.get("cursor") === "q2" ? [SONG_C] : [SONG_A]),
+      queueNext: "q2",
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }))
+
+    await rowFor("Song C")
+    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual([
+      "Song A",
+      "Song C",
+    ])
+    expect(queueUrls(fetchMock).at(-1)).toContain("cursor=q2")
+    expect(
+      screen.queryByRole("button", { name: "Load more" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("hides the previous rows while a new filter loads (#540)", async () => {
+    stubBackend({
+      queue: (params) =>
+        params.get("source") === "automated"
+          ? new Promise<QueueItem[]>(() => {})
+          : [SONG_A],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await userEvent.click(within(await rowFor("Song A")).getByRole("checkbox"))
+
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "automated")
+
+    expect(await screen.findByText("Loading queue...")).toBeInTheDocument()
+    expect(screen.queryByText("Song A")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("toolbar", { name: "Bulk actions" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("drops a Load more page that lands after the filters changed (#540)", async () => {
+    let releaseLate: (items: QueueItem[]) => void = () => {}
+    stubBackend({
+      queue: (params) => {
+        if (params.get("cursor") === "q2")
+          return new Promise((resolve) => {
+            releaseLate = resolve
+          })
+        return params.get("source") === "automated" ? [SONG_C] : [SONG_A]
+      },
+      queueNext: "q2",
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }))
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "automated")
+    await rowFor("Song C")
+    releaseLate([SONG_B])
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByText("Song B")).not.toBeInTheDocument()
+    expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual(["Song C"])
+  })
+
+  it("keeps Load more and the filters disabled until the post-action reload lands (#540)", async () => {
+    let reloadArmed = false
+    let reloadRequested = false
+    let releaseReload: (items: QueueItem[]) => void = () => {}
+    stubBackend({
+      queue: (params) => {
+        if (params.get("cursor")) return [SONG_C]
+        if (!reloadArmed) return [SONG_A, SONG_B]
+        reloadRequested = true
+        return new Promise((resolve) => {
+          releaseReload = resolve
+        })
+      },
+      queueNext: "q2",
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song B")
+
+    reloadArmed = true
+    await userEvent.click(
+      within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+    )
+
+    await waitFor(() => expect(reloadRequested).toBe(true))
+    expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled()
+    // A filter change here would be superseded by the reload's click-time query.
+    for (const label of ["Sort by", "Source", "Category"])
+      expect(screen.getByLabelText(label)).toBeDisabled()
+
+    releaseReload([SONG_B])
+    await waitFor(() =>
+      expect(screen.queryByText("Song A")).not.toBeInTheDocument()
+    )
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled()
+    expect(screen.getByLabelText("Sort by")).toBeEnabled()
+  })
+
+  it("reloads with the current token when it rotates mid-action (#540)", async () => {
+    const backend = stubBackend({ queue: [SONG_A, SONG_B] })
+    let releasePost: () => void = () => {}
+    const posted = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") await posted
+      return backend(url, init)
+    })
+    const { rerender } = render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song B")
+
+    await userEvent.click(
+      within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+    )
+    rerender(<ModerationDashboard accessToken="tok2" />)
+    releasePost()
+
+    await waitFor(async () =>
+      expect(
+        within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+      ).toBeEnabled()
+    )
+    expect(screen.queryByText("Loading queue...")).not.toBeInTheDocument()
+    const lastQueueGet = backend.mock.calls
+      .filter(([url]) => url.startsWith("/api/admin/moderation/queue"))
+      .at(-1)
+    expect(
+      (lastQueueGet?.[1]?.headers as Record<string, string>).authorization
+    ).toBe("Bearer tok2")
+  })
+
+  it("goes back to the first page after an action (#540)", async () => {
+    const fetchMock = stubBackend({
+      queue: (params) => (params.get("cursor") === "q2" ? [SONG_C] : [SONG_A]),
+      queueNext: "q2",
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song A")
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }))
+    await rowFor("Song C")
+
+    await userEvent.click(
+      within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+    )
+
+    await waitFor(() =>
+      expect(queueUrls(fetchMock).at(-1)).not.toContain("cursor")
+    )
+    await waitFor(() =>
+      expect(screen.queryByText("Song C")).not.toBeInTheDocument()
+    )
+  })
+
+  it("names the admin and the target in the activity log (AC5, #540)", async () => {
     const fetchMock = stubBackend({
       queue: [],
       log: [
-        {
-          id: "l1",
-          actor_id: "admin-1",
-          action: "ban",
-          target_type: "user",
-          target_id: "u2",
+        logEntry({
+          actor_name: "Ada Admin",
+          target_label: "Creator Two",
           reason: "repeat spam",
-          details: {},
-          created_at: "2026-09-20T12:00:00Z",
-        },
+        }),
       ],
     })
     render(<ModerationDashboard accessToken="tok" />)
@@ -717,8 +907,9 @@ describe("ModerationDashboard", () => {
     const row = (await screen.findByText("Banned user")).closest(
       "tr"
     ) as HTMLElement
-    expect(row).toHaveTextContent("user u2")
-    expect(row).toHaveTextContent("admin-1")
+    expect(row).toHaveTextContent("Creator Two")
+    expect(row).toHaveTextContent("Ada Admin")
+    expect(row).not.toHaveTextContent("admin-1")
     expect(row).toHaveTextContent("repeat spam")
     expect(
       fetchMock.mock.calls.some(
@@ -727,20 +918,31 @@ describe("ModerationDashboard", () => {
     ).toBe(true)
   })
 
+  it("falls back to raw ids when a log entry's admin or target is gone", async () => {
+    stubBackend({ queue: [], log: [logEntry()] })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    const row = (await screen.findByText("Banned user")).closest(
+      "tr"
+    ) as HTMLElement
+    expect(row).toHaveTextContent("user u2")
+    expect(row).toHaveTextContent("admin-1")
+  })
+
   it("labels a platform-written log entry with no actor as system (#538)", async () => {
     stubBackend({
       queue: [],
       log: [
-        {
+        logEntry({
           id: "l2",
           actor_id: null,
           action: "soundcloud_unshare_failed",
           target_type: "clip",
           target_id: "c9",
-          reason: null,
-          details: {},
-          created_at: "2026-09-20T12:00:00Z",
-        },
+        }),
       ],
     })
     render(<ModerationDashboard accessToken="tok" />)
@@ -753,6 +955,29 @@ describe("ModerationDashboard", () => {
     ) as HTMLElement
     expect(row).toHaveTextContent("clip c9")
     expect(row).toHaveTextContent("system")
+  })
+
+  it("appends older log entries on Load more (#540)", async () => {
+    const fetchMock = stubBackend({
+      queue: [],
+      log: [logEntry({ id: "l1", reason: "first page" })],
+      logNext: "g2",
+      logPages: { g2: [logEntry({ id: "l0", reason: "second page" })] },
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+    await screen.findByText("first page")
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }))
+
+    expect(await screen.findByText("second page")).toBeInTheDocument()
+    expect(screen.getByText("first page")).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === "/api/admin/moderation/log?limit=100&cursor=g2"
+      )
+    ).toBe(true)
   })
 
   it("has an Appeals tab that loads the appeals queue (US-27.4)", async () => {

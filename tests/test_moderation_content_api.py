@@ -497,6 +497,8 @@ class TestContentActionContract:
             str(target.id),
             "policy",
         )
+        # A video or artwork is labelled by the song it was made for.
+        assert entry["target_label"] == ("Rape survivor" if target_type == "voice_model" else "Song")
 
 
 def test_moderated_documents_are_never_whole_document_saved():

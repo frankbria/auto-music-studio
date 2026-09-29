@@ -5,6 +5,7 @@ approve, remove or flag clips and warn or ban users in bulk, and every action la
 the moderation log with who did it and when.
 """
 
+import base64
 import itertools
 from datetime import datetime, timedelta, timezone
 
@@ -254,6 +255,130 @@ class TestQueue:
     async def test_empty_queue(self, client, settings):
         await _clip(await _user())
         assert await _queue(client, await _admin(), settings) == []
+
+
+async def _queue_page(client, admin, settings, **params) -> dict:
+    resp = await client.get(QUEUE_URL, params=params, headers=_auth(admin, settings))
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _mixed_queue(owner) -> dict[str, str]:
+    """Clips whose order differs by sort: most reports, highest severity and newest are all different."""
+    now = datetime.now(timezone.utc)
+    reporters = [await _user() for _ in range(3)]
+    ids = {}
+    for name, category, count, hours_ago in (
+        ("three-spam", "spam", 3, 5),
+        ("one-inappropriate", "inappropriate", 1, 4),
+        ("one-copyright", "copyright", 1, 3),
+        ("one-spam-new", "spam", 1, 1),
+    ):
+        clip = await _clip(owner, title=name)
+        ids[name] = str(clip.id)
+        for reporter in reporters[:count]:
+            await _report(clip.id, category, reporter=reporter, at=now - timedelta(hours=hours_ago))
+    flagged = await _clip(owner, title="flagged", moderation_flags=["violence"])
+    await flagged.set({"created_at": now - timedelta(hours=2)})
+    ids["flagged"] = str(flagged.id)
+    return ids
+
+
+@pytest.mark.integration
+class TestQueuePaging:
+    @pytest.mark.parametrize(
+        "sort,expected",
+        [
+            ("reports", ["three-spam", "one-inappropriate", "one-copyright", "one-spam-new", "flagged"]),
+            ("severity", ["one-inappropriate", "flagged", "one-copyright", "three-spam", "one-spam-new"]),
+            ("newest", ["one-spam-new", "flagged", "one-copyright", "one-inappropriate", "three-spam"]),
+        ],
+    )
+    async def test_the_server_sorts(self, client, settings, sort, expected):
+        admin = await _admin()
+        ids = await _mixed_queue(await _user())
+
+        page = await _queue_page(client, admin, settings, sort=sort)
+
+        assert [i["clip_id"] for i in page["items"]] == [ids[name] for name in expected]
+        assert page["next_cursor"] is None
+
+    @pytest.mark.parametrize("sort", ["reports", "severity", "newest"])
+    async def test_cursor_pages_walk_every_item_once(self, client, settings, sort):
+        admin = await _admin()
+        await _mixed_queue(await _user())
+        whole = [i["target_id"] for i in (await _queue_page(client, admin, settings, sort=sort))["items"]]
+
+        seen, cursor, pages = [], None, 0
+        while True:
+            params = {"sort": sort, "limit": 2} | ({"cursor": cursor} if cursor else {})
+            page = await _queue_page(client, admin, settings, **params)
+            seen += [i["target_id"] for i in page["items"]]
+            pages += 1
+            assert pages <= 5, "the cursor never advanced"
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+
+        assert seen == whole
+        assert pages == 3
+
+    async def test_acting_on_a_page_does_not_skip_the_next(self, client, settings):
+        admin = await _admin()
+        ids = await _mixed_queue(await _user())
+        first = await _queue_page(client, admin, settings, limit=2)
+
+        await _act_on_clips(client, admin, settings, "approve", [i["clip_id"] for i in first["items"]])
+        second = await _queue_page(client, admin, settings, limit=2, cursor=first["next_cursor"])
+
+        assert [i["clip_id"] for i in second["items"]] == [ids["one-copyright"], ids["one-spam-new"]]
+
+    @pytest.mark.parametrize(
+        "params,expected",
+        [
+            ({"source": "automated"}, ["flagged"]),
+            ({"source": "report"}, ["three-spam", "one-inappropriate", "one-copyright", "one-spam-new"]),
+            ({"category": "copyright"}, ["one-copyright"]),
+            ({"category": "spam", "sort": "newest"}, ["one-spam-new", "three-spam"]),
+            ({"source": "automated", "category": "spam"}, []),
+        ],
+    )
+    async def test_the_server_filters(self, client, settings, params, expected):
+        admin = await _admin()
+        ids = await _mixed_queue(await _user())
+
+        page = await _queue_page(client, admin, settings, **params)
+
+        assert [i["clip_id"] for i in page["items"]] == [ids[name] for name in expected]
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"cursor": "not-a-cursor"},
+            {"cursor": "WzEsMl0"},  # valid base64 JSON, wrong shape
+            {"sort": "loudest"},
+            {"source": "rumour"},
+            {"category": "boring"},
+            {"limit": 0},
+            {"limit": 501},
+        ],
+    )
+    async def test_bad_params_are_422(self, client, settings, params):
+        resp = await client.get(QUEUE_URL, params=params, headers=_auth(await _admin(), settings))
+        assert resp.status_code == 422
+
+    # reports and severity keys have the same shape, so only a sort tag in the cursor tells them apart.
+    @pytest.mark.parametrize(
+        "minted,replayed", [("newest", "reports"), ("reports", "severity"), ("severity", "reports")]
+    )
+    async def test_a_cursor_from_another_sort_is_422(self, client, settings, minted, replayed):
+        admin = await _admin()
+        await _mixed_queue(await _user())
+        cursor = (await _queue_page(client, admin, settings, sort=minted, limit=1))["next_cursor"]
+
+        resp = await client.get(QUEUE_URL, params={"sort": replayed, "cursor": cursor}, headers=_auth(admin, settings))
+
+        assert resp.status_code == 422
 
 
 @pytest.mark.integration
@@ -654,6 +779,96 @@ class TestModerationLog:
 
         assert len(resp.json()["entries"]) == 2
         assert (await client.get(LOG_URL, params={"limit": 501}, headers=_auth(admin, settings))).status_code == 422
+
+    async def test_cursor_pages_walk_the_log_newest_first(self, client, settings):
+        admin = await _admin()
+        now = datetime.now(timezone.utc)
+        # Two entries share a timestamp, so the page boundary has to break the tie on id.
+        stamps = [now - timedelta(minutes=m) for m in (5, 4, 3, 3, 1)]
+        written = [
+            await ModerationLogEntry(action="warn", target_type="user", target_id=str(i), created_at=at).insert()
+            for i, at in enumerate(stamps)
+        ]
+        newest_first = sorted(written, key=lambda e: (e.created_at, e.id), reverse=True)
+
+        seen, cursor = [], None
+        while True:
+            params = {"limit": 2} | ({"cursor": cursor} if cursor else {})
+            body = (await client.get(LOG_URL, params=params, headers=_auth(admin, settings))).json()
+            seen += [e["id"] for e in body["entries"]]
+            assert len(seen) <= len(written), "the cursor never advanced"
+            cursor = body["next_cursor"]
+            if cursor is None:
+                break
+
+        assert seen == [str(e.id) for e in newest_first]
+
+    async def test_a_new_entry_does_not_shift_the_next_page(self, client, settings):
+        admin, owner = await _admin(), await _user()
+        for _ in range(3):
+            await _act_on_users(client, admin, settings, "warn", [owner.id])
+        first = (await client.get(LOG_URL, params={"limit": 2}, headers=_auth(admin, settings))).json()
+
+        await _act_on_users(client, admin, settings, "warn", [owner.id])
+        second = (
+            await client.get(
+                LOG_URL, params={"limit": 2, "cursor": first["next_cursor"]}, headers=_auth(admin, settings)
+            )
+        ).json()
+
+        assert len(second["entries"]) == 1
+        assert second["next_cursor"] is None
+        assert second["entries"][0]["id"] not in {e["id"] for e in first["entries"]}
+
+    @pytest.mark.parametrize(
+        "cursor",
+        [
+            "nope",
+            # Well-formed, but its id is not an ObjectId.
+            base64.urlsafe_b64encode(b'["log","2026-09-01T00:00:00","not-an-id"]').decode(),
+        ],
+    )
+    async def test_a_bad_cursor_is_422(self, client, settings, cursor):
+        resp = await client.get(LOG_URL, params={"cursor": cursor}, headers=_auth(await _admin(), settings))
+        assert resp.status_code == 422
+
+    async def test_entries_name_the_admin_and_the_target(self, client, settings):
+        admin = await _user(is_admin=True, display_name="Ada Admin")
+        owner = await _user(display_name="Owner Name")
+        clip = await _clip(owner, title="Night Drive")
+
+        await _act_on_clips(client, admin, settings, "flag", [clip.id])
+        await _act_on_users(client, admin, settings, "warn", [owner.id])
+        await ModerationLogEntry(
+            action="soundcloud_unshare_failed", target_type="clip", target_id=str(clip.id)
+        ).insert()
+
+        entries = (await client.get(LOG_URL, headers=_auth(admin, settings))).json()["entries"]
+
+        assert [(e["action"], e["actor_name"], e["target_label"]) for e in entries] == [
+            ("soundcloud_unshare_failed", None, "Night Drive"),
+            ("warn", "Ada Admin", "Owner Name"),
+            ("flag", "Ada Admin", "Night Drive"),
+        ]
+
+    async def test_targets_that_have_no_name_label_as_none(self, client, settings):
+        admin = await _admin()
+        await ModerationLogEntry(
+            actor_id=admin.id, action="remove", target_type="clip", target_id=str(PydanticObjectId())
+        ).insert()
+        await ModerationLogEntry(actor_id=admin.id, action="remove", target_type="clip", target_id="bad-id").insert()
+        await ModerationLogEntry(
+            actor_id=PydanticObjectId(), action="warn", target_type="user", target_id=None
+        ).insert()
+        await ModerationLogEntry(
+            actor_id=admin.id, action="update_screening_rules", target_type="screening_rules"
+        ).insert()
+
+        entries = (await client.get(LOG_URL, headers=_auth(admin, settings))).json()["entries"]
+
+        assert [e["target_label"] for e in entries] == [None, None, None, None]
+        # A deleted admin has no name.
+        assert [e["actor_name"] for e in entries] == [admin.name, None, admin.name, admin.name]
 
 
 async def _removed_clip(client, settings, owner, **fields) -> Clip:

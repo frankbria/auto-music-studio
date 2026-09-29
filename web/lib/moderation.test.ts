@@ -8,11 +8,9 @@ import {
   fetchAppeals,
   fetchModerationLog,
   fetchModerationQueue,
-  filterQueue,
   applyQueueAction,
   formatLogAction,
   parseApiTime,
-  sortQueue,
   type AppealQueueItem,
   type QueueItem,
 } from "@/lib/moderation"
@@ -54,13 +52,28 @@ afterEach(() => {
 })
 
 describe("fetchModerationQueue", () => {
-  it("GETs the admin queue with the bearer token and returns its items", async () => {
-    const fetchMock = stubFetch(200, { items: [item()] })
-    const items = await fetchModerationQueue("tok")
-    expect(items).toEqual([item()])
+  it("GETs the first page, server-sorted and unfiltered by default, with the bearer token", async () => {
+    const fetchMock = stubFetch(200, { items: [item()], next_cursor: "n1" })
+    const page = await fetchModerationQueue("tok")
+    expect(page).toEqual({ items: [item()], next_cursor: "n1" })
     const [url, opts] = fetchMock.mock.calls[0]
-    expect(url).toBe("/api/admin/moderation/queue")
+    expect(url).toBe(
+      "/api/admin/moderation/queue?sort=reports&source=all&category=all"
+    )
     expect(opts.headers.authorization).toBe("Bearer tok")
+  })
+
+  it("sends the sort, filters and cursor to the server (#540)", async () => {
+    const fetchMock = stubFetch(200, { items: [], next_cursor: null })
+    await fetchModerationQueue("tok", {
+      sort: "severity",
+      source: "automated",
+      category: "spam",
+      cursor: "a+b/c=",
+    })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/admin/moderation/queue?sort=severity&source=automated&category=spam&cursor=a%2Bb%2Fc%3D"
+    )
   })
 
   it("throws a ModerationError carrying the backend detail and status", async () => {
@@ -81,21 +94,34 @@ describe("fetchModerationQueue", () => {
 })
 
 describe("fetchModerationLog", () => {
-  it("GETs the log with a limit and returns its entries", async () => {
+  it("GETs a page of the log and returns its entries and next cursor", async () => {
     const entry = {
       id: "l1",
       actor_id: "a1",
+      actor_name: "Ada",
       action: "approve",
       target_type: "clip",
       target_id: "c1",
+      target_label: "Song",
       reason: null,
       details: {},
       created_at: "2026-09-01T00:00:00Z",
     }
-    const fetchMock = stubFetch(200, { entries: [entry] })
-    expect(await fetchModerationLog("tok", 50)).toEqual([entry])
+    const fetchMock = stubFetch(200, { entries: [entry], next_cursor: "n2" })
+    expect(await fetchModerationLog("tok")).toEqual({
+      items: [entry],
+      next_cursor: "n2",
+    })
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/admin/moderation/log?limit=50"
+      "/api/admin/moderation/log?limit=100"
+    )
+  })
+
+  it("asks for the page after a cursor (#540)", async () => {
+    const fetchMock = stubFetch(200, { entries: [], next_cursor: null })
+    await fetchModerationLog("tok", "x=")
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/admin/moderation/log?limit=100&cursor=x%3D"
     )
   })
 })
@@ -186,92 +212,6 @@ describe("applyClipAction / applyUserAction", () => {
     await expect(applyUserAction("tok", "warn", ["u2"])).rejects.toMatchObject({
       status: 422,
     })
-  })
-})
-
-describe("sortQueue", () => {
-  const a = item({
-    clip_id: "a",
-    report_count: 5,
-    severity: 1,
-    latest_at: "2026-09-01T00:00:00Z",
-  })
-  const b = item({
-    clip_id: "b",
-    report_count: 2,
-    severity: 3,
-    latest_at: "2026-09-03T00:00:00Z",
-  })
-  const c = item({
-    clip_id: "c",
-    report_count: 1,
-    severity: 3,
-    latest_at: "2026-09-02T00:00:00Z",
-  })
-
-  it("keeps the server order for report count", () => {
-    expect(sortQueue([a, b, c], "reports").map((i) => i.clip_id)).toEqual([
-      "a",
-      "b",
-      "c",
-    ])
-  })
-
-  it("orders by severity, then report count", () => {
-    expect(sortQueue([a, c, b], "severity").map((i) => i.clip_id)).toEqual([
-      "b",
-      "c",
-      "a",
-    ])
-  })
-
-  it("orders newest first", () => {
-    expect(sortQueue([a, b, c], "newest").map((i) => i.clip_id)).toEqual([
-      "b",
-      "c",
-      "a",
-    ])
-  })
-
-  it("does not mutate its input", () => {
-    const input = [a, b, c]
-    sortQueue(input, "newest")
-    expect(input.map((i) => i.clip_id)).toEqual(["a", "b", "c"])
-  })
-})
-
-describe("filterQueue", () => {
-  const reported = item({
-    clip_id: "r",
-    sources: ["report"],
-    categories: { copyright: 2 },
-  })
-  const automated = item({
-    clip_id: "x",
-    sources: ["automated"],
-    categories: {},
-    report_count: 0,
-  })
-
-  it("filters by source", () => {
-    expect(
-      filterQueue([reported, automated], "automated", "all").map(
-        (i) => i.clip_id
-      )
-    ).toEqual(["x"])
-    expect(
-      filterQueue([reported, automated], "report", "all").map((i) => i.clip_id)
-    ).toEqual(["r"])
-    expect(filterQueue([reported, automated], "all", "all")).toHaveLength(2)
-  })
-
-  it("filters by report category", () => {
-    expect(
-      filterQueue([reported, automated], "all", "copyright").map(
-        (i) => i.clip_id
-      )
-    ).toEqual(["r"])
-    expect(filterQueue([reported, automated], "all", "spam")).toEqual([])
   })
 })
 
