@@ -297,6 +297,17 @@ class TestDecideAppeal:
         assert by_id[stale["id"]]["superseded"] is True
         assert by_id[live["id"]]["superseded"] is False
 
+    async def test_a_flag_back_in_force_after_a_reversed_removal_is_not_superseded(self, client, settings):
+        owner, clip, flag_appeal = await _appealed(client, settings, action="flag")
+        await _moderate(client, settings, "remove", clip)
+        removal = (await _appeal(client, settings, owner, clip)).json()
+        assert (await _decide(client, settings, removal["id"], "reverse")).status_code == 200
+
+        [item] = await _queue(client, settings)
+
+        assert item["id"] == flag_appeal["id"]
+        assert item["superseded"] is False
+
     async def test_an_appeal_on_a_deleted_clip_is_not_marked_superseded(self, client, settings):
         _, clip, appeal = await _appealed(client, settings)
         await clip.delete()
