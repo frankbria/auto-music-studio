@@ -154,14 +154,19 @@ function unique(ids: (string | null)[]): string[] {
   return [...new Set(ids.filter((id): id is string => !!id))]
 }
 
+type FetchPage<T> = (cursor: string | null) => Promise<Page<T>>
+
 // A server-paged list: `reload` fetches the first page, `more` the next one (null
-// on the last page). A response that a newer request has superseded is dropped,
-// so a Load more that lands after a filter change can't append to the new list.
-function usePages<T>(
-  fetchPage: ((cursor: string | null) => Promise<Page<T>>) | null
-) {
-  const [rows, setRows] = useState<T[] | null>(null)
-  const [cursor, setCursor] = useState<string | null>(null)
+// on the last page). Rows belong to the fetcher that loaded them, so a new sort or
+// filter shows as loading instead of leaving the old rows up (and selectable), and
+// a response a newer request has superseded is dropped, so a Load more that lands
+// after a filter change can't append to the new list.
+function usePages<T>(fetchPage: FetchPage<T> | null) {
+  const [loaded, setLoaded] = useState<{
+    from: FetchPage<T>
+    rows: T[]
+    cursor: string | null
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const latest = useRef(0)
 
@@ -172,10 +177,11 @@ function usePages<T>(
       return fetchPage(after).then(
         (page) => {
           if (request !== latest.current) return
-          setRows((prev) =>
-            after ? [...(prev ?? []), ...page.items] : page.items
-          )
-          setCursor(page.next_cursor)
+          setLoaded((prev) => ({
+            from: fetchPage,
+            rows: after && prev ? [...prev.rows, ...page.items] : page.items,
+            cursor: page.next_cursor,
+          }))
           setError(null)
         },
         (e: unknown) => {
@@ -190,8 +196,10 @@ function usePages<T>(
     void load(null)
   }, [load])
 
+  const current = loaded?.from === fetchPage ? loaded : null
+  const cursor = current?.cursor
   return {
-    rows,
+    rows: current?.rows ?? null,
     error,
     more: cursor ? () => void load(cursor) : null,
     reload: () => load(null),

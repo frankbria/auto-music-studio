@@ -315,6 +315,7 @@ class TestQueuePaging:
             page = await _queue_page(client, admin, settings, **params)
             seen += [i["target_id"] for i in page["items"]]
             pages += 1
+            assert pages <= 5, "the cursor never advanced"
             cursor = page["next_cursor"]
             if cursor is None:
                 break
@@ -795,6 +796,7 @@ class TestModerationLog:
             params = {"limit": 2} | ({"cursor": cursor} if cursor else {})
             body = (await client.get(LOG_URL, params=params, headers=_auth(admin, settings))).json()
             seen += [e["id"] for e in body["entries"]]
+            assert len(seen) <= len(written), "the cursor never advanced"
             cursor = body["next_cursor"]
             if cursor is None:
                 break

@@ -752,6 +752,25 @@ describe("ModerationDashboard", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("hides the previous rows while a new filter loads (#540)", async () => {
+    stubBackend({
+      queue: (params) =>
+        params.get("source") === "automated"
+          ? new Promise<QueueItem[]>(() => {})
+          : [SONG_A],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await userEvent.click(within(await rowFor("Song A")).getByRole("checkbox"))
+
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "automated")
+
+    expect(await screen.findByText("Loading queue...")).toBeInTheDocument()
+    expect(screen.queryByText("Song A")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("toolbar", { name: "Bulk actions" })
+    ).not.toBeInTheDocument()
+  })
+
   it("drops a Load more page that lands after the filters changed (#540)", async () => {
     let releaseLate: (items: QueueItem[]) => void = () => {}
     stubBackend({
