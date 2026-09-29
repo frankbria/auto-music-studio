@@ -9,9 +9,9 @@ function stubBackend(isAdmin: boolean) {
     const body =
       url === "/api/users/me"
         ? { is_admin: isAdmin }
-        : url === "/api/admin/moderation/queue"
-          ? { items: [] }
-          : { entries: [] }
+        : url.startsWith("/api/admin/moderation/queue")
+          ? { items: [], next_cursor: null }
+          : { entries: [], next_cursor: null }
     return new Response(JSON.stringify(body), { status: 200 })
   })
   vi.stubGlobal("fetch", fetchMock)
@@ -36,7 +36,7 @@ describe("/admin/moderation", () => {
     ).toBeInTheDocument()
     expect(await screen.findByText("Nothing to review.")).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/admin/moderation/queue",
+      "/api/admin/moderation/queue?sort=reports&source=all&category=all",
       expect.anything()
     )
   })
