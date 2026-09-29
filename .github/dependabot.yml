@@ -13,6 +13,9 @@ updates:
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "uv"
     directory: "/"
@@ -21,6 +24,9 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -30,6 +36,9 @@ updates:
     # semver-*-days cooldowns are not supported for github-actions
     cooldown:
       default-days: 14
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "docker"
     directory: "/docker"
@@ -38,6 +47,9 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   # The platform images (#429). Dependabot only watches the directories it is told about,
   # so without these the API and web base images would never be bumped — the ACE-Step
@@ -56,6 +68,9 @@ updates:
       # the CI matrix in the same change so the image never runs a Python CI does not test.
       - dependency-name: "python"
         update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "docker"
     directory: "/web"
@@ -71,3 +86,6 @@ updates:
       # never diverge. Patch/minor moves inside the chosen line are still welcome.
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
