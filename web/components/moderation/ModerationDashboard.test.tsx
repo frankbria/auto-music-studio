@@ -833,6 +833,39 @@ describe("ModerationDashboard", () => {
     expect(screen.getByLabelText("Sort by")).toBeEnabled()
   })
 
+  it("reloads with the current token when it rotates mid-action (#540)", async () => {
+    const backend = stubBackend({ queue: [SONG_A, SONG_B] })
+    let releasePost: () => void = () => {}
+    const posted = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") await posted
+      return backend(url, init)
+    })
+    const { rerender } = render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song B")
+
+    await userEvent.click(
+      within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+    )
+    rerender(<ModerationDashboard accessToken="tok2" />)
+    releasePost()
+
+    await waitFor(async () =>
+      expect(
+        within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+      ).toBeEnabled()
+    )
+    expect(screen.queryByText("Loading queue...")).not.toBeInTheDocument()
+    const lastQueueGet = backend.mock.calls
+      .filter(([url]) => url.startsWith("/api/admin/moderation/queue"))
+      .at(-1)
+    expect(
+      (lastQueueGet?.[1]?.headers as Record<string, string>).authorization
+    ).toBe("Bearer tok2")
+  })
+
   it("goes back to the first page after an action (#540)", async () => {
     const fetchMock = stubBackend({
       queue: (params) => (params.get("cursor") === "q2" ? [SONG_C] : [SONG_A]),

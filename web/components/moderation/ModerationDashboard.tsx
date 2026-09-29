@@ -192,7 +192,12 @@ function usePages<T>(fetchPage: FetchPage<T> | null) {
     [fetchPage]
   )
 
+  // `reload` runs the newest `load`, not the one captured by the render that started
+  // an action: a token rotation or query change mid-action mounts a new fetcher, and a
+  // reload through the old one would supersede its request and strand the list loading.
+  const latestLoad = useRef(load)
   useEffect(() => {
+    latestLoad.current = load
     void load(null)
   }, [load])
 
@@ -202,7 +207,7 @@ function usePages<T>(fetchPage: FetchPage<T> | null) {
     rows: current?.rows ?? null,
     error,
     more: cursor ? () => void load(cursor) : null,
-    reload: () => load(null),
+    reload: () => latestLoad.current(null),
   }
 }
 
