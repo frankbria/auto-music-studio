@@ -12,7 +12,7 @@ and ``/users`` act on them in bulk, and every action
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, model_validator
@@ -74,11 +74,19 @@ async def get_moderation_reports(
 
 class ModerationQueueItemsResponse(BaseModel):
     items: list[moderation.QueueItem]
+    next_cursor: str | None
 
 
 @router.get("/moderation/queue", response_model=ModerationQueueItemsResponse)
-async def get_moderation_queue() -> ModerationQueueItemsResponse:
-    return ModerationQueueItemsResponse(items=await moderation.get_queue())
+async def get_moderation_queue(
+    sort: moderation.QueueSort = "reports",
+    source: Literal["all"] | moderation.QueueSource = "all",
+    category: Literal["all"] | ReportCategory = "all",
+    limit: int = Query(default=100, ge=1, le=moderation.MAX_QUEUE_LIMIT),
+    cursor: str | None = None,
+) -> ModerationQueueItemsResponse:
+    items, next_cursor = await moderation.get_queue(sort, source, category, limit, cursor)
+    return ModerationQueueItemsResponse(items=items, next_cursor=next_cursor)
 
 
 MAX_BATCH = 100
@@ -174,41 +182,18 @@ async def moderate_users(
     return UserActionResponse(results=results)
 
 
-class ModerationLogItem(BaseModel):
-    id: str
-    actor_id: str | None
-    action: str
-    target_type: str
-    target_id: str | None
-    reason: str | None
-    details: dict
-    created_at: datetime
-
-
 class ModerationLogResponse(BaseModel):
-    entries: list[ModerationLogItem]
+    entries: list[moderation.LogItem]
+    next_cursor: str | None
 
 
 @router.get("/moderation/log", response_model=ModerationLogResponse)
 async def get_moderation_log(
     limit: int = Query(default=100, ge=1, le=moderation.MAX_LOG_LIMIT),
+    cursor: str | None = None,
 ) -> ModerationLogResponse:
-    entries = await moderation.list_log(limit)
-    return ModerationLogResponse(
-        entries=[
-            ModerationLogItem(
-                id=str(e.id),
-                actor_id=str(e.actor_id) if e.actor_id else None,
-                action=e.action,
-                target_type=e.target_type,
-                target_id=e.target_id,
-                reason=e.reason,
-                details=e.details,
-                created_at=e.created_at,
-            )
-            for e in entries
-        ]
-    )
+    entries, next_cursor = await moderation.list_log(limit, cursor)
+    return ModerationLogResponse(entries=entries, next_cursor=next_cursor)
 
 
 class AppealQueueResponse(BaseModel):

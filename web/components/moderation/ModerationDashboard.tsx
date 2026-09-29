@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AppealsPanel } from "@/components/moderation/AppealsPanel"
 import { Badge } from "@/components/ui/badge"
@@ -22,12 +22,10 @@ import {
   applyUserAction,
   fetchModerationLog,
   fetchModerationQueue,
-  filterQueue,
   formatLogAction,
-  sortQueue,
   TARGET_LABELS,
   type CategoryFilter,
-  type ModerationLogEntry,
+  type Page,
   type QueueItem,
   type QueueSort,
   type QueueTarget,
@@ -45,7 +43,9 @@ import { videoStreamUrl } from "@/lib/video"
 // with per-row and bulk actions, and the activity log. Remove, Unpublish, Drop,
 // Warn and Ban go through a reason dialog; Approve and Flag are one click.
 // After any action the queue and log are refetched rather than patched locally,
-// so what the admin sees is always what the backend now holds.
+// so what the admin sees is always what the backend now holds. Both are paged by
+// the server (#540): sort and filters change what the server returns, and Load
+// more appends the page after the last row.
 
 type Pending =
   | { kind: "target"; action: TargetAction; targets: QueueTargetRef[] }
@@ -154,14 +154,49 @@ function unique(ids: (string | null)[]): string[] {
   return [...new Set(ids.filter((id): id is string => !!id))]
 }
 
-function load(token: string) {
-  return Promise.allSettled([
-    fetchModerationQueue(token),
-    fetchModerationLog(token),
-  ] as const)
-}
+// A server-paged list: `reload` fetches the first page, `more` the next one (null
+// on the last page). A response that a newer request has superseded is dropped,
+// so a Load more that lands after a filter change can't append to the new list.
+function usePages<T>(
+  fetchPage: ((cursor: string | null) => Promise<Page<T>>) | null
+) {
+  const [rows, setRows] = useState<T[] | null>(null)
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const latest = useRef(0)
 
-type Loaded = Awaited<ReturnType<typeof load>>
+  const load = useCallback(
+    (after: string | null) => {
+      if (!fetchPage) return Promise.resolve()
+      const request = ++latest.current
+      return fetchPage(after).then(
+        (page) => {
+          if (request !== latest.current) return
+          setRows((prev) =>
+            after ? [...(prev ?? []), ...page.items] : page.items
+          )
+          setCursor(page.next_cursor)
+          setError(null)
+        },
+        (e: unknown) => {
+          if (request === latest.current) setError(errorMessage(e))
+        }
+      )
+    },
+    [fetchPage]
+  )
+
+  useEffect(() => {
+    void load(null)
+  }, [load])
+
+  return {
+    rows,
+    error,
+    more: cursor ? () => void load(cursor) : null,
+    reload: () => load(null),
+  }
+}
 
 function clipLabel(item: QueueItem) {
   if (item.target_type === "clip" && item.clip_deleted) return "Clip deleted"
@@ -174,10 +209,6 @@ export function ModerationDashboard({
 }: {
   accessToken: string | null
 }) {
-  const [items, setItems] = useState<QueueItem[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [log, setLog] = useState<ModerationLogEntry[] | null>(null)
-  const [logError, setLogError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [sort, setSort] = useState<QueueSort>("reports")
   const [source, setSource] = useState<SourceFilter>("all")
@@ -187,36 +218,36 @@ export function ModerationDashboard({
   const [confirming, setConfirming] = useState<Pending | null>(null)
   const [reason, setReason] = useState("")
 
-  const apply = useCallback((loaded: Loaded) => {
-    const [queue, entries] = loaded
-    if (queue.status === "fulfilled") {
-      setItems(queue.value)
-      setLoadError(null)
-    } else setLoadError(errorMessage(queue.reason))
-    if (entries.status === "fulfilled") {
-      setLog(entries.value)
-      setLogError(null)
-    } else setLogError(errorMessage(entries.reason))
-  }, [])
-
-  useEffect(() => {
-    if (!accessToken) return
-    let active = true
-    void load(accessToken).then((loaded) => {
-      if (active) apply(loaded)
-    })
-    return () => {
-      active = false
-    }
-  }, [accessToken, apply])
-
-  const visible = useMemo(
-    () => sortQueue(filterQueue(items ?? [], source, category), sort),
-    [items, source, category, sort]
+  const queue = usePages(
+    useMemo(
+      () =>
+        accessToken
+          ? (cursor: string | null) =>
+              fetchModerationQueue(accessToken, {
+                sort,
+                source,
+                category,
+                cursor,
+              })
+          : null,
+      [accessToken, sort, source, category]
+    )
   )
+  const log = usePages(
+    useMemo(
+      () =>
+        accessToken
+          ? (cursor: string | null) => fetchModerationLog(accessToken, cursor)
+          : null,
+      [accessToken]
+    )
+  )
+  const items = queue.rows
+  const filtered = source !== "all" || category !== "all"
+
   // Bulk actions only ever touch rows the admin can currently see.
-  const chosen = visible.filter((i) => selected.has(keyOf(i)))
-  const allChosen = visible.length > 0 && chosen.length === visible.length
+  const chosen = (items ?? []).filter((i) => selected.has(keyOf(i)))
+  const allChosen = !!items?.length && chosen.length === items.length
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -228,7 +259,7 @@ export function ModerationDashboard({
   }
 
   function toggleAll() {
-    setSelected(allChosen ? new Set() : new Set(visible.map(keyOf)))
+    setSelected(allChosen ? new Set() : new Set((items ?? []).map(keyOf)))
   }
 
   function describeTarget(kind: Pending["kind"], id: string) {
@@ -273,7 +304,7 @@ export function ModerationDashboard({
     } finally {
       setBusy(false)
     }
-    apply(await load(accessToken))
+    await Promise.all([queue.reload(), log.reload()])
   }
 
   function request(pending: Pending) {
@@ -480,17 +511,20 @@ export function ModerationDashboard({
             </div>
           )}
 
-          {loadError ? (
+          {queue.error && (
             <p role="alert" className="text-sm text-destructive">
-              {loadError}
+              {queue.error}
             </p>
-          ) : items === null ? (
-            <p className="text-sm text-muted-foreground">Loading queue...</p>
-          ) : visible.length === 0 ? (
+          )}
+          {items === null ? (
+            !queue.error && (
+              <p className="text-sm text-muted-foreground">Loading queue...</p>
+            )
+          ) : items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {items.length === 0
-                ? "Nothing to review."
-                : "Nothing matches these filters."}
+              {filtered
+                ? "Nothing matches these filters."
+                : "Nothing to review."}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -516,7 +550,7 @@ export function ModerationDashboard({
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((item) => (
+                  {items.map((item) => (
                     <QueueRow
                       key={keyOf(item)}
                       item={item}
@@ -542,6 +576,7 @@ export function ModerationDashboard({
                   ))}
                 </tbody>
               </table>
+              <LoadMore onClick={queue.more} />
             </div>
           )}
         </TabsContent>
@@ -551,13 +586,16 @@ export function ModerationDashboard({
         </TabsContent>
 
         <TabsContent value="log">
-          {logError ? (
+          {log.error && (
             <p role="alert" className="text-sm text-destructive">
-              {logError}
+              {log.error}
             </p>
-          ) : log === null ? (
-            <p className="text-sm text-muted-foreground">Loading log...</p>
-          ) : log.length === 0 ? (
+          )}
+          {log.rows === null ? (
+            !log.error && (
+              <p className="text-sm text-muted-foreground">Loading log...</p>
+            )
+          ) : log.rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No moderation actions yet.
             </p>
@@ -574,7 +612,7 @@ export function ModerationDashboard({
                   </tr>
                 </thead>
                 <tbody>
-                  {log.map((entry) => (
+                  {log.rows.map((entry) => (
                     <tr key={entry.id} className="border-t border-border">
                       <td className="py-2 pr-3 whitespace-nowrap">
                         {formatTime(entry.created_at)}
@@ -582,17 +620,26 @@ export function ModerationDashboard({
                       <td className="py-2 pr-3">
                         {formatLogAction(entry.action, entry.target_type)}
                       </td>
-                      <td className="py-2 pr-3 font-mono text-xs">
-                        {entry.target_type} {entry.target_id}
+                      <td className="py-2 pr-3">
+                        {entry.target_label ?? (
+                          <span className="font-mono text-xs">
+                            {entry.target_type} {entry.target_id}
+                          </span>
+                        )}
                       </td>
-                      <td className="py-2 pr-3 font-mono text-xs">
-                        {entry.actor_id ?? "system"}
+                      <td className="py-2 pr-3">
+                        {entry.actor_name ?? (
+                          <span className="font-mono text-xs">
+                            {entry.actor_id ?? "system"}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2">{entry.reason ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              <LoadMore onClick={log.more} />
             </div>
           )}
         </TabsContent>
@@ -652,6 +699,15 @@ export function ModerationDashboard({
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+function LoadMore({ onClick }: { onClick: (() => void) | null }) {
+  if (!onClick) return null
+  return (
+    <Button size="sm" variant="outline" className="mt-3" onClick={onClick}>
+      Load more
+    </Button>
   )
 }
 

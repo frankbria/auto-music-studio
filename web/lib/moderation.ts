@@ -37,9 +37,13 @@ export type QueueItem = {
 export type ModerationLogEntry = {
   id: string
   actor_id: string | null
+  /** Resolved at read time (#540); null when the admin or target no longer exists. */
+  actor_name: string | null
   action: string
   target_type: string
-  target_id: string
+  target_id: string | null
+  /** A clip's title, a user's name, a video's or artwork's song, a voice model's name. */
+  target_label: string | null
   reason: string | null
   details: Record<string, unknown>
   created_at: string
@@ -103,22 +107,40 @@ async function request<T>(
   return json as T
 }
 
-export async function fetchModerationQueue(
-  token: string
-): Promise<QueueItem[]> {
-  return (await request<{ items: QueueItem[] }>("queue", token)).items
+/** One page of a server-paged list (#540); a null cursor means it was the last. */
+export type Page<T> = { items: T[]; next_cursor: string | null }
+
+export type QueueQuery = {
+  sort: QueueSort
+  source: SourceFilter
+  category: CategoryFilter
+  cursor?: string | null
+}
+
+export function fetchModerationQueue(
+  token: string,
+  { cursor, ...query }: QueueQuery = {
+    sort: "reports",
+    source: "all",
+    category: "all",
+  }
+): Promise<Page<QueueItem>> {
+  const params = new URLSearchParams(query)
+  if (cursor) params.set("cursor", cursor)
+  return request<Page<QueueItem>>(`queue?${params}`, token)
 }
 
 export async function fetchModerationLog(
   token: string,
-  limit = 100
-): Promise<ModerationLogEntry[]> {
-  return (
-    await request<{ entries: ModerationLogEntry[] }>(
-      `log?limit=${limit}`,
-      token
-    )
-  ).entries
+  cursor?: string | null
+): Promise<Page<ModerationLogEntry>> {
+  const params = new URLSearchParams({ limit: "100" })
+  if (cursor) params.set("cursor", cursor)
+  const page = await request<{
+    entries: ModerationLogEntry[]
+    next_cursor: string | null
+  }>(`log?${params}`, token)
+  return { items: page.entries, next_cursor: page.next_cursor }
 }
 
 function withReason(body: Record<string, unknown>, reason?: string) {
@@ -131,7 +153,7 @@ type RawResult = { ok: boolean; detail?: string | null }
 /** The backend rejects (422) a batch of more than this many ids. */
 export const MAX_BATCH = 100
 
-// "Select all" can cover the whole 500-row queue, so large selections go out as
+// "Select all" covers every loaded page of the queue, so large selections go out as
 // sequential batches. A failed batch throws; earlier batches have already applied,
 // which the caller's refetch shows.
 async function inBatches(
@@ -267,30 +289,6 @@ export async function decideAppeal(
     `appeals/${encodeURIComponent(appealId)}`,
     token,
     trimmed ? { decision, note: trimmed } : { decision }
-  )
-}
-
-/** "reports" is the server's own order (report count, severity, recency). */
-export function sortQueue(items: QueueItem[], sort: QueueSort): QueueItem[] {
-  if (sort === "reports") return items
-  const copy = [...items]
-  if (sort === "severity")
-    copy.sort(
-      (a, b) => b.severity - a.severity || b.report_count - a.report_count
-    )
-  else copy.sort((a, b) => Date.parse(b.latest_at) - Date.parse(a.latest_at))
-  return copy
-}
-
-export function filterQueue(
-  items: QueueItem[],
-  source: SourceFilter,
-  category: CategoryFilter
-): QueueItem[] {
-  return items.filter(
-    (i) =>
-      (source === "all" || i.sources.includes(source)) &&
-      (category === "all" || (i.categories[category] ?? 0) > 0)
   )
 }
 
