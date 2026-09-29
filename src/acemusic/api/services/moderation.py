@@ -103,10 +103,13 @@ _CURSORS: dict[str, TypeAdapter] = {
     "severity": _cursor("severity", int, int, NaiveDatetime, str, str),
     "newest": _cursor("newest", NaiveDatetime, str, str),
     "log": _cursor("log", NaiveDatetime, str),
+    # #543: the appeals lists, keyed on (created_at, id) like the log.
+    "appeals_oldest": _cursor("appeals_oldest", NaiveDatetime, str),
+    "appeals_newest": _cursor("appeals_newest", NaiveDatetime, str),
 }
 
 
-def _encode_cursor(kind: str, key: tuple) -> str:
+def encode_cursor(kind: str, key: tuple) -> str:
     return base64.urlsafe_b64encode(_CURSORS[kind].dump_json((kind, *key))).decode()
 
 
@@ -115,6 +118,18 @@ def _decode_cursor(kind: str, cursor: str) -> tuple:
         return _CURSORS[kind].validate_json(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))[1:]
     except ValueError:  # bad base64, bad JSON, a wrong shape and another kind's cursor are all ValueErrors
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+
+
+def after_cursor(kind: str, cursor: str | None, newest_first: bool = True) -> dict:
+    """The filter for rows past ``cursor`` in ``(created_at, _id)`` order; empty on the first page."""
+    if not cursor:
+        return {}
+    at, last_id = _decode_cursor(kind, cursor)
+    oid = coerce_object_id(last_id)
+    if oid is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+    past = "$lt" if newest_first else "$gt"
+    return {"$or": [{"created_at": {past: at}}, {"created_at": at, "_id": {past: oid}}]}
 
 
 def _queue_key(item: "QueueItem", sort: QueueSort) -> tuple:
@@ -193,7 +208,7 @@ async def get_queue(
     ]
     items.sort(key=lambda i: _queue_key(i, sort), reverse=True)
     page = items[:limit]
-    return page, _encode_cursor(sort, _queue_key(page[-1], sort)) if len(items) > limit else None
+    return page, encode_cursor(sort, _queue_key(page[-1], sort)) if len(items) > limit else None
 
 
 # ponytail: every open report and unreviewed flag is read and ranked in memory on each page;
@@ -284,7 +299,7 @@ async def act_on_clip(
             details["previous_visibility"] = clip.visibility.value
             updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
         elif action == "flag":
-            updates["content_warning"] = True
+            updates.update(content_warning=True, flagged_at=now)
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
@@ -410,15 +425,8 @@ class LogItem(BaseModel):
 
 async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem], str | None]:
     """A page of the log, newest first, plus the cursor for the next page (None on the last)."""
-    query = {}
-    if cursor:
-        at, last_id = _decode_cursor("log", cursor)
-        oid = coerce_object_id(last_id)
-        if oid is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
-        query = {"$or": [{"created_at": {"$lt": at}}, {"created_at": at, "_id": {"$lt": oid}}]}
     entries = (
-        await ModerationLogEntry.find(query)
+        await ModerationLogEntry.find(after_cursor("log", cursor))
         .sort(-ModerationLogEntry.created_at, -ModerationLogEntry.id)
         .limit(limit + 1)
         .to_list()
@@ -441,7 +449,7 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
         for e in page
     ]
     more = len(entries) > limit
-    return items, _encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
+    return items, encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
 
 
 async def _log_names(

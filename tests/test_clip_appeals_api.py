@@ -6,6 +6,7 @@ information. Each outcome records a notice for the creator and a moderation log 
 """
 
 import itertools
+from datetime import datetime
 
 import httpx
 import pytest
@@ -99,6 +100,10 @@ async def _decide(client, settings, appeal_id, decision, note=None, admin=None):
     )
 
 
+def _naive(iso: str) -> datetime:
+    return datetime.fromisoformat(iso).replace(tzinfo=None)
+
+
 async def _queue(client, settings, status=None):
     params = {"status": status} if status else {}
     resp = await client.get(APPEALS_URL, params=params, headers=_auth(await _user(is_admin=True), settings))
@@ -179,6 +184,25 @@ class TestSubmitAppeal:
         await _moderate(client, settings, "remove", clip, reason="Again")
 
         assert (await _appeal(client, settings, owner, clip)).status_code == 201
+
+    async def test_a_new_flag_is_stamped_so_the_library_can_tell_it_from_the_appealed_one(self, client, settings):
+        owner, clip, appeal = await _appealed(client, settings, action="flag")
+        assert (await _decide(client, settings, appeal["id"], "uphold")).status_code == 200
+        await _moderate(client, settings, "flag", clip, reason="Flagged again")
+
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}", headers=_auth(owner, settings))
+
+        flagged_at = _naive(resp.json()["flagged_at"])
+        assert flagged_at > _naive(appeal["created_at"])
+        assert (await _appeal(client, settings, owner, clip)).status_code == 201
+
+    async def test_an_unflagged_clip_has_no_flag_stamp(self, client, settings):
+        owner = await _user()
+        clip = await _clip(owner)
+
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}", headers=_auth(owner, settings))
+
+        assert resp.json()["flagged_at"] is None
 
     @pytest.mark.parametrize("reason", ["", "   ", "x" * 2001])
     async def test_reason_is_required_and_bounded(self, client, settings, reason):
@@ -262,6 +286,39 @@ class TestDecideAppeal:
         )
         # It can still be closed without touching the newer decision.
         assert (await _decide(client, settings, appeal["id"], "uphold")).status_code == 200
+
+    async def test_the_queue_marks_an_appeal_a_newer_decision_replaced(self, client, settings):
+        _, clip, stale = await _appealed(client, settings)
+        _, _, live = await _appealed(client, settings)
+        await _moderate(client, settings, "remove", clip, reason="Removed again")
+
+        by_id = {item["id"]: item for item in await _queue(client, settings)}
+
+        assert by_id[stale["id"]]["superseded"] is True
+        assert by_id[live["id"]]["superseded"] is False
+
+    async def test_an_appeal_on_a_deleted_clip_is_not_marked_superseded(self, client, settings):
+        _, clip, appeal = await _appealed(client, settings)
+        await clip.delete()
+
+        [item] = await _queue(client, settings)
+
+        assert item["id"] == appeal["id"]
+        assert item["clip_deleted"] is True and item["superseded"] is False
+
+    async def test_more_information_cannot_be_requested_on_a_superseded_decision(self, client, settings):
+        owner, clip, appeal = await _appealed(client, settings)
+        await _moderate(client, settings, "remove", clip, reason="Removed again")
+
+        resp = await _decide(client, settings, appeal["id"], "request_info", note="Which license?")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "A newer moderation decision has replaced the one appealed."
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+        assert (
+            await NotificationEvent.find_one({"user_id": owner.id, "event_type": "moderation_appeal_info_requested"})
+            is None
+        )
 
     async def test_reverse_clears_a_content_warning(self, client, settings):
         _, clip, appeal = await _appealed(client, settings, action="flag")
@@ -396,3 +453,61 @@ class TestAdminGate:
         assert (await client.get(APPEALS_URL, headers=headers)).status_code == 403
         resp = await client.post(f"{APPEALS_URL}/{appeal['id']}", json={"decision": "reverse"}, headers=headers)
         assert resp.status_code == 403
+
+
+@pytest.mark.integration
+class TestPagination:
+    async def test_the_open_queue_pages_oldest_first_and_survives_a_decision_between_pages(self, client, settings):
+        ids = [(await _appealed(client, settings))[2]["id"] for _ in range(3)]
+        admin = _auth(await _user(is_admin=True), settings)
+
+        first = (await client.get(APPEALS_URL, params={"limit": 2}, headers=admin)).json()
+        await _decide(client, settings, ids[0], "uphold")
+        second = await client.get(APPEALS_URL, params={"limit": 2, "cursor": first["next_cursor"]}, headers=admin)
+
+        assert [a["id"] for a in first["appeals"]] == ids[:2]
+        assert [a["id"] for a in second.json()["appeals"]] == ids[2:]
+        assert second.json()["next_cursor"] is None
+
+    async def test_all_appeals_page_newest_first(self, client, settings):
+        ids = [(await _appealed(client, settings))[2]["id"] for _ in range(3)]
+        admin = _auth(await _user(is_admin=True), settings)
+
+        first = (await client.get(APPEALS_URL, params={"status": "all", "limit": 2}, headers=admin)).json()
+        params = {"status": "all", "limit": 2, "cursor": first["next_cursor"]}
+        second = (await client.get(APPEALS_URL, params=params, headers=admin)).json()
+
+        assert [a["id"] for a in first["appeals"] + second["appeals"]] == ids[::-1]
+        assert second["next_cursor"] is None
+
+    async def test_my_appeals_page_newest_first(self, client, settings):
+        owner = await _user()
+        ids = []
+        for _ in range(3):
+            clip = await _clip(owner)
+            await _moderate(client, settings, "remove", clip)
+            ids.append((await _appeal(client, settings, owner, clip)).json()["id"])
+        headers = _auth(owner, settings)
+
+        first = (await client.get(MY_APPEALS_URL, params={"limit": 2}, headers=headers)).json()
+        second = await client.get(MY_APPEALS_URL, params={"limit": 2, "cursor": first["next_cursor"]}, headers=headers)
+
+        assert [a["id"] for a in first["appeals"] + second.json()["appeals"]] == ids[::-1]
+        assert second.json()["next_cursor"] is None
+
+    @pytest.mark.parametrize("url", [APPEALS_URL, MY_APPEALS_URL])
+    @pytest.mark.parametrize("params", [{"cursor": "not-a-cursor"}, {"limit": 0}, {"limit": 501}])
+    async def test_a_bad_cursor_or_limit_is_422(self, client, settings, url, params):
+        resp = await client.get(url, params=params, headers=_auth(await _user(is_admin=True), settings))
+
+        assert resp.status_code == 422
+
+    async def test_an_open_queue_cursor_is_rejected_by_the_all_view(self, client, settings):
+        for _ in range(2):
+            await _appealed(client, settings)
+        admin = _auth(await _user(is_admin=True), settings)
+        cursor = (await client.get(APPEALS_URL, params={"limit": 1}, headers=admin)).json()["next_cursor"]
+
+        resp = await client.get(APPEALS_URL, params={"status": "all", "cursor": cursor}, headers=admin)
+
+        assert resp.status_code == 422

@@ -185,6 +185,7 @@ class ClipResponse(BaseModel):
     is_public: bool
     visibility: VisibilityState
     content_warning: bool
+    flagged_at: datetime | None
     removed_at: datetime | None
     created_at: datetime
 
@@ -209,6 +210,7 @@ class ClipResponse(BaseModel):
             is_public=clip.is_public,
             visibility=clip.visibility,
             content_warning=clip.content_warning,
+            flagged_at=clip.flagged_at,
             removed_at=clip.removed_at,
             created_at=clip.created_at,
         )

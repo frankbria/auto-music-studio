@@ -199,11 +199,17 @@ async def get_moderation_log(
 
 class AppealQueueResponse(BaseModel):
     appeals: list[appeal_service.AppealQueueItem]
+    next_cursor: str | None
 
 
 @router.get("/moderation/appeals", response_model=AppealQueueResponse)
-async def get_appeals(status: appeal_service.QueueFilter = "open") -> AppealQueueResponse:
-    return AppealQueueResponse(appeals=await appeal_service.list_queue(status))
+async def get_appeals(
+    status: appeal_service.QueueFilter = "open",
+    limit: int = Query(default=100, ge=1, le=appeal_service.MAX_APPEALS),
+    cursor: str | None = None,
+) -> AppealQueueResponse:
+    appeals, next_cursor = await appeal_service.list_queue(status, limit, cursor)
+    return AppealQueueResponse(appeals=appeals, next_cursor=next_cursor)
 
 
 class AppealDecisionRequest(BaseModel):
