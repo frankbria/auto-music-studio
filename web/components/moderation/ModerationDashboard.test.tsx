@@ -796,6 +796,39 @@ describe("ModerationDashboard", () => {
     expect(renderedTitles().map((t) => t.slice(0, 6))).toEqual(["Song C"])
   })
 
+  it("keeps Load more disabled until the post-action reload lands (#540)", async () => {
+    let reloadArmed = false
+    let reloadRequested = false
+    let releaseReload: (items: QueueItem[]) => void = () => {}
+    stubBackend({
+      queue: (params) => {
+        if (params.get("cursor")) return [SONG_C]
+        if (!reloadArmed) return [SONG_A, SONG_B]
+        reloadRequested = true
+        return new Promise((resolve) => {
+          releaseReload = resolve
+        })
+      },
+      queueNext: "q2",
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await rowFor("Song B")
+
+    reloadArmed = true
+    await userEvent.click(
+      within(await rowFor("Song A")).getByRole("button", { name: "Approve" })
+    )
+
+    await waitFor(() => expect(reloadRequested).toBe(true))
+    expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled()
+
+    releaseReload([SONG_B])
+    await waitFor(() =>
+      expect(screen.queryByText("Song A")).not.toBeInTheDocument()
+    )
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled()
+  })
+
   it("goes back to the first page after an action (#540)", async () => {
     const fetchMock = stubBackend({
       queue: (params) => (params.get("cursor") === "q2" ? [SONG_C] : [SONG_A]),

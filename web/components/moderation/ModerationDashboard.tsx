@@ -309,10 +309,11 @@ export function ModerationDashboard({
       setSelected(new Set())
     } catch (error) {
       setNotice({ status: null, failures: [errorMessage(error)] })
-    } finally {
-      setBusy(false)
     }
+    // Stay busy until the reload lands: a Load more clicked meanwhile would supersede
+    // it and leave the pre-action rows up, still actionable. reload() never rejects.
     await Promise.all([queue.reload(), log.reload()])
+    setBusy(false)
   }
 
   function request(pending: Pending) {
@@ -584,7 +585,7 @@ export function ModerationDashboard({
                   ))}
                 </tbody>
               </table>
-              <LoadMore onClick={queue.more} />
+              <LoadMore onClick={queue.more} disabled={busy} />
             </div>
           )}
         </TabsContent>
@@ -647,7 +648,7 @@ export function ModerationDashboard({
                   ))}
                 </tbody>
               </table>
-              <LoadMore onClick={log.more} />
+              <LoadMore onClick={log.more} disabled={busy} />
             </div>
           )}
         </TabsContent>
@@ -710,10 +711,22 @@ export function ModerationDashboard({
   )
 }
 
-function LoadMore({ onClick }: { onClick: (() => void) | null }) {
+function LoadMore({
+  onClick,
+  disabled,
+}: {
+  onClick: (() => void) | null
+  disabled: boolean
+}) {
   if (!onClick) return null
   return (
-    <Button size="sm" variant="outline" className="mt-3" onClick={onClick}>
+    <Button
+      size="sm"
+      variant="outline"
+      className="mt-3"
+      disabled={disabled}
+      onClick={onClick}
+    >
       Load more
     </Button>
   )
