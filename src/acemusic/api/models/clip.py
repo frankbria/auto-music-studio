@@ -34,6 +34,8 @@ class Clip(Document):
     moderation_reviewed_at: datetime | None = None
     #: US-27.3: an admin kept the clip up but labelled it for listeners.
     content_warning: bool = False
+    #: #543: when the latest flag landed, so the owner's Library can tell a re-flag from the flag it appealed.
+    flagged_at: datetime | None = None
     #: US-27.3: taken down by moderation. Forced private, and the owner cannot make it public again.
     removed_at: datetime | None = None
     vocal_language: str | None = None

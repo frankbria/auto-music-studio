@@ -9,7 +9,7 @@ on an open appeal, so two admins deciding at once cannot both win.
 from datetime import datetime
 from typing import Literal
 
-from beanie import PydanticObjectId, UpdateResponse
+from beanie import PydanticObjectId, SortDirection, UpdateResponse
 from beanie.operators import In
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -29,12 +29,13 @@ from ..models.clip_appeal import AppealedAction
 from ..models.common import utcnow
 from .clips import get_owned_clip
 from .common import coerce_object_id
-from .moderation import log_action
+from .moderation import after_cursor, encode_cursor, log_action
 
 AppealDecision = Literal["uphold", "reverse", "request_info"]
 QueueFilter = Literal["open", "all"]
 
 MAX_APPEALS = 500
+_SUPERSEDED = "A newer moderation decision has replaced the one appealed."
 _DECISION_STATUS: dict[AppealDecision, AppealStatus] = {
     "uphold": "upheld",
     "reverse": "reversed",
@@ -75,6 +76,8 @@ class AppealQueueItem(AppealView):
     creator_name: str | None
     action_reason: str | None
     action_at: datetime | None
+    # #543: a newer moderation decision replaced the appealed one, so only upholding (closing) it is left.
+    superseded: bool
 
 
 async def submit_appeal(clip_id: str, user_id: str, reason: str, context: str | None) -> ClipAppeal:
@@ -97,19 +100,45 @@ async def submit_appeal(clip_id: str, user_id: str, reason: str, context: str | 
     return appeal
 
 
+def _in_force_kind(clip: Clip) -> AppealedAction | None:
+    if clip.removed_at is not None:
+        return "remove"
+    return "flag" if clip.content_warning else None
+
+
 async def _appealable_action(clip: Clip) -> ModerationLogEntry | None:
     """The decision currently in force on the clip: its latest removal, else its latest flag."""
-    if clip.removed_at is not None:
-        action = "remove"
-    elif clip.content_warning:
-        action = "flag"
-    else:
+    action = _in_force_kind(clip)
+    if action is None:
         return None
     return (
         await ModerationLogEntry.find({"target_type": "clip", "target_id": str(clip.id), "action": action})
         .sort(-ModerationLogEntry.created_at, -ModerationLogEntry.id)
         .first_or_none()
     )
+
+
+async def _in_force_actions(clips: list[Clip]) -> dict[PydanticObjectId, PydanticObjectId]:
+    """Each clip's in-force decision id (see ``_appealable_action``), in one read; clips with none are absent."""
+    kinds = {str(c.id): _in_force_kind(c) for c in clips}
+    ids = [clip_id for clip_id, kind in kinds.items() if kind]
+    entries = (
+        await ModerationLogEntry.find(
+            {"target_type": "clip", "target_id": {"$in": ids}, "action": {"$in": ["remove", "flag"]}}
+        )
+        .sort(-ModerationLogEntry.created_at, -ModerationLogEntry.id)
+        .to_list()
+    )
+    latest: dict[PydanticObjectId, PydanticObjectId] = {}
+    for entry in entries:
+        clip_id = PydanticObjectId(entry.target_id)
+        if entry.action == kinds[entry.target_id] and clip_id not in latest:
+            latest[clip_id] = entry.id
+    return latest
+
+
+def _is_superseded(clip: Clip | None, appeal: ClipAppeal, in_force_id: PydanticObjectId | None) -> bool:
+    return clip is not None and in_force_id != appeal.action_id
 
 
 async def answer_info_request(clip_id: str, user_id: str, context: str) -> ClipAppeal:
@@ -134,28 +163,37 @@ async def answer_info_request(clip_id: str, user_id: str, context: str) -> ClipA
     return appeal
 
 
-async def list_user_appeals(user_id: str) -> list[ClipAppeal]:
-    return (
-        await ClipAppeal.find({"user_id": PydanticObjectId(user_id)})
-        .sort(-ClipAppeal.created_at)
-        .limit(MAX_APPEALS)
+async def _page(query: dict, newest_first: bool, limit: int, cursor: str | None) -> tuple[list[ClipAppeal], str | None]:
+    """A keyset page of appeals in ``(created_at, _id)`` order, plus the cursor for the next (None on the last)."""
+    kind = "appeals_newest" if newest_first else "appeals_oldest"
+    direction = SortDirection.DESCENDING if newest_first else SortDirection.ASCENDING
+    rows = (
+        await ClipAppeal.find(query, after_cursor(kind, cursor, newest_first))
+        .sort([("created_at", direction), ("_id", direction)])
+        .limit(limit + 1)
         .to_list()
     )
+    page = rows[:limit]
+    return page, encode_cursor(kind, (page[-1].created_at, str(page[-1].id))) if len(rows) > limit else None
 
 
-async def list_queue(which: QueueFilter) -> list[AppealQueueItem]:
+async def list_user_appeals(user_id: str, limit: int, cursor: str | None) -> tuple[list[ClipAppeal], str | None]:
+    return await _page({"user_id": PydanticObjectId(user_id)}, True, limit, cursor)
+
+
+async def list_queue(which: QueueFilter, limit: int, cursor: str | None) -> tuple[list[AppealQueueItem], str | None]:
     """Open appeals oldest first (first come, first served); ``all`` is newest first."""
     if which == "open":
-        query = ClipAppeal.find(In(ClipAppeal.status, list(OPEN_APPEAL_STATUSES))).sort(+ClipAppeal.created_at)
+        appeals, next_cursor = await _page({"status": {"$in": list(OPEN_APPEAL_STATUSES)}}, False, limit, cursor)
     else:
-        query = ClipAppeal.find_all().sort(-ClipAppeal.created_at)
-    appeals = await query.limit(MAX_APPEALS).to_list()
+        appeals, next_cursor = await _page({}, True, limit, cursor)
     clips = {c.id: c for c in await Clip.find(In(Clip.id, [a.clip_id for a in appeals])).to_list()}
     users = {u.id: u for u in await User.find(In(User.id, list({a.user_id for a in appeals}))).to_list()}
     actions = {
         e.id: e
         for e in await ModerationLogEntry.find(In(ModerationLogEntry.id, [a.action_id for a in appeals])).to_list()
     }
+    in_force = await _in_force_actions(list(clips.values()))
     items = []
     for appeal in appeals:
         clip, creator, action = clips.get(appeal.clip_id), users.get(appeal.user_id), actions.get(appeal.action_id)
@@ -168,23 +206,26 @@ async def list_queue(which: QueueFilter) -> list[AppealQueueItem]:
                 creator_name=(creator.display_name or creator.name or creator.email) if creator else None,
                 action_reason=action.reason if action else None,
                 action_at=action.created_at if action else None,
+                superseded=_is_superseded(clip, appeal, in_force.get(appeal.clip_id)),
             )
         )
-    return items
+    return items, next_cursor
 
 
 async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: str | None) -> ClipAppeal:
-    """404 unknown appeal, 409 already upheld or reversed, or (reverse) a newer decision replaced it."""
+    """404 unknown appeal, 409 already upheld or reversed, or a newer decision replaced it.
+
+    A superseded appeal can still be upheld, which closes it: reversing it would undo the newer decision, and
+    asking the creator for more about a decision no longer in force goes nowhere.
+    """
     oid = coerce_object_id(appeal_id)
     existing = await ClipAppeal.get(oid) if oid is not None else None
     if existing is None:
         raise _appeal_not_found()
     clip = await Clip.get(existing.clip_id)
     in_force = await _appealable_action(clip) if clip is not None else None
-    if decision == "reverse" and clip is not None and (in_force is None or in_force.id != existing.action_id):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="A newer moderation decision has replaced the one appealed."
-        )
+    if decision != "uphold" and _is_superseded(clip, existing, in_force.id if in_force else None):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
 
     new_status = _DECISION_STATUS[decision]
     updates: dict = {"status": new_status, "admin_note": note}
