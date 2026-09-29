@@ -30,6 +30,7 @@ from ..models import (
     Job,
     ModerationLogEntry,
     NotificationEvent,
+    ReportCategory,
     User,
     Video,
     VisibilityState,
@@ -91,7 +92,8 @@ class QueueItem(BaseModel):
 # Keyset cursors (#540): the last row's sort key, so a page boundary survives rows being acted
 # on (the queue shrinks) or logged (the log grows at the head) between requests. Each cursor
 # leads with its kind: a reports key and a severity key have the same shape, and replaying
-# one under the other sort would silently skip or repeat rows instead of failing.
+# one under the other sort would silently skip or repeat rows instead of failing. Times are
+# NaiveDatetime because pymongo hands back naive UTC, and the keys are built from what it read.
 def _cursor(kind: str, *key: type) -> TypeAdapter:
     return TypeAdapter(tuple[(Literal[kind], *key)], config=ConfigDict(strict=True))
 
@@ -132,7 +134,7 @@ class ActionResult(BaseModel):
 async def get_queue(
     sort: QueueSort = "reports",
     source: Literal["all"] | QueueSource = "all",
-    category: str = "all",
+    category: Literal["all"] | ReportCategory = "all",
     limit: int = 100,
     cursor: str | None = None,
 ) -> tuple[list[QueueItem], str | None]:
@@ -455,10 +457,12 @@ async def _log_names(
     async def load(document: type, ids: set[PydanticObjectId]) -> dict:
         return {d.id: d for d in await document.find(In(document.id, list(ids))).to_list()} if ids else {}
 
-    users = await load(User, {e.actor_id for e in entries if e.actor_id} | targets.get("user", set()))
-    videos = await load(Video, targets.get("video", set()))
-    artwork = await load(ArtworkOption, targets.get("artwork", set()))
-    voices = await load(VoiceModel, targets.get("voice_model", set()))
+    users, videos, artwork, voices = await asyncio.gather(
+        load(User, {e.actor_id for e in entries if e.actor_id} | targets.get("user", set())),
+        load(Video, targets.get("video", set())),
+        load(ArtworkOption, targets.get("artwork", set())),
+        load(VoiceModel, targets.get("voice_model", set())),
+    )
     songs = {d.id: d.clip_id for d in [*videos.values(), *artwork.values()]}
     clips = await load(Clip, targets.get("clip", set()) | set(songs.values()))
 
