@@ -89,24 +89,29 @@ class QueueItem(BaseModel):
 
 
 # Keyset cursors (#540): the last row's sort key, so a page boundary survives rows being acted
-# on (the queue shrinks) or logged (the log grows at the head) between requests.
-_RANK = tuple[int, int, NaiveDatetime, str, str]
+# on (the queue shrinks) or logged (the log grows at the head) between requests. Each cursor
+# leads with its kind: a reports key and a severity key have the same shape, and replaying
+# one under the other sort would silently skip or repeat rows instead of failing.
+def _cursor(kind: str, *key: type) -> TypeAdapter:
+    return TypeAdapter(tuple[(Literal[kind], *key)], config=ConfigDict(strict=True))
+
+
 _CURSORS: dict[str, TypeAdapter] = {
-    "reports": TypeAdapter(_RANK, config=ConfigDict(strict=True)),
-    "severity": TypeAdapter(_RANK, config=ConfigDict(strict=True)),
-    "newest": TypeAdapter(tuple[NaiveDatetime, str, str], config=ConfigDict(strict=True)),
-    "log": TypeAdapter(tuple[NaiveDatetime, str], config=ConfigDict(strict=True)),
+    "reports": _cursor("reports", int, int, NaiveDatetime, str, str),
+    "severity": _cursor("severity", int, int, NaiveDatetime, str, str),
+    "newest": _cursor("newest", NaiveDatetime, str, str),
+    "log": _cursor("log", NaiveDatetime, str),
 }
 
 
 def _encode_cursor(kind: str, key: tuple) -> str:
-    return base64.urlsafe_b64encode(_CURSORS[kind].dump_json(key)).decode()
+    return base64.urlsafe_b64encode(_CURSORS[kind].dump_json((kind, *key))).decode()
 
 
 def _decode_cursor(kind: str, cursor: str) -> tuple:
     try:
-        return _CURSORS[kind].validate_json(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-    except ValueError:  # bad base64, bad JSON and a wrong shape are all ValueErrors
+        return _CURSORS[kind].validate_json(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))[1:]
+    except ValueError:  # bad base64, bad JSON, a wrong shape and another kind's cursor are all ValueErrors
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
 
 

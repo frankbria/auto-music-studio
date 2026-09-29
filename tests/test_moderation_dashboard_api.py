@@ -5,6 +5,7 @@ approve, remove or flag clips and warn or ban users in bulk, and every action la
 the moderation log with who did it and when.
 """
 
+import base64
 import itertools
 from datetime import datetime, timedelta, timezone
 
@@ -365,12 +366,16 @@ class TestQueuePaging:
         resp = await client.get(QUEUE_URL, params=params, headers=_auth(await _admin(), settings))
         assert resp.status_code == 422
 
-    async def test_a_cursor_from_another_sort_is_422(self, client, settings):
+    # reports and severity keys have the same shape, so only a sort tag in the cursor tells them apart.
+    @pytest.mark.parametrize(
+        "minted,replayed", [("newest", "reports"), ("reports", "severity"), ("severity", "reports")]
+    )
+    async def test_a_cursor_from_another_sort_is_422(self, client, settings, minted, replayed):
         admin = await _admin()
         await _mixed_queue(await _user())
-        cursor = (await _queue_page(client, admin, settings, sort="newest", limit=1))["next_cursor"]
+        cursor = (await _queue_page(client, admin, settings, sort=minted, limit=1))["next_cursor"]
 
-        resp = await client.get(QUEUE_URL, params={"sort": "reports", "cursor": cursor}, headers=_auth(admin, settings))
+        resp = await client.get(QUEUE_URL, params={"sort": replayed, "cursor": cursor}, headers=_auth(admin, settings))
 
         assert resp.status_code == 422
 
@@ -813,8 +818,16 @@ class TestModerationLog:
         assert second["next_cursor"] is None
         assert second["entries"][0]["id"] not in {e["id"] for e in first["entries"]}
 
-    async def test_a_bad_cursor_is_422(self, client, settings):
-        resp = await client.get(LOG_URL, params={"cursor": "nope"}, headers=_auth(await _admin(), settings))
+    @pytest.mark.parametrize(
+        "cursor",
+        [
+            "nope",
+            # Well-formed, but its id is not an ObjectId.
+            base64.urlsafe_b64encode(b'["log","2026-09-01T00:00:00","not-an-id"]').decode(),
+        ],
+    )
+    async def test_a_bad_cursor_is_422(self, client, settings, cursor):
+        resp = await client.get(LOG_URL, params={"cursor": cursor}, headers=_auth(await _admin(), settings))
         assert resp.status_code == 422
 
     async def test_entries_name_the_admin_and_the_target(self, client, settings):
