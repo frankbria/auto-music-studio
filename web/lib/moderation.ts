@@ -261,6 +261,8 @@ export type AppealQueueItem = AppealView & {
   creator_name: string | null
   action_reason: string | null
   action_at: string | null
+  /** A newer moderation decision replaced the appealed one (#543); it can only be upheld. */
+  superseded: boolean
 }
 
 export type AppealStatusFilter = "open" | "all"
@@ -268,14 +270,16 @@ export type AppealDecision = "uphold" | "reverse" | "request_info"
 
 export async function fetchAppeals(
   token: string,
-  status: AppealStatusFilter = "open"
-): Promise<AppealQueueItem[]> {
-  return (
-    await request<{ appeals: AppealQueueItem[] }>(
-      `appeals?status=${status}`,
-      token
-    )
-  ).appeals
+  status: AppealStatusFilter = "open",
+  cursor?: string | null
+): Promise<Page<AppealQueueItem>> {
+  const params = new URLSearchParams({ status })
+  if (cursor) params.set("cursor", cursor)
+  const page = await request<{
+    appeals: AppealQueueItem[]
+    next_cursor: string | null
+  }>(`appeals?${params}`, token)
+  return { items: page.appeals, next_cursor: page.next_cursor }
 }
 
 export async function decideAppeal(

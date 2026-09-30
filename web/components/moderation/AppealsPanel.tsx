@@ -1,6 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useMemo, useState } from "react"
+
+import { LoadMore, usePages } from "@/components/moderation/paging"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -25,7 +27,8 @@ import {
 
 // Admin appeals queue (US-27.4): open (default) or all appeals against a
 // removal/flag decision, with Uphold / Reverse / Request info actions. Every
-// decision refetches the list rather than patching it locally.
+// decision refetches the list rather than patching it locally. Paged by the
+// server (#543); an appeal a newer decision superseded can only be upheld.
 
 const ACTION_LABEL: Record<AppealQueueItem["action"], string> = {
   remove: "Removed",
@@ -90,26 +93,25 @@ type Confirming = { appeal: AppealQueueItem; decision: AppealDecision }
 
 export function AppealsPanel({ accessToken }: { accessToken: string | null }) {
   const [status, setStatus] = useState<AppealStatusFilter>("open")
-  const [appeals, setAppeals] = useState<AppealQueueItem[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<Confirming | null>(null)
   const [note, setNote] = useState("")
 
-  const load = useCallback(() => {
-    if (!accessToken) return
-    void fetchAppeals(accessToken, status)
-      .then((next) => {
-        setAppeals(next)
-        setLoadError(null)
-      })
-      .catch((error) => setLoadError(errorMessage(error)))
-  }, [accessToken, status])
-
-  useEffect(() => {
-    load()
-  }, [load])
+  const {
+    rows: appeals,
+    error: loadError,
+    more,
+    reload,
+  } = usePages(
+    useMemo(
+      () =>
+        accessToken
+          ? (cursor: string | null) => fetchAppeals(accessToken, status, cursor)
+          : null,
+      [accessToken, status]
+    )
+  )
 
   function openDecision(appeal: AppealQueueItem, decision: AppealDecision) {
     setNote("")
@@ -130,7 +132,7 @@ export function AppealsPanel({ accessToken }: { accessToken: string | null }) {
     } finally {
       setBusy(false)
     }
-    load()
+    reload()
   }
 
   const copy = confirming ? DECISION_COPY[confirming.decision] : undefined
@@ -165,77 +167,95 @@ export function AppealsPanel({ accessToken }: { accessToken: string | null }) {
       ) : appeals.length === 0 ? (
         <p className="text-sm text-muted-foreground">No appeals to review.</p>
       ) : (
-        <div className="flex flex-col gap-3">
-          {appeals.map((item) => {
-            const open = item.decided_at === null
-            return (
-              <div
-                key={item.id}
-                className="flex flex-col gap-2 rounded-lg border border-border p-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-medium">{clipLabel(item)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {item.creator_name ?? "-"}
-                    </span>
+        <div>
+          <div className="flex flex-col gap-3">
+            {appeals.map((item) => {
+              const open = item.decided_at === null
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col gap-2 rounded-lg border border-border p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-medium">{clipLabel(item)}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {item.creator_name ?? "-"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Badge variant="destructive">
+                        {ACTION_LABEL[item.action]}
+                      </Badge>
+                      <Badge variant="outline">
+                        {STATUS_LABEL[item.status]}
+                      </Badge>
+                      {open && item.superseded && (
+                        <Badge variant="secondary">Superseded</Badge>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Badge variant="destructive">
-                      {ACTION_LABEL[item.action]}
-                    </Badge>
-                    <Badge variant="outline">{STATUS_LABEL[item.status]}</Badge>
-                  </div>
+                  {open && item.superseded && (
+                    <p className="text-xs text-muted-foreground">
+                      A newer moderation decision replaced this one. Uphold to
+                      close the appeal.
+                    </p>
+                  )}
+                  {item.action_reason && (
+                    <p className="text-xs text-muted-foreground">
+                      Moderation reason: {item.action_reason}
+                    </p>
+                  )}
+                  <p className="text-sm">{item.reason}</p>
+                  {item.context && (
+                    <p className="text-sm text-muted-foreground">
+                      Context: {item.context}
+                    </p>
+                  )}
+                  {item.admin_note && (
+                    <p className="text-xs text-muted-foreground italic">
+                      Admin note: {item.admin_note}
+                    </p>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    Submitted {formatTime(item.created_at)}
+                  </span>
+                  {open && (
+                    <div className="flex flex-wrap gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => openDecision(item, "uphold")}
+                      >
+                        Uphold
+                      </Button>
+                      {!item.superseded && (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => openDecision(item, "reverse")}
+                          >
+                            Reverse
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => openDecision(item, "request_info")}
+                          >
+                            Request info
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {item.action_reason && (
-                  <p className="text-xs text-muted-foreground">
-                    Moderation reason: {item.action_reason}
-                  </p>
-                )}
-                <p className="text-sm">{item.reason}</p>
-                {item.context && (
-                  <p className="text-sm text-muted-foreground">
-                    Context: {item.context}
-                  </p>
-                )}
-                {item.admin_note && (
-                  <p className="text-xs text-muted-foreground italic">
-                    Admin note: {item.admin_note}
-                  </p>
-                )}
-                <span className="text-xs text-muted-foreground">
-                  Submitted {formatTime(item.created_at)}
-                </span>
-                {open && (
-                  <div className="flex flex-wrap gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => openDecision(item, "uphold")}
-                    >
-                      Uphold
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => openDecision(item, "reverse")}
-                    >
-                      Reverse
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => openDecision(item, "request_info")}
-                    >
-                      Request info
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
+          <LoadMore onClick={more} disabled={busy} />
         </div>
       )}
 

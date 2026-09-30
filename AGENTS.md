@@ -369,9 +369,13 @@ Package manager: `uv` with `hatchling` build backend
 - **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip
   (its latest `remove`, else its latest `flag`), and the unique `ClipAppeal.action_id` is the one-appeal-per-decision
   rule (409). A removal's log entry records `details.previous_visibility`, and reversing it restores that
-  visibility. Reversing a superseded decision is a 409. Owner routes are `POST/PATCH /clips/{id}/appeal` and
-  `GET /users/me/appeals`; admin routes are `/admin/moderation/appeals`. The web Library `ClipCard` shows appeal UI
-  only when passed an `appeal` prop. Outcomes are `NotificationEvent(moderation_appeal_*)`
+  visibility. An appeal whose decision a newer one replaced is `superseded` in the admin queue (#543): `reverse` and
+  `request_info` are a 409, and `uphold` closes it. Owner routes are `POST/PATCH /clips/{id}/appeal` and
+  `GET /users/me/appeals`; admin routes are `/admin/moderation/appeals`. Both lists are keyset-paged like the
+  moderation log (`limit`/`cursor`/`next_cursor`, #543). The web Library `ClipCard` shows appeal UI
+  only when passed an `appeal` prop. It compares the appeal's `created_at` with `Clip.removed_at`/`Clip.flagged_at`
+  (restamped by each removal or flag) to tell a new decision from the appealed one. `useMyAppeals` refetches when a
+  new `moderation` notice reaches the inbox store. Outcomes are `NotificationEvent(moderation_appeal_*)`
 - **Notification inbox (#537)**: `services/notifications.py` behind `GET /api/v1/users/me/notifications`
   (newest first, `limit`/`offset`, global `unread_count`) and `POST /api/v1/users/me/notifications/read`
   (`ids`, or all). Reading a notice sets `NotificationEvent.delivered_at`. Every writer (moderation, appeals,
