@@ -41,12 +41,17 @@ export function ClipAppealStatus({
   clip,
   appeal,
 }: {
-  clip: Pick<Clip, "id" | "removed_at" | "content_warning">
+  clip: Pick<Clip, "id" | "removed_at" | "content_warning" | "flagged_at">
   /** The caller's latest appeal against this clip's current (or most recent) decision. */
   appeal: AppealView | null
 }) {
   const auth = useContext(AuthContext)
-  const [override, setOverride] = useState<AppealView | null>(null)
+  // What this card last submitted, and the `appeal` prop it replaced. A refetch
+  // hands down a new prop object, which supersedes it (#543).
+  const [override, setOverride] = useState<{
+    over: AppealView | null
+    value: AppealView
+  } | null>(null)
   const [open, setOpen] = useState(false)
   const [reason, setReason] = useState("")
   const [context, setContext] = useState("")
@@ -56,19 +61,21 @@ export function ClipAppealStatus({
   const [infoPhase, setInfoPhase] = useState<Phase>({ kind: "form" })
   const [infoDone, setInfoDone] = useState<string | null>(null)
 
-  const current = override ?? appeal
+  const current = override?.over === appeal ? override.value : appeal
   const removed = clip.removed_at != null
   const flagged = clip.content_warning === true
   if (!removed && !flagged && !current) return null
 
   // An appeal only blocks the decision it was filed against. A later removal
-  // restamps removed_at, so a removal newer than the appeal is a new decision.
+  // restamps removed_at, and a re-flag flagged_at (#543), so a decision newer
+  // than the appeal is a new one.
+  const decidedAt = removed ? clip.removed_at : clip.flagged_at
   const coversCurrentDecision =
     !!current &&
     current.action === (removed ? "remove" : "flag") &&
     !(
-      removed &&
-      parseApiTime(clip.removed_at!).getTime() >
+      decidedAt != null &&
+      parseApiTime(decidedAt).getTime() >
         parseApiTime(current.created_at).getTime()
     )
   // A resolved appeal's outcome only describes the clip while no newer decision
@@ -97,7 +104,7 @@ export function ClipAppealStatus({
     setPhase({ kind: "submitting" })
     const result = await submitClipAppeal(clip.id, reason, context, accessToken)
     if (result.status === "submitted") {
-      setOverride(result.appeal)
+      setOverride({ over: appeal, value: result.appeal })
       setDoneMessage(result.message)
       setPhase({ kind: "form" })
     } else {
@@ -110,7 +117,7 @@ export function ClipAppealStatus({
     setInfoPhase({ kind: "submitting" })
     const result = await addAppealContext(clip.id, infoContext, accessToken)
     if (result.status === "submitted") {
-      setOverride(result.appeal)
+      setOverride({ over: appeal, value: result.appeal })
       setInfoDone(result.message)
       setInfoPhase({ kind: "form" })
       setInfoContext("")
