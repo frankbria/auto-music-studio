@@ -56,9 +56,10 @@ jobs:
         # Each integration test builds ~21 collections and ~74 indexes, then drops them. On a
         # slow-disk runner every one of those file creates/drops and journal fsyncs crawled
         # (4,391 createIndexes slow ops vs 21 on a normal runner) and the step took 30–40m (#590).
-        # The test database is throwaway, so it lives in memory.
+        # The test database is throwaway, so it lives in memory. Each test drops its database, so
+        # the data stays small; the cap turns a runaway into ENOSPC rather than an OOM-killed mongod.
         options: >-
-          --tmpfs /data/db
+          --tmpfs /data/db:size=2g
           --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
           --health-interval 10s
           --health-timeout 5s
