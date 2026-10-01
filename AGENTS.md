@@ -327,6 +327,9 @@ Package manager: `uv` with `hatchling` build backend
   ACE-Step, which shares the filesystem
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
+- API demos run on `scripts/demo_api_stack.py`: one process holds a throwaway `acemusic_demo_*` database, a seeded
+  Pro user with clips and a linked SoundCloud account, and a local SoundCloud stand-in. Source its `env.sh` for
+  `TOKEN`, `api` and `M`, and stop it with `kill $(cat <dir>/pid)`. Its docstring has the usage
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions
 - **Content screening (US-27.1)**: every generation entry point calls `services/screening.enforce(...)`
   on its free text *before* `charge_and_create`, so a blocked request (422, string `detail`) never
