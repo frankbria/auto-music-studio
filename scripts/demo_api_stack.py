@@ -25,6 +25,7 @@ import json
 import os
 import secrets
 import shlex
+import socket
 import sys
 import threading
 import wave
@@ -85,7 +86,9 @@ async def seed(settings, clips: int) -> dict[str, str]:
     from acemusic.api.services.tiers import PRO
     from acemusic.storage import get_storage_backend
 
-    await AsyncMongoClient(MONGO_URL).drop_database(settings.mongodb_db_name)
+    client = AsyncMongoClient(MONGO_URL)
+    await client.drop_database(settings.mongodb_db_name)
+    await client.close()
     await init_db(settings)
     user = await user_service.get_or_create_user(
         email="musician@example.com", provider="google", oauth_id="g-demo-musician", name="Demo Musician"
@@ -148,6 +151,13 @@ def main() -> None:
     directory = args.dir.resolve()
     if directory.is_relative_to(REPO):
         sys.exit("--dir must be outside the repo: env.sh holds a live JWT")
+    # Before any write: a stack that is still running owns these ports, and its pid, log and database stay intact.
+    for port in (args.port, args.port + 1):
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                sys.exit(f"port {port} is in use; stop the running stack with kill $(cat <dir>/pid) first")
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "pid").write_text(str(os.getpid()))
 
