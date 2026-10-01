@@ -24,6 +24,7 @@ import io
 import json
 import os
 import secrets
+import shlex
 import sys
 import threading
 import wave
@@ -122,7 +123,7 @@ async def seed(settings, clips: int) -> dict[str, str]:
 
 def write_env(directory: Path, port: int, db: str, ids: dict[str, str]) -> None:
     exports = {"DEMO_DIR": str(directory), "DEMO_API": f"http://127.0.0.1:{port}/api/v1", "DEMO_DB": db, **ids}
-    lines = [f"export {key}={value}" for key, value in exports.items()]
+    lines = [f"export {key}={shlex.quote(value)}" for key, value in exports.items()]
     lines += [
         'api() { local code; code=$(curl -s -o "$DEMO_DIR/last_body.json" -w \'%{http_code}\' -X "$1" '
         '"$DEMO_API$2" -H "Authorization: Bearer $TOKEN" -H \'Content-Type: application/json\' ${3:+-d "$3"}); '
@@ -155,6 +156,8 @@ def main() -> None:
         ACEMUSIC_API_MONGODB_URL=MONGO_URL,
         ACEMUSIC_API_MONGODB_DB_NAME=args.db,
         ACEMUSIC_API_JWT_SECRET_KEY=secrets.token_urlsafe(48),
+        # A demo and a later `showboat verify` outlive the default 15-minute token.
+        ACEMUSIC_API_ACCESS_TOKEN_EXPIRE_MINUTES="1440",
         ACEMUSIC_API_JOB_PROCESSOR_ENABLED="false",
         ACEMUSIC_STORAGE_BACKEND="local",
         ACEMUSIC_STORAGE_LOCAL_ROOT=str(directory / "storage"),
