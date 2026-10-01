@@ -206,6 +206,9 @@ Environment variables (see `.env.example`):
 - Coverage target: >85%
 - Integration tests marked `@pytest.mark.integration` (excluded by default)
 - Integration tests require a live ACE-Step server (auto-started via `ACESTEP_API_CMD` env var, or skipped)
+- Mongo-backed integration tests build and drop a whole database per test, so mongod's disk dominates their
+  runtime. Run a throwaway Mongo on tmpfs (`docker run --rm --tmpfs /data/db:size=2g -p 27017:27017 mongo:7`):
+  locally it cut a 259-test subset from 540s to 52s. CI's mongo service does the same (#590)
 - Test config: `testpaths = ["tests"]`, `bdd_features_base_dir = "tests/features"`
 - **`tests/conftest.py` pops `FORCE_COLOR`/`CLICOLOR_FORCE` at import time (#520)**, so CLI
   substring assertions never see Rich's ANSI escapes. It has to happen at import, not in a
@@ -234,7 +237,7 @@ Configured in `.pre-commit-config.yaml`:
 
 `.github/workflows/ci.yml` — four jobs:
 - Triggers on PR to `main`, push to `main`, and `workflow_dispatch` (branches without a PR). A newer push to a PR cancels its in-flight run; `main` runs are never cancelled (#481)
-- `ci` — matrix Python 3.11, 3.12, with a `mongo:7` service container. Steps: install
+- `ci` — matrix Python 3.11, 3.12, with a `mongo:7` service container (data dir on tmpfs, #590). Steps: install
   ffmpeg → `uv sync --extra dev` → `black --check` → `ruff check` → `pytest --cov` →
   `pytest -m integration` against the service Mongo. **These two are required checks
   on `main`** (`ci (3.11)`, `ci (3.12)`).
