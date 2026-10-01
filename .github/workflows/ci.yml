@@ -39,12 +39,10 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     # Longest job in the file: 12–20m, of which the integration step is 11–16m. Some runners
-    # are ~2.3x slower across the whole integration step (no single slow test), and 30 cut
-    # them off ~85% through at 25.5–25.9m of integration — on either Python leg (#557).
-    # Such a job needs ~35m, so 45 keeps headroom while still bounding a hang well under
-    # the 6h default. Raising the ceiling was picked over sharding the integration step,
-    # which shares one Mongo database. Once a normal run passes ~22m, a slow runner reaches
-    # 45 again; shard it then instead of raising this further.
+    # ran the integration step 3–5x slower (#557, #590) while the unit step stayed normal: the
+    # cost was mongod's disk, not Python. The mongo service below now keeps its data on tmpfs.
+    # 45 still bounds a hang well under the 6h default. If a slow runner reaches it again,
+    # shard the integration step rather than raising this.
     timeout-minutes: 45
     strategy:
       matrix:
@@ -55,7 +53,13 @@ jobs:
         image: mongo:7
         ports:
           - 27017:27017
+        # Each integration test builds ~21 collections and ~74 indexes, then drops them. On a
+        # slow-disk runner every one of those file creates/drops and journal fsyncs crawled
+        # (4,391 createIndexes slow ops vs 21 on a normal runner) and the step took 30–40m (#590).
+        # The test database is throwaway, so it lives in memory. Each test drops its database, so
+        # the data stays small; the cap turns a runaway into ENOSPC rather than an OOM-killed mongod.
         options: >-
+          --tmpfs /data/db:size=2g
           --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
           --health-interval 10s
           --health-timeout 5s
