@@ -64,6 +64,16 @@ def soundcloud_stand_in(port: int, log: Path) -> ThreadingHTTPServer:
     return server
 
 
+def running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def silent_wav() -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as w:
@@ -151,15 +161,20 @@ def main() -> None:
     directory = args.dir.resolve()
     if directory.is_relative_to(REPO):
         sys.exit("--dir must be outside the repo: env.sh holds a live JWT")
-    # Before any write: a stack that is still running owns these ports, and its pid, log and database stay intact.
+    # Before any write, so a stack that is still running keeps its pid, log and database.
+    pid_file = directory / "pid"
+    if pid_file.exists() and running(int(pid_file.read_text())):
+        sys.exit(f"a stack from this --dir is still running; stop it with kill $(cat {pid_file}) first")
     for port in (args.port, args.port + 1):
         with socket.socket() as probe:
+            # As the servers do, so a stack stopped seconds ago doesn't read as running.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", port))
             except OSError:
-                sys.exit(f"port {port} is in use; stop the running stack with kill $(cat <dir>/pid) first")
+                sys.exit(f"port {port} is in use")
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "pid").write_text(str(os.getpid()))
+    pid_file.write_text(str(os.getpid()))
 
     # Before any acemusic import: settings are read at import time, and the repo .env points at Atlas.
     os.environ.update(
