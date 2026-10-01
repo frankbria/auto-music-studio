@@ -946,7 +946,7 @@ class TestDistributionScreening:
         )
         return resp, clip, uploads
 
-    @pytest.mark.parametrize("field", ["title", "genre", "description"])
+    @pytest.mark.parametrize("field", ["title", "genre", "description", "key_signature", "isrc"])
     async def test_blocked_override_never_reaches_soundcloud(self, client, settings, local_storage, monkeypatch, field):
         resp, _, uploads = await self._upload(
             client, settings, monkeypatch, f"sc-block-{field}@example.com", **{field: BLOCKED}
