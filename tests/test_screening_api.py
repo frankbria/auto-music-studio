@@ -19,6 +19,7 @@ from acemusic.api.models import (
     Clip,
     Job,
     Release,
+    ReleaseStatus,
     SoundCloudConnection,
     VisibilityState,
     VoiceModel,
@@ -30,6 +31,7 @@ from acemusic.api.services import clips as clip_service, routing, screening, sou
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.processor import JobProcessor
+from tests.test_distribution_api import _make_clip, _make_connection
 from tests.test_releases_api import FULL_METADATA as RELEASE_METADATA, RELEASES_URL
 from tests.test_voice_models_api import wav as voice_wav
 from tests.users import make_user
@@ -323,8 +325,8 @@ class TestGenerateScreening:
         assert resp.status_code == 422
 
 
-async def _user_with_clip(email: str):
-    user = await make_user(email, credits_balance=10.0)
+async def _user_with_clip(email: str, **user_fields):
+    user = await make_user(email, credits_balance=10.0, **user_fields)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip_id = PydanticObjectId()
@@ -803,3 +805,185 @@ class TestVoiceModelScreening:
         )
         assert resp.status_code == 200, resp.text
         assert (await VoiceModel.get(model.id)).moderation_flags == []
+
+
+BLOCKED = "gas the jews"
+BORDERLINE = "a song about self harm"
+SOUNDCLOUD_UPLOAD_URL = f"{API_V1_PREFIX}/distribution/soundcloud/upload"
+
+
+async def _assert_flagged(clip_id) -> None:
+    clip = await Clip.get(clip_id)
+    assert clip.moderation_flags == ["self-harm"]
+    assert clip.moderation_reviewed_at is None
+
+
+@pytest.mark.integration
+class TestReleaseMetadataScreening:
+    """#555: a release's metadata goes to DSPs and SoundCloud, so it is screened as it is saved."""
+
+    async def _create(self, client, settings, user, clip, **fields):
+        body = {"clip_id": str(clip.id), **RELEASE_METADATA, **fields}
+        return await client.post(RELEASES_URL, json=body, headers=_auth(user, settings))
+
+    @pytest.mark.parametrize(
+        "field", ["title", "artist", "genre", "album_name", "description", "copyright", "language", "credits"]
+    )
+    async def test_blocked_text_creates_nothing(self, client, settings, field):
+        user, clip = await _user_with_clip(f"release-block-{field}@example.com")
+        resp = await self._create(client, settings, user, clip, **{field: f"anthem, {BLOCKED}"})
+        assert resp.status_code == 422
+        assert "wasn't saved" in resp.json()["detail"]
+        assert await Release.find(Release.clip_id == clip.id).count() == 0
+        # Refused before the recording's ISRC was claimed.
+        assert (await Clip.get(clip.id)).isrc is None
+
+    async def test_borderline_text_creates_and_flags_the_source_clip(self, client, settings):
+        user, clip = await _user_with_clip("release-flag@example.com")
+        resp = await self._create(client, settings, user, clip, description=BORDERLINE)
+        assert resp.status_code == 201, resp.text
+        await _assert_flagged(clip.id)
+
+    async def test_ordinary_text_creates_unflagged(self, client, settings):
+        user, clip = await _user_with_clip("release-pass@example.com")
+        resp = await self._create(client, settings, user, clip)
+        assert resp.status_code == 201, resp.text
+        assert (await Clip.get(clip.id)).moderation_flags == []
+
+    async def test_blocked_update_leaves_the_release_unchanged(self, client, settings):
+        user, clip = await _user_with_clip("release-update-block@example.com")
+        release_id = (await self._create(client, settings, user, clip)).json()["id"]
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}", json={"credits": BLOCKED}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
+        assert (await Release.get(PydanticObjectId(release_id))).credits == RELEASE_METADATA["credits"]
+
+    async def test_borderline_update_saves_and_flags_the_source_clip(self, client, settings):
+        user, clip = await _user_with_clip("release-update-flag@example.com")
+        release_id = (await self._create(client, settings, user, clip)).json()["id"]
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}", json={"album_name": BORDERLINE}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["album_name"] == BORDERLINE
+        await _assert_flagged(clip.id)
+
+    async def test_ordinary_update_saves_unflagged(self, client, settings):
+        user, clip = await _user_with_clip("release-update-pass@example.com")
+        release_id = (await self._create(client, settings, user, clip)).json()["id"]
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}",
+            json={"description": "Rain on the windshield"},
+            headers=_auth(user, settings),
+        )
+        assert resp.status_code == 200, resp.text
+        assert (await Clip.get(clip.id)).moderation_flags == []
+
+    async def test_update_is_screened_after_the_source_clip_is_deleted(self, client, settings):
+        user, clip = await _user_with_clip("release-update-orphan@example.com")
+        release_id = (await self._create(client, settings, user, clip)).json()["id"]
+        await clip.delete()
+        url, headers = f"{RELEASES_URL}/{release_id}", _auth(user, settings)
+        assert (await client.patch(url, json={"title": BLOCKED}, headers=headers)).status_code == 422
+        assert (await client.patch(url, json={"title": BORDERLINE}, headers=headers)).status_code == 200
+
+
+@pytest.mark.integration
+class TestDistributionScreening:
+    """#555: what leaves for a DSP or SoundCloud is screened as it leaves, so text saved before a rule existed counts."""
+
+    async def _release(self, client, settings, email, *, lyrics=None, release_fields=None):
+        user, clip = await _user_with_clip(email, tier=PRO)
+        created = await client.post(
+            RELEASES_URL, json={"clip_id": str(clip.id), **RELEASE_METADATA}, headers=_auth(user, settings)
+        )
+        assert created.status_code == 201, created.text
+        # Written straight to Mongo: text saved before the rule that now matches it.
+        if lyrics is not None:
+            await clip.set({Clip.lyrics: lyrics})
+        release = await Release.get(PydanticObjectId(created.json()["id"]))
+        if release_fields:
+            await release.set(release_fields)
+        return user, clip, release
+
+    @pytest.mark.parametrize("action", ["prepare", "submit"])
+    async def test_blocked_clip_text_never_leaves(self, client, settings, action):
+        user, clip, release = await self._release(client, settings, f"dist-block-{action}@example.com", lyrics=BLOCKED)
+        resp = await client.post(f"{RELEASES_URL}/{release.id}/{action}/landr", headers=_auth(user, settings))
+        assert resp.status_code == 422
+        after = await Release.get(release.id)
+        assert (after.status, after.submitted_channels) == (ReleaseStatus.READY, [])
+
+    @pytest.mark.parametrize("action", ["prepare", "submit"])
+    async def test_blocked_release_text_never_leaves(self, client, settings, action):
+        user, _, release = await self._release(
+            client, settings, f"dist-block-release-{action}@example.com", release_fields={Release.credits: BLOCKED}
+        )
+        resp = await client.post(f"{RELEASES_URL}/{release.id}/{action}/landr", headers=_auth(user, settings))
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("action", ["prepare", "submit"])
+    async def test_borderline_text_goes_out_and_flags_the_clip(self, client, settings, action):
+        user, clip, release = await self._release(
+            client, settings, f"dist-flag-{action}@example.com", lyrics=BORDERLINE
+        )
+        resp = await client.post(f"{RELEASES_URL}/{release.id}/{action}/landr", headers=_auth(user, settings))
+        assert resp.status_code == 200, resp.text
+        await _assert_flagged(clip.id)
+
+    @pytest.mark.parametrize("action", ["prepare", "submit"])
+    async def test_ordinary_text_goes_out_unflagged(self, client, settings, action):
+        user, clip, release = await self._release(client, settings, f"dist-pass-{action}@example.com")
+        resp = await client.post(f"{RELEASES_URL}/{release.id}/{action}/landr", headers=_auth(user, settings))
+        assert resp.status_code == 200, resp.text
+        assert (await Clip.get(clip.id)).moderation_flags == []
+
+    async def _upload(self, client, settings, monkeypatch, email, *, lyrics=None, **overrides):
+        user = await make_user(email, tier=PRO)
+        clip = await _make_clip(user, b"RIFFaudio")
+        if lyrics is not None:
+            await clip.set({Clip.lyrics: lyrics})
+        await _make_connection(user)
+        uploads: list[dict] = []
+
+        async def upload_track(_token, _audio, _filename, metadata, artwork=None):
+            uploads.append(metadata)
+            return {"id": 4242, "permalink_url": "https://snd.sc/t"}
+
+        monkeypatch.setattr(soundcloud, "upload_track", upload_track)
+        resp = await client.post(
+            SOUNDCLOUD_UPLOAD_URL,
+            json={"clip_id": str(clip.id), "metadata_overrides": overrides},
+            headers=_auth(user, settings),
+        )
+        return resp, clip, uploads
+
+    @pytest.mark.parametrize("field", ["title", "genre", "description", "key_signature", "isrc"])
+    async def test_blocked_override_never_reaches_soundcloud(self, client, settings, local_storage, monkeypatch, field):
+        resp, _, uploads = await self._upload(
+            client, settings, monkeypatch, f"sc-block-{field}@example.com", **{field: BLOCKED}
+        )
+        assert resp.status_code == 422
+        assert uploads == []
+
+    async def test_blocked_clip_text_never_reaches_soundcloud(self, client, settings, local_storage, monkeypatch):
+        resp, _, uploads = await self._upload(
+            client, settings, monkeypatch, "sc-block-clip@example.com", lyrics=BLOCKED
+        )
+        assert resp.status_code == 422
+        assert uploads == []
+
+    async def test_borderline_upload_goes_out_and_flags_the_clip(self, client, settings, local_storage, monkeypatch):
+        resp, clip, uploads = await self._upload(
+            client, settings, monkeypatch, "sc-flag@example.com", description=BORDERLINE
+        )
+        assert resp.status_code == 200, resp.text
+        assert uploads[0]["description"] == BORDERLINE
+        await _assert_flagged(clip.id)
+
+    async def test_ordinary_upload_goes_out_unflagged(self, client, settings, local_storage, monkeypatch):
+        resp, clip, uploads = await self._upload(client, settings, monkeypatch, "sc-pass@example.com", genre="house")
+        assert resp.status_code == 200, resp.text
+        assert len(uploads) == 1
+        assert (await Clip.get(clip.id)).moderation_flags == []
