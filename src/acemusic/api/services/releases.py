@@ -34,6 +34,13 @@ _EDITABLE_STATUSES = {ReleaseStatus.DRAFT, ReleaseStatus.READY}
 # code that already occupies this sequence slot. A few re-mints clear it.
 _MAX_MINT_ATTEMPTS = 5
 
+#: Release metadata that is free text and leaves the platform with the release (#555).
+_TEXT_FIELDS = ("title", "artist", "genre", "album_name", "description", "copyright", "credits")
+
+
+def release_texts(fields: dict) -> list[str | None]:
+    return [fields.get(field) for field in _TEXT_FIELDS]
+
 
 def _duplicate_field(exc: DuplicateKeyError) -> str:
     """Name the identifier a unique-index violation collided on.
@@ -88,6 +95,7 @@ async def create_release(user_id: str, clip_id: str, metadata: dict, settings: A
     """
     clip = await clip_service.get_owned_clip(clip_id, user_id)
     clip_service.ensure_not_removed(clip)
+    await clip_service.screen_outgoing(clip, release_texts(metadata))
     isrc = await _claim_clip_isrc(clip, settings)
 
     for _ in range(_MAX_MINT_ATTEMPTS):
@@ -187,6 +195,8 @@ async def update_release(release_id: str, user_id: str, updates: dict) -> Releas
     release = await get_owned_release(release_id, user_id)
     if release.status not in _EDITABLE_STATUSES:
         raise _state_error("Release metadata cannot be modified after submission")
+    clip = await clip_service.find_owned_clip(str(release.clip_id), user_id)
+    await clip_service.screen_outgoing(clip, release_texts(updates))
     # Reject a duplicate UPC up front, so a clashing override can't re-code the
     # clip (below) and then have the release write roll back on the unique index.
     # With this pre-check both sequential failure directions stay clean: a UPC
@@ -215,6 +225,19 @@ async def ensure_source_not_removed(release: Release) -> None:
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
     if clip is not None:
         clip_service.ensure_not_removed(clip)
+
+
+async def ensure_distributable(release: Release) -> None:
+    """Refuse to send ``release`` out when its source clip was removed (403) or its text is blocked (422).
+
+    Screens the release and its source clip as they leave (#555), so a rule added since either was saved
+    still applies. Flagged text goes out and re-queues the clip.
+    """
+    clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
+    if clip is not None:
+        clip_service.ensure_not_removed(clip)
+    texts = release_texts(release.model_dump()) + (screening.clip_texts(clip) if clip is not None else [])
+    await clip_service.screen_outgoing(clip, texts)
 
 
 async def source_clip_visibility_update(release: Release, visibility: VisibilityState) -> dict:
@@ -349,7 +372,7 @@ async def confirm_submission(release_id: str, user_id: str, target: str) -> Rele
     Raises 404 if not owned, 409 from ``draft`` or a terminal state.
     """
     release = await get_owned_release(release_id, user_id)
-    await ensure_source_not_removed(release)
+    await ensure_distributable(release)
     if release.status not in _CONFIRMABLE_STATUSES:
         raise _state_error(f"Release cannot be submitted from status {release.status.value!r}")
     # Atomic $addToSet + guarded $set so concurrent confirmations of different

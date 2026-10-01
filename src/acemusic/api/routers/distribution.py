@@ -31,6 +31,7 @@ from ..services import (
     clips as clip_service,
     distribution_status as status_service,
     releases as release_service,
+    screening,
     soundcloud as sc,
 )
 from ..services.tiers import Capability
@@ -254,6 +255,10 @@ async def soundcloud_upload(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="release_id does not reference the uploaded clip.",
             )
+    overrides = body.metadata_overrides
+    await clip_service.screen_outgoing(
+        clip, [*screening.clip_texts(clip), overrides.title, overrides.genre, overrides.description]
+    )
 
     # Validate the SoundCloud link first so the common "not connected" / revoked
     # case fast-fails before paying for a (potentially large) storage download.

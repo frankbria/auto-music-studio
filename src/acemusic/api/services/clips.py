@@ -471,6 +471,20 @@ async def screened_update(clip: Clip, texts: list[str | None], fields: dict) -> 
     }
 
 
+async def screen_outgoing(clip: Clip | None, texts: list[str | None]) -> None:
+    """Screen text about to leave the platform with ``clip`` (#555): a release, a bundle, a SoundCloud upload.
+
+    Blocked text is the usual 422. Flagged text goes out, and sends the source clip back to the moderation
+    queue, since that is what a moderator acts on. A deleted source clip has nothing to flag.
+    """
+    if clip is None:
+        await screening.enforce(*texts, saving=True)
+        return
+    update = await screened_update(clip, texts, {})
+    if "$addToSet" in update:
+        await Clip.find_one({"_id": clip.id}).update(update)
+
+
 async def update_clip_fields(
     clip_id: str,
     user_id: str,
