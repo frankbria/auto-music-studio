@@ -826,7 +826,9 @@ class TestReleaseMetadataScreening:
         body = {"clip_id": str(clip.id), **RELEASE_METADATA, **fields}
         return await client.post(RELEASES_URL, json=body, headers=_auth(user, settings))
 
-    @pytest.mark.parametrize("field", ["title", "artist", "genre", "album_name", "description", "copyright", "credits"])
+    @pytest.mark.parametrize(
+        "field", ["title", "artist", "genre", "album_name", "description", "copyright", "language", "credits"]
+    )
     async def test_blocked_text_creates_nothing(self, client, settings, field):
         user, clip = await _user_with_clip(f"release-block-{field}@example.com")
         resp = await self._create(client, settings, user, clip, **{field: f"anthem, {BLOCKED}"})
@@ -866,6 +868,17 @@ class TestReleaseMetadataScreening:
         assert resp.status_code == 200, resp.text
         assert resp.json()["album_name"] == BORDERLINE
         await _assert_flagged(clip.id)
+
+    async def test_ordinary_update_saves_unflagged(self, client, settings):
+        user, clip = await _user_with_clip("release-update-pass@example.com")
+        release_id = (await self._create(client, settings, user, clip)).json()["id"]
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release_id}",
+            json={"description": "Rain on the windshield"},
+            headers=_auth(user, settings),
+        )
+        assert resp.status_code == 200, resp.text
+        assert (await Clip.get(clip.id)).moderation_flags == []
 
     async def test_update_is_screened_after_the_source_clip_is_deleted(self, client, settings):
         user, clip = await _user_with_clip("release-update-orphan@example.com")

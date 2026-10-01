@@ -35,7 +35,7 @@ _EDITABLE_STATUSES = {ReleaseStatus.DRAFT, ReleaseStatus.READY}
 _MAX_MINT_ATTEMPTS = 5
 
 #: Release metadata that is free text and leaves the platform with the release (#555).
-_TEXT_FIELDS = ("title", "artist", "genre", "album_name", "description", "copyright", "credits")
+_TEXT_FIELDS = ("title", "artist", "genre", "album_name", "description", "copyright", "language", "credits")
 
 
 def release_texts(fields: dict) -> list[str | None]:
