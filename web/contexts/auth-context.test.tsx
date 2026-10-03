@@ -239,15 +239,20 @@ describe("AuthProvider", () => {
         <Probe />
       </AuthProvider>
     )
-    await waitFor(() =>
-      expect(screen.getByTestId("state")).toHaveTextContent("in:")
-    )
+    // Settle the mount refresh inside act so React also flushes the effect that
+    // re-subscribes the visibility listener with the restored token. A waitFor
+    // on the DOM can resolve between that commit and its effects on a slow
+    // runner, leaving the event to hit the stale signed-out listener (#596).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(screen.getByTestId("state")).toHaveTextContent("in:")
 
     // Kick off a background refresh, then log out while it is still in flight.
     act(() => {
       document.dispatchEvent(new Event("visibilitychange"))
     })
-    await waitFor(() => expect(call).toBe(2))
+    expect(call).toBe(2)
     await user.click(screen.getByRole("button", { name: "logout" }))
     await waitFor(() =>
       expect(screen.getByTestId("state")).toHaveTextContent("out")

@@ -31,6 +31,7 @@ from ..services import (
     clips as clip_service,
     distribution_status as status_service,
     releases as release_service,
+    screening,
     soundcloud as sc,
 )
 from ..services.tiers import Capability
@@ -254,6 +255,11 @@ async def soundcloud_upload(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="release_id does not reference the uploaded clip.",
             )
+    # Everything SoundCloud will receive, and the clip's own text, is screened before anything leaves (#555).
+    metadata = _merge_metadata(clip, body.metadata_overrides)
+    await clip_service.screen_outgoing(
+        clip, [*screening.clip_texts(clip), *(value for value in metadata.values() if isinstance(value, str))]
+    )
 
     # Validate the SoundCloud link first so the common "not connected" / revoked
     # case fast-fails before paying for a (potentially large) storage download.
@@ -280,7 +286,6 @@ async def soundcloud_upload(
             detail=f"Audio exceeds SoundCloud's {sc.MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
         )
 
-    metadata = _merge_metadata(clip, body.metadata_overrides)
     artwork = await _resolve_artwork(clip, storage)
 
     filename = f"{clip.title or clip.id}.{clip.format or 'wav'}"

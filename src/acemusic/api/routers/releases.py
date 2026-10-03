@@ -302,7 +302,7 @@ async def prepare_release(
     await require_tier_capability(current.user_id, Capability.DISTRIBUTION)
 
     release = await release_service.get_owned_release(release_id, current.user_id)
-    await release_service.ensure_source_not_removed(release)
+    await release_service.ensure_distributable(release)
     checklist, bundle_url = await distribution_service.prepare_release(release, target)
     return PrepareResponse(
         release_id=str(release.id),

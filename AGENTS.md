@@ -327,6 +327,9 @@ Package manager: `uv` with `hatchling` build backend
   ACE-Step, which shares the filesystem
 - User stories are numbered `US-{stage}.{sequence}` (e.g., US-2.1 = Stage 2, first story)
 - Integration tests are gated behind `@pytest.mark.integration` and skip gracefully without a server
+- API demos run on `scripts/demo_api_stack.py`: one process holds a throwaway `acemusic_demo_*` database, a seeded
+  Pro user with clips and a linked SoundCloud account, and a local SoundCloud stand-in. Source its `env.sh` for
+  `TOKEN`, `api` and `M`, and stop it with `kill $(cat <dir>/pid)`. Its docstring has the usage
 - The `.beads/` directory is local-only (gitignored) for issue tracking across sessions
 - **Content screening (US-27.1)**: every generation entry point calls `services/screening.enforce(...)`
   on its free text *before* `charge_and_create`, so a blocked request (422, string `detail`) never
@@ -335,7 +338,10 @@ Package manager: `uv` with `hatchling` build backend
   Display metadata is screened as well (#531): clip upload and title PATCH screen what they store, and any
   path that makes a clip public/unlisted (clip PATCH, release visibility) re-screens everything the clip
   displays through `services/clips.screened_update`, which only re-queues a clip for a *new* flag category.
-  Voice-model name/description are screened on train and rename (`VoiceModel.moderation_flags`)
+  Voice-model name/description are screened on train and rename (`VoiceModel.moderation_flags`).
+  Text that leaves the platform is screened too (#555): release create/update screen their free text, and prepare,
+  confirm-submission and SoundCloud upload re-screen the release, the source clip and every metadata string sent,
+  through `services/clips.screen_outgoing`. A flag there re-queues the source clip. A new outbound path must call it.
   Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
   admins are `User.is_admin=True`, set in the database only.
   Matching folds case, accents, Cyrillic/Greek homoglyphs, fullwidth letters and invisible format characters
