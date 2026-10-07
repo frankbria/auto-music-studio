@@ -627,6 +627,32 @@ class TestAdminRules:
         assert body["fold_leetspeak"] is True
         assert body["block_threshold"] == screening.DEFAULT_BLOCK_THRESHOLD
 
+    async def test_patch_does_not_undo_a_save_that_lands_mid_request(self, client, settings, monkeypatch):
+        admin = await make_user("screen-admin-patch-race@example.com", is_admin=True)
+        other = screening.DEFAULT_RULES.model_copy(update={"allow_terms": ["suicide squad"]})
+        real_get_rules = screening.get_rules
+
+        async def read_then_race():
+            before = await real_get_rules()
+            await screening.save_rules(other)  # another admin's save, after this PATCH has read
+            return before
+
+        monkeypatch.setattr(screening, "get_rules", read_then_race)
+        resp = await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
+        assert resp.status_code == 200
+        monkeypatch.setattr(screening, "get_rules", real_get_rules)
+        stored = (await client.get(RULES_URL, headers=_auth(admin, settings))).json()
+        assert stored["allow_terms"] == ["suicide squad"]
+        assert stored["fold_leetspeak"] is True
+
+    async def test_an_empty_patch_changes_nothing(self, client, settings):
+        admin = await make_user("screen-admin-patch-empty@example.com", is_admin=True)
+        resp = await client.patch(RULES_URL, json={}, headers=_auth(admin, settings))
+        assert resp.status_code == 200
+        assert (await client.get(RULES_URL, headers=_auth(admin, settings))).json() == (
+            screening.DEFAULT_RULES.model_dump()
+        )
+
     async def test_patch_rejects_an_unknown_field(self, client, settings):
         admin = await make_user("screen-admin-patch-typo@example.com", is_admin=True)
         resp = await client.patch(RULES_URL, json={"fold_leetspeek": True}, headers=_auth(admin, settings))

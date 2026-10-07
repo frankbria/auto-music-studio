@@ -34,7 +34,9 @@ async def get_screening_rules() -> ScreeningRules:
     return await screening.get_rules()
 
 
-async def _save_rules(rules: ScreeningRules, before: ScreeningRules, current: CurrentUser) -> ScreeningRules:
+async def _save_rules(
+    rules: ScreeningRules, before: ScreeningRules, current: CurrentUser, fields: set[str] | None = None
+) -> ScreeningRules:
     # Checked here, not in the model, so a term stored before this check can never fail every read (#561).
     for term in [*(r.term for r in rules.rules), *rules.allow_terms]:
         if screening.has_invisible(term):
@@ -42,7 +44,7 @@ async def _save_rules(rules: ScreeningRules, before: ScreeningRules, current: Cu
                 status_code=422,
                 detail=f"The term {term!r} contains an invisible character, which would join the words around it.",
             )
-    saved = await screening.save_rules(rules)
+    saved = await screening.save_rules(rules, fields)
     await moderation.log_screening_rules_update(current.user_id, before.model_dump(), saved.model_dump())
     return saved
 
@@ -61,14 +63,13 @@ async def patch_screening_rules(
     unknown = sorted(changes.keys() - ScreeningRules.model_fields.keys())
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown screening-rules fields: {', '.join(unknown)}.")
-    # ponytail: read-merge-write, so two concurrent PATCHes can lose one; $set only the sent fields if admins race.
     before = await screening.get_rules()
     try:
         rules = ScreeningRules.model_validate({**before.model_dump(), **changes})
     except ValidationError as exc:
         errors = exc.errors(include_context=False)
         raise RequestValidationError([{**e, "loc": ("body", *e["loc"])} for e in errors]) from exc
-    return await _save_rules(rules, before, current)
+    return await _save_rules(rules, before, current, set(changes))
 
 
 class ReportEntry(BaseModel):

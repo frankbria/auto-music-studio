@@ -193,9 +193,14 @@ async def get_rules() -> ScreeningRules:
     return DEFAULT_RULES if doc is None else ScreeningRules.model_validate(doc.model_dump())
 
 
-async def save_rules(rules: ScreeningRules) -> ScreeningRules:
+async def save_rules(rules: ScreeningRules, fields: set[str] | None = None) -> ScreeningRules:
+    """Write ``fields`` (all by default) atomically; the rest only seed a first save, so PATCHes don't race."""
+    values = rules.model_dump()
+    sent = values.keys() if fields is None else fields
     await ScreeningRulesDocument.get_pymongo_collection().update_one(
-        {"key": "global"}, {"$set": rules.model_dump()}, upsert=True
+        {"key": "global"},
+        {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}},
+        upsert=True,
     )
     return rules
 
