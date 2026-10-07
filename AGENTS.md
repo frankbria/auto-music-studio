@@ -342,11 +342,14 @@ Package manager: `uv` with `hatchling` build backend
   Text that leaves the platform is screened too (#555): release create/update screen their free text, and prepare,
   confirm-submission and SoundCloud upload re-screen the release, the source clip and every metadata string sent,
   through `services/clips.screen_outgoing`. A flag there re-queues the source clip. A new outbound path must call it.
-  Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`;
-  admins are `User.is_admin=True`, set in the database only.
-  Matching folds case, accents, Cyrillic/Greek homoglyphs, fullwidth letters and invisible format characters
+  Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`, or `PATCH`
+  to change only the fields sent (#561: an unknown field is a 422, and only sent fields are written, so saves don't race).
+  A term hiding an invisible character is a 422 on save. Admins are `User.is_admin=True`, set in the database only.
+  Matching folds case, accents, homoglyphs (Cyrillic/Greek, plus confusables.txt lookalikes from Armenian, Cherokee
+  and Latin small capitals, #561), fullwidth letters and invisible format characters
   (#532), both in the text and in the rule terms, so a rule matches across scripts. Leetspeak folding
-  (`ScreeningRules.fold_leetspeak`) is off by default: turning it on catches `h3il`, at the cost of more false positives
+  (`ScreeningRules.fold_leetspeak`) is off by default: turning it on catches `h3il`, at the cost of more false positives.
+  Under it, a term with letters only matches text with a letter, so `to` never matches `70`
 - **User reporting (US-27.2)**: `POST /api/v1/clips/{id}/report` writes a `ClipReport`; the unique
   `(clip_id, reporter_id)` index is the duplicate check (409), not a pre-read. Submissions are capped per user by
   `app.state.report_limiter` (`ACEMUSIC_API_REPORT_RATE_LIMIT_PER_HOUR`, default 20, 429 over it; failed attempts count too) (#534). Admins list reports via
