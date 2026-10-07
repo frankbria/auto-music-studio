@@ -38,7 +38,10 @@ async def _save_rules(
     rules: ScreeningRules, before: ScreeningRules, current: CurrentUser, fields: set[str] | None = None
 ) -> ScreeningRules:
     # Checked here, not in the model, so a term stored before this check can never fail every read (#561).
-    for term in [*(r.term for r in rules.rules), *rules.allow_terms]:
+    # Only the fields being written: a stored term a PATCH leaves alone must not block it.
+    sent = ScreeningRules.model_fields.keys() if fields is None else fields
+    rule_terms = [r.term for r in rules.rules] if "rules" in sent else []
+    for term in [*rule_terms, *(rules.allow_terms if "allow_terms" in sent else [])]:
         if screening.has_invisible(term):
             raise HTTPException(
                 status_code=422,

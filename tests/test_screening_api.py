@@ -599,6 +599,20 @@ class TestAdminRules:
             screening.DEFAULT_RULES.model_dump()
         )
 
+    async def test_a_legacy_invisible_term_does_not_block_a_patch_that_leaves_it_alone(self, client, settings):
+        admin = await make_user("screen-admin-zw-legacy@example.com", is_admin=True)
+        legacy = screening.DEFAULT_RULES.model_copy(
+            update={"rules": [screening.Rule(term="sieg\u200bheil", category="x", action="block")]}
+        )
+        await screening.save_rules(legacy)  # stored before saves checked for invisible characters
+        resp = await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
+        assert resp.status_code == 200
+        assert resp.json()["fold_leetspeak"] is True
+        # Resending the term itself is still refused.
+        rules = [{"term": "sieg\u200bheil", "category": "x", "action": "block"}]
+        resp = await client.patch(RULES_URL, json={"rules": rules}, headers=_auth(admin, settings))
+        assert resp.status_code == 422
+
     async def test_an_accented_term_is_not_mistaken_for_an_invisible_one(self, client, settings):
         admin = await make_user("screen-admin-accent@example.com", is_admin=True)
         body = {"rules": [{"term": "heíl", "category": "x", "action": "block"}]}
