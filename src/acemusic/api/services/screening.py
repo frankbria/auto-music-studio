@@ -12,6 +12,8 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from pymongo import ReturnDocument
+
 from ..models import Clip
 from ..models.screening import Rule, ScreeningRules, ScreeningRulesDocument
 
@@ -194,15 +196,17 @@ async def get_rules() -> ScreeningRules:
 
 
 async def save_rules(rules: ScreeningRules, fields: set[str] | None = None) -> ScreeningRules:
-    """Write ``fields`` (all by default) atomically; the rest only seed a first save, so PATCHes don't race."""
+    """Write ``fields`` (all by default) atomically and return what is stored. The other fields only seed a
+    first save, so a PATCH can't undo a concurrent save of a field it wasn't sent."""
     values = rules.model_dump()
     sent = values.keys() if fields is None else fields
-    await ScreeningRulesDocument.get_pymongo_collection().update_one(
+    stored = await ScreeningRulesDocument.get_pymongo_collection().find_one_and_update(
         {"key": "global"},
         {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}},
         upsert=True,
+        return_document=ReturnDocument.AFTER,
     )
-    return rules
+    return ScreeningRules.model_validate(stored)
 
 
 async def enforce(*texts: str | None, saving: bool = False) -> list[str]:

@@ -640,6 +640,10 @@ class TestAdminRules:
         monkeypatch.setattr(screening, "get_rules", read_then_race)
         resp = await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
         assert resp.status_code == 200
+        # The response and the audit log report what was stored, the other admin's save included.
+        assert resp.json()["allow_terms"] == ["suicide squad"]
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "update_screening_rules")
+        assert entry.details["after"]["allow_terms"] == ["suicide squad"]
         monkeypatch.setattr(screening, "get_rules", real_get_rules)
         stored = (await client.get(RULES_URL, headers=_auth(admin, settings))).json()
         assert stored["allow_terms"] == ["suicide squad"]
