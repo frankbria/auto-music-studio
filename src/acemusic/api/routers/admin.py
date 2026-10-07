@@ -36,11 +36,12 @@ async def get_screening_rules() -> ScreeningRules:
 
 async def _save_rules(rules: ScreeningRules, before: ScreeningRules, current: CurrentUser) -> ScreeningRules:
     # Checked here, not in the model, so a term stored before this check can never fail every read (#561).
-    if any(screening.has_invisible(term) for term in [*(r.term for r in rules.rules), *rules.allow_terms]):
-        raise HTTPException(
-            status_code=422,
-            detail="A term contains an invisible character, which would join the words around it. Remove it.",
-        )
+    for term in [*(r.term for r in rules.rules), *rules.allow_terms]:
+        if screening.has_invisible(term):
+            raise HTTPException(
+                status_code=422,
+                detail=f"The term {term!r} contains an invisible character, which would join the words around it.",
+            )
     saved = await screening.save_rules(rules)
     await moderation.log_screening_rules_update(current.user_id, before.model_dump(), saved.model_dump())
     return saved
@@ -56,11 +57,17 @@ async def patch_screening_rules(
     changes: dict[str, Any], current: CurrentUser = Depends(require_admin)
 ) -> ScreeningRules:
     """Change only the fields sent, so toggling ``fold_leetspeak`` can't reset the rest (#561)."""
+    # A misspelt field would otherwise be ignored, and the admin left believing a safety switch is on.
+    unknown = sorted(changes.keys() - ScreeningRules.model_fields.keys())
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown screening-rules fields: {', '.join(unknown)}.")
+    # ponytail: read-merge-write, so two concurrent PATCHes can lose one; $set only the sent fields if admins race.
     before = await screening.get_rules()
     try:
         rules = ScreeningRules.model_validate({**before.model_dump(), **changes})
     except ValidationError as exc:
-        raise RequestValidationError(exc.errors(include_context=False)) from exc
+        errors = exc.errors(include_context=False)
+        raise RequestValidationError([{**e, "loc": ("body", *e["loc"])} for e in errors]) from exc
     return await _save_rules(rules, before, current)
 
 

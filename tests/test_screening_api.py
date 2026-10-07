@@ -113,6 +113,10 @@ class TestMatch:
     def test_armenian_letters_spelling_a_flag_term_are_caught(self):
         assert screening.match(self.RULES, ["ցenօcide"]).flags == ["violence"]
 
+    def test_icelandic_thorn_is_a_letter_not_a_p(self):
+        rules = screening.ScreeningRules(rules=[screening.Rule(term="porn", category="x", action="flag")])
+        assert screening.match(rules, ["þorn"]).flags == []
+
     def test_a_rule_written_with_homoglyphs_still_matches_plain_text(self):
         rules = screening.ScreeningRules(rules=[screening.Rule(term="hеil", category="hate speech", action="block")])
         assert screening.match(rules, ["heil"]).blocked is True
@@ -221,6 +225,15 @@ class TestMatch:
     def test_a_lettered_term_still_matches_leet_with_a_letter(self, text):
         assert screening.match(self.SHORT, [text]).flags == ["x"]
 
+    def test_a_mixed_leet_spelling_matches_but_its_digits_alone_do_not(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="bad", category="x", action="flag")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["b4d"]).flags == ["x"]
+        assert screening.match(rules, ["84d"]).flags == ["x"]
+        # The trade-off, pinned: an all-digit spelling ("1337" for "leet") is let through with "70".
+        assert screening.match(rules, ["840"]).flags == []
+
     def test_a_digit_term_still_matches_digits_under_leet(self):
         rules = screening.ScreeningRules(
             rules=[screening.Rule(term="1488", category="hate speech", action="block")], fold_leetspeak=True
@@ -240,6 +253,9 @@ ORDINARY_LYRICS = [
     # Armenian and Cherokee, whose lookalikes the table maps too (#561).
     "Իմ սիրելի մայր, երգ եմ երգում քեզ համար, Հայաստան, իմ հայրենիք",
     "ᎣᏏᏲ, ᏙᎯᏧ? ᎠᏂᏴᏫᏯ ᏗᎦᎳᏫᎢᏍᏗ ᎤᏁᎳᏅᎯ ᎤᏤᎵ",
+    # Icelandic and Turkish letters near the folded ones: "þ" stays, dotless "ı" folds like an accent.
+    "Þú ert sólin mín, ég syng þér lag í kvöld við þorpið",
+    "Kırmızı gülün alı var, ıssız gecede ışıklar yanar",
 ]
 
 
@@ -600,11 +616,30 @@ class TestAdminRules:
         assert entry.details["before"]["fold_leetspeak"] is False
         assert entry.details["after"]["fold_leetspeak"] is True
 
+    async def test_patch_of_rules_alone_keeps_the_switches(self, client, settings):
+        admin = await make_user("screen-admin-patch-rules@example.com", is_admin=True)
+        await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
+        rules = [{"term": "banana", "category": "x", "action": "block"}]
+        resp = await client.patch(RULES_URL, json={"rules": rules}, headers=_auth(admin, settings))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rules"] == rules
+        assert body["fold_leetspeak"] is True
+        assert body["block_threshold"] == screening.DEFAULT_BLOCK_THRESHOLD
+
+    async def test_patch_rejects_an_unknown_field(self, client, settings):
+        admin = await make_user("screen-admin-patch-typo@example.com", is_admin=True)
+        resp = await client.patch(RULES_URL, json={"fold_leetspeek": True}, headers=_auth(admin, settings))
+        assert resp.status_code == 422
+        assert "fold_leetspeek" in resp.json()["detail"]
+        assert (await client.get(RULES_URL, headers=_auth(admin, settings))).json()["fold_leetspeak"] is False
+
     async def test_patch_validates_like_put(self, client, settings):
         admin = await make_user("screen-admin-patch-bad@example.com", is_admin=True)
         user = await make_user("screen-patch-nonadmin@example.com")
         bad = await client.patch(RULES_URL, json={"block_threshold": -1}, headers=_auth(admin, settings))
         assert bad.status_code == 422
+        assert bad.json()["detail"][0]["loc"] == ["body", "block_threshold"]
         assert (await client.patch(RULES_URL, json={}, headers=_auth(user, settings))).status_code == 403
 
 

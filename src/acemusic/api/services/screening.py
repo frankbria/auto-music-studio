@@ -66,7 +66,7 @@ class ScreeningResult:
 #: ("Н" is H, "н" isn't). NFKD already folds fullwidth and mathematical letters. Past the Cyrillic and
 #: Greek basics, the rows are confusables.txt (Unicode 18) entries that map onto one Latin letter (#561).
 #: ponytail: a subset of confusables.txt for the scripts evasion has used; load the whole table only with a
-#: false-positive pass over every script it folds.
+#: false-positive pass over every script it folds. Icelandic "þ" is left out: it is a letter there ("þorn" isn't "porn").
 _HOMOGLYPHS = str.maketrans(
     "АВЕКМНОРСТУХІЈЅҺԚԜӀ"
     "аеорсухіјѕһԁӏԛԝ"
@@ -75,7 +75,7 @@ _HOMOGLYPHS = str.maketrans(
     "ϲϹϜϳͿϺσϱϸᴦγϒ"
     "քցհւյոռօՕգզՏսՍա"
     "ᎪᏏᏴꮯᏟᏧᎠᎬᏀᏳᏂᎻꭵᎥᎫᏦᏞᎷᏢꮁᎡᏒꮪᏕᏚᎢꮩᏙꮃꮤᎳᏔᎩᎽꮓᏃ"
-    "ɑꭤƄꞴᴄꬲꬵꞙƒʄẝꞘɡᶃƍıɪɩȷꞲꞮꟾƖꞁǀᴏᴑꬽþƿꭇꭈƦɌꜱƽꞟᴜꭎꭒʋᴠɯꟺᴡꞳɣᶌʏỿꭚᴢⱬⱫ",
+    "ɑꭤƄꞴᴄꬲꬵꞙƒʄẝꞘɡᶃƍıɪɩȷꞲꞮꟾƖꞁǀᴏᴑꬽƿꭇꭈƦɌꜱƽꞟᴜꭎꭒʋᴠɯꟺᴡꞳɣᶌʏỿꭚᴢⱬⱫ",
     "ABEKMHOPCTYXIJSHQWl"
     "aeopcyxijshdlqw"
     "ABEZHIKMNOPTYX"
@@ -83,7 +83,7 @@ _HOMOGLYPHS = str.maketrans(
     "cCFjJMoppryY"
     "fghijnnoOqqSuUw"
     "AbBcCdDEGGhHiiJKLMPrRRsSSTvVwwWWYYzZ"
-    "aabBcefffffFgggiiijJlllllooopprrRRssuuuuuvwwwXyyyyyzzZ",
+    "aabBcefffffFgggiiijJllllloooprrRRssuuuuuvwwwXyyyyyzzZ",
 )
 
 #: Leet stand-ins per letter. Expanded on the rule side, so "1" can be both "i" and "l".
