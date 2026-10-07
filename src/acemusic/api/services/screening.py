@@ -62,12 +62,28 @@ class ScreeningResult:
         return [] if self.blocked else self.categories
 
 
-#: Cyrillic and Greek letters that render like Latin ones, applied before lowercasing because the
-#: capitals differ ("Н" is H, "н" isn't). NFKD already folds fullwidth and mathematical letters.
-#: ponytail: a hand-picked subset of Unicode's confusables.txt; load that table if evasion moves to other scripts.
+#: Letters that render like Latin ones, applied before lowercasing because the capitals differ
+#: ("Н" is H, "н" isn't). NFKD already folds fullwidth and mathematical letters. Past the Cyrillic and
+#: Greek basics, the rows are confusables.txt (Unicode 18) entries that map onto one Latin letter (#561).
+#: ponytail: a subset of confusables.txt for the scripts evasion has used; load the whole table only with a
+#: false-positive pass over every script it folds.
 _HOMOGLYPHS = str.maketrans(
-    "АВЕКМНОРСТУХІЈЅҺԚԜӀ" "аеорсухіјѕһԁӏԛԝ" "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ" "αεικνορτυχ",
-    "ABEKMHOPCTYXIJSHQWl" "aeopcyxijshdlqw" "ABEZHIKMNOPTYX" "aeikvoptux",
+    "АВЕКМНОРСТУХІЈЅҺԚԜӀ"
+    "аеорсухіјѕһԁӏԛԝ"
+    "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ"
+    "αεικνορτυχ"
+    "ϲϹϜϳͿϺσϱϸᴦγϒ"
+    "քցհւյոռօՕգզՏսՍա"
+    "ᎪᏏᏴꮯᏟᏧᎠᎬᏀᏳᏂᎻꭵᎥᎫᏦᏞᎷᏢꮁᎡᏒꮪᏕᏚᎢꮩᏙꮃꮤᎳᏔᎩᎽꮓᏃ"
+    "ɑꭤƄꞴᴄꬲꬵꞙƒʄẝꞘɡᶃƍıɪɩȷꞲꞮꟾƖꞁǀᴏᴑꬽþƿꭇꭈƦɌꜱƽꞟᴜꭎꭒʋᴠɯꟺᴡꞳɣᶌʏỿꭚᴢⱬⱫ",
+    "ABEKMHOPCTYXIJSHQWl"
+    "aeopcyxijshdlqw"
+    "ABEZHIKMNOPTYX"
+    "aeikvoptux"
+    "cCFjJMoppryY"
+    "fghijnnoOqqSuUw"
+    "AbBcCdDEGGhHiiJKLMPrRRsSSTvVwwWWYYzZ"
+    "aabBcefffffFgggiiijJlllllooopprrRRssuuuuuvwwwXyyyyyzzZ",
 )
 
 #: Leet stand-ins per letter. Expanded on the rule side, so "1" can be both "i" and "l".
@@ -82,6 +98,16 @@ _INVISIBLE = "\x00"
 _BLANK_LETTERS = "\u115f\u1160"
 
 
+def _is_invisible(c: str) -> bool:
+    """For a character of NFKD text that ``combining()`` reports as 0."""
+    return unicodedata.category(c) in ("Cf", "Mn") or c in _BLANK_LETTERS
+
+
+def has_invisible(term: str) -> bool:
+    """Whether a rule term hides a zero-width character, which would silently join the words around it."""
+    return any(_is_invisible(c) for c in unicodedata.normalize("NFKD", term) if not unicodedata.combining(c))
+
+
 def _normalise(text: str, *, keep: str = "") -> str:
     """Lowercase, fold accents ("heíl"), homoglyphs ("hеil") and punctuation ("child-porn") to plain words.
 
@@ -89,9 +115,10 @@ def _normalise(text: str, *, keep: str = "") -> str:
     NFKD leaves, like variation selectors, and blank filler letters) become ``_INVISIBLE``.
     ``keep`` names punctuation that survives, for leet matching ("$ieg").
     """
+    # Homoglyphs fold before NFKD as well as after, since NFKD turns lunate sigma "Ϲ" into an unmapped "Σ".
     folded = "".join(
-        _INVISIBLE if unicodedata.category(c) in ("Cf", "Mn") or c in _BLANK_LETTERS else c
-        for c in unicodedata.normalize("NFKD", text)
+        _INVISIBLE if _is_invisible(c) else c
+        for c in unicodedata.normalize("NFKD", text.translate(_HOMOGLYPHS))
         if not unicodedata.combining(c)
     )
     return " ".join(
@@ -116,6 +143,15 @@ def _phrase(term: str, leet: bool) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){body}(?!\w)")
 
 
+_LETTER = re.compile(r"[^\W\d_]")
+
+
+def _found(term: str, leet: bool, text: str) -> bool:
+    """Under leet, a term with letters needs a letter in the match too: "to" must not match "70" (#561)."""
+    needs_letter = leet and _LETTER.search(term)
+    return any(not needs_letter or _LETTER.search(m.group()) for m in _phrase(term, leet).finditer(text))
+
+
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
     """Screen ``texts`` against ``rules``. Pure — no storage, so it is cheap to test."""
     # ponytail: regexes compiled per call; cache per rule set if rule lists grow to thousands.
@@ -130,7 +166,7 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     flagged: list[str] = []
     for rule in rules.rules:
         hits = blocked if rule.action == "block" else flagged
-        if rule.category not in hits and _words(rule.term) and _phrase(rule.term, leet).search(text):
+        if rule.category not in hits and _words(rule.term) and _found(rule.term, leet, text):
             hits.append(rule.category)
 
     if blocked:

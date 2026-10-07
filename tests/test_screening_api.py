@@ -18,6 +18,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import (
     Clip,
     Job,
+    ModerationLogEntry,
     Release,
     ReleaseStatus,
     SoundCloudConnection,
@@ -99,6 +100,18 @@ class TestMatch:
     )
     def test_homoglyphs_do_not_evade(self, text):
         assert screening.match(self.RULES, [text]).blocked is True
+
+    # Confusables beyond Cyrillic (#561): Armenian հ, Cherokee Ꮪ/ꮪ, Latin small capitals ꜱ/ɪ, Greek lunate sigma.
+    @pytest.mark.parametrize("text", ["sieg հeil", "ᏚIEG HEIL", "ꮪieg heil", "ꜱɪeg heil"])
+    def test_confusables_from_other_scripts_do_not_evade(self, text):
+        assert screening.match(self.RULES, [text]).blocked is True
+
+    @pytest.mark.parametrize("text", ["Ϲhild porn", "ϲhild porn"])
+    def test_lunate_sigma_reads_as_c(self, text):
+        assert screening.match(screening.DEFAULT_RULES, [text]).blocked is True
+
+    def test_armenian_letters_spelling_a_flag_term_are_caught(self):
+        assert screening.match(self.RULES, ["ցenօcide"]).flags == ["violence"]
 
     def test_a_rule_written_with_homoglyphs_still_matches_plain_text(self):
         rules = screening.ScreeningRules(rules=[screening.Rule(term="hеil", category="hate speech", action="block")])
@@ -195,6 +208,25 @@ class TestMatch:
         )
         assert screening.match(rules, ["n@zi"]).categories == []
 
+    # A short term under leet folding must not match a plain number: "to" is not "70" (#561).
+    SHORT = screening.ScreeningRules(
+        rules=[screening.Rule(term="to", category="x", action="flag")], fold_leetspeak=True
+    )
+
+    @pytest.mark.parametrize("text", ["70 miles", "drove 70", "70, 70"])
+    def test_a_lettered_term_never_matches_a_number(self, text):
+        assert screening.match(self.SHORT, [text]).flags == []
+
+    @pytest.mark.parametrize("text", ["to", "7o", "70 miles to go"])
+    def test_a_lettered_term_still_matches_leet_with_a_letter(self, text):
+        assert screening.match(self.SHORT, [text]).flags == ["x"]
+
+    def test_a_digit_term_still_matches_digits_under_leet(self):
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="1488", category="hate speech", action="block")], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["chant 1488"]).blocked is True
+
 
 # Everyday lyrics a fold must not turn into a rule hit: English with numbers and prices, and
 # ordinary Russian and Greek, whose letters the homoglyph table maps onto Latin (#532).
@@ -205,6 +237,9 @@ ORDINARY_LYRICS = [
     "Всё пройдёт, и печаль, и радость, солнце встанет над рекой",
     "Σ' αγαπώ, σε θέλω, κάτω από τον ουρανό της Αθήνας\nΧόρεψε μαζί μου απόψε",
     "Ruby Tuesday, heal my heart, the rapeseed fields are golden, sheila come home",
+    # Armenian and Cherokee, whose lookalikes the table maps too (#561).
+    "Իմ սիրելի մայր, երգ եմ երգում քեզ համար, Հայաստան, իմ հայրենիք",
+    "ᎣᏏᏲ, ᏙᎯᏧ? ᎠᏂᏴᏫᏯ ᏗᎦᎳᏫᎢᏍᏗ ᎤᏁᎳᏅᎯ ᎤᏤᎵ",
 ]
 
 
@@ -527,6 +562,50 @@ class TestAdminRules:
         assert (await client.put(RULES_URL, json=bad, headers=_auth(admin, settings))).status_code == 422
         worse = {"rules": [{"term": "x", "category": "x", "action": "nuke"}], "allow_terms": [], "block_threshold": 0}
         assert (await client.put(RULES_URL, json=worse, headers=_auth(admin, settings))).status_code == 422
+
+    # "sieg<ZWSP>heil" would compile as the one word "siegheil" and never match the phrase (#561).
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"rules": [{"term": "sieg​heil", "category": "x", "action": "block"}]},
+            {"rules": [{"term": "sieg he️il", "category": "x", "action": "block"}]},
+            {"rules": [{"term": "siegㅤheil", "category": "x", "action": "block"}]},
+            {"allow_terms": ["rape⁠awareness"]},
+        ],
+    )
+    async def test_terms_with_invisible_characters_are_rejected(self, client, settings, body):
+        admin = await make_user("screen-admin-zw@example.com", is_admin=True)
+        for send in (client.put, client.patch):
+            resp = await send(RULES_URL, json=body, headers=_auth(admin, settings))
+            assert resp.status_code == 422
+            assert "invisible" in resp.json()["detail"]
+        assert (await client.get(RULES_URL, headers=_auth(admin, settings))).json() == (
+            screening.DEFAULT_RULES.model_dump()
+        )
+
+    async def test_an_accented_term_is_not_mistaken_for_an_invisible_one(self, client, settings):
+        admin = await make_user("screen-admin-accent@example.com", is_admin=True)
+        body = {"rules": [{"term": "heíl", "category": "x", "action": "block"}]}
+        assert (await client.put(RULES_URL, json=body, headers=_auth(admin, settings))).status_code == 200
+
+    async def test_patch_changes_only_the_fields_sent(self, client, settings):
+        admin = await make_user("screen-admin-patch@example.com", is_admin=True)
+        user = await make_user("screen-patch@example.com")
+        resp = await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
+        assert resp.status_code == 200
+        assert resp.json() == screening.DEFAULT_RULES.model_copy(update={"fold_leetspeak": True}).model_dump()
+        prompt = {"prompt": "a chant of s13g h31l"}
+        assert (await client.post(GENERATE_URL, json=prompt, headers=_auth(user, settings))).status_code == 422
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "update_screening_rules")
+        assert entry.details["before"]["fold_leetspeak"] is False
+        assert entry.details["after"]["fold_leetspeak"] is True
+
+    async def test_patch_validates_like_put(self, client, settings):
+        admin = await make_user("screen-admin-patch-bad@example.com", is_admin=True)
+        user = await make_user("screen-patch-nonadmin@example.com")
+        bad = await client.patch(RULES_URL, json={"block_threshold": -1}, headers=_auth(admin, settings))
+        assert bad.status_code == 422
+        assert (await client.patch(RULES_URL, json={}, headers=_auth(user, settings))).status_code == 403
 
 
 @pytest.fixture

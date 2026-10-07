@@ -1,6 +1,7 @@
 """Admin-only platform settings (US-27.1) and moderation (US-27.2, US-27.3).
 
-``GET/PUT /admin/screening-rules`` read and replace the live content-screening rules.
+``GET/PUT /admin/screening-rules`` read and replace the live content-screening rules; ``PATCH`` changes
+only the fields sent.
 A save applies to the next generation request — no deploy, no restart.
 ``GET /admin/moderation/reports`` lists listener reports, newest first.
 ``GET /admin/moderation/queue`` groups open reports and automated flags per clip, and lists
@@ -13,10 +14,11 @@ the log are paged by keyset cursor (#540); the queue sorts and filters on the se
 """
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ..auth.dependencies import CurrentUser, get_settings, require_admin
 from ..models import ReportCategory
@@ -32,12 +34,34 @@ async def get_screening_rules() -> ScreeningRules:
     return await screening.get_rules()
 
 
-@router.put("/screening-rules", response_model=ScreeningRules)
-async def put_screening_rules(rules: ScreeningRules, current: CurrentUser = Depends(require_admin)) -> ScreeningRules:
-    before = await screening.get_rules()
+async def _save_rules(rules: ScreeningRules, before: ScreeningRules, current: CurrentUser) -> ScreeningRules:
+    # Checked here, not in the model, so a term stored before this check can never fail every read (#561).
+    if any(screening.has_invisible(term) for term in [*(r.term for r in rules.rules), *rules.allow_terms]):
+        raise HTTPException(
+            status_code=422,
+            detail="A term contains an invisible character, which would join the words around it. Remove it.",
+        )
     saved = await screening.save_rules(rules)
     await moderation.log_screening_rules_update(current.user_id, before.model_dump(), saved.model_dump())
     return saved
+
+
+@router.put("/screening-rules", response_model=ScreeningRules)
+async def put_screening_rules(rules: ScreeningRules, current: CurrentUser = Depends(require_admin)) -> ScreeningRules:
+    return await _save_rules(rules, await screening.get_rules(), current)
+
+
+@router.patch("/screening-rules", response_model=ScreeningRules)
+async def patch_screening_rules(
+    changes: dict[str, Any], current: CurrentUser = Depends(require_admin)
+) -> ScreeningRules:
+    """Change only the fields sent, so toggling ``fold_leetspeak`` can't reset the rest (#561)."""
+    before = await screening.get_rules()
+    try:
+        rules = ScreeningRules.model_validate({**before.model_dump(), **changes})
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors(include_context=False)) from exc
+    return await _save_rules(rules, before, current)
 
 
 class ReportEntry(BaseModel):
