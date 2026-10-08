@@ -366,7 +366,8 @@ Package manager: `uv` with `hatchling` build backend
   `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip`, `User` or `Release` fetched before a moderation action could land.
   Remove and ban also make the releases private and queue their SoundCloud tracks for un-share
-  (`services/releases.unshare_releases`, #538/#569); dropping an artwork option that was the cover queues them too.
+  (`services/releases.unshare_releases`, #538/#569); dropping an artwork option that was the cover queues them too,
+  and an upload whose cover was dropped while it was in flight queues its own track.
   Every upload records its track id on `Clip.soundcloud_track_ids`, with or without a release, so bare uploads are
   covered. Nothing calls SoundCloud inside the admin request: the SoundCloud poller drains `SoundCloudUnshare`
   each cycle, with backoff (interval·2^n, capped 1h), until the track is private or gone, or the owner's grant is gone.
