@@ -298,6 +298,8 @@ async def soundcloud_upload(
     if track_id is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="SoundCloud returned no track id.")
 
+    # Recorded on the clip with or without a release, so a later removal or ban can un-share it (#569).
+    await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": str(track_id)}})
     if release is not None:
         # Persist the track id, then start the SoundCloud channel at ``submitted``
         # so the poller (US-13.6) can advance it as the upload is processed. Both are
@@ -307,14 +309,12 @@ async def soundcloud_upload(
         await status_service.apply_channel_status(
             release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
         )
-    # A removal landing mid-upload (#538) had no track id to un-share, so the new track is taken down here.
-    await release_service.unshare_if_source_removed(
-        clip.id,
-        current.user_id,
-        _settings(request),
-        release_id=release.id if release is not None else None,
-        track_id=str(track_id),
-    )
+    if artwork is not None and not await Clip.find_one({"_id": clip.id, "artwork_path": clip.artwork_path}):
+        # The cover this upload carried was dropped mid-upload (#569), and the drop queued before this track existed.
+        # ponytail: an owner replacing their own cover in that window also lands here; the cost is one re-upload.
+        await release_service.queue_track(clip.user_id, clip.id, str(track_id))
+    # A removal landing mid-upload (#538) ran before the track id was recorded, so it is queued again here.
+    await release_service.unshare_if_source_removed(clip.id, current.user_id)
 
     return UploadResponse(track_id=str(track_id), permalink_url=track.get("permalink_url"))
 

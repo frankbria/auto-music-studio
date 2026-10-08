@@ -318,7 +318,11 @@ const LOG_ACTION_LABELS: Record<string, string> = {
   appeal_upheld: "Upheld appeal",
   appeal_reversed: "Reversed appeal",
   appeal_info_requested: "Requested appeal info",
-  soundcloud_unshare_failed: "SoundCloud un-share failed",
+  // Platform-written outcomes of the SoundCloud un-share queue (#569).
+  soundcloud_unshared: "SoundCloud track made private",
+  soundcloud_unshare_failed: "SoundCloud un-share failed, retrying",
+  soundcloud_unshare_abandoned:
+    "SoundCloud un-share abandoned: account unlinked",
 }
 
 export function formatLogAction(action: string, targetType = "clip"): string {

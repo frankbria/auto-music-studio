@@ -365,12 +365,17 @@ Package manager: `uv` with `hatchling` build backend
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
   `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip`, `User` or `Release` fetched before a moderation action could land.
-  Remove and ban also make the releases private and best-effort un-share their SoundCloud tracks
-  (`services/releases.unshare_releases`, #538). A failure is logged in the action's details and returned as its
-  `detail`. A route that shares a release or track out must call `unshare_if_source_removed` after the external
-  call, because a removal or ban can land while that call is in flight. A ban counts as a takedown there even for a
-  clip that was still private, which the ban's own sweep skips. A failure on that path writes its own log entry
-  with `actor_id=None`, which means the platform wrote it rather than an admin
+  Remove and ban also make the releases private and queue their SoundCloud tracks for un-share
+  (`services/releases.unshare_releases`, #538/#569); dropping an artwork option that was the cover queues them too,
+  and an upload whose cover was dropped while it was in flight queues its own track.
+  Every upload records its track id on `Clip.soundcloud_track_ids`, with or without a release, so bare uploads are
+  covered. Nothing calls SoundCloud inside the admin request: the SoundCloud poller drains `SoundCloudUnshare`
+  each cycle, with backoff (interval·2^n, capped 1h), until the track is private or gone, or the owner's grant is gone.
+  Its outcomes are log entries with `actor_id=None` (the platform wrote them): `soundcloud_unshared`,
+  `soundcloud_unshare_failed` (first failure only) and `soundcloud_unshare_abandoned`. A route that shares a release
+  or track out must call `unshare_if_source_removed` after the external call, because a removal or ban can land while
+  that call is in flight. A ban counts as a takedown there even for a clip that was still private, which the ban's
+  own sweep skips. Bulk moderation routes isolate each target: an unexpected error is that target's `ok=false`
 - **Flagged non-clip content (#539)**: `Video` and `ArtworkOption` copy `moderation_flags` from their job at creation
   (a new generative output must too), and they and `VoiceModel` carry `moderation_reviewed_at`. The queue lists them with
   `target_type`/`target_id`; `POST /api/v1/admin/moderation/content` acts on them under `moderation.CONTENT_ACTIONS`

@@ -16,13 +16,28 @@ from pymongo.errors import DuplicateKeyError
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, ModerationLogEntry, Release, SoundCloudConnection, VisibilityState
+from acemusic.api.models import (
+    ArtworkOption,
+    Clip,
+    ModerationLogEntry,
+    Release,
+    SoundCloudConnection,
+    SoundCloudUnshare,
+    VisibilityState,
+)
 from acemusic.api.routers import distribution as dist
 from acemusic.api.services import moderation, soundcloud as sc
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
+from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
 from acemusic.storage import get_storage_backend
 from tests.users import make_user
+
+
+async def _drain(settings) -> None:
+    """Run the SoundCloud poller's un-share queue drain once (#569)."""
+    await SoundCloudStatusPoller(settings).drain_unshares()
+
 
 pytestmark = pytest.mark.integration
 
@@ -241,6 +256,8 @@ class TestUpload:
         assert captured["metadata"]["key_signature"] == "Am"
         assert captured["metadata"]["genre"] == "house"  # override beat the style_tag default
         assert captured["audio"] == b"RIFFaudio"
+        # #569: recorded on the clip even without a release, so a later takedown can un-share it.
+        assert (await Clip.get(clip.id)).soundcloud_track_ids == ["777"]
 
     async def test_untitled_clip_falls_back_to_clip_id_as_title(
         self, client, settings, local_storage, monkeypatch
@@ -517,6 +534,7 @@ class TestUploadReleaseAssociation:
         stored = await Release.get(release.id)
         assert stored.soundcloud_track_id == "555"
         assert stored.channel_statuses["soundcloud"].value == "submitted"
+        assert (await Clip.get(clip.id)).soundcloud_track_ids == ["555"]
 
     async def test_release_id_mismatched_clip_returns_400(self, client, settings, local_storage, monkeypatch) -> None:
         user = await make_user("up-assoc-mismatch@example.com", tier=PRO)
@@ -586,6 +604,10 @@ class TestRemovalMidUpload:
         resp, shared = await self._upload_racing_a_removal(client, settings, monkeypatch, user, clip)
 
         assert resp.status_code == 403
+        # Queued, not un-shared inside the request (#569); the poller's next cycle makes it private.
+        assert shared == []
+        assert (await Clip.get(clip.id)).soundcloud_track_ids == ["808"]
+        await _drain(settings)
         assert shared == [("808", "private")]
 
     async def test_the_release_keeps_the_track_and_goes_private(self, client, settings, local_storage, monkeypatch):
@@ -598,6 +620,7 @@ class TestRemovalMidUpload:
         resp, shared = await self._upload_racing_a_removal(client, settings, monkeypatch, user, clip, release)
 
         assert resp.status_code == 403
+        await _drain(settings)
         assert shared == [("808", "private")]
         stored = await Release.get(release.id)
         # Recorded, so a later moderation action can still find it.
@@ -616,11 +639,69 @@ class TestRemovalMidUpload:
         resp, _ = await self._upload_racing_a_removal(client, settings, monkeypatch, user, clip, release, fail=True)
 
         assert resp.status_code == 403
+        await _drain(settings)
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.target_id == str(clip.id))
         assert entry.action == "soundcloud_unshare_failed"
         # The platform wrote it, not an admin; the clip's owner is never recorded as the actor.
         assert entry.actor_id is None
         assert [f["track_id"] for f in entry.details["soundcloud_unshare_failed"]] == ["808"]
+
+    async def test_a_cover_dropped_mid_upload_takes_the_new_track_down(
+        self, client, settings, local_storage, monkeypatch
+    ):
+        # #569: the upload carried the cover before moderation dropped it, and the drop queued before the track
+        # id was recorded. The upload notices its cover is gone and queues its own track.
+        user = await make_user("up-race-cover@example.com", tier=PRO)
+        admin = await make_user("up-race-cover-admin@example.com", is_admin=True)
+        clip = await _make_clip(user, b"RIFFaudio")
+        await _make_connection(user)
+        path = f"{clip.user_id}/{clip.workspace_id}/artwork/{clip.id}/cover.png"
+        get_storage_backend().upload(path, b"png")
+        option = await ArtworkOption(
+            clip_id=clip.id, user_id=user.id, job_id=PydanticObjectId(), storage_path=path, option_index=0
+        ).insert()
+        await Clip.find_one(Clip.id == clip.id).update({"$set": {"artwork_path": path}})
+        shared: list[tuple[str, str]] = []
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            assert artwork == b"png"
+            await moderation.act_on_content(str(admin.id), "artwork", "drop", str(option.id), None)
+            return {"id": 1001}
+
+        async def _sharing(token, track_id, sharing):
+            shared.append((track_id, sharing))
+            return {}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        monkeypatch.setattr(sc, "update_track_sharing", _sharing)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+
+        assert resp.status_code == 200
+        await _drain(settings)
+        assert shared == [("1001", "private")]
+
+    async def test_an_upload_with_its_cover_intact_is_not_taken_down(
+        self, client, settings, local_storage, monkeypatch
+    ):
+        user = await make_user("up-cover-kept@example.com", tier=PRO)
+        clip = await _make_clip(user, b"RIFFaudio")
+        await _make_connection(user)
+        path = f"{clip.user_id}/{clip.workspace_id}/artwork/{clip.id}/cover.png"
+        get_storage_backend().upload(path, b"png")
+        await Clip.find_one(Clip.id == clip.id).update({"$set": {"artwork_path": path}})
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            return {"id": 1002}
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+
+        assert resp.status_code == 200
+        assert await SoundCloudUnshare.find_all().to_list() == []
 
     async def test_a_ban_during_the_upload_of_a_private_clip_unshares_the_track(
         self, client, settings, local_storage, monkeypatch
@@ -634,7 +715,7 @@ class TestRemovalMidUpload:
 
         async def _upload(token, audio, filename, metadata, artwork=None):
             # A ban skips a private clip, so the clip is never marked removed.
-            await moderation.act_on_user(str(admin.id), "ban", str(user.id), None, settings)
+            await moderation.act_on_user(str(admin.id), "ban", str(user.id), None)
             return {"id": 909}
 
         async def _sharing(token, track_id, sharing):
@@ -649,4 +730,5 @@ class TestRemovalMidUpload:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == "This account has been suspended."
+        await _drain(settings)
         assert shared == [("909", "private")]

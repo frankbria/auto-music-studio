@@ -13,6 +13,8 @@ the log are paged by keyset cursor (#540); the queue sorts and filters on the se
 /admin/moderation/appeals/{id}`` upholds, reverses or asks for more information.
 """
 
+import logging
+from collections.abc import Awaitable
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -20,11 +22,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from ..auth.dependencies import CurrentUser, get_settings, require_admin
+from ..auth.dependencies import CurrentUser, require_admin
 from ..models import ReportCategory
 from ..models.screening import ScreeningRules
 from ..services import appeals as appeal_service, moderation, reports as report_service, screening
-from ..settings import ApiSettings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -143,15 +146,20 @@ class ClipActionResponse(BaseModel):
     results: list[ClipActionResult]
 
 
+async def _isolated(action: Awaitable[moderation.ActionResult]) -> moderation.ActionResult:
+    """One target's unexpected error becomes that target's result, so the rest of a bulk action still runs (#569)."""
+    try:
+        return await action
+    except Exception:
+        logger.exception("A moderation action failed on one target")
+        return moderation.ActionResult(ok=False, detail="This action hit an unexpected error. Try it again.")
+
+
 @router.post("/moderation/clips", response_model=ClipActionResponse)
-async def moderate_clips(
-    body: ClipActionRequest,
-    current: CurrentUser = Depends(require_admin),
-    settings: ApiSettings = Depends(get_settings),
-) -> ClipActionResponse:
+async def moderate_clips(body: ClipActionRequest, current: CurrentUser = Depends(require_admin)) -> ClipActionResponse:
     results = []
     for clip_id in body.clip_ids:
-        outcome = await moderation.act_on_clip(current.user_id, body.action, clip_id, body.reason, settings)
+        outcome = await _isolated(moderation.act_on_clip(current.user_id, body.action, clip_id, body.reason))
         results.append(ClipActionResult(clip_id=clip_id, **outcome.model_dump()))
     return ClipActionResponse(results=results)
 
@@ -184,8 +192,8 @@ async def moderate_content(
 ) -> ContentActionResponse:
     results = []
     for target_id in body.ids:
-        outcome = await moderation.act_on_content(
-            current.user_id, body.target_type, body.action, target_id, body.reason
+        outcome = await _isolated(
+            moderation.act_on_content(current.user_id, body.target_type, body.action, target_id, body.reason)
         )
         results.append(ContentActionResult(id=target_id, **outcome.model_dump()))
     return ContentActionResponse(results=results)
@@ -209,11 +217,10 @@ class UserActionResponse(BaseModel):
 async def moderate_users(
     body: UserActionRequest,
     current: CurrentUser = Depends(require_admin),
-    settings: ApiSettings = Depends(get_settings),
 ) -> UserActionResponse:
     results = []
     for user_id in body.user_ids:
-        outcome = await moderation.act_on_user(current.user_id, body.action, user_id, body.reason, settings)
+        outcome = await _isolated(moderation.act_on_user(current.user_id, body.action, user_id, body.reason))
         results.append(UserActionResult(user_id=user_id, **outcome.model_dump()))
     return UserActionResponse(results=results)
 

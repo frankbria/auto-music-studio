@@ -21,6 +21,7 @@ and ``PUT /tracks/{id}`` and logs one line per request to ``$DIR/soundcloud.log`
 import argparse
 import asyncio
 import io
+import itertools
 import json
 import os
 import secrets
@@ -38,6 +39,8 @@ MONGO_URL = "mongodb://localhost:27017"
 
 
 def soundcloud_stand_in(port: int, log: Path) -> ThreadingHTTPServer:
+    track_ids = itertools.count(4242)
+
     class Handler(BaseHTTPRequestHandler):
         def _answer(self, status: int, body: dict) -> None:
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -51,7 +54,8 @@ def soundcloud_stand_in(port: int, log: Path) -> ThreadingHTTPServer:
             self.wfile.write(data)
 
         def do_POST(self) -> None:
-            self._answer(201, {"id": 4242, "permalink_url": "https://soundcloud.example/demo"})
+            # A fresh id per upload, as SoundCloud gives, so a demo can tell two clips' tracks apart.
+            self._answer(201, {"id": next(track_ids), "permalink_url": "https://soundcloud.example/demo"})
 
         def do_PUT(self) -> None:
             self._answer(200, {})

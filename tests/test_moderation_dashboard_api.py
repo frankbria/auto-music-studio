@@ -26,14 +26,16 @@ from acemusic.api.models import (
     Release,
     ReleaseStatus,
     SoundCloudConnection,
+    SoundCloudUnshare,
     User,
     Video,
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import moderation, routing, screening, soundcloud
+from acemusic.api.services import moderation, releases as release_service, routing, screening, soundcloud
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
+from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
 from tests.users import make_user
 
 ADMIN_URL = f"{API_V1_PREFIX}/admin"
@@ -737,8 +739,7 @@ class TestModerationLog:
             "clips_removed": 1,
             "videos_unpublished": 0,
             "releases_privatized": 0,
-            "soundcloud_unshared": [],
-            "soundcloud_unshare_failed": [],
+            "soundcloud_unshare_queued": [],
         }
 
     async def test_screening_rules_update_is_logged_with_before_and_after(self, client, settings):
@@ -1012,11 +1013,23 @@ async def _latest_log(action: str) -> ModerationLogEntry:
     )
 
 
+async def _drain(settings) -> int:
+    """Run the poller's queue drain once, as its next cycle would (#569)."""
+    return await SoundCloudStatusPoller(settings).drain_unshares()
+
+
+async def _queued_track_ids() -> list[str]:
+    return sorted(row.track_id for row in await SoundCloudUnshare.find_all().to_list())
+
+
 @pytest.mark.integration
 class TestRemovalUnsharesSoundCloud:
-    """#538: taking a clip down also takes down what was already distributed from it."""
+    """#538: taking a clip down also takes down what was already distributed from it.
 
-    async def test_remove_makes_releases_private_and_unshares_their_tracks(self, client, settings, sharing_calls):
+    #569: the takedown only queues each track; the SoundCloud poller makes it private off-request.
+    """
+
+    async def test_remove_makes_releases_private_and_queues_their_tracks(self, client, settings, sharing_calls):
         owner = await _user()
         clip = await _clip(owner)
         await _sc_connection(owner)
@@ -1027,15 +1040,19 @@ class TestRemovalUnsharesSoundCloud:
         [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
 
         assert result == {"clip_id": str(clip.id), "ok": True, "detail": None}
-        assert sharing_calls == [("sc-1", "private")]
+        # The admin request never waits on SoundCloud.
+        assert sharing_calls == []
         for release in (shared, unshipped):
             assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         details = (await _latest_log("remove")).details
         assert details["releases_privatized"] == 2
-        assert details["soundcloud_unshared"] == ["sc-1"]
-        assert details["soundcloud_unshare_failed"] == []
+        assert details["soundcloud_unshare_queued"] == ["sc-1"]
 
-    async def test_a_failed_unshare_is_logged_and_surfaced_to_the_admin(self, client, settings, sharing_calls):
+        assert await _drain(settings) == 1
+        assert sharing_calls == [("sc-1", "private")]
+        assert await _queued_track_ids() == []
+
+    async def test_an_unreachable_track_is_abandoned_off_request_and_logged(self, client, settings, sharing_calls):
         owner = await _user()
         clip = await _clip(owner)
         # No SoundCloud connection: the owner unlinked their account, so the track can't be reached.
@@ -1043,50 +1060,59 @@ class TestRemovalUnsharesSoundCloud:
 
         [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
 
-        assert result["ok"] is True
-        assert "sc-9" in result["detail"] and "SoundCloud" in result["detail"]
+        assert result == {"clip_id": str(clip.id), "ok": True, "detail": None}
         assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         assert (await Clip.get(clip.id)).removed_at is not None
-        details = (await _latest_log("remove")).details
-        assert details["soundcloud_unshared"] == []
-        assert [f["track_id"] for f in details["soundcloud_unshare_failed"]] == ["sc-9"]
-        assert details["soundcloud_unshare_failed"][0]["error"]
+        assert await _queued_track_ids() == ["sc-9"]
 
-    async def test_other_clips_releases_are_untouched(self, client, settings, sharing_calls):
+        await _drain(settings)
+
+        assert sharing_calls == []
+        assert await _queued_track_ids() == []
+        entry = await _latest_log("soundcloud_unshare_abandoned")
+        assert entry.actor_id is None and entry.target_id == str(clip.id)
+        assert entry.details["track_id"] == "sc-9"
+
+    async def test_other_clips_tracks_are_untouched(self, client, settings, sharing_calls):
         owner = await _user()
-        clip, other = await _clip(owner), await _clip(owner)
+        clip, other = await _clip(owner), await _clip(owner, soundcloud_track_ids=["sc-bare-other"])
         await _sc_connection(owner)
         kept = await _release(other, visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-other")
 
         await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+        await _drain(settings)
 
         assert sharing_calls == []
         assert (await Release.get(kept.id)).visibility == VisibilityState.PUBLIC
 
-    async def test_ban_makes_every_release_private_and_unshares_its_tracks(self, client, settings, sharing_calls):
+    async def test_remove_queues_a_bare_upload_recorded_on_the_clip(self, client, settings, sharing_calls):
+        owner = await _user()
+        clip = await _clip(owner, soundcloud_track_ids=["sc-bare"])
+        await _sc_connection(owner)
+
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+        await _drain(settings)
+
+        assert sharing_calls == [("sc-bare", "private")]
+
+    async def test_ban_makes_every_release_private_and_queues_its_tracks(self, client, settings, sharing_calls):
         owner = await _user()
         await _sc_connection(owner)
         first = await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-a")
         second = await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-b")
+        await _clip(owner, visibility=VisibilityState.PRIVATE, soundcloud_track_ids=["sc-bare"])
 
         [result] = await _act_on_users(client, await _admin(), settings, "ban", [owner.id])
 
         assert result == {"user_id": str(owner.id), "ok": True, "detail": None}
-        assert sorted(sharing_calls) == [("sc-a", "private"), ("sc-b", "private")]
+        assert sharing_calls == []
         for release in (first, second):
             assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         details = (await _latest_log("ban")).details
-        assert sorted(details["soundcloud_unshared"]) == ["sc-a", "sc-b"]
+        assert details["soundcloud_unshare_queued"] == ["sc-a", "sc-b", "sc-bare"]
 
-    async def test_ban_surfaces_a_failed_unshare(self, client, settings, sharing_calls):
-        owner = await _user()
-        await _release(await _clip(owner), visibility=VisibilityState.PUBLIC, soundcloud_track_id="sc-x")
-
-        [result] = await _act_on_users(client, await _admin(), settings, "ban", [owner.id])
-
-        assert result["ok"] is True
-        assert "sc-x" in result["detail"]
-        assert (await User.get(owner.id)).banned_at is not None
+        assert await _drain(settings) == 3
+        assert sorted(sharing_calls) == [("sc-a", "private"), ("sc-b", "private"), ("sc-bare", "private")]
 
     async def test_a_removal_landing_mid_share_leaves_the_track_private(self, client, settings, monkeypatch):
         owner, admin = await _user(), await _admin()
@@ -1099,7 +1125,7 @@ class TestRemovalUnsharesSoundCloud:
             if sharing == "public" and not calls:
                 # The admin removes the clip after the route's local write; the moderation un-share
                 # reaches SoundCloud first and the route's "public" PUT lands after it.
-                await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), None, settings)
+                await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), None)
             calls.append(sharing)
             return {}
 
@@ -1111,6 +1137,7 @@ class TestRemovalUnsharesSoundCloud:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == REMOVED
+        await _drain(settings)
         assert calls[-1] == "private"
         assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
@@ -1129,7 +1156,7 @@ class TestRemovalUnsharesSoundCloud:
             # After the route read the clip, before it writes it public: the ban's sweep skips a private clip.
             if not calls:
                 calls.append("ban")
-                await moderation.act_on_user(str(admin.id), "ban", str(owner.id), None, settings)
+                await moderation.act_on_user(str(admin.id), "ban", str(owner.id), None)
             return await real_enforce(*texts, **kwargs)
 
         async def update_track_sharing(_token, track_id, sharing):
@@ -1145,8 +1172,109 @@ class TestRemovalUnsharesSoundCloud:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == SUSPENDED
+        await _drain(settings)
         assert calls[-1] == "private"
         assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         stored = await Clip.get(clip.id)
         # Taken down the way the ban would have, had its sweep seen the clip public.
         assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)
+
+
+@pytest.mark.integration
+class TestBulkActionsIsolateFailures:
+    """#569: one target's unexpected error is that target's result; the rest of the batch still runs."""
+
+    async def test_a_crashing_clip_does_not_abort_the_batch(self, client, settings, monkeypatch):
+        owner = await _user()
+        first, bad, last = await _clip(owner), await _clip(owner), await _clip(owner)
+        real = moderation.act_on_clip
+
+        async def flaky(actor_id, action, clip_id, reason):
+            if clip_id == str(bad.id):
+                raise RuntimeError("mongo went away")
+            return await real(actor_id, action, clip_id, reason)
+
+        monkeypatch.setattr(moderation, "act_on_clip", flaky)
+
+        results = await _act_on_clips(client, await _admin(), settings, "remove", [first.id, bad.id, last.id])
+
+        assert [r["ok"] for r in results] == [True, False, True]
+        assert results[1]["clip_id"] == str(bad.id)
+        assert "unexpected error" in results[1]["detail"]
+        for clip in (first, last):
+            assert (await Clip.get(clip.id)).removed_at is not None
+
+    async def test_a_crashing_user_does_not_abort_the_batch(self, client, settings, monkeypatch):
+        bad, good = await _user(), await _user()
+        real = moderation.act_on_user
+
+        async def flaky(actor_id, action, user_id, reason):
+            if user_id == str(bad.id):
+                raise RuntimeError("mongo went away")
+            return await real(actor_id, action, user_id, reason)
+
+        monkeypatch.setattr(moderation, "act_on_user", flaky)
+
+        results = await _act_on_users(client, await _admin(), settings, "ban", [bad.id, good.id])
+
+        assert [r["ok"] for r in results] == [False, True]
+        assert (await User.get(good.id)).banned_at is not None
+
+    async def test_a_remove_that_cannot_queue_its_unshares_changes_nothing(self, client, settings, monkeypatch):
+        # Queueing runs before the clip is written, so a failure leaves nothing half-done to retry into.
+        owner = await _user()
+        clip = await _clip(owner, soundcloud_track_ids=["sc-1"])
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("mongo went away")
+
+        monkeypatch.setattr(release_service, "unshare_releases", broken)
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result["ok"] is False
+        stored = await Clip.get(clip.id)
+        assert stored.removed_at is None and stored.visibility == VisibilityState.PUBLIC
+        assert await _latest_log("remove") is None
+
+    async def test_an_upload_finishing_mid_remove_is_still_queued(self, client, settings, monkeypatch):
+        # The upload records its track after the remove enumerated the clip's tracks but before the clip was
+        # stamped removed, so the upload's own check missed the removal too. The post-stamp queueing catches it.
+        owner = await _user()
+        clip = await _clip(owner, soundcloud_track_ids=["sc-early"])
+        real = release_service.unshare_releases
+
+        async def upload_lands(release_query, clip_query):
+            result = await real(release_query, clip_query)
+            await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": "sc-late"}})
+            return result
+
+        monkeypatch.setattr(release_service, "unshare_releases", upload_lands)
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result["ok"] is True
+        assert await _queued_track_ids() == ["sc-early", "sc-late"]
+
+    async def test_a_share_landing_mid_remove_leaves_the_release_private(self, client, settings, monkeypatch):
+        # The owner's share sets the release public after the remove's first privatize but before the clip is
+        # stamped, so the share's own check saw no removal. The post-stamp pass privatizes it again.
+        owner = await _user()
+        clip = await _clip(owner)
+        release = await _release(clip, visibility=VisibilityState.PRIVATE)
+        real = release_service.unshare_releases
+        calls = 0
+
+        async def share_lands(release_query, clip_query):
+            nonlocal calls
+            calls += 1
+            result = await real(release_query, clip_query)
+            if calls == 1:
+                await Release.find_one(Release.id == release.id).update({"$set": {"visibility": "public"}})
+            return result
+
+        monkeypatch.setattr(release_service, "unshare_releases", share_lands)
+
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE

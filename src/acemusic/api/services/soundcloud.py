@@ -80,6 +80,10 @@ class SoundCloudAuthError(SoundCloudError):
     """Re-authorization is required (e.g. the refresh token was revoked)."""
 
 
+class SoundCloudTrackGone(SoundCloudError):
+    """The track no longer exists on SoundCloud (404/410), so it can't be public either (#569)."""
+
+
 @dataclass
 class LinkAuthorizationRequest:
     """The connect step's output: the authorize URL plus the secrets to cookie.
@@ -326,6 +330,8 @@ async def update_track_sharing(access_token: str, track_id: str, sharing: str) -
                 headers={"Authorization": f"OAuth {access_token}"},
                 data={"track[sharing]": sharing},
             )
+            if resp.status_code in (404, 410):
+                raise SoundCloudTrackGone("The SoundCloud track no longer exists.")
             resp.raise_for_status()
             return resp.json()
     except (httpx.HTTPError, ValueError) as exc:  # ValueError: a 2xx with a non-JSON body

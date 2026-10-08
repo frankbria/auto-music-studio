@@ -21,6 +21,7 @@ from .refresh_token import RefreshToken
 from .release import Release, ReleaseStatus
 from .screening import ScreeningRulesDocument
 from .soundcloud_connection import SoundCloudConnection
+from .soundcloud_unshare import SoundCloudUnshare
 from .user import OAuthIdentity, User
 from .video import Video
 from .voice_model import VoiceModel, VoiceModelStatus
@@ -38,6 +39,7 @@ ALL_MODELS = [
     BatchJob,
     ArtworkOption,
     SoundCloudConnection,
+    SoundCloudUnshare,
     Release,
     NotificationEvent,
     Counter,
@@ -74,6 +76,7 @@ __all__ = [
     "Preset",
     "PRESET_PARAM_FIELDS",
     "SoundCloudConnection",
+    "SoundCloudUnshare",
     "Release",
     "ReleaseStatus",
     "DistributionStatus",

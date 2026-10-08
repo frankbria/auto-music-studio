@@ -37,7 +37,6 @@ from ..models import (
     VoiceModel,
 )
 from ..models.common import utcnow
-from ..settings import ApiSettings
 from . import clips as clip_service, releases as release_service
 from .common import coerce_object_id
 
@@ -278,9 +277,7 @@ def _queue_item(
     )
 
 
-async def act_on_clip(
-    actor_id: str, action: ClipAction, clip_id: str, reason: str | None, settings: ApiSettings
-) -> ActionResult:
+async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: str | None) -> ActionResult:
     oid = coerce_object_id(clip_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid clip id.")
@@ -298,12 +295,17 @@ async def act_on_clip(
             # US-27.4: a reversed appeal restores the visibility recorded here.
             details["previous_visibility"] = clip.visibility.value
             updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
+            # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
+            details.update(await release_service.unshare_releases({"clip_id": oid}, {"_id": oid}))
         elif action == "flag":
             updates.update(content_warning=True, flagged_at=now)
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
-            details.update(await release_service.unshare_releases({"clip_id": oid}, settings))
+            # And again once stamped: an upload or share that landed in between saw no removal either, so its
+            # track is queued and its release made private here. Both are idempotent; anything from here on
+            # sees removed_at and takes itself down (unshare_if_source_removed).
+            await release_service.unshare_releases({"clip_id": oid}, {"_id": oid})
             await NotificationEvent(
                 user_id=clip.user_id,
                 clip_id=clip.id,
@@ -312,7 +314,7 @@ async def act_on_clip(
                 payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
             ).insert()
     await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved, **details})
-    return ActionResult(ok=True, detail=_unshare_failure(details))
+    return ActionResult(ok=True)
 
 
 async def act_on_content(
@@ -342,23 +344,28 @@ async def act_on_content(
 
 async def _drop_artwork(option: ArtworkOption) -> dict:
     """Delete a generated cover option, and clear the clip's cover if it was that option."""
+    queued: list[str] = []
+    is_cover = await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}) is not None
+    if is_cover:
+        # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it. Queued
+        # before anything is deleted, so a failure here leaves the drop retryable.
+        queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
     await option.delete()
     cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
         {"$set": {"artwork_path": None}}
     )
+    if is_cover:
+        # And again once cleared: an upload that recorded its track in between still saw the cover. Anything
+        # recorded from here on sees the cover gone and queues itself (routers/distribution.soundcloud_upload).
+        queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
     try:
         await asyncio.to_thread(get_storage_backend().delete, option.storage_path)
     except Exception:  # best-effort: the option can no longer be selected or served either way
         logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
-    return {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
-
-
-def _unshare_failure(details: dict) -> str | None:
-    failed = [f["track_id"] for f in details.get("soundcloud_unshare_failed", [])]
-    if not failed:
-        return None
-    noun, pronoun = ("track", "it") if len(failed) == 1 else ("tracks", "they")
-    return f"Couldn't make SoundCloud {noun} {', '.join(failed)} private; {pronoun} may still be public on the owner's account."
+    details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
+    if queued:
+        details["soundcloud_unshare_queued"] = queued
+    return details
 
 
 async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
@@ -366,9 +373,7 @@ async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
     return result.modified_count
 
 
-async def act_on_user(
-    actor_id: str, action: UserAction, user_id: str, reason: str | None, settings: ApiSettings
-) -> ActionResult:
+async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: str | None) -> ActionResult:
     oid = coerce_object_id(user_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid user id.")
@@ -384,12 +389,12 @@ async def act_on_user(
     else:
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
-        details = await _ban(user, settings)
+        details = await _ban(user)
     await log_action(actor_id, action, "user", str(oid), reason, details)
-    return ActionResult(ok=True, detail=_unshare_failure(details))
+    return ActionResult(ok=True)
 
 
-async def _ban(user: User, settings: ApiSettings) -> dict:
+async def _ban(user: User) -> dict:
     now = utcnow()
     if user.banned_at is None:
         await user.set({"banned_at": now})
@@ -399,7 +404,7 @@ async def _ban(user: User, settings: ApiSettings) -> dict:
     videos = await Video.find({"user_id": user.id, "published": True}).update(
         {"$set": {"published": False, "removed_at": now}}
     )
-    releases = await release_service.unshare_releases({"user_id": user.id}, settings)
+    releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
