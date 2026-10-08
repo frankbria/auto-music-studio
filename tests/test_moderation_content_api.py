@@ -406,8 +406,8 @@ class TestArtworkActions:
     ):
         # An upload records its track after the drop's first queueing but before the cover is cleared, so the
         # upload still saw its cover. The drop's second queueing, after the clear, picks it up.
+        # No earlier tracks: the clip's first upload is the one landing in between, so the first scan finds nothing.
         option, clip = await _artwork(local_storage, as_cover=True)
-        await clip.set({"soundcloud_track_ids": ["sc-early"]})
         real = release_service.queue_unshares
         calls = 0
 
@@ -423,8 +423,7 @@ class TestArtworkActions:
 
         await _act(client, await _admin(), settings, "artwork", "drop", [option.id])
 
-        queued = sorted(row.track_id for row in await SoundCloudUnshare.find_all().to_list())
-        assert queued == ["sc-early", "sc-late"]
+        assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-late"]
 
     async def test_dropping_an_option_that_was_not_the_cover_queues_nothing(self, client, settings, local_storage):
         option, clip = await _artwork(local_storage)

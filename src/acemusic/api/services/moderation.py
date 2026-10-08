@@ -344,7 +344,8 @@ async def act_on_content(
 async def _drop_artwork(option: ArtworkOption) -> dict:
     """Delete a generated cover option, and clear the clip's cover if it was that option."""
     queued: list[str] = []
-    if await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}):
+    is_cover = await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}) is not None
+    if is_cover:
         # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it. Queued
         # before anything is deleted, so a failure here leaves the drop retryable.
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
@@ -352,7 +353,7 @@ async def _drop_artwork(option: ArtworkOption) -> dict:
     cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
         {"$set": {"artwork_path": None}}
     )
-    if queued:
+    if is_cover:
         # And again once cleared: an upload that recorded its track in between still saw the cover. Anything
         # recorded from here on sees the cover gone and queues itself (routers/distribution.soundcloud_upload).
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
