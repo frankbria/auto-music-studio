@@ -183,6 +183,24 @@ export function toAppNotification(
         `You received a moderation warning.${suffix("Reason", text(p, "reason"))}`,
         "/notifications"
       )
+    case "moderation_video_unpublished":
+      return row(
+        "moderation",
+        `Moderation unpublished your video for ${song}.${suffix("Reason", text(p, "reason"))}`,
+        event.clip_id ? `/video/${event.clip_id}` : "/notifications"
+      )
+    case "moderation_video_restored":
+      return row(
+        "moderation",
+        `Moderation restored your video for ${song}. You can publish it again.${suffix("Reason", text(p, "reason"))}`,
+        event.clip_id ? `/video/${event.clip_id}` : "/notifications"
+      )
+    case "moderation_artwork_dropped":
+      return row(
+        "moderation",
+        `Moderation removed ${p.was_cover === true ? "the cover art" : "an artwork image"} from ${song}.${suffix("Reason", text(p, "reason"))}`,
+        songHref
+      )
     case "moderation_appeal_upheld":
       return row(
         "moderation",

@@ -48,9 +48,9 @@ QueueSource = Literal["report", "automated"]
 QueueSort = Literal["reports", "severity", "newest"]
 # #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
 ContentType = Literal["video", "artwork", "voice_model"]
-ContentAction = Literal["approve", "unpublish", "drop"]
+ContentAction = Literal["approve", "unpublish", "restore", "drop"]
 CONTENT_ACTIONS: dict[str, tuple[str, ...]] = {
-    "video": ("approve", "unpublish"),
+    "video": ("approve", "unpublish", "restore"),
     "artwork": ("approve", "drop"),
     "voice_model": ("approve",),
 }
@@ -320,7 +320,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
 async def act_on_content(
     actor_id: str, target_type: ContentType, action: ContentAction, target_id: str, reason: str | None
 ) -> ActionResult:
-    """Approve, unpublish (video) or drop (artwork) one flagged non-clip output (#539)."""
+    """Approve, unpublish or restore (video), or drop (artwork) one flagged non-clip output (#539, #571)."""
     noun = _CONTENT_NOUNS[target_type]
     oid = coerce_object_id(target_id)
     if oid is None:
@@ -330,16 +330,63 @@ async def act_on_content(
         return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
     now = utcnow()
     details: dict = {}
+    notice: tuple[str, dict] | None = None
     if action == "drop":
         details = await _drop_artwork(doc)
+        notice = ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
+    elif action == "restore":
+        if refused := await _restore_video(doc):
+            return ActionResult(ok=False, detail=refused)
+        notice = ("moderation_video_restored", {"video_id": str(oid)})
     else:
         updates: dict = {"moderation_reviewed_at": now}
         if action == "unpublish":
             details["was_published"] = doc.published
-            updates.update(published=False, removed_at=now)
+            if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
+                notice = ("moderation_video_unpublished", {"video_id": str(oid)})
+            # A video already down keeps its stamp: its edits carry that one, and restore matches on it.
+            updates.update(published=False, removed_at=doc.removed_at or now)
         await doc.set(updates)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
+    # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
+    # already stamped, lifted or deleted), so a failed insert must not report the action as failed.
+    if notice:
+        try:
+            await _notify_owner(doc, notice[0], reason, **notice[1])
+        except Exception:
+            logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+async def _restore_video(video: Video) -> str | None:
+    """Lift a takedown so the owner may publish again (#571). The video stays unpublished until they do."""
+    if video.removed_at is None:
+        return "This video is not taken down."
+    owner = await User.get(video.user_id)
+    if owner is not None and owner.banned_at is not None:
+        return "The video's owner is banned."
+    # Conditional on the takedown read: of two concurrent restores only one applies, and an unpublish that
+    # re-stamps removed_at meanwhile is not lifted by a restore aimed at the older one.
+    lifted = await Video.find({"_id": video.id, "removed_at": video.removed_at}).update({"$set": {"removed_at": None}})
+    if not lifted.modified_count:
+        return "This video is not taken down."
+    # Edits copy their source's removed_at (tasks/video.py), so the same stamp on this song's videos is this takedown.
+    await Video.find({"clip_id": video.clip_id, "user_id": video.user_id, "removed_at": video.removed_at}).update(
+        {"$set": {"removed_at": None}}
+    )
+    return None
+
+
+async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str | None, **payload) -> None:
+    """Tell a video's or artwork's owner what moderation did to it, naming the song it was made for."""
+    clip = await Clip.get(doc.clip_id)
+    await NotificationEvent(
+        user_id=doc.user_id,
+        clip_id=doc.clip_id,
+        event_type=event_type,
+        channel="in_app",
+        payload={**payload, "title": clip.title if clip else None, "reason": reason},
+    ).insert()
 
 
 async def _drop_artwork(option: ArtworkOption) -> dict:

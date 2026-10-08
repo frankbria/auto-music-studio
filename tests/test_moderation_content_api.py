@@ -19,6 +19,7 @@ from acemusic.api.models import (
     Clip,
     Job,
     ModerationLogEntry,
+    NotificationEvent,
     SoundCloudUnshare,
     User,
     Video,
@@ -27,7 +28,12 @@ from acemusic.api.models import (
     VoiceModelStatus,
     Workspace,
 )
-from acemusic.api.services import artwork as artwork_service, releases as release_service, video as video_service
+from acemusic.api.services import (
+    artwork as artwork_service,
+    moderation,
+    releases as release_service,
+    video as video_service,
+)
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -327,6 +333,167 @@ class TestVideoActions:
         resp = await client.get(f"{VIDEOS_URL}/{video.id}", headers=_auth(await _user(), settings))
         assert resp.status_code == 404
 
+    async def test_unpublish_notifies_the_owner(self, client, settings):
+        owner = await _user()
+        video = await _video(owner, published=True)
+
+        await _act(client, await _admin(), settings, "video", "unpublish", [video.id], reason="gore")
+
+        [notice] = await NotificationEvent.find(NotificationEvent.user_id == owner.id).to_list()
+        assert notice.event_type == "moderation_video_unpublished"
+        assert notice.clip_id == video.clip_id
+        assert notice.payload == {"video_id": str(video.id), "title": "Song", "reason": "gore"}
+
+    async def test_approve_notifies_no_one(self, client, settings):
+        owner = await _user()
+        video = await _video(owner)
+        await _act(client, await _admin(), settings, "video", "approve", [video.id])
+        assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 0
+
+
+@pytest.mark.integration
+class TestVideoRestore:
+    async def test_restore_lets_the_owner_publish_again_and_tells_them(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        [result] = await _act(client, admin, settings, "video", "restore", [video.id], reason="appealed by email")
+
+        assert result == {"id": str(video.id), "ok": True, "detail": None}
+        stored = await Video.get(video.id)
+        assert (stored.published, stored.removed_at) == (False, None)
+        notices = await NotificationEvent.find(NotificationEvent.user_id == owner.id).sort("+_id").to_list()
+        assert [n.event_type for n in notices] == ["moderation_video_unpublished", "moderation_video_restored"]
+        assert notices[1].payload == {"video_id": str(video.id), "title": "Song", "reason": "appealed by email"}
+        resp = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
+        assert resp.status_code == 200, resp.text
+        assert (await Video.get(video.id)).published is True
+
+    async def test_a_video_unpublished_before_it_was_ever_published_can_be_restored(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        [result] = await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert result["ok"] is True
+        resp = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
+        assert resp.status_code == 200, resp.text
+
+    async def test_restore_is_logged(self, client, settings):
+        admin = await _admin()
+        video = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        await _act(client, admin, settings, "video", "restore", [video.id], reason="mistake")
+
+        resp = await client.get(LOG_URL, headers=_auth(admin, settings))
+        newest = resp.json()["entries"][0]
+        assert (newest["action"], newest["target_type"], newest["target_id"], newest["reason"]) == (
+            "restore",
+            "video",
+            str(video.id),
+            "mistake",
+        )
+
+    async def test_a_video_that_was_not_taken_down_is_refused(self, client, settings):
+        owner = await _user()
+        video = await _video(owner, published=True)
+
+        [result] = await _act(client, await _admin(), settings, "video", "restore", [video.id])
+
+        assert result == {"id": str(video.id), "ok": False, "detail": "This video is not taken down."}
+        assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 0
+        assert await ModerationLogEntry.find(ModerationLogEntry.action == "restore").count() == 0
+
+    async def test_a_restore_does_not_lift_an_unpublish_that_landed_after_its_read(self, settings):
+        video = await _video(published=True)
+        await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 1, 1), "published": False}})
+        stale = await Video.get(video.id)
+        await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 2, 1)}})
+
+        assert await moderation._restore_video(stale) == "This video is not taken down."
+        assert (await Video.get(video.id)).removed_at == datetime(2026, 2, 1)
+
+    async def test_unpublishing_a_video_already_down_does_not_notify_again(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        [result] = await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        assert result["ok"] is True
+        assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 1
+
+    async def test_a_failed_notice_does_not_fail_an_applied_restore(self, client, settings, monkeypatch):
+        admin = await _admin()
+        video = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        async def broken(*args, **kwargs):
+            raise RuntimeError("mongo blip")
+
+        monkeypatch.setattr(moderation, "_notify_owner", broken)
+        [result] = await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert result["ok"] is True
+        assert (await Video.get(video.id)).removed_at is None
+        assert await ModerationLogEntry.find(ModerationLogEntry.action == "restore").count() == 1
+
+    async def test_restore_also_lifts_edits_that_inherited_the_takedown(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+        stamp = (await Video.get(video.id)).removed_at
+        edit = await Video(
+            clip_id=video.clip_id,
+            user_id=owner.id,
+            job_id=PydanticObjectId(),
+            storage_path="edit.mp4",
+            resolution="720p",
+            aspect_ratio="16:9",
+            parent_video_id=video.id,
+            removed_at=stamp,
+        ).insert()
+        other = await _video(owner)
+        await Video.find({"_id": other.id}).update({"$set": {"removed_at": datetime(2026, 1, 1)}})
+
+        await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert (await Video.get(edit.id)).removed_at is None
+        assert (await Video.get(other.id)).removed_at == datetime(2026, 1, 1)
+        resp = await client.post(f"{VIDEOS_URL}/{edit.id}/publish", headers=_auth(owner, settings))
+        assert resp.status_code == 200, resp.text
+
+    async def test_re_unpublishing_keeps_the_stamp_its_edits_inherited(self, client, settings):
+        admin = await _admin()
+        video = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+        stamp = (await Video.get(video.id)).removed_at
+
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        assert (await Video.get(video.id)).removed_at == stamp
+
+    async def test_a_banned_owners_video_stays_down(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, flags=(), published=True)
+        resp = await client.post(
+            f"{ADMIN_URL}/users", json={"action": "ban", "user_ids": [str(owner.id)]}, headers=_auth(admin, settings)
+        )
+        assert resp.status_code == 200, resp.text
+
+        [result] = await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert result == {"id": str(video.id), "ok": False, "detail": "The video's owner is banned."}
+        assert (await Video.get(video.id)).removed_at is not None
+
 
 @pytest.mark.integration
 class TestArtworkActions:
@@ -366,6 +533,16 @@ class TestArtworkActions:
         assert (await Clip.get(clip.id)).artwork_path is None
         [entry] = await ModerationLogEntry.find(ModerationLogEntry.target_type == "artwork").to_list()
         assert entry.details == {"clip_id": str(clip.id), "was_cover": True}
+
+    async def test_drop_notifies_the_owner(self, client, settings, local_storage):
+        option, clip = await _artwork(local_storage, as_cover=True)
+
+        await _act(client, await _admin(), settings, "artwork", "drop", [option.id], reason="gore")
+
+        [notice] = await NotificationEvent.find(NotificationEvent.user_id == clip.user_id).to_list()
+        assert notice.event_type == "moderation_artwork_dropped"
+        assert notice.clip_id == clip.id
+        assert notice.payload == {"title": "Song", "was_cover": True, "reason": "gore"}
 
     async def test_dropping_a_distributed_cover_queues_the_songs_soundcloud_tracks(
         self, client, settings, local_storage
@@ -505,7 +682,13 @@ class TestVoiceModelActions:
 class TestContentActionContract:
     @pytest.mark.parametrize(
         "target_type,action",
-        [("video", "drop"), ("artwork", "unpublish"), ("voice_model", "unpublish"), ("voice_model", "drop")],
+        [
+            ("video", "drop"),
+            ("artwork", "unpublish"),
+            ("artwork", "restore"),
+            ("voice_model", "unpublish"),
+            ("voice_model", "restore"),
+        ],
     )
     async def test_an_action_that_does_not_fit_the_type_is_422(self, client, settings, target_type, action):
         resp = await client.post(

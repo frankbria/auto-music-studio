@@ -379,8 +379,11 @@ Package manager: `uv` with `hatchling` build backend
 - **Flagged non-clip content (#539)**: `Video` and `ArtworkOption` copy `moderation_flags` from their job at creation
   (a new generative output must too), and they and `VoiceModel` carry `moderation_reviewed_at`. The queue lists them with
   `target_type`/`target_id`; `POST /api/v1/admin/moderation/content` acts on them under `moderation.CONTENT_ACTIONS`
-  (video approve|unpublish, artwork approve|drop, voice_model approve). Unpublish stamps `Video.removed_at`, which
-  `publish_video` refuses in the same conditional write, and a ban and a video edit carry it too. Voice rename re-screens
+  (video approve|unpublish|restore, artwork approve|drop, voice_model approve). Unpublish stamps `Video.removed_at`, which
+  `publish_video` refuses in the same conditional write, and a ban and a video edit carry it too. Restore (#571, from a
+  Restore button on the activity log's unpublish rows) clears only the `removed_at` it read (on the video and on edits that inherited that stamp), never for a banned owner, and
+  leaves the video unpublished for the owner to republish. Unpublish, restore and drop notify the owner
+  (`moderation_video_unpublished|restored`, `moderation_artwork_dropped`), written after the log entry. Voice rename re-screens
   the whole name + description. `VoiceModel`, `Video` and the artwork `Clip` writers are `$set`-only, pinned by
   `test_moderated_documents_are_never_whole_document_saved`
 - **Appeals (US-27.4)**: `services/appeals.py`. An appeal targets the `ModerationLogEntry` in force on the clip

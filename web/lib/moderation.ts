@@ -50,7 +50,7 @@ export type ModerationLogEntry = {
 }
 
 export type ClipAction = "approve" | "remove" | "flag"
-export type ContentAction = "approve" | "unpublish" | "drop"
+export type ContentAction = "approve" | "unpublish" | "restore" | "drop"
 export type TargetAction = ClipAction | ContentAction
 export type UserAction = "warn" | "ban"
 export type QueueTargetRef = { type: QueueTarget; id: string }
@@ -308,6 +308,7 @@ const TARGET_VERBS: Record<string, string> = {
   remove: "Removed",
   flag: "Flagged",
   unpublish: "Unpublished",
+  restore: "Restored",
   drop: "Dropped",
 }
 

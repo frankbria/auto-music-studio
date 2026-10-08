@@ -423,6 +423,90 @@ describe("ModerationDashboard", () => {
     expect(await screen.findByText("Unpublished video")).toBeInTheDocument()
   })
 
+  it("restores an unpublished video from the activity log (#571)", async () => {
+    const fetchMock = stubBackend({
+      queue: [],
+      log: [
+        logEntry({
+          id: "l1",
+          action: "unpublish",
+          target_type: "video",
+          target_id: "v1",
+          target_label: "Song V",
+        }),
+        logEntry({
+          id: "l2",
+          action: "drop",
+          target_type: "artwork",
+          target_id: "a1",
+          target_label: "Song Art",
+        }),
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    const artRow = (await screen.findByText("Song Art")).closest("tr")!
+    expect(
+      within(artRow).queryByRole("button", { name: "Restore" })
+    ).not.toBeInTheDocument()
+    const videoRow = screen.getByText("Song V").closest("tr")!
+    await userEvent.click(
+      within(videoRow).getByRole("button", { name: "Restore" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Restore 1 video?")
+    await userEvent.type(within(dialog).getByLabelText(/Reason/), "mistake")
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Restore" })
+    )
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Restored 1 video."
+    )
+    expect(actionCalls(fetchMock)).toEqual([
+      {
+        url: "/api/admin/moderation/content",
+        body: {
+          target_type: "video",
+          action: "restore",
+          ids: ["v1"],
+          reason: "mistake",
+        },
+      },
+    ])
+  })
+
+  it("names a failed restore by its song (#571)", async () => {
+    stubBackend({
+      queue: [],
+      log: [
+        logEntry({
+          action: "unpublish",
+          target_type: "video",
+          target_id: "v1",
+          target_label: "Song V",
+        }),
+      ],
+      results: [{ ok: false, detail: "This video is not taken down." }],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Restore" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Restore" })
+    )
+
+    expect(
+      await screen.findByText("Song V: This video is not taken down.")
+    ).toBeInTheDocument()
+  })
+
   it("shows an empty state when nothing is waiting", async () => {
     stubBackend({ queue: [] })
     render(<ModerationDashboard accessToken="tok" />)
