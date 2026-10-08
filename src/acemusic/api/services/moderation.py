@@ -367,7 +367,13 @@ async def _restore_video(video: Video) -> str | None:
     # Conditional on the takedown read: of two concurrent restores only one applies, and an unpublish that
     # re-stamps removed_at meanwhile is not lifted by a restore aimed at the older one.
     lifted = await Video.find({"_id": video.id, "removed_at": video.removed_at}).update({"$set": {"removed_at": None}})
-    return None if lifted.modified_count else "This video is not taken down."
+    if not lifted.modified_count:
+        return "This video is not taken down."
+    # Edits copy their source's removed_at (tasks/video.py), so the same stamp on this song's videos is this takedown.
+    await Video.find({"clip_id": video.clip_id, "user_id": video.user_id, "removed_at": video.removed_at}).update(
+        {"$set": {"removed_at": None}}
+    )
+    return None
 
 
 async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str | None, **payload) -> None:

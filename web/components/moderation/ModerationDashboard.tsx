@@ -229,7 +229,9 @@ export function ModerationDashboard({
     const all = items ?? []
     if (kind === "target") {
       const hit = all.find((i) => i.target_id === id)
-      return hit ? clipLabel(hit) : id
+      if (hit) return clipLabel(hit)
+      // Restore acts from the activity log, on targets no longer in the queue.
+      return log.rows?.find((e) => e.target_id === id)?.target_label ?? id
     }
     return all.find((i) => i.creator_id === id)?.creator_name ?? id
   }

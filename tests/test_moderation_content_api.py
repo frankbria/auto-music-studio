@@ -444,6 +444,32 @@ class TestVideoRestore:
         assert (await Video.get(video.id)).removed_at is None
         assert await ModerationLogEntry.find(ModerationLogEntry.action == "restore").count() == 1
 
+    async def test_restore_also_lifts_edits_that_inherited_the_takedown(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+        stamp = (await Video.get(video.id)).removed_at
+        edit = await Video(
+            clip_id=video.clip_id,
+            user_id=owner.id,
+            job_id=PydanticObjectId(),
+            storage_path="edit.mp4",
+            resolution="720p",
+            aspect_ratio="16:9",
+            parent_video_id=video.id,
+            removed_at=stamp,
+        ).insert()
+        other = await _video(owner)
+        await Video.find({"_id": other.id}).update({"$set": {"removed_at": datetime(2026, 1, 1)}})
+
+        await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert (await Video.get(edit.id)).removed_at is None
+        assert (await Video.get(other.id)).removed_at == datetime(2026, 1, 1)
+        resp = await client.post(f"{VIDEOS_URL}/{edit.id}/publish", headers=_auth(owner, settings))
+        assert resp.status_code == 200, resp.text
+
     async def test_a_banned_owners_video_stays_down(self, client, settings):
         owner = await _user()
         admin = await _admin()

@@ -478,6 +478,35 @@ describe("ModerationDashboard", () => {
     ])
   })
 
+  it("names a failed restore by its song (#571)", async () => {
+    stubBackend({
+      queue: [],
+      log: [
+        logEntry({
+          action: "unpublish",
+          target_type: "video",
+          target_id: "v1",
+          target_label: "Song V",
+        }),
+      ],
+      results: [{ ok: false, detail: "This video is not taken down." }],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Restore" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Restore" })
+    )
+
+    expect(
+      await screen.findByText("Song V: This video is not taken down.")
+    ).toBeInTheDocument()
+  })
+
   it("shows an empty state when nothing is waiting", async () => {
     stubBackend({ queue: [] })
     render(<ModerationDashboard accessToken="tok" />)
