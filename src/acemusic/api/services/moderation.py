@@ -344,7 +344,8 @@ async def act_on_content(
             details["was_published"] = doc.published
             if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
                 notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-            updates.update(published=False, removed_at=now)
+            # A video already down keeps its stamp: its edits carry that one, and restore matches on it.
+            updates.update(published=False, removed_at=doc.removed_at or now)
         await doc.set(updates)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is

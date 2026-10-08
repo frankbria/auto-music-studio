@@ -470,6 +470,16 @@ class TestVideoRestore:
         resp = await client.post(f"{VIDEOS_URL}/{edit.id}/publish", headers=_auth(owner, settings))
         assert resp.status_code == 200, resp.text
 
+    async def test_re_unpublishing_keeps_the_stamp_its_edits_inherited(self, client, settings):
+        admin = await _admin()
+        video = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+        stamp = (await Video.get(video.id)).removed_at
+
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        assert (await Video.get(video.id)).removed_at == stamp
+
     async def test_a_banned_owners_video_stays_down(self, client, settings):
         owner = await _user()
         admin = await _admin()
