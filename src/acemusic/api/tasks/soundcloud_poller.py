@@ -192,26 +192,41 @@ class SoundCloudStatusPoller:
             # The grant is gone: nobody can reach the track any more, so stop trying.
             await self._settle(row, "soundcloud_unshare_abandoned", {"track_id": row.track_id, "error": str(exc)})
             return False
+        except sc.SoundCloudError as exc:  # a refresh that failed in transit: the grant may be fine
+            await self._retry_later(row, str(exc))
+            return False
         update = self._sharing_updater or sc.update_track_sharing
+        details = {"track_id": row.track_id, "attempts": row.attempts + 1}
         try:
             await update(connection.access_token, row.track_id, "private")
         except sc.SoundCloudTrackGone:
-            pass  # deleted on SoundCloud, so it can't be public either
+            # Deleted, so it can't be public either. Flagged: a relinked account also answers 404 for the old track.
+            details["track_gone"] = True
         except sc.SoundCloudError as exc:
             await self._retry_later(row, str(exc))
             return False
-        await self._settle(row, "soundcloud_unshared", {"track_id": row.track_id, "attempts": row.attempts + 1})
-        return True
+        return await self._settle(row, "soundcloud_unshared", details)
 
-    async def _settle(self, row: SoundCloudUnshare, action: str, details: dict) -> None:
-        await SoundCloudUnshare.find_one(SoundCloudUnshare.id == row.id).delete()
-        await _log(row, action, details)
+    # Both writes apply only to the generation this attempt read. A takedown queueing the track again mid-attempt
+    # (e.g. the owner re-shared meanwhile) bumps it, so that newer request survives and runs next cycle.
+
+    async def _settle(self, row: SoundCloudUnshare, action: str, details: dict) -> bool:
+        result = await SoundCloudUnshare.get_pymongo_collection().delete_one(
+            {"_id": row.id, "generation": row.generation}
+        )
+        if result.deleted_count:
+            await _log(row, action, details)
+        return bool(result.deleted_count)
 
     async def _retry_later(self, row: SoundCloudUnshare, error: str) -> None:
-        delay = min(timedelta(seconds=self._poll_interval * 2**row.attempts), MAX_UNSHARE_BACKOFF)
+        # The exponent is capped before timedelta sees it: 2**45 seconds is past timedelta's range.
+        delay = min(self._poll_interval * 2 ** min(row.attempts, 20), MAX_UNSHARE_BACKOFF.total_seconds())
         await SoundCloudUnshare.get_pymongo_collection().update_one(
-            {"_id": row.id},
-            {"$set": {"next_attempt_at": utcnow() + delay, "last_error": error}, "$inc": {"attempts": 1}},
+            {"_id": row.id, "generation": row.generation},
+            {
+                "$set": {"next_attempt_at": utcnow() + timedelta(seconds=delay), "last_error": error},
+                "$inc": {"attempts": 1},
+            },
         )
         if row.attempts == 0:
             # Logged once, so an admin learns a track is stuck without a log entry per retry.

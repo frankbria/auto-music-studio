@@ -19,6 +19,8 @@ class SoundCloudUnshare(Document):
     user_id: PydanticObjectId
     clip_id: PydanticObjectId | None = None
     attempts: int = 0
+    #: Bumped by every queueing, so an attempt's outcome never overwrites a newer request for the same track.
+    generation: int = 0
     next_attempt_at: datetime = Field(default_factory=utcnow)
     last_error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

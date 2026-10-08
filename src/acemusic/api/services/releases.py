@@ -339,6 +339,7 @@ async def queue_unshares(release_query: dict, clip_query: dict) -> list[str]:
             {"track_id": track_id},
             {
                 "$set": {"next_attempt_at": now},
+                "$inc": {"generation": 1},
                 "$setOnInsert": {
                     "user_id": owner_id,
                     "clip_id": clip_id,

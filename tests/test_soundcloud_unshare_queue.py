@@ -152,7 +152,9 @@ class TestDraining:
 
         assert await poller.drain_unshares() == 1
         assert await _queued() == {}
-        assert len(await _log("soundcloud_unshared")) == 1
+        [entry] = await _log("soundcloud_unshared")
+        # Told apart from a real un-share: a relinked account also answers 404 for the old track.
+        assert entry.details["track_gone"] is True
 
     @pytest.mark.parametrize("error", [sc.SoundCloudNotConnectedError, sc.SoundCloudAuthError])
     async def test_a_lost_grant_abandons_the_row(self, mongo_db, mongo_settings, error):
@@ -171,6 +173,23 @@ class TestDraining:
         [entry] = await _log("soundcloud_unshare_abandoned")
         assert entry.actor_id is None and entry.target_id == str(clip.id)
         assert entry.details["track_id"] == "t1" and entry.details["error"]
+
+    async def test_a_failed_token_refresh_backs_off_too(self, mongo_db, mongo_settings):
+        # A network error or 5xx while refreshing the token isn't a lost grant: retry later, don't spin.
+        async def _get(_user_id, _settings):
+            raise sc.SoundCloudError("Refreshing the SoundCloud token failed.")
+
+        user = await make_user("d-refresh@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        poller, calls = _poller(mongo_settings, getter=_get)
+
+        assert await poller.drain_unshares() == 0
+
+        row = (await _queued())["t1"]
+        assert row.attempts == 1 and _aware(row.next_attempt_at) > utcnow()
+        assert row.last_error == "Refreshing the SoundCloud token failed."
+        assert calls == []
 
     async def test_a_transient_failure_backs_off_and_is_logged_once(self, mongo_db, mongo_settings):
         async def _down(_track_id):
@@ -216,6 +235,55 @@ class TestDraining:
 
         row = (await _queued())["t1"]
         assert _aware(row.next_attempt_at) <= utcnow() + MAX_UNSHARE_BACKOFF
+
+    async def test_backoff_never_overflows_after_many_failures(self, mongo_db, mongo_settings):
+        # 60·2^45 seconds is past timedelta's range; the row must still move to the capped delay.
+        async def _down(_track_id):
+            raise sc.SoundCloudError("down")
+
+        user = await make_user("d-overflow@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        await SoundCloudUnshare.find_one(SoundCloudUnshare.track_id == "t1").update({"$set": {"attempts": 60}})
+        poller, _ = _poller(mongo_settings, sharing=_down)
+
+        await poller.drain_unshares()
+
+        row = (await _queued())["t1"]
+        assert row.attempts == 61
+        assert _aware(row.next_attempt_at) > utcnow() + MAX_UNSHARE_BACKOFF - timedelta(minutes=1)
+
+    async def test_a_requeue_during_a_successful_attempt_keeps_the_row_due(self, mongo_db, mongo_settings):
+        # The owner re-shares mid-attempt and the race path queues the track again: it must run once more.
+        user = await make_user("d-requeue-ok@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+
+        async def _requeue(_track_id):
+            await release_service.queue_unshares({"clip_id": clip.id}, {"_id": clip.id})
+
+        poller, _ = _poller(mongo_settings, sharing=_requeue)
+
+        await poller.drain_unshares()
+
+        row = (await _queued())["t1"]
+        assert _aware(row.next_attempt_at) <= utcnow()
+        assert await _log("soundcloud_unshared") == []
+
+    async def test_a_requeue_during_a_failed_attempt_is_not_pushed_back(self, mongo_db, mongo_settings):
+        user = await make_user("d-requeue-fail@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+
+        async def _requeue_then_fail(_track_id):
+            await release_service.queue_unshares({"clip_id": clip.id}, {"_id": clip.id})
+            raise sc.SoundCloudError("down")
+
+        poller, _ = _poller(mongo_settings, sharing=_requeue_then_fail)
+
+        await poller.drain_unshares()
+
+        assert _aware((await _queued())["t1"].next_attempt_at) <= utcnow()
 
     async def test_one_bad_row_does_not_stop_the_batch(self, mongo_db, mongo_settings):
         async def _crash(track_id):

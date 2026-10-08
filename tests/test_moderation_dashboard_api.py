@@ -32,7 +32,7 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import moderation, routing, screening, soundcloud
+from acemusic.api.services import moderation, releases as release_service, routing, screening, soundcloud
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
@@ -1219,3 +1219,20 @@ class TestBulkActionsIsolateFailures:
 
         assert [r["ok"] for r in results] == [False, True]
         assert (await User.get(good.id)).banned_at is not None
+
+    async def test_a_remove_that_cannot_queue_its_unshares_changes_nothing(self, client, settings, monkeypatch):
+        # Queueing runs before the clip is written, so a failure leaves nothing half-done to retry into.
+        owner = await _user()
+        clip = await _clip(owner, soundcloud_track_ids=["sc-1"])
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("mongo went away")
+
+        monkeypatch.setattr(release_service, "unshare_releases", broken)
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result["ok"] is False
+        stored = await Clip.get(clip.id)
+        assert stored.removed_at is None and stored.visibility == VisibilityState.PUBLIC
+        assert await _latest_log("remove") is None
