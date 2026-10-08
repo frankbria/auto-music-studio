@@ -9,7 +9,8 @@ import { useSimilarClips } from "@/hooks/use-similar-clips"
 // skeletons; an empty/failed result hides the panel rather than showing a dead
 // "no results" block — related songs are supplementary. Report (US-27.2, #535)
 // shows only when the server says the clip isn't the viewer's; an absent
-// is_owner hides it rather than risk a Report on your own clip.
+// is_owner hides it rather than risk a Report on your own clip. Owner-only card
+// controls (rename, visibility, menus) need an explicit is_owner === true (#564).
 
 export function RelatedSongs({
   clipId,
@@ -40,7 +41,11 @@ export function RelatedSongs({
         {clips.map((clip) => (
           <li key={clip.id} className="flex items-start gap-1">
             <div className="min-w-0 flex-1">
-              <ClipCard clip={clip} isFreeTier={isFreeTier} />
+              <ClipCard
+                clip={clip}
+                isFreeTier={isFreeTier}
+                isOwner={clip.is_owner === true}
+              />
             </div>
             {/* Fixed gutter keeps cards the same width whether or not Report shows. */}
             <div className="w-8 shrink-0">

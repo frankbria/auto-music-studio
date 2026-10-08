@@ -96,6 +96,11 @@ export type ClipCardProps = {
    * the moderation status and Appeal entry.
    */
   appeal?: AppealView | null
+  /**
+   * False on someone else's clip (e.g. Related songs, #564): rename, visibility, Get Full
+   * Song and both menus are hidden, as on song detail, since the API refuses them all.
+   */
+  isOwner?: boolean
 }
 
 /** Map the clip-menu vocabulary to a registry action id (only remix-edit differs). */
@@ -146,6 +151,7 @@ export function ClipCard({
   isFreeTier = false,
   onDeleted,
   appeal,
+  isOwner = true,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
   // Registry-driven dispatch: modal / navigation / download / delete-confirm /
@@ -175,7 +181,7 @@ export function ClipCard({
   const version = versionLabel(clip.model)
   const metadataLabel = modeLabel(clip.generation_mode)
   const styleText = clip.style_tags.join(", ")
-  const showFullSong = isFullSongEligible(clip)
+  const showFullSong = isOwner && isFullSongEligible(clip)
 
   function startEdit() {
     setDraft(title ?? "")
@@ -311,6 +317,10 @@ export function ClipCard({
             }}
             className="h-7"
           />
+        ) : !isOwner ? (
+          <span className="truncate text-sm font-medium">
+            {title ?? "Untitled clip"}
+          </span>
         ) : (
           <button
             type="button"
@@ -341,7 +351,7 @@ export function ClipCard({
               {metadataLabel}
             </Badge>
           )}
-          <VisibilityBadge visibility={visibility} />
+          {isOwner && <VisibilityBadge visibility={visibility} />}
         </div>
 
         {/* Style description (full text on hover via title attr). */}
@@ -392,7 +402,9 @@ export function ClipCard({
           >
             <HugeiconsIcon icon={Share01Icon} size={16} />
           </Button>
-          <VisibilityToggle value={visibility} onChange={changeVisibility} />
+          {isOwner && (
+            <VisibilityToggle value={visibility} onChange={changeVisibility} />
+          )}
 
           {showFullSong && (
             <Button
@@ -405,56 +417,58 @@ export function ClipCard({
             </Button>
           )}
 
-          <div className="ml-auto flex items-center gap-1">
-            {/* Remix/Edit primary CTA. */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" aria-label="Remix or edit clip">
-                  Remix
-                  <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {REMIX_ITEMS.map((action) => item(action))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {isOwner && (
+            <div className="ml-auto flex items-center gap-1">
+              {/* Remix/Edit primary CTA. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" aria-label="Remix or edit clip">
+                    Remix
+                    <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {REMIX_ITEMS.map((action) => item(action))}
+                </DropdownMenuContent>
+              </DropdownMenu>
 
-            {/* More options (⋯) — full spec §9.2 list. */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="More options"
-                >
-                  <HugeiconsIcon icon={MoreHorizontalIcon} size={16} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                {/* Remix/Edit opens the remix flow; the generation actions below
+              {/* More options (⋯) — full spec §9.2 list. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="More options"
+                  >
+                    <HugeiconsIcon icon={MoreHorizontalIcon} size={16} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {/* Remix/Edit opens the remix flow; the generation actions below
                     are the flat §9.2 items (the primary CTA is the shortcut). */}
-                {MORE_ITEMS.map((action, i) =>
-                  action === null ? (
-                    <DropdownMenuSeparator key={`sep-${i}`} />
-                  ) : (
-                    item(
-                      action,
-                      action === "remix-edit" ? "Remix / Edit" : undefined
+                  {MORE_ITEMS.map((action, i) =>
+                    action === null ? (
+                      <DropdownMenuSeparator key={`sep-${i}`} />
+                    ) : (
+                      item(
+                        action,
+                        action === "remix-edit" ? "Remix / Edit" : undefined
+                      )
                     )
-                  )
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Download</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {SONG_DOWNLOAD_ITEMS.map((format) => item(format.id))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSeparator />
-                {item("delete", undefined, true)}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Download</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {SONG_DOWNLOAD_ITEMS.map((format) => item(format.id))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                  {item("delete", undefined, true)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
         </div>
 
         {/* Download failures surface here; delete errors show in their dialog. */}
