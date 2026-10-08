@@ -58,6 +58,7 @@ const VERBS: Record<TargetAction | UserAction, string> = {
   remove: "Removed",
   flag: "Flagged",
   unpublish: "Unpublished",
+  restore: "Restored",
   drop: "Dropped",
   warn: "Warned",
   ban: "Banned",
@@ -87,13 +88,19 @@ const CONFIRMED: Partial<
   unpublish: {
     verb: "Unpublish",
     description:
-      "Unpublished videos come off their song pages and cannot be published again.",
+      "Unpublished videos come off their song pages and cannot be published again until restored from the activity log. Their creators are notified.",
     destructive: true,
+  },
+  restore: {
+    verb: "Restore",
+    description:
+      "Restored videos can be published again by their creators, who are notified. They stay unpublished until then.",
+    destructive: false,
   },
   drop: {
     verb: "Drop",
     description:
-      "Dropped artwork is deleted, and taken off its song if it was the selected cover.",
+      "Dropped artwork is deleted, and taken off its song if it was the selected cover. Its creator is notified.",
     destructive: true,
   },
   warn: {
@@ -569,6 +576,9 @@ export function ModerationDashboard({
                     <th className="pr-3 pb-2 font-medium">Target</th>
                     <th className="pr-3 pb-2 font-medium">Admin</th>
                     <th className="pb-2 font-medium">Reason</th>
+                    <th className="pb-2">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -595,6 +605,28 @@ export function ModerationDashboard({
                         )}
                       </td>
                       <td className="py-2">{entry.reason ?? "-"}</td>
+                      <td className="py-2 pl-3">
+                        {entry.action === "unpublish" &&
+                          entry.target_type === "video" &&
+                          entry.target_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() =>
+                                request({
+                                  kind: "target",
+                                  action: "restore",
+                                  targets: [
+                                    { type: "video", id: entry.target_id! },
+                                  ],
+                                })
+                              }
+                            >
+                              Restore
+                            </Button>
+                          )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

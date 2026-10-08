@@ -119,6 +119,44 @@ describe("toAppNotification (#537)", () => {
     expect(row).toMatchObject({ type: "moderation", message, href: "/song/c1" })
   })
 
+  it.each([
+    [
+      "moderation_video_unpublished",
+      'Moderation unpublished your video for "Song". Reason: Gore',
+      "/video/c1",
+    ],
+    [
+      "moderation_video_restored",
+      'Moderation restored your video for "Song". You can publish it again. Reason: Gore',
+      "/video/c1",
+    ],
+    [
+      "moderation_artwork_dropped",
+      'Moderation removed an artwork image from "Song". Reason: Gore',
+      "/song/c1",
+    ],
+  ])("words the %s notice (#571)", (type, message, href) => {
+    const row = toAppNotification(
+      event({
+        event_type: type,
+        clip_id: "c1",
+        payload: { title: "Song", reason: "Gore" },
+      })
+    )
+    expect(row).toMatchObject({ type: "moderation", message, href })
+  })
+
+  it("says when a dropped artwork image was the cover (#571)", () => {
+    const row = toAppNotification(
+      event({
+        event_type: "moderation_artwork_dropped",
+        clip_id: "c1",
+        payload: { title: "Song", was_cover: true, reason: null },
+      })
+    )
+    expect(row.message).toBe('Moderation removed the cover art from "Song".')
+  })
+
   it("maps voice training and distribution events", () => {
     expect(
       toAppNotification(

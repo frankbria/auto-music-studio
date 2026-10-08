@@ -48,9 +48,9 @@ QueueSource = Literal["report", "automated"]
 QueueSort = Literal["reports", "severity", "newest"]
 # #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
 ContentType = Literal["video", "artwork", "voice_model"]
-ContentAction = Literal["approve", "unpublish", "drop"]
+ContentAction = Literal["approve", "unpublish", "restore", "drop"]
 CONTENT_ACTIONS: dict[str, tuple[str, ...]] = {
-    "video": ("approve", "unpublish"),
+    "video": ("approve", "unpublish", "restore"),
     "artwork": ("approve", "drop"),
     "voice_model": ("approve",),
 }
@@ -320,7 +320,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
 async def act_on_content(
     actor_id: str, target_type: ContentType, action: ContentAction, target_id: str, reason: str | None
 ) -> ActionResult:
-    """Approve, unpublish (video) or drop (artwork) one flagged non-clip output (#539)."""
+    """Approve, unpublish or restore (video), or drop (artwork) one flagged non-clip output (#539, #571)."""
     noun = _CONTENT_NOUNS[target_type]
     oid = coerce_object_id(target_id)
     if oid is None:
@@ -332,14 +332,43 @@ async def act_on_content(
     details: dict = {}
     if action == "drop":
         details = await _drop_artwork(doc)
+        await _notify_owner(doc, "moderation_artwork_dropped", reason, was_cover=details["was_cover"])
+    elif action == "restore":
+        if refused := await _restore_video(doc):
+            return ActionResult(ok=False, detail=refused)
+        await _notify_owner(doc, "moderation_video_restored", reason, video_id=str(oid))
     else:
         updates: dict = {"moderation_reviewed_at": now}
         if action == "unpublish":
             details["was_published"] = doc.published
             updates.update(published=False, removed_at=now)
         await doc.set(updates)
+        if action == "unpublish":
+            await _notify_owner(doc, "moderation_video_unpublished", reason, video_id=str(oid))
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     return ActionResult(ok=True)
+
+
+async def _restore_video(video: Video) -> str | None:
+    """Lift a takedown so the owner may publish again (#571). The video stays unpublished until they do."""
+    owner = await User.get(video.user_id)
+    if owner is not None and owner.banned_at is not None:
+        return "The video's owner is banned."
+    # Conditional, so of two concurrent restores only one is logged and notified.
+    lifted = await Video.find({"_id": video.id, "removed_at": {"$ne": None}}).update({"$set": {"removed_at": None}})
+    return None if lifted.modified_count else "This video was not unpublished by moderation."
+
+
+async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str | None, **payload) -> None:
+    """Tell a video's or artwork's owner what moderation did to it, naming the song it was made for."""
+    clip = await Clip.get(doc.clip_id)
+    await NotificationEvent(
+        user_id=doc.user_id,
+        clip_id=doc.clip_id,
+        event_type=event_type,
+        channel="in_app",
+        payload={**payload, "title": clip.title if clip else None, "reason": reason},
+    ).insert()
 
 
 async def _drop_artwork(option: ArtworkOption) -> dict:
