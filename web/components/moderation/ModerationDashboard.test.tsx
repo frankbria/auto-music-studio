@@ -950,9 +950,9 @@ describe("ModerationDashboard", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
 
-    const row = (await screen.findByText("SoundCloud un-share failed")).closest(
-      "tr"
-    ) as HTMLElement
+    const row = (
+      await screen.findByText("SoundCloud un-share failed, retrying")
+    ).closest("tr") as HTMLElement
     expect(row).toHaveTextContent("clip c9")
     expect(row).toHaveTextContent("system")
   })

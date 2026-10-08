@@ -7,9 +7,14 @@ purpose-built: each cycle finds releases whose SoundCloud upload is still in a
 non-terminal state, asks SoundCloud for the current track state, and advances the
 channel status (recording a notification when it reaches ``live``/``rejected``).
 
+Each cycle also drains the un-share queue (#569): takedowns only queue a track
+(:class:`SoundCloudUnshare`), and the poller makes it private, retrying with
+exponential backoff until it succeeds or the owner's grant is gone. Each outcome
+is a platform-written moderation log entry (``actor_id=None``).
+
 The SoundCloud HTTP calls are injected (``connection_getter`` / ``status_fetcher``)
-so tests can drive the loop against a real MongoDB without hitting the gated
-SoundCloud API.
+(and ``sharing_updater``) so tests can drive the loop against a real MongoDB
+without hitting the gated SoundCloud API.
 """
 
 from __future__ import annotations
@@ -17,10 +22,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from ..models.common import utcnow
 from ..models.distribution import SOUNDCLOUD_CHANNEL, DistributionStatus
+from ..models.moderation_log import ModerationLogEntry
 from ..models.release import Release
+from ..models.soundcloud_unshare import SoundCloudUnshare
 from ..services import distribution_status as status_service, soundcloud as sc
 from ..settings import ApiSettings
 
@@ -29,8 +37,12 @@ logger = logging.getLogger(__name__)
 #: SoundCloud states the poller still acts on (terminal states are left alone).
 _NON_TERMINAL = (DistributionStatus.SUBMITTED.value, DistributionStatus.IN_REVIEW.value)
 
+#: The longest a failing un-share waits between attempts.
+MAX_UNSHARE_BACKOFF = timedelta(hours=1)
+
 ConnectionGetter = Callable[[str, ApiSettings], Awaitable[object]]
 StatusFetcher = Callable[[str, str], Awaitable[dict]]
+SharingUpdater = Callable[[str, str, str], Awaitable[dict]]
 
 
 class SoundCloudStatusPoller:
@@ -44,12 +56,14 @@ class SoundCloudStatusPoller:
         batch_size: int = 20,
         connection_getter: ConnectionGetter | None = None,
         status_fetcher: StatusFetcher | None = None,
+        sharing_updater: SharingUpdater | None = None,
     ) -> None:
         self._settings = settings
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._connection_getter = connection_getter or sc.get_valid_connection
         self._status_fetcher = status_fetcher or sc.get_track_status
+        self._sharing_updater = sharing_updater
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -77,13 +91,18 @@ class SoundCloudStatusPoller:
 
     async def _run_loop(self) -> None:
         while self._running:
+            await self.run_cycle()
+            await asyncio.sleep(self._poll_interval)
+
+    async def run_cycle(self) -> None:
+        """Poll statuses, then drain the un-share queue. Neither step's failure stops the other or the loop."""
+        for step in (self.poll_once, self.drain_unshares):
             try:
-                await self.poll_once()
+                await step()
             except asyncio.CancelledError:
                 raise
             except Exception:  # a poll cycle must never kill the loop
-                logger.exception("SoundCloud status poll cycle failed")
-            await asyncio.sleep(self._poll_interval)
+                logger.exception("SoundCloud poller step %s failed", step.__name__)
 
     # -- work --------------------------------------------------------------
 
@@ -142,3 +161,71 @@ class SoundCloudStatusPoller:
             {"_id": release.id}, {"$set": {"soundcloud_last_polled": utcnow()}}
         )
         return changed
+
+    # -- un-share queue (#569) ---------------------------------------------
+
+    async def drain_unshares(self) -> int:
+        """Retry the un-shares that are due; return how many tracks were made private.
+
+        A failure on one track is logged and skipped so the rest of the batch still makes progress.
+        """
+        due = (
+            await SoundCloudUnshare.find(SoundCloudUnshare.next_attempt_at <= utcnow())
+            .sort(("next_attempt_at", 1))
+            .limit(self._batch_size)
+            .to_list()
+        )
+        done = 0
+        for row in due:
+            try:
+                done += await self._unshare(row)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Un-sharing SoundCloud track %s failed", row.track_id)
+        return done
+
+    async def _unshare(self, row: SoundCloudUnshare) -> bool:
+        try:
+            connection = await self._connection_getter(str(row.user_id), self._settings)
+        except (sc.SoundCloudNotConnectedError, sc.SoundCloudAuthError) as exc:
+            # The grant is gone: nobody can reach the track any more, so stop trying.
+            await self._settle(row, "soundcloud_unshare_abandoned", {"track_id": row.track_id, "error": str(exc)})
+            return False
+        update = self._sharing_updater or sc.update_track_sharing
+        try:
+            await update(connection.access_token, row.track_id, "private")
+        except sc.SoundCloudTrackGone:
+            pass  # deleted on SoundCloud, so it can't be public either
+        except sc.SoundCloudError as exc:
+            await self._retry_later(row, str(exc))
+            return False
+        await self._settle(row, "soundcloud_unshared", {"track_id": row.track_id, "attempts": row.attempts + 1})
+        return True
+
+    async def _settle(self, row: SoundCloudUnshare, action: str, details: dict) -> None:
+        await SoundCloudUnshare.find_one(SoundCloudUnshare.id == row.id).delete()
+        await _log(row, action, details)
+
+    async def _retry_later(self, row: SoundCloudUnshare, error: str) -> None:
+        delay = min(timedelta(seconds=self._poll_interval * 2**row.attempts), MAX_UNSHARE_BACKOFF)
+        await SoundCloudUnshare.get_pymongo_collection().update_one(
+            {"_id": row.id},
+            {"$set": {"next_attempt_at": utcnow() + delay, "last_error": error}, "$inc": {"attempts": 1}},
+        )
+        if row.attempts == 0:
+            # Logged once, so an admin learns a track is stuck without a log entry per retry.
+            await _log(
+                row,
+                "soundcloud_unshare_failed",
+                {"soundcloud_unshare_failed": [{"track_id": row.track_id, "error": error}]},
+            )
+
+
+async def _log(row: SoundCloudUnshare, action: str, details: dict) -> None:
+    await ModerationLogEntry(
+        action=action,
+        target_type="clip",
+        target_id=str(row.clip_id) if row.clip_id else None,
+        details=details,
+    ).insert()

@@ -57,6 +57,8 @@ class Clip(Document):
     # owner selects a generated option or uploads custom artwork; the binary is
     # served via ``GET /clips/{id}/artwork`` (file_path stays internal, like audio).
     artwork_path: str | None = None
+    #: Every SoundCloud track uploaded from this clip, with or without a release, so a takedown can un-share it (#569).
+    soundcloud_track_ids: list[str] = Field(default_factory=list)
     # International Standard Recording Code (US-13.4). Identifies this *recording*;
     # minted (or reused) when the clip is first packaged into a release and shared
     # with that release. Globally unique via the partial index below — a recording

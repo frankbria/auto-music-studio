@@ -37,7 +37,6 @@ from ..models import (
     VoiceModel,
 )
 from ..models.common import utcnow
-from ..settings import ApiSettings
 from . import clips as clip_service, releases as release_service
 from .common import coerce_object_id
 
@@ -278,9 +277,7 @@ def _queue_item(
     )
 
 
-async def act_on_clip(
-    actor_id: str, action: ClipAction, clip_id: str, reason: str | None, settings: ApiSettings
-) -> ActionResult:
+async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: str | None) -> ActionResult:
     oid = coerce_object_id(clip_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid clip id.")
@@ -303,7 +300,7 @@ async def act_on_clip(
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
-            details.update(await release_service.unshare_releases({"clip_id": oid}, settings))
+            details.update(await release_service.unshare_releases({"clip_id": oid}, {"_id": oid}))
             await NotificationEvent(
                 user_id=clip.user_id,
                 clip_id=clip.id,
@@ -312,7 +309,7 @@ async def act_on_clip(
                 payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
             ).insert()
     await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved, **details})
-    return ActionResult(ok=True, detail=_unshare_failure(details))
+    return ActionResult(ok=True)
 
 
 async def act_on_content(
@@ -350,15 +347,13 @@ async def _drop_artwork(option: ArtworkOption) -> dict:
         await asyncio.to_thread(get_storage_backend().delete, option.storage_path)
     except Exception:  # best-effort: the option can no longer be selected or served either way
         logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
-    return {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
-
-
-def _unshare_failure(details: dict) -> str | None:
-    failed = [f["track_id"] for f in details.get("soundcloud_unshare_failed", [])]
-    if not failed:
-        return None
-    noun, pronoun = ("track", "it") if len(failed) == 1 else ("tracks", "they")
-    return f"Couldn't make SoundCloud {noun} {', '.join(failed)} private; {pronoun} may still be public on the owner's account."
+    details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
+    if cleared.modified_count:
+        # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it.
+        queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
+        if queued:
+            details["soundcloud_unshare_queued"] = queued
+    return details
 
 
 async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
@@ -366,9 +361,7 @@ async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
     return result.modified_count
 
 
-async def act_on_user(
-    actor_id: str, action: UserAction, user_id: str, reason: str | None, settings: ApiSettings
-) -> ActionResult:
+async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: str | None) -> ActionResult:
     oid = coerce_object_id(user_id)
     if oid is None:
         return ActionResult(ok=False, detail="Invalid user id.")
@@ -384,12 +377,12 @@ async def act_on_user(
     else:
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
-        details = await _ban(user, settings)
+        details = await _ban(user)
     await log_action(actor_id, action, "user", str(oid), reason, details)
-    return ActionResult(ok=True, detail=_unshare_failure(details))
+    return ActionResult(ok=True)
 
 
-async def _ban(user: User, settings: ApiSettings) -> dict:
+async def _ban(user: User) -> dict:
     now = utcnow()
     if user.banned_at is None:
         await user.set({"banned_at": now})
@@ -399,7 +392,7 @@ async def _ban(user: User, settings: ApiSettings) -> dict:
     videos = await Video.find({"user_id": user.id, "published": True}).update(
         {"$set": {"published": False, "removed_at": now}}
     )
-    releases = await release_service.unshare_releases({"user_id": user.id}, settings)
+    releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 

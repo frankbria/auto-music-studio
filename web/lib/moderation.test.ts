@@ -310,6 +310,18 @@ describe("formatLogAction", () => {
     expect(formatLogAction("something_new")).toBe("something new")
   })
 
+  it("labels the platform's SoundCloud un-share outcomes (#569)", () => {
+    expect(formatLogAction("soundcloud_unshared")).toBe(
+      "SoundCloud track made private"
+    )
+    expect(formatLogAction("soundcloud_unshare_failed")).toBe(
+      "SoundCloud un-share failed, retrying"
+    )
+    expect(formatLogAction("soundcloud_unshare_abandoned")).toBe(
+      "SoundCloud un-share abandoned: account unlinked"
+    )
+  })
+
   it("labels the appeal decision actions (US-27.4)", () => {
     expect(formatLogAction("appeal_upheld")).toBe("Upheld appeal")
     expect(formatLogAction("appeal_reversed")).toBe("Reversed appeal")

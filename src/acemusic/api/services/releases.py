@@ -16,11 +16,11 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..exceptions import DuplicateIdentifierError
-from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus, User
+from ..models import Clip, Release, ReleaseStatus, SoundCloudUnshare, User
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers, screening, soundcloud as sc, users as user_service
+from . import clips as clip_service, identifiers, screening, users as user_service
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
 
@@ -279,84 +279,77 @@ async def update_visibility(release: Release, visibility: VisibilityState, clip_
     return release
 
 
-async def unshare_if_source_removed(
-    clip_id: PydanticObjectId,
-    user_id: PydanticObjectId | str,
-    settings: ApiSettings,
-    *,
-    release_id: PydanticObjectId | None = None,
-    track_id: str | None = None,
-) -> None:
+async def unshare_if_source_removed(clip_id: PydanticObjectId, user_id: PydanticObjectId | str) -> None:
     """Undo a share if moderation took the source clip down meanwhile (#538), then 403.
 
-    Called after a route has shared a release (``release_id``) or a bare track (``track_id``) out. A removal
-    or ban landing mid-request ran its own un-share before this request's SoundCloud call, so it's repeated here.
-    A ban's sweep skips a clip that was still private, so a banned owner counts too, and this clip is taken down
-    the way the sweep would have. A failure gets its own moderation log entry: the action's entry was written
-    without it.
+    Called after a route has shared a release or uploaded a track (already recorded on the clip). A removal or ban
+    landing mid-request queued its un-shares before this request's SoundCloud call, so they're queued again here,
+    which makes them due now. A ban's sweep skips a clip that was still private, so a banned owner counts too, and
+    this clip is taken down the way the sweep would have.
     """
     clip = await clip_service.find_owned_clip(str(clip_id), str(user_id))
     owner = await User.get(PydanticObjectId(str(user_id)))
     banned = owner is not None and owner.banned_at is not None
     if not banned and (clip is None or clip.removed_at is None):
         return
+    oid = PydanticObjectId(str(clip_id))
     if banned:
-        await clip_service.take_down_visible({"_id": PydanticObjectId(str(clip_id))})
-    if release_id is not None:
-        failed = (await unshare_releases({"_id": release_id}, settings))["soundcloud_unshare_failed"]
-    else:
-        error = await unshare_track(str(user_id), track_id, settings)
-        failed = [] if error is None else [{"track_id": track_id, "error": error}]
-    if failed:
-        await ModerationLogEntry(
-            action="soundcloud_unshare_failed",
-            target_type="clip",
-            target_id=str(clip_id),
-            details={"soundcloud_unshare_failed": failed},
-        ).insert()
+        await clip_service.take_down_visible({"_id": oid})
+    await unshare_releases({"clip_id": oid}, {"_id": oid})
     if banned:
         user_service.reject_banned(owner)
     clip_service.ensure_not_removed(clip)
 
 
-async def unshare_releases(query: dict, settings: ApiSettings) -> dict:
-    """Make every release matching ``query`` private and best-effort un-share its SoundCloud track (#538).
+async def unshare_releases(release_query: dict, clip_query: dict) -> dict:
+    """Make every release matching ``release_query`` private and queue its tracks' un-share (#538, #569).
 
-    The local write always stands. A track that can't be reached (unlinked account, revoked grant,
-    SoundCloud down) is returned in ``soundcloud_unshare_failed`` for the caller to surface.
+    ``clip_query`` names the same clips, for tracks uploaded without a release. Nothing here calls SoundCloud:
+    the SoundCloud poller drains the queue and logs each outcome.
     """
-    # Write, then read: a track id recorded before the write is seen; one recorded after it is the
-    # uploader's to un-share (unshare_if_source_removed).
-    privatized = await Release.find({**query, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
+    # Write, then read: a track id recorded before the write is queued; one recorded after it is the
+    # uploader's to queue (unshare_if_source_removed).
+    privatized = await Release.find({**release_query, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
         {"$set": {"visibility": VisibilityState.PRIVATE.value, "updated_at": utcnow()}}
     )
-    releases = await Release.find(query).to_list()
-    unshared: list[str] = []
-    failed: list[dict] = []
-    for release in releases:
-        if not release.soundcloud_track_id:
-            continue
-        error = await unshare_track(str(release.user_id), release.soundcloud_track_id, settings)
-        if error is None:
-            unshared.append(release.soundcloud_track_id)
-        else:
-            failed.append({"track_id": release.soundcloud_track_id, "error": error})
     return {
         "releases_privatized": privatized.modified_count,
-        "soundcloud_unshared": unshared,
-        "soundcloud_unshare_failed": failed,
+        "soundcloud_unshare_queued": await queue_unshares(release_query, clip_query),
     }
 
 
-async def unshare_track(user_id: str, track_id: str, settings: ApiSettings) -> str | None:
-    """Set a SoundCloud track private on ``user_id``'s account; the error message on failure, else ``None``."""
-    try:
-        connection = await sc.get_valid_connection(user_id, settings)
-        await sc.update_track_sharing(connection.access_token, track_id, "private")
-    except sc.SoundCloudError as exc:
-        logger.warning("Un-sharing SoundCloud track %s failed: %s", track_id, exc)
-        return str(exc)
-    return None
+async def queue_unshares(release_query: dict, clip_query: dict) -> list[str]:
+    """Queue every SoundCloud track uploaded from the matching releases and clips; return the track ids (#569).
+
+    Queueing a track already in the queue keeps its attempt count and makes it due now.
+    """
+    tracks: dict[str, tuple] = {}
+    async for release in Release.get_pymongo_collection().find(
+        {**release_query, "soundcloud_track_id": {"$ne": None}}, {"user_id": 1, "clip_id": 1, "soundcloud_track_id": 1}
+    ):
+        tracks[release["soundcloud_track_id"]] = (release["user_id"], release["clip_id"])
+    async for clip in Clip.get_pymongo_collection().find(
+        {**clip_query, "soundcloud_track_ids.0": {"$exists": True}}, {"user_id": 1, "soundcloud_track_ids": 1}
+    ):
+        for track_id in clip["soundcloud_track_ids"]:
+            tracks[track_id] = (clip["user_id"], clip["_id"])
+    now = utcnow()
+    for track_id, (owner_id, clip_id) in tracks.items():
+        await SoundCloudUnshare.get_pymongo_collection().update_one(
+            {"track_id": track_id},
+            {
+                "$set": {"next_attempt_at": now},
+                "$setOnInsert": {
+                    "user_id": owner_id,
+                    "clip_id": clip_id,
+                    "attempts": 0,
+                    "last_error": None,
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+    return sorted(tracks)
 
 
 # A submission can only be confirmed once the package is assembled, and re-confirmed

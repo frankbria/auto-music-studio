@@ -19,6 +19,7 @@ from acemusic.api.models import (
     Clip,
     Job,
     ModerationLogEntry,
+    SoundCloudUnshare,
     User,
     Video,
     VisibilityState,
@@ -365,6 +366,27 @@ class TestArtworkActions:
         assert (await Clip.get(clip.id)).artwork_path is None
         [entry] = await ModerationLogEntry.find(ModerationLogEntry.target_type == "artwork").to_list()
         assert entry.details == {"clip_id": str(clip.id), "was_cover": True}
+
+    async def test_dropping_a_distributed_cover_queues_the_songs_soundcloud_tracks(
+        self, client, settings, local_storage
+    ):
+        # #569: the cover went out with each SoundCloud upload, so dropping it takes those tracks down too.
+        option, clip = await _artwork(local_storage, as_cover=True)
+        await clip.set({"soundcloud_track_ids": ["sc-cover"]})
+
+        await _act(client, await _admin(), settings, "artwork", "drop", [option.id])
+
+        assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-cover"]
+        [entry] = await ModerationLogEntry.find(ModerationLogEntry.target_type == "artwork").to_list()
+        assert entry.details["soundcloud_unshare_queued"] == ["sc-cover"]
+
+    async def test_dropping_an_option_that_was_not_the_cover_queues_nothing(self, client, settings, local_storage):
+        option, clip = await _artwork(local_storage)
+        await clip.set({"soundcloud_track_ids": ["sc-kept"]})
+
+        await _act(client, await _admin(), settings, "artwork", "drop", [option.id])
+
+        assert await SoundCloudUnshare.find_all().to_list() == []
 
     async def test_dropping_an_unselected_option_leaves_the_cover(self, client, settings, local_storage):
         option, clip = await _artwork(local_storage)

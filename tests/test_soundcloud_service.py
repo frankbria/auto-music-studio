@@ -240,3 +240,20 @@ class TestTokenExpiry:
 
         expiry = sc.token_expiry(None)
         assert expiry > datetime.now(timezone.utc)
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [404, 410])
+async def test_update_track_sharing_reports_a_deleted_track(status) -> None:
+    # #569: a track the owner deleted can never be public again, so the un-share queue treats it as done.
+    respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/t1").mock(return_value=httpx.Response(status))
+    with pytest.raises(sc.SoundCloudTrackGone):
+        await sc.update_track_sharing("at", "t1", "private")
+
+
+@respx.mock
+async def test_update_track_sharing_keeps_other_failures_retryable() -> None:
+    respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/t1").mock(return_value=httpx.Response(503))
+    with pytest.raises(sc.SoundCloudError) as exc:
+        await sc.update_track_sharing("at", "t1", "private")
+    assert not isinstance(exc.value, sc.SoundCloudTrackGone)
