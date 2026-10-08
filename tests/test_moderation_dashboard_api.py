@@ -1236,3 +1236,22 @@ class TestBulkActionsIsolateFailures:
         stored = await Clip.get(clip.id)
         assert stored.removed_at is None and stored.visibility == VisibilityState.PUBLIC
         assert await _latest_log("remove") is None
+
+    async def test_an_upload_finishing_mid_remove_is_still_queued(self, client, settings, monkeypatch):
+        # The upload records its track after the remove enumerated the clip's tracks but before the clip was
+        # stamped removed, so the upload's own check missed the removal too. The post-stamp queueing catches it.
+        owner = await _user()
+        clip = await _clip(owner, soundcloud_track_ids=["sc-early"])
+        real = release_service.unshare_releases
+
+        async def upload_lands(release_query, clip_query):
+            result = await real(release_query, clip_query)
+            await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": "sc-late"}})
+            return result
+
+        monkeypatch.setattr(release_service, "unshare_releases", upload_lands)
+
+        [result] = await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert result["ok"] is True
+        assert await _queued_track_ids() == ["sc-early", "sc-late"]

@@ -295,13 +295,16 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
             # US-27.4: a reversed appeal restores the visibility recorded here.
             details["previous_visibility"] = clip.visibility.value
             updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
-            # First, and idempotent (#569): if this fails, nothing is half-applied and the admin can retry.
+            # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
             details.update(await release_service.unshare_releases({"clip_id": oid}, {"_id": oid}))
         elif action == "flag":
             updates.update(content_warning=True, flagged_at=now)
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
+            # And again once stamped: an upload that recorded its track in between saw no removal either.
+            # Queueing is idempotent; anything uploaded from here on sees removed_at and queues itself.
+            await release_service.queue_unshares({"clip_id": oid}, {"_id": oid})
             await NotificationEvent(
                 user_id=clip.user_id,
                 clip_id=clip.id,
@@ -340,6 +343,11 @@ async def act_on_content(
 
 async def _drop_artwork(option: ArtworkOption) -> dict:
     """Delete a generated cover option, and clear the clip's cover if it was that option."""
+    queued: list[str] = []
+    if await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}):
+        # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it. Queued
+        # before anything is deleted, so a failure here leaves the drop retryable.
+        queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
     await option.delete()
     cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
         {"$set": {"artwork_path": None}}
@@ -349,11 +357,8 @@ async def _drop_artwork(option: ArtworkOption) -> dict:
     except Exception:  # best-effort: the option can no longer be selected or served either way
         logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
     details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
-    if cleared.modified_count:
-        # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it.
-        queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
-        if queued:
-            details["soundcloud_unshare_queued"] = queued
+    if queued:
+        details["soundcloud_unshare_queued"] = queued
     return details
 
 

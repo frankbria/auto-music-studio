@@ -27,7 +27,7 @@ from acemusic.api.models import (
     VoiceModelStatus,
     Workspace,
 )
-from acemusic.api.services import artwork as artwork_service, video as video_service
+from acemusic.api.services import artwork as artwork_service, releases as release_service, video as video_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -379,6 +379,27 @@ class TestArtworkActions:
         assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-cover"]
         [entry] = await ModerationLogEntry.find(ModerationLogEntry.target_type == "artwork").to_list()
         assert entry.details["soundcloud_unshare_queued"] == ["sc-cover"]
+
+    async def test_a_cover_drop_that_cannot_queue_can_be_retried(self, client, settings, local_storage, monkeypatch):
+        # Queueing runs before the option is deleted, so a failure leaves the drop retryable.
+        option, clip = await _artwork(local_storage, as_cover=True)
+        await clip.set({"soundcloud_track_ids": ["sc-cover"]})
+        admin = await _admin()
+        real = release_service.queue_unshares
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("mongo went away")
+
+        monkeypatch.setattr(release_service, "queue_unshares", broken)
+        [failed] = await _act(client, admin, settings, "artwork", "drop", [option.id])
+        assert failed["ok"] is False
+        assert await ArtworkOption.get(option.id) is not None
+        assert (await Clip.get(clip.id)).artwork_path == option.storage_path
+
+        monkeypatch.setattr(release_service, "queue_unshares", real)
+        [retried] = await _act(client, admin, settings, "artwork", "drop", [option.id])
+        assert retried["ok"] is True
+        assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-cover"]
 
     async def test_dropping_an_option_that_was_not_the_cover_queues_nothing(self, client, settings, local_storage):
         option, clip = await _artwork(local_storage)
