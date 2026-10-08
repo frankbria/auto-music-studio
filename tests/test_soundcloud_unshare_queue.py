@@ -237,20 +237,21 @@ class TestDraining:
         assert _aware(row.next_attempt_at) <= utcnow() + MAX_UNSHARE_BACKOFF
 
     async def test_backoff_never_overflows_after_many_failures(self, mongo_db, mongo_settings):
-        # 60·2^45 seconds is past timedelta's range; the row must still move to the capped delay.
+        # Past timedelta's range and past a float's: the row must still move to the capped delay.
         async def _down(_track_id):
             raise sc.SoundCloudError("down")
 
         user = await make_user("d-overflow@example.com")
         clip = await _clip(user, track_ids=["t1"])
         await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
-        await SoundCloudUnshare.find_one(SoundCloudUnshare.track_id == "t1").update({"$set": {"attempts": 60}})
+        # ~6 weeks of hourly failures: 60.0 * 2**1025 overflows a float before any cap applies.
+        await SoundCloudUnshare.find_one(SoundCloudUnshare.track_id == "t1").update({"$set": {"attempts": 2000}})
         poller, _ = _poller(mongo_settings, sharing=_down)
 
         await poller.drain_unshares()
 
         row = (await _queued())["t1"]
-        assert row.attempts == 61
+        assert row.attempts == 2001
         assert _aware(row.next_attempt_at) > utcnow() + MAX_UNSHARE_BACKOFF - timedelta(minutes=1)
 
     async def test_a_requeue_during_a_successful_attempt_keeps_the_row_due(self, mongo_db, mongo_settings):

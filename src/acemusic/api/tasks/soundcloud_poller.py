@@ -219,8 +219,8 @@ class SoundCloudStatusPoller:
         return bool(result.deleted_count)
 
     async def _retry_later(self, row: SoundCloudUnshare, error: str) -> None:
-        # Capped in seconds before timedelta sees it: 2**45 seconds is past timedelta's range.
-        delay = min(self._poll_interval * 2**row.attempts, MAX_UNSHARE_BACKOFF.total_seconds())
+        # The exponent is capped first: a float poll interval times 2**1025 overflows before min() can apply.
+        delay = min(self._poll_interval * 2 ** min(row.attempts, 20), MAX_UNSHARE_BACKOFF.total_seconds())
         await SoundCloudUnshare.get_pymongo_collection().update_one(
             {"_id": row.id, "generation": row.generation},
             {

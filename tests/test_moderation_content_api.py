@@ -401,6 +401,31 @@ class TestArtworkActions:
         assert retried["ok"] is True
         assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-cover"]
 
+    async def test_a_track_recorded_between_the_drops_two_queueings_is_caught(
+        self, client, settings, local_storage, monkeypatch
+    ):
+        # An upload records its track after the drop's first queueing but before the cover is cleared, so the
+        # upload still saw its cover. The drop's second queueing, after the clear, picks it up.
+        option, clip = await _artwork(local_storage, as_cover=True)
+        await clip.set({"soundcloud_track_ids": ["sc-early"]})
+        real = release_service.queue_unshares
+        calls = 0
+
+        async def upload_lands(release_query, clip_query):
+            nonlocal calls
+            calls += 1
+            result = await real(release_query, clip_query)
+            if calls == 1:
+                await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": "sc-late"}})
+            return result
+
+        monkeypatch.setattr(release_service, "queue_unshares", upload_lands)
+
+        await _act(client, await _admin(), settings, "artwork", "drop", [option.id])
+
+        queued = sorted(row.track_id for row in await SoundCloudUnshare.find_all().to_list())
+        assert queued == ["sc-early", "sc-late"]
+
     async def test_dropping_an_option_that_was_not_the_cover_queues_nothing(self, client, settings, local_storage):
         option, clip = await _artwork(local_storage)
         await clip.set({"soundcloud_track_ids": ["sc-kept"]})

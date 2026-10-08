@@ -309,6 +309,10 @@ async def soundcloud_upload(
         await status_service.apply_channel_status(
             release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
         )
+    if artwork is not None and not await Clip.find_one({"_id": clip.id, "artwork_path": clip.artwork_path}):
+        # The cover this upload carried was dropped mid-upload (#569), and the drop queued before this track existed.
+        # ponytail: an owner replacing their own cover in that window also lands here; the cost is one re-upload.
+        await release_service.queue_track(clip.user_id, clip.id, str(track_id))
     # A removal landing mid-upload (#538) ran before the track id was recorded, so it is queued again here.
     await release_service.unshare_if_source_removed(clip.id, current.user_id)
 

@@ -333,24 +333,29 @@ async def queue_unshares(release_query: dict, clip_query: dict) -> list[str]:
     ):
         for track_id in clip["soundcloud_track_ids"]:
             tracks[track_id] = (clip["user_id"], clip["_id"])
-    now = utcnow()
     for track_id, (owner_id, clip_id) in tracks.items():
-        await SoundCloudUnshare.get_pymongo_collection().update_one(
-            {"track_id": track_id},
-            {
-                "$set": {"next_attempt_at": now},
-                "$inc": {"generation": 1},
-                "$setOnInsert": {
-                    "user_id": owner_id,
-                    "clip_id": clip_id,
-                    "attempts": 0,
-                    "last_error": None,
-                    "created_at": now,
-                },
-            },
-            upsert=True,
-        )
+        await queue_track(owner_id, clip_id, track_id)
     return sorted(tracks)
+
+
+async def queue_track(user_id: PydanticObjectId, clip_id: PydanticObjectId | None, track_id: str) -> None:
+    """Queue one SoundCloud track to be made private; queued again, it keeps its attempts and is due now (#569)."""
+    now = utcnow()
+    await SoundCloudUnshare.get_pymongo_collection().update_one(
+        {"track_id": track_id},
+        {
+            "$set": {"next_attempt_at": now},
+            "$inc": {"generation": 1},
+            "$setOnInsert": {
+                "user_id": user_id,
+                "clip_id": clip_id,
+                "attempts": 0,
+                "last_error": None,
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
 
 
 # A submission can only be confirmed once the package is assembled, and re-confirmed
