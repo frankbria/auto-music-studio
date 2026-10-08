@@ -347,9 +347,13 @@ async def act_on_content(
             updates.update(published=False, removed_at=now)
         await doc.set(updates)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
-    # After the log: a failed insert must not leave an applied drop, which can't be retried, unlogged.
+    # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
+    # already stamped, lifted or deleted), so a failed insert must not report the action as failed.
     if notice:
-        await _notify_owner(doc, notice[0], reason, **notice[1])
+        try:
+            await _notify_owner(doc, notice[0], reason, **notice[1])
+        except Exception:
+            logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
 
 

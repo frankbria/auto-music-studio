@@ -364,7 +364,7 @@ class TestVideoRestore:
         assert result == {"id": str(video.id), "ok": True, "detail": None}
         stored = await Video.get(video.id)
         assert (stored.published, stored.removed_at) == (False, None)
-        notices = await NotificationEvent.find(NotificationEvent.user_id == owner.id).sort("+created_at").to_list()
+        notices = await NotificationEvent.find(NotificationEvent.user_id == owner.id).sort("+_id").to_list()
         assert [n.event_type for n in notices] == ["moderation_video_unpublished", "moderation_video_restored"]
         assert notices[1].payload == {"video_id": str(video.id), "title": "Song", "reason": "appealed by email"}
         resp = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
@@ -428,6 +428,21 @@ class TestVideoRestore:
 
         assert result["ok"] is True
         assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 1
+
+    async def test_a_failed_notice_does_not_fail_an_applied_restore(self, client, settings, monkeypatch):
+        admin = await _admin()
+        video = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        async def broken(*args, **kwargs):
+            raise RuntimeError("mongo blip")
+
+        monkeypatch.setattr(moderation, "_notify_owner", broken)
+        [result] = await _act(client, admin, settings, "video", "restore", [video.id])
+
+        assert result["ok"] is True
+        assert (await Video.get(video.id)).removed_at is None
+        assert await ModerationLogEntry.find(ModerationLogEntry.action == "restore").count() == 1
 
     async def test_a_banned_owners_video_stays_down(self, client, settings):
         owner = await _user()
