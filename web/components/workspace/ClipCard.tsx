@@ -253,7 +253,7 @@ export function ClipCard({
   return (
     <div
       data-testid="clip-card"
-      draggable
+      draggable={isOwner}
       onDragStart={(e) => {
         setClipDragData(e.dataTransfer, {
           kind: "add",
@@ -445,7 +445,7 @@ export function ClipCard({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
                   {/* Remix/Edit opens the remix flow; the generation actions below
-                    are the flat §9.2 items (the primary CTA is the shortcut). */}
+                      are the flat §9.2 items (the primary CTA is the shortcut). */}
                   {MORE_ITEMS.map((action, i) =>
                     action === null ? (
                       <DropdownMenuSeparator key={`sep-${i}`} />

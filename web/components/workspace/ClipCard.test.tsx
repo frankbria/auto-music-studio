@@ -723,6 +723,14 @@ describe("ClipCard for a visitor (#564)", () => {
     expect(screen.getByTestId("current-track")).toHaveTextContent("c1")
   })
 
+  it("is not a Studio drag source, since Studio only mixes the viewer's own clips", () => {
+    renderCard({ isOwner: false })
+    expect(screen.getByTestId("clip-card")).toHaveAttribute(
+      "draggable",
+      "false"
+    )
+  })
+
   it("shows the owner controls by default", () => {
     renderCard({ clip: clip({ duration: 30 }) })
     for (const name of OWNER_CONTROLS) {
