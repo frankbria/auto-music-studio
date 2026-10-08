@@ -341,21 +341,14 @@ async def queue_unshares(release_query: dict, clip_query: dict) -> list[str]:
 async def queue_track(user_id: PydanticObjectId, clip_id: PydanticObjectId | None, track_id: str) -> None:
     """Queue one SoundCloud track to be made private; queued again, it keeps its attempts and is due now (#569)."""
     now = utcnow()
-    await SoundCloudUnshare.get_pymongo_collection().update_one(
-        {"track_id": track_id},
-        {
-            "$set": {"next_attempt_at": now},
-            "$inc": {"generation": 1},
-            "$setOnInsert": {
-                "user_id": user_id,
-                "clip_id": clip_id,
-                "attempts": 0,
-                "last_error": None,
-                "created_at": now,
-            },
-        },
-        upsert=True,
-    )
+    requeue = {"$set": {"next_attempt_at": now}, "$inc": {"generation": 1}}
+    insert = {"user_id": user_id, "clip_id": clip_id, "attempts": 0, "last_error": None, "created_at": now}
+    collection = SoundCloudUnshare.get_pymongo_collection()
+    try:
+        await collection.update_one({"track_id": track_id}, {**requeue, "$setOnInsert": insert}, upsert=True)
+    except DuplicateKeyError:
+        # Two takedowns first-queued the same track at once and the other upsert inserted it: requeue that row.
+        await collection.update_one({"track_id": track_id}, requeue)
 
 
 # A submission can only be confirmed once the package is assembled, and re-confirmed

@@ -1255,3 +1255,26 @@ class TestBulkActionsIsolateFailures:
 
         assert result["ok"] is True
         assert await _queued_track_ids() == ["sc-early", "sc-late"]
+
+    async def test_a_share_landing_mid_remove_leaves_the_release_private(self, client, settings, monkeypatch):
+        # The owner's share sets the release public after the remove's first privatize but before the clip is
+        # stamped, so the share's own check saw no removal. The post-stamp pass privatizes it again.
+        owner = await _user()
+        clip = await _clip(owner)
+        release = await _release(clip, visibility=VisibilityState.PRIVATE)
+        real = release_service.unshare_releases
+        calls = 0
+
+        async def share_lands(release_query, clip_query):
+            nonlocal calls
+            calls += 1
+            result = await real(release_query, clip_query)
+            if calls == 1:
+                await Release.find_one(Release.id == release.id).update({"$set": {"visibility": "public"}})
+            return result
+
+        monkeypatch.setattr(release_service, "unshare_releases", share_lands)
+
+        await _act_on_clips(client, await _admin(), settings, "remove", [clip.id])
+
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE

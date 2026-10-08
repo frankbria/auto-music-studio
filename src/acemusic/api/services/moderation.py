@@ -302,9 +302,10 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
         await clip.set(updates)
         resolved = await _resolve_reports(oid, now)
         if action == "remove":
-            # And again once stamped: an upload that recorded its track in between saw no removal either.
-            # Queueing is idempotent; anything uploaded from here on sees removed_at and queues itself.
-            await release_service.queue_unshares({"clip_id": oid}, {"_id": oid})
+            # And again once stamped: an upload or share that landed in between saw no removal either, so its
+            # track is queued and its release made private here. Both are idempotent; anything from here on
+            # sees removed_at and takes itself down (unshare_if_source_removed).
+            await release_service.unshare_releases({"clip_id": oid}, {"_id": oid})
             await NotificationEvent(
                 user_id=clip.user_id,
                 clip_id=clip.id,

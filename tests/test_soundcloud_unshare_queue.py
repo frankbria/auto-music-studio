@@ -11,6 +11,7 @@ from datetime import timedelta, timezone
 
 import pytest
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 
 from acemusic.api.models import Clip, ModerationLogEntry, Release, SoundCloudUnshare, Workspace
 from acemusic.api.models.common import utcnow
@@ -205,7 +206,8 @@ class TestDraining:
         row = (await _queued())["t1"]
         assert row.attempts == 1
         assert row.last_error == "Updating the SoundCloud track sharing failed."
-        assert _aware(row.next_attempt_at) >= before + timedelta(seconds=60)
+        # Mongo keeps milliseconds, so the stored time can sit up to 1ms below the exact one.
+        assert _aware(row.next_attempt_at) >= before + timedelta(seconds=60) - timedelta(milliseconds=1)
         # Not due yet: the next cycle leaves it alone.
         assert await poller.drain_unshares() == 0
         assert len(calls) == 1
@@ -318,3 +320,27 @@ async def test_queued_ids_are_stored_as_object_ids(mongo_db):
     raw = await SoundCloudUnshare.get_pymongo_collection().find_one({"track_id": "t1"})
     assert isinstance(raw["user_id"], ObjectId) and raw["user_id"] == user.id
     assert isinstance(raw["clip_id"], ObjectId) and raw["clip_id"] == clip.id
+
+
+async def test_a_concurrent_first_queueing_of_the_same_track_requeues_instead_of_failing(mongo_db, monkeypatch):
+    # Two takedowns upsert a brand-new track at once; the loser's upsert hits the unique index (E11000).
+    user = await make_user("q-dup@example.com")
+    clip = await _clip(user)
+    real = SoundCloudUnshare.get_pymongo_collection()
+
+    class LosesTheRace:
+        raced = False
+
+        async def update_one(self, query, update, upsert=False):
+            if upsert and not self.raced:
+                self.raced = True
+                await real.update_one(query, update, upsert=True)  # the other takedown's insert lands first
+                raise DuplicateKeyError("E11000 duplicate key error")
+            return await real.update_one(query, update, upsert=upsert)
+
+    monkeypatch.setattr(SoundCloudUnshare, "get_pymongo_collection", classmethod(lambda cls: LosesTheRace()))
+
+    await release_service.queue_track(user.id, clip.id, "t-dup")
+
+    row = await real.find_one({"track_id": "t-dup"})
+    assert row["generation"] == 2  # both queueings counted
