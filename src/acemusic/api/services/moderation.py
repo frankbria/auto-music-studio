@@ -330,33 +330,40 @@ async def act_on_content(
         return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
     now = utcnow()
     details: dict = {}
+    notice: tuple[str, dict] | None = None
     if action == "drop":
         details = await _drop_artwork(doc)
-        await _notify_owner(doc, "moderation_artwork_dropped", reason, was_cover=details["was_cover"])
+        notice = ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
     elif action == "restore":
         if refused := await _restore_video(doc):
             return ActionResult(ok=False, detail=refused)
-        await _notify_owner(doc, "moderation_video_restored", reason, video_id=str(oid))
+        notice = ("moderation_video_restored", {"video_id": str(oid)})
     else:
         updates: dict = {"moderation_reviewed_at": now}
         if action == "unpublish":
             details["was_published"] = doc.published
+            if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
+                notice = ("moderation_video_unpublished", {"video_id": str(oid)})
             updates.update(published=False, removed_at=now)
         await doc.set(updates)
-        if action == "unpublish":
-            await _notify_owner(doc, "moderation_video_unpublished", reason, video_id=str(oid))
     await log_action(actor_id, action, target_type, str(oid), reason, details)
+    # After the log: a failed insert must not leave an applied drop, which can't be retried, unlogged.
+    if notice:
+        await _notify_owner(doc, notice[0], reason, **notice[1])
     return ActionResult(ok=True)
 
 
 async def _restore_video(video: Video) -> str | None:
     """Lift a takedown so the owner may publish again (#571). The video stays unpublished until they do."""
+    if video.removed_at is None:
+        return "This video is not taken down."
     owner = await User.get(video.user_id)
     if owner is not None and owner.banned_at is not None:
         return "The video's owner is banned."
-    # Conditional, so of two concurrent restores only one is logged and notified.
-    lifted = await Video.find({"_id": video.id, "removed_at": {"$ne": None}}).update({"$set": {"removed_at": None}})
-    return None if lifted.modified_count else "This video was not unpublished by moderation."
+    # Conditional on the takedown read: of two concurrent restores only one applies, and an unpublish that
+    # re-stamps removed_at meanwhile is not lifted by a restore aimed at the older one.
+    lifted = await Video.find({"_id": video.id, "removed_at": video.removed_at}).update({"$set": {"removed_at": None}})
+    return None if lifted.modified_count else "This video is not taken down."
 
 
 async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str | None, **payload) -> None:

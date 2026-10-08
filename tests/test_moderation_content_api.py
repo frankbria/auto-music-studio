@@ -28,7 +28,12 @@ from acemusic.api.models import (
     VoiceModelStatus,
     Workspace,
 )
-from acemusic.api.services import artwork as artwork_service, releases as release_service, video as video_service
+from acemusic.api.services import (
+    artwork as artwork_service,
+    moderation,
+    releases as release_service,
+    video as video_service,
+)
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -400,9 +405,29 @@ class TestVideoRestore:
 
         [result] = await _act(client, await _admin(), settings, "video", "restore", [video.id])
 
-        assert result == {"id": str(video.id), "ok": False, "detail": "This video was not unpublished by moderation."}
+        assert result == {"id": str(video.id), "ok": False, "detail": "This video is not taken down."}
         assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 0
         assert await ModerationLogEntry.find(ModerationLogEntry.action == "restore").count() == 0
+
+    async def test_a_restore_does_not_lift_an_unpublish_that_landed_after_its_read(self, settings):
+        video = await _video(published=True)
+        await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 1, 1), "published": False}})
+        stale = await Video.get(video.id)
+        await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 2, 1)}})
+
+        assert await moderation._restore_video(stale) == "This video is not taken down."
+        assert (await Video.get(video.id)).removed_at == datetime(2026, 2, 1)
+
+    async def test_unpublishing_a_video_already_down_does_not_notify_again(self, client, settings):
+        owner = await _user()
+        admin = await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        [result] = await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        assert result["ok"] is True
+        assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 1
 
     async def test_a_banned_owners_video_stays_down(self, client, settings):
         owner = await _user()
