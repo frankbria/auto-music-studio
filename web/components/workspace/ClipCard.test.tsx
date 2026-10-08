@@ -691,3 +691,50 @@ describe("ClipCard moderation appeal (US-27.4)", () => {
     ).not.toBeInTheDocument()
   })
 })
+
+describe("ClipCard for a visitor (#564)", () => {
+  // Every owner-only control: the API refuses all of them on someone else's clip.
+  const OWNER_CONTROLS = [
+    "Edit title",
+    /^Visibility:/,
+    "Remix or edit clip",
+    "More options",
+    /get full song/i,
+  ]
+
+  it("hides every owner-only control on someone else's clip", () => {
+    renderCard({
+      clip: clip({ duration: 30, is_public: true }),
+      isOwner: false,
+    })
+    for (const name of OWNER_CONTROLS) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByText("Public")).not.toBeInTheDocument()
+    expect(screen.getByText("Midnight")).toBeInTheDocument()
+  })
+
+  it("keeps play, like, dislike and share, which anyone may use", async () => {
+    renderCard({ isOwner: false })
+    for (const name of ["Play", "Like", "Dislike", "Share"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument()
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Play" }))
+    expect(screen.getByTestId("current-track")).toHaveTextContent("c1")
+  })
+
+  it("is not a Studio drag source, since Studio only mixes the viewer's own clips", () => {
+    renderCard({ isOwner: false })
+    expect(screen.getByTestId("clip-card")).toHaveAttribute(
+      "draggable",
+      "false"
+    )
+  })
+
+  it("shows the owner controls by default", () => {
+    renderCard({ clip: clip({ duration: 30 }) })
+    for (const name of OWNER_CONTROLS) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument()
+    }
+  })
+})

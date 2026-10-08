@@ -72,3 +72,40 @@ describe("RelatedSongs Report control (#535)", () => {
     ).not.toBeInTheDocument()
   })
 })
+
+describe("RelatedSongs owner-only controls (#564)", () => {
+  const OWNER_CONTROLS = ["Edit title", "More options", "Remix or edit clip"]
+
+  it("hides owner controls on another user's clip and keeps them on your own", async () => {
+    renderRail([
+      makeClip({ id: "theirs", title: "Theirs", is_owner: false }),
+      makeClip({ id: "mine", title: "Mine", is_owner: true }),
+    ])
+
+    const theirs = await itemFor("Theirs")
+    const mine = await itemFor("Mine")
+    for (const name of OWNER_CONTROLS) {
+      expect(
+        within(theirs).queryByRole("button", { name })
+      ).not.toBeInTheDocument()
+      expect(within(mine).getByRole("button", { name })).toBeInTheDocument()
+    }
+    expect(
+      within(theirs).queryByRole("button", { name: /^Visibility:/ })
+    ).not.toBeInTheDocument()
+    expect(
+      within(mine).getByRole("button", { name: /^Visibility:/ })
+    ).toBeInTheDocument()
+  })
+
+  it("treats unknown ownership as not yours", async () => {
+    renderRail([makeClip({ id: "legacy", title: "Legacy" })])
+
+    const legacy = await itemFor("Legacy")
+    for (const name of OWNER_CONTROLS) {
+      expect(
+        within(legacy).queryByRole("button", { name })
+      ).not.toBeInTheDocument()
+    }
+  })
+})
