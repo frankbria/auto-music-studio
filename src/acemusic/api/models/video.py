@@ -45,7 +45,7 @@ class Video(Document):
     # #539: borderline screening categories from the job's prompt, for the moderation queue.
     moderation_flags: list[str] = Field(default_factory=list)
     moderation_reviewed_at: datetime | None = None
-    # Set when moderation unpublishes it; the owner may not publish it again.
+    # Set when moderation unpublishes it; the owner may not publish it again until an admin restores it (#571).
     removed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
