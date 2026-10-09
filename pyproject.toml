@@ -36,13 +36,13 @@ dependencies = [
     # (AsyncMongoClient) directly — Motor is deprecated and no longer used.
     # dnspython is required for Atlas mongodb+srv:// connection strings.
     "beanie>=2.2.0",
-    "pymongo>=4.18.1",
+    "pymongo>=4.18.2",
     "dnspython>=2.6",
     "email-validator>=2.0",
     # OAuth2 + JWT auth (US-8.3). authlib drives the provider flows; PyJWT signs
     # and verifies our own access tokens (python-jose is unmaintained / has CVEs).
     "authlib>=1.8.0",
-    "pyjwt>=2.14.0",
+    "pyjwt>=2.15.0",
     "stripe>=15.6.1",
 ]
 
@@ -73,7 +73,7 @@ api = [
     "uvicorn[standard]>=0.53.0",
 ]
 s3 = [
-    "boto3>=1.43.95",
+    "boto3>=1.43.102",
 ]
 
 [tool.hatch.build.targets.wheel]
