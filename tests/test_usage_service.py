@@ -16,12 +16,6 @@ from acemusic.api.services import credits as credits_service, usage
 from tests.users import make_user
 
 
-@pytest.fixture(autouse=True)
-def _db(mongo_db):
-    """Service-layer tests with no HTTP client still need Beanie initialised."""
-    return mongo_db
-
-
 async def _user(email: str, *, monthly: float = 0.0, purchased: float = 0.0) -> User:
     # Anniversary and last reset on the same date, so "one month from the last reset" is
     # a fixed offset regardless of which day of the month the suite happens to run on.
@@ -81,6 +75,10 @@ class TestCategoryFor:
 
 @pytest.mark.integration
 class TestBuildUsageSummary:
+    @pytest.fixture(autouse=True)
+    async def _db(self, mongo_db):
+        return mongo_db
+
     async def test_it_reports_both_buckets_the_tier_and_the_reset_date(self) -> None:
         user = await _user("usage-balance@example.com", monthly=30.0, purchased=12.0)
 
