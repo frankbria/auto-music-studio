@@ -75,25 +75,6 @@ Set up a GitHub Actions workflow that runs lint, type-check, and tests on every 
 
 ---
 
-#### US-1.4: Issue Tracking Setup
-
-**As a** developer, **I want** beads issue tracking initialized, **so that** I can track development work across stages and sessions.
-
-**Description:**
-Initialize the `.beads` directory for issue tracking so that `bd` commands are available throughout the project lifecycle.
-
-**Functional Requirements:**
-- Run `bd onboard` to initialize `.beads`
-- Configure project label prefix (e.g., `ams-###`)
-- Verify `bd quickstart` works
-
-**Acceptance Criteria:**
-- [ ] `.beads` directory exists in the repo
-- [ ] `bd quickstart` runs without error
-- [ ] Issues can be created with `bd` commands
-
----
-
 **Stage 1 Completion Criteria:**
 - CI pipeline is green
 - Pre-commit hooks fire on commit
