@@ -8,7 +8,6 @@
 !.env.example
 
 # Secrets and local state
-.beads/
 *.pem
 *.key
 
