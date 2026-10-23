@@ -42,7 +42,7 @@ dependencies = [
     # OAuth2 + JWT auth (US-8.3). authlib drives the provider flows; PyJWT signs
     # and verifies our own access tokens (python-jose is unmaintained / has CVEs).
     "authlib>=1.8.0",
-    "pyjwt>=2.14.0",
+    "pyjwt>=2.15.0",
     "stripe>=15.6.1",
 ]
 
