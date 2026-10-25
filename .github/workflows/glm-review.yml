@@ -13,11 +13,14 @@ jobs:
       github.event.pull_request.changed_files >= 5 ||
       github.event.pull_request.additions >= 20 ||
       github.event.pull_request.deletions >= 20
-    uses: frankbria/glm-review/.github/workflows/review.yml@b877d15a0f8c0855d0d2ebdcce32ae09cec1bb2d # main 2026-07-10
+    uses: frankbria/glm-review/.github/workflows/review.yml@694b8104c462f47ace9112dfd46ee4c5954c75d6 # main @ 2026-10-24
+    with:
+      base_url: https://api.kimi.com/coding/
+      model: k3[1m]
     permissions:
       contents: read
       pull-requests: write
       issues: write
       id-token: write
     secrets:
-      ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
