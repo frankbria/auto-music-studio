@@ -43,7 +43,7 @@ dependencies = [
     # and verifies our own access tokens (python-jose is unmaintained / has CVEs).
     "authlib>=1.8.0",
     "pyjwt>=2.15.1",
-    "stripe>=15.6.1",
+    "stripe>=16.0.0",
 ]
 
 [project.scripts]
