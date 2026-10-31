@@ -119,6 +119,11 @@ class TestPublicPool:
         await Clip.get_pymongo_collection().insert_one(legacy)  # pre-US-20.7 shape: no visibility key
         assert await _ids(client) == [str(legacy_id)]
 
+    async def test_a_clip_whose_two_visibility_copies_disagree_is_not_listed(self, client) -> None:
+        drifted = await _clip(visibility=VisibilityState.PUBLIC)
+        await Clip.get_pymongo_collection().update_one({"_id": drifted.id}, {"$set": {"visibility": "unlisted"}})
+        assert await _ids(client) == []
+
     async def test_discovery_has_its_own_rate_limit_bucket(self, settings) -> None:
         app = create_app(settings.model_copy(update={"discover_rate_limit_per_minute": 1}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:

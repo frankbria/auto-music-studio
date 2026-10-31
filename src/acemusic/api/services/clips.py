@@ -249,8 +249,14 @@ async def public_clip_filter() -> dict:
     # shortcut: the banned-owner list is read whole on every listing; fine while bans number in the
     # thousands, move to a denormalized owner_banned flag on Clip if that list grows past that.
     banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
-    # is_public, not visibility: clips written before US-20.7 have no visibility key in Mongo.
-    return {"is_public": True, "removed_at": None, "user_id": {"$nin": banned}}
+    # Both copies must agree, so a writer that sets one without the other can't leak a clip. A missing
+    # visibility ($in matches null) is a clip written before US-20.7, which only ever had is_public.
+    return {
+        "is_public": True,
+        "visibility": {"$in": [VisibilityState.PUBLIC.value, None]},
+        "removed_at": None,
+        "user_id": {"$nin": banned},
+    }
 
 
 def ensure_not_removed(clip: Clip) -> None:
