@@ -118,7 +118,7 @@ src/acemusic/
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
     models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry, ClipAppeal
-    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, editing, extraction, workspaces, presets, iterative, admin)
+    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, discover, editing, extraction, workspaces, presets, iterative, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
@@ -401,4 +401,11 @@ Package manager: `uv` with `hatchling` build backend
   voice training, distribution) shows up there, so a new `event_type` needs a case in the web
   `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
   `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
+- **Public discovery (#651)**: Feed, Explore and Search read `GET /api/v1/discover/clips` (keyset-paged, `newest` |
+  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they are anonymous. Every public listing
+  filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
+  uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
+  `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them
+  (no play, like or share counters, no staff-pick flag). Profiles and Playlists still read the mock pool in
+  `web/lib/mock-clips.ts`
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)

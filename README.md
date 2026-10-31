@@ -303,6 +303,27 @@ All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally
 
 `GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges, and is Pro-only when it converts *to* wav — including for anonymous callers, since otherwise signing out would beat the gate), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
 
+### Discovery
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/discover/clips` | Public clips for Feed, Explore and Search (#651): anonymous, keyset-paged |
+| `GET /api/v1/discover/facets` | The musical `keys` and `models` present among public clips, for Search's filter options |
+
+`GET /api/v1/discover/clips` takes these query parameters:
+
+- `q`: case-insensitive literal text over title, style tags and lyrics, at most 200 characters.
+- `style`: a word or phrase inside a style tag, so `hip-hop` matches "dark hip hop beat".
+- `bpm_min` / `bpm_max`: inclusive range.
+- `key`, `model`: exact match.
+- `sort`: `newest` (the default) or `relevance`. Relevance ranks a title prefix above a title match, then a tag, then lyrics. With no `q` it orders by newest.
+- `limit`: 1–50, default 20.
+- `cursor`: pass the previous response's `next_cursor`.
+
+The response is `{clips, next_cursor, total}`, where `clips` uses the redacted public clip shape (`GET /clips/{id}/public`). A malformed cursor, or one taken from the other sort, returns `422`.
+
+Both endpoints read one shared pool, `services/clips.public_clip_filter`: public, not removed by moderation, and not owned by a banned user. They are rate-limited per client IP in a bucket of their own, separate from streaming (`ACEMUSIC_API_DISCOVER_RATE_LIMIT_PER_MINUTE`, default 120).
+
 `GET /api/v1/clips/{id}/similar` finds clips related to a seed for a radio-style queue (pairs with the playback queue above). It scores candidates by shared style tags (each +1, case-insensitive), BPM within ±10% (+1), the same or relative key (+1), and matching model **and** generation mode (+1), returning them most-similar first. `?scope=mine|public|all` (default `all`) selects the candidate pool — the caller's own clips, public clips, or both — and `?limit=N` caps the result (default 20, max 50); `total` reports how many candidates matched before the limit. The seed is resolved like `/audio` (`404` unknown, `403` another user's private clip), so any clip the caller can see may seed a queue, and no matches returns `200` with an empty array. Each clip carries `is_owner`; another user's clip comes back with `workspace_id`, `seed`, `inference_steps` and `parent_clip_ids` blanked, as on the public read.
 
 ### Audio Editing (US-10.1)
