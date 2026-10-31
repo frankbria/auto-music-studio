@@ -9,10 +9,12 @@ on:
 jobs:
   review:
     # Only review substantial changes (5+ files, or 20+ additions, or 20+ deletions)
+    # and never Dependabot PRs: their runs don't get MODEL_API_KEY
     if: |
+      github.event.pull_request.user.login != 'dependabot[bot]' && (
       github.event.pull_request.changed_files >= 5 ||
       github.event.pull_request.additions >= 20 ||
-      github.event.pull_request.deletions >= 20
+      github.event.pull_request.deletions >= 20)
     uses: frankbria/glm-review/.github/workflows/review.yml@694b8104c462f47ace9112dfd46ee4c5954c75d6 # main @ 2026-10-24
     with:
       base_url: https://api.kimi.com/coding/
