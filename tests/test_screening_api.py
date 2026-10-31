@@ -274,7 +274,7 @@ def test_folding_does_not_flag_ordinary_lyrics(lyrics, fold_leetspeak):
     assert screening.match(rules, [lyrics]).categories == []
 
 
-@pytest.mark.parametrize("rule", screening.DEFAULT_RULES.rules, ids=lambda rule: rule.term)
+@pytest.mark.parametrize("rule", screening.DEFAULT_RULES.rules, ids=lambda rule: f"{rule.category}-{rule.action}")
 def test_every_default_rule_catches_its_own_term(rule):
     result = screening.match(screening.DEFAULT_RULES, [f"a song about {rule.term} tonight"])
     assert result.categories == [rule.category]
@@ -299,6 +299,7 @@ def test_every_default_rule_catches_its_own_term(rule):
         ("a school shooting", False, ["graphic violence"]),
         ("the king was beheaded", False, ["graphic violence"]),
         ("a suicide squad remix", False, []),
+        ("a suicide squad remix where i kill myself", False, ["self-harm"]),
     ],
 )
 def test_the_english_default_list(text, blocked, categories):

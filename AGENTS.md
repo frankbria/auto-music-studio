@@ -342,7 +342,8 @@ Package manager: `uv` with `hatchling` build backend
   confirm-submission and SoundCloud upload re-screen the release, the source clip and every metadata string sent,
   through `services/clips.screen_outgoing`. A flag there re-queues the source clip. A new outbound path must call it.
   Until an admin saves rules, `screening.DEFAULT_RULES` applies: an English-only list (#559) that blocks unambiguous
-  content and flags the rest. Matching is whole-word with no stemming, so a plural needs its own rule.
+  content and flags the rest. Matching is whole-word with no stemming, so a plural needs its own rule. A deployment
+  with saved rules keeps them; to adopt new defaults, an admin `PUT`s them (or the `screening_rules` document is deleted).
   Rules live in the `screening_rules` singleton, editable via `GET/PUT /api/v1/admin/screening-rules`, or `PATCH`
   to change only the fields sent (#561: an unknown field is a 422, and only sent fields are written, so saves don't race).
   A term hiding an invisible character is a 422 on save. Admins are `User.is_admin=True`, set in the database only.
