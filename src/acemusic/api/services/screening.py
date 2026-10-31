@@ -122,6 +122,8 @@ DEFAULT_RULES = ScreeningRules(
         "suicide doors",
         "suicide blonde",
         "spic and span",
+        "cut myself some slack",
+        "cutting myself some slack",
     ],
     block_threshold=DEFAULT_BLOCK_THRESHOLD,
 )

@@ -262,7 +262,7 @@ ORDINARY_LYRICS = [
     "Suicide doors on a Cadillac, she's a suicide blonde, call the suicide prevention hotline",
     "Spic and span kitchen, a scraped knee, the cutting room floor, I'm cutting my hair tonight",
     "Kill the lights, killing time, we killed it, the hangman's song, hang my coat up",
-    "A shooting star over the school, a cut above, end of my rope but not my life",
+    "A shooting star over the school, end of my rope, so I cut myself some slack",
 ]
 
 
