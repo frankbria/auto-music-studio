@@ -806,7 +806,7 @@ class TestUnban:
         stale = await User.get(user.id)
         await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})  # a concurrent unban won
 
-        assert await moderation._unban(stale) is None
+        assert await moderation._unban(str(PydanticObjectId()), stale, None) == "This account is not banned."
 
     async def test_unbanning_an_account_that_is_not_banned_is_refused(self, client, settings):
         admin, user = await _admin(), await _user()

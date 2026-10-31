@@ -430,27 +430,24 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
     user = await User.get(oid)
     if user is None:
         return ActionResult(ok=False, detail="User not found.")
-
-    if action == "warn":
-        await NotificationEvent(
-            user_id=oid, event_type="moderation_warning", channel="in_app", payload={"reason": reason}
-        ).insert()
-        details: dict = {}
-    elif action == "unban":
-        if user.banned_at is None:
-            return ActionResult(ok=False, detail="This account is not banned.")
-        details = await _unban(user)
-        if details is None:
-            return ActionResult(ok=False, detail="This account is not banned.")
-    else:
-        if str(oid) == actor_id:
-            return ActionResult(ok=False, detail="You cannot ban yourself.")
-        details = await _ban(user)
-    await log_action(actor_id, action, "user", str(oid), reason, details)
+    outcome = await _USER_ACTIONS[action](actor_id, user, reason)
+    if isinstance(outcome, str):
+        return ActionResult(ok=False, detail=outcome)
+    await log_action(actor_id, action, "user", str(oid), reason, outcome)
     return ActionResult(ok=True)
 
 
-async def _ban(user: User) -> dict:
+async def _warn(_actor_id: str, user: User, reason: str | None) -> dict:
+    await NotificationEvent(
+        user_id=user.id, event_type="moderation_warning", channel="in_app", payload={"reason": reason}
+    ).insert()
+    return {}
+
+
+async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
+    """The log entry's details, or why the ban was refused."""
+    if str(user.id) == actor_id:
+        return "You cannot ban yourself."
     if user.banned_at is None:
         await user.set({"banned_at": utcnow()})
     # The ban's own stamp marks what it took down, so an unban lifts exactly that (#581).
@@ -465,19 +462,23 @@ async def _ban(user: User) -> dict:
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
-async def _unban(user: User) -> dict | None:
+async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
     """Lift a ban (#581): restore the clips its sweep took down and lift its video takedowns.
 
     Videos stay unpublished for the owner to republish, as a moderator's restore leaves them (#571). Releases the ban
-    made private stay private: the owner re-publishes them. None when a concurrent unban got there first.
+    made private stay private: the owner re-publishes them. Refused when the account isn't banned, including when a
+    concurrent unban got there first.
     """
     banned_at = user.banned_at
     lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
-    if not lifted.modified_count:
-        return None
+    if banned_at is None or not lifted.modified_count:
+        return "This account is not banned."
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
     videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
+
+
+_USER_ACTIONS = {"warn": _warn, "ban": _ban, "unban": _unban}
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:
