@@ -268,7 +268,8 @@ def ensure_not_removed(clip: Clip) -> None:
 async def take_down_visible(query: dict, banned_at: datetime) -> int:
     """Make every non-private clip matching ``query`` private and removed (the US-27.3 ban sweep); returns how many.
 
-    A private clip is left alone, so its owner keeps it if the ban is lifted. Each clip records what it was taken
+    A private clip is left alone (one predating US-20.7, with no visibility key, is swept and comes back private).
+    Each clip records what it was taken
     down from, and ``removed_at`` is the ban's own stamp, so :func:`restore_ban_sweep` finds exactly these (#581).
     """
     # Pre-US-20.7 clips have no visibility key; is_public is what they were.

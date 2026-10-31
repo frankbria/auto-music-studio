@@ -440,6 +440,8 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
         if user.banned_at is None:
             return ActionResult(ok=False, detail="This account is not banned.")
         details = await _unban(user)
+        if details is None:
+            return ActionResult(ok=False, detail="This account is not banned.")
     else:
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
@@ -452,25 +454,27 @@ async def _ban(user: User) -> dict:
     if user.banned_at is None:
         await user.set({"banned_at": utcnow()})
     # The ban's own stamp marks what it took down, so an unban lifts exactly that (#581).
-    now = user.banned_at
+    stamp = user.banned_at
     await revoke_all_user_tokens(user.id)
-    clips_removed = await clip_service.take_down_visible({"user_id": user.id}, now)
+    clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
     videos = await Video.find({"user_id": user.id, "published": True}).update(
-        {"$set": {"published": False, "removed_at": now}}
+        {"$set": {"published": False, "removed_at": stamp}}
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
-async def _unban(user: User) -> dict:
+async def _unban(user: User) -> dict | None:
     """Lift a ban (#581): restore the clips its sweep took down and lift its video takedowns.
 
     Videos stay unpublished for the owner to republish, as a moderator's restore leaves them (#571). Releases the ban
-    made private stay private: the owner re-publishes them.
+    made private stay private: the owner re-publishes them. None when a concurrent unban got there first.
     """
     banned_at = user.banned_at
-    await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    if not lifted.modified_count:
+        return None
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
     videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}

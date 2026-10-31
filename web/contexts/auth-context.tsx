@@ -12,7 +12,7 @@ import {
 import { useRouter } from "next/navigation"
 
 import {
-  AccountSuspendedError,
+  SignInRefusedError,
   decodeAccessToken,
   decodeTokenExp,
   type AuthUser,
@@ -176,7 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!res.ok) {
         const { detail } = await res.json().catch(() => ({}))
         if (res.status === 403 && typeof detail === "string") {
-          throw new AccountSuspendedError(detail)
+          throw new SignInRefusedError(detail)
         }
         throw new Error("Authentication failed.")
       }

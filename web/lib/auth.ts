@@ -102,5 +102,5 @@ export function parseStateSetCookies(
   return out
 }
 
-/** Sign-in refused because an admin suspended the account; the message says how to contest it (#581). */
-export class AccountSuspendedError extends Error {}
+/** The backend refused sign-in (403) with a reason the user should read, e.g. how to contest a ban (#581). */
+export class SignInRefusedError extends Error {}

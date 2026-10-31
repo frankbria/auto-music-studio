@@ -801,6 +801,13 @@ class TestUnban:
         stored = await Clip.get(clip.id)
         assert (stored.visibility, stored.is_public, stored.removed_at) == (VisibilityState.PUBLIC, True, None)
 
+    async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        stale = await User.get(user.id)
+        await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})  # a concurrent unban won
+
+        assert await moderation._unban(stale) is None
+
     async def test_unbanning_an_account_that_is_not_banned_is_refused(self, client, settings):
         admin, user = await _admin(), await _user()
 

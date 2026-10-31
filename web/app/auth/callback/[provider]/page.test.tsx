@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
-import { AccountSuspendedError } from "@/lib/auth"
+import { SignInRefusedError } from "@/lib/auth"
 
 import CallbackPage from "./page"
 
@@ -18,7 +18,7 @@ describe("CallbackPage", () => {
   it("tells a suspended user how to contest the ban (#581)", async () => {
     const detail =
       "This account has been suspended. To contest it, contact appeals@example.com."
-    completeLogin.mockRejectedValueOnce(new AccountSuspendedError(detail))
+    completeLogin.mockRejectedValueOnce(new SignInRefusedError(detail))
 
     render(<CallbackPage />)
 

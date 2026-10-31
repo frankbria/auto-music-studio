@@ -7,11 +7,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert01Icon, Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
-import {
-  AccountSuspendedError,
-  RETURN_TO_KEY,
-  safeInternalPath,
-} from "@/lib/auth"
+import { SignInRefusedError, RETURN_TO_KEY, safeInternalPath } from "@/lib/auth"
 import { useAuth } from "@/hooks/use-auth"
 
 function CallbackHandler() {
@@ -36,7 +32,7 @@ function CallbackHandler() {
       .then(() => router.replace(from))
       .catch((error: unknown) =>
         setExchangeError(
-          error instanceof AccountSuspendedError
+          error instanceof SignInRefusedError
             ? error.message
             : "Sign-in could not be completed."
         )

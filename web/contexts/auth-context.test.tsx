@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AuthProvider } from "@/contexts/auth-context"
 import { useAuth } from "@/hooks/use-auth"
-import { AccountSuspendedError } from "@/lib/auth"
+import { SignInRefusedError } from "@/lib/auth"
 
 const accessToken = `h.${Buffer.from(
   JSON.stringify({ sub: "u1", email: "musician@example.com" })
@@ -41,7 +41,7 @@ function SignInProbe() {
         onClick={() =>
           completeLogin("google", "code", "state").catch((error: Error) =>
             setFailure(
-              `${error instanceof AccountSuspendedError ? "suspended" : "other"}: ${error.message}`
+              `${error instanceof SignInRefusedError ? "suspended" : "other"}: ${error.message}`
             )
           )
         }
