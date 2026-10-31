@@ -23,7 +23,7 @@ from fastapi import HTTPException, status
 from acemusic.constants import BPM_MAX, BPM_MIN
 from acemusic.storage import get_storage_backend
 
-from ..models import ArtworkOption, Clip, VisibilityState
+from ..models import ArtworkOption, Clip, User, VisibilityState
 from ..models.common import utcnow
 from ..tasks.common import store_clip
 from . import (
@@ -176,9 +176,9 @@ async def find_similar_clips(
     if scope == "mine":
         scope_clause: dict = {"user_id": owner}
     elif scope == "public":
-        scope_clause = {"is_public": True}
+        scope_clause = await public_clip_filter()
     else:
-        scope_clause = {"$or": [{"user_id": owner}, {"is_public": True}]}
+        scope_clause = {"$or": [{"user_id": owner}, await public_clip_filter()]}
 
     query = {
         "$and": [
@@ -238,6 +238,18 @@ async def is_active_admin(user_id: str) -> bool:
     # Looked up only when access would otherwise be refused, so ordinary streams pay nothing (US-27.3).
     user = await user_service.get_user_by_id(user_id)
     return user is not None and user.is_admin and user.banned_at is None
+
+
+async def public_clip_filter() -> dict:
+    """The public pool every public listing reads (#651): public, not removed, owner not banned.
+
+    Moderation already makes a removed clip and a banned owner's clips private; this checks both
+    itself, so a clip written around those paths still stays out of every listing.
+    """
+    # shortcut: the banned-owner list is read whole on every listing; fine while bans number in the
+    # thousands, move to a denormalized owner_banned flag on Clip if that list grows past that.
+    banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
+    return {"visibility": VisibilityState.PUBLIC.value, "removed_at": None, "user_id": {"$nin": banned}}
 
 
 def ensure_not_removed(clip: Clip) -> None:

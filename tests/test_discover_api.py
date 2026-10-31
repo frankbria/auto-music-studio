@@ -1,0 +1,221 @@
+"""Public discovery listings for Feed, Explore and Search (#651).
+
+``GET /discover/clips`` and ``GET /discover/facets`` are anonymous reads over the public
+pool: public, not removed by moderation, and not owned by a banned user. That rule lives in
+one shared filter (``services/discovery.public_clip_filter``), which similar-clips uses too.
+"""
+
+import itertools
+from datetime import timedelta
+
+import httpx
+import pytest
+from beanie import PydanticObjectId
+from fastapi.testclient import TestClient
+
+from acemusic.api.main import API_V1_PREFIX, create_app
+from acemusic.api.models import Clip, VisibilityState, Workspace
+from acemusic.api.models.common import utcnow
+from acemusic.api.services.clips import find_similar_clips
+from acemusic.api.settings import ApiSettings
+from tests.users import make_user
+
+CLIPS_URL = f"{API_V1_PREFIX}/discover/clips"
+FACETS_URL = f"{API_V1_PREFIX}/discover/facets"
+
+_SEQ = itertools.count(1)
+_BASE_TIME = utcnow().replace(microsecond=0) - timedelta(days=1)
+
+
+class TestValidationWithoutDatabase:
+    def test_unknown_sort_is_422(self) -> None:
+        assert TestClient(create_app()).get(CLIPS_URL, params={"sort": "popular"}).status_code == 422
+
+    def test_limit_over_the_cap_is_422(self) -> None:
+        assert TestClient(create_app()).get(CLIPS_URL, params={"limit": 51}).status_code == 422
+
+    def test_overlong_query_is_422(self) -> None:
+        assert TestClient(create_app()).get(CLIPS_URL, params={"q": "x" * 201}).status_code == 422
+
+
+@pytest.fixture
+def settings(mongo_db, mongo_settings) -> ApiSettings:
+    return mongo_settings.model_copy(
+        update={"jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx", "job_processor_enabled": False}
+    )
+
+
+@pytest.fixture
+async def client(settings):
+    transport = httpx.ASGITransport(app=create_app(settings))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        yield ac
+
+
+async def _owner(**fields):
+    return await make_user(f"discover-{next(_SEQ)}@example.com", **fields)
+
+
+async def _clip(owner=None, *, minutes: int = 0, visibility=VisibilityState.PUBLIC, **fields) -> Clip:
+    owner = owner or await _owner()
+    workspace = Workspace(name="WS", user_id=owner.id)
+    await workspace.insert()
+    clip = Clip(
+        id=PydanticObjectId(),
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        file_path="x.wav",
+        format="wav",
+        visibility=visibility,
+        created_at=_BASE_TIME + timedelta(minutes=minutes),
+        **{"title": "Song", "style_tags": ["lofi"], **fields},
+    )
+    await clip.insert()
+    return clip
+
+
+async def _ids(client, **params) -> list[str]:
+    resp = await client.get(CLIPS_URL, params=params)
+    assert resp.status_code == 200, resp.text
+    return [c["id"] for c in resp.json()["clips"]]
+
+
+async def _all_pages(client, **params) -> list[str]:
+    ids: list[str] = []
+    cursor = None
+    while True:
+        resp = await client.get(CLIPS_URL, params={**params, **({"cursor": cursor} if cursor else {})})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids += [c["id"] for c in body["clips"]]
+        cursor = body["next_cursor"]
+        if cursor is None:
+            return ids
+
+
+@pytest.mark.integration
+class TestPublicPool:
+    async def test_only_public_clips_from_unbanned_owners_that_were_not_removed_are_listed(self, client) -> None:
+        listed = await _clip(title="Listed", key="A minor", model="ace-step-v1")
+        await _clip(title="Private", visibility=VisibilityState.PRIVATE, key="B minor", model="m-private")
+        await _clip(title="Unlisted", visibility=VisibilityState.UNLISTED, key="C minor", model="m-unlisted")
+        # Written straight to the database, past the ban sweep and the removal path that would
+        # also make them private: the shared filter must hold on its own.
+        await _clip(title="Removed", removed_at=utcnow(), key="D minor", model="m-removed")
+        await _clip(await _owner(banned_at=utcnow()), title="Banned", key="E minor", model="m-banned")
+
+        for sort in ("newest", "relevance"):
+            assert await _ids(client, sort=sort) == [str(listed.id)]
+            for hidden in ("Private", "Unlisted", "Removed", "Banned"):
+                assert await _ids(client, sort=sort, q=hidden) == []
+        assert (await client.get(FACETS_URL)).json() == {"keys": ["A minor"], "models": ["ace-step-v1"]}
+
+    async def test_total_counts_the_whole_match_not_the_page(self, client) -> None:
+        for i in range(3):
+            await _clip(minutes=i)
+        body = (await client.get(CLIPS_URL, params={"limit": 2})).json()
+        assert (len(body["clips"]), body["total"]) == (2, 3)
+        assert body["next_cursor"] is not None
+
+    async def test_response_is_the_redacted_public_clip_shape(self, client) -> None:
+        clip = await _clip(seed=7, inference_steps=30, content_warning=True)
+        [served] = (await client.get(CLIPS_URL)).json()["clips"]
+        assert served["id"] == str(clip.id)
+        assert (served["workspace_id"], served["seed"], served["inference_steps"]) == (None, None, None)
+        assert (served["is_owner"], served["content_warning"]) == (False, True)
+
+    async def test_similar_clips_public_scope_skips_a_banned_owners_clip(self, mongo_db) -> None:
+        viewer = await _owner()
+        seed = await _clip(style_tags=["lofi"])
+        kept = await _clip(style_tags=["lofi"])
+        await _clip(await _owner(banned_at=utcnow()), style_tags=["lofi"])
+        await _clip(style_tags=["lofi"], removed_at=utcnow())
+        for scope in ("public", "all"):
+            similar, total = await find_similar_clips(str(seed.id), str(viewer.id), scope=scope)
+            assert ([c.id for c in similar], total) == ([kept.id], 1)
+
+
+@pytest.mark.integration
+class TestFiltersAndSorts:
+    async def test_newest_first(self, client) -> None:
+        old = await _clip(minutes=1)
+        new = await _clip(minutes=2)
+        assert await _ids(client) == [str(new.id), str(old.id)]
+
+    async def test_free_text_matches_title_tags_and_lyrics_case_insensitively(self, client) -> None:
+        by_title = await _clip(title="Neon NIGHTS", minutes=3)
+        by_tag = await _clip(title="A", style_tags=["nightcore"], minutes=2)
+        by_lyrics = await _clip(title="B", lyrics="all night long", minutes=1)
+        await _clip(title="C", style_tags=["jazz"])
+        assert await _ids(client, q="night") == [str(by_title.id), str(by_tag.id), str(by_lyrics.id)]
+
+    async def test_free_text_is_literal_not_a_regex(self, client) -> None:
+        await _clip(title="Anything")
+        dotted = await _clip(title="a.b")
+        assert await _ids(client, q=".") == [str(dotted.id)]
+
+    async def test_relevance_ranks_title_prefix_then_title_then_tag_then_lyrics(self, client) -> None:
+        lyrics = await _clip(title="Zzz", lyrics="glow", minutes=4)
+        tag = await _clip(title="Yyy", style_tags=["glowwave"], minutes=3)
+        title = await _clip(title="Afterglow", minutes=2)
+        prefix = await _clip(title="Glow Up", minutes=1)
+        expected = [str(prefix.id), str(title.id), str(tag.id), str(lyrics.id)]
+        assert await _ids(client, q="glow", sort="relevance") == expected
+        assert await _all_pages(client, q="glow", sort="relevance", limit=1) == expected
+
+    async def test_relevance_without_a_query_is_newest(self, client) -> None:
+        old = await _clip(minutes=1)
+        new = await _clip(minutes=2)
+        assert await _ids(client, sort="relevance") == [str(new.id), str(old.id)]
+
+    async def test_style_bpm_key_and_model_filters_combine(self, client) -> None:
+        match = await _clip(style_tags=["Rock"], bpm=120, key="E minor", model="turbo")
+        await _clip(style_tags=["rockabilly"], bpm=120, key="E minor", model="turbo")  # style is a whole tag
+        await _clip(style_tags=["rock"], bpm=140, key="E minor", model="turbo")
+        await _clip(style_tags=["rock"], bpm=120, key="A minor", model="turbo")
+        await _clip(style_tags=["rock"], bpm=120, key="E minor", model="base")
+        params = {"style": "rock", "bpm_min": 100, "bpm_max": 130, "key": "E minor", "model": "turbo"}
+        assert await _ids(client, **params) == [str(match.id)]
+
+    async def test_bpm_bounds_are_inclusive(self, client) -> None:
+        low = await _clip(bpm=100, minutes=1)
+        high = await _clip(bpm=130, minutes=2)
+        assert await _ids(client, bpm_min=100, bpm_max=130) == [str(high.id), str(low.id)]
+
+
+@pytest.mark.integration
+class TestKeysetPaging:
+    async def test_pages_cover_every_clip_once(self, client) -> None:
+        clips = [await _clip(minutes=i // 2) for i in range(5)]  # pairs share a created_at
+        ids = await _all_pages(client, limit=2)
+        assert sorted(ids) == sorted(str(c.id) for c in clips)
+        assert len(ids) == len(set(ids))
+
+    async def test_a_newer_clip_inserted_between_pages_does_not_shift_the_next_page(self, client) -> None:
+        for i in range(4):
+            await _clip(minutes=i)
+        first = (await client.get(CLIPS_URL, params={"limit": 2})).json()
+        await _clip(minutes=10)
+        second = (await client.get(CLIPS_URL, params={"limit": 2, "cursor": first["next_cursor"]})).json()
+        seen = [c["id"] for c in first["clips"] + second["clips"]]
+        assert len(seen) == len(set(seen)) == 4
+
+    async def test_a_relevance_page_survives_a_newer_better_match(self, client) -> None:
+        for i in range(3):
+            await _clip(title="drift", minutes=i)
+        first = (await client.get(CLIPS_URL, params={"q": "drift", "sort": "relevance", "limit": 2})).json()
+        await _clip(title="drift", minutes=10)
+        cursor = first["next_cursor"]
+        second = (await client.get(CLIPS_URL, params={"q": "drift", "sort": "relevance", "cursor": cursor})).json()
+        seen = [c["id"] for c in first["clips"] + second["clips"]]
+        assert len(seen) == len(set(seen)) == 3
+
+    async def test_a_malformed_cursor_is_422(self, client) -> None:
+        assert (await client.get(CLIPS_URL, params={"cursor": "not-a-cursor"})).status_code == 422
+
+    async def test_a_cursor_from_the_other_sort_is_422(self, client) -> None:
+        for i in range(2):
+            await _clip(title="echo", minutes=i)
+        cursor = (await client.get(CLIPS_URL, params={"limit": 1})).json()["next_cursor"]
+        replayed = await client.get(CLIPS_URL, params={"q": "echo", "sort": "relevance", "cursor": cursor})
+        assert replayed.status_code == 422
