@@ -18,27 +18,25 @@ DiscoverSort = Literal["newest", "relevance"]
 _NEWEST = [("created_at", -1), ("_id", -1)]
 
 
-def _contains(text: str) -> re.Pattern:
-    return re.compile(re.escape(text), re.IGNORECASE)
-
-
-def _criteria(
-    q: str, style: str | None, bpm_min: int | None, bpm_max: int | None, key: str | None, model: str | None
-) -> dict:
+def _text_criteria(q: str, style: str | None) -> dict:
     criteria: dict = {}
     if q:
-        needle = _contains(q)
+        # shortcut: an unanchored regex over the public pool (bounded by the is_public index, scanned
+        # again for total); move to a search index once the public pool reaches tens of thousands.
+        needle = re.compile(re.escape(q), re.IGNORECASE)
         criteria["$or"] = [{"title": needle}, {"style_tags": needle}, {"lyrics": needle}]
+    style = (style or "").strip()
     if style:
-        criteria["style_tags"] = re.compile(f"^{re.escape(style)}$", re.IGNORECASE)
-    bpm = {op: value for op, value in (("$gte", bpm_min), ("$lte", bpm_max)) if value is not None}
-    if bpm:
-        criteria["bpm"] = bpm
-    if key:
-        criteria["key"] = key
-    if model:
-        criteria["model"] = model
+        # Generated clips store their whole style prompt as one tag ("dark hip hop beat"), so a
+        # genre is a whole word or phrase inside a tag, and a slug's hyphen matches a space too.
+        phrase = r"[\s-]".join(re.escape(word) for word in re.split(r"[\s-]+", style))
+        criteria["style_tags"] = re.compile(rf"\b{phrase}\b", re.IGNORECASE)
     return criteria
+
+
+def _exact_criteria(bpm_min: int | None, bpm_max: int | None, key: str | None, model: str | None) -> dict:
+    bpm = {op: value for op, value in (("$gte", bpm_min), ("$lte", bpm_max)) if value is not None}
+    return {field: value for field, value in (("bpm", bpm), ("key", key), ("model", model)) if value}
 
 
 def _relevance_score(q: str) -> dict:
@@ -49,7 +47,11 @@ def _relevance_score(q: str) -> dict:
 
     needle = re.escape(q)
     title = {"$cond": [matches("$title", f"^{needle}"), 5, {"$cond": [matches("$title", needle), 3, 0]}]}
-    tags = {"$anyElementTrue": [{"$map": {"input": "$style_tags", "as": "tag", "in": matches("$$tag", needle)}}]}
+    tags = {
+        "$anyElementTrue": [
+            {"$map": {"input": {"$ifNull": ["$style_tags", []]}, "as": "tag", "in": matches("$$tag", needle)}}
+        ]
+    }
     return {"$add": [title, {"$cond": [tags, 2, 0]}, {"$cond": [matches("$lyrics", needle), 1, 0]}]}
 
 
@@ -115,7 +117,7 @@ async def list_public_clips(
     ``relevance`` with no query ranks newest, as the client-side search did.
     """
     q = q.strip()
-    match = {**await public_clip_filter(), **_criteria(q, style, bpm_min, bpm_max, key, model)}
+    match = {**await public_clip_filter(), **_text_criteria(q, style), **_exact_criteria(bpm_min, bpm_max, key, model)}
     total = await Clip.find(match).count()
     if sort == "relevance" and q:
         clips, next_cursor = await _by_relevance(match, q, limit, cursor)

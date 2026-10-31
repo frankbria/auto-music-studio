@@ -58,10 +58,11 @@ export function searchClips(
   })
 }
 
-function intOrNull(raw: string | null): number | null {
+/** A BPM from the URL; a negative one is dropped, since the API rejects it with a 422. */
+function bpmOrNull(raw: string | null): number | null {
   if (raw == null) return null
   const n = Number.parseInt(raw, 10)
-  return Number.isFinite(n) ? n : null
+  return Number.isFinite(n) && n >= 0 ? n : null
 }
 
 /** Read search state from a URL query string (invalid values fall to defaults). */
@@ -70,8 +71,8 @@ export function parseSearchParams(sp: URLSearchParams): SearchParams {
   return {
     q: sp.get("q") ?? "",
     style: sp.get("style") ?? "",
-    bpmMin: intOrNull(sp.get("bpm_min")),
-    bpmMax: intOrNull(sp.get("bpm_max")),
+    bpmMin: bpmOrNull(sp.get("bpm_min")),
+    bpmMax: bpmOrNull(sp.get("bpm_max")),
     key: sp.get("key") ?? "",
     model: sp.get("model") ?? "",
     sort: sortRaw && SORT_VALUES.has(sortRaw) ? sortRaw : DEFAULT_SEARCH.sort,

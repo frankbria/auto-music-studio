@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..services import discovery
-from ..utils.rate_limit import enforce_stream_rate_limit
+from ..utils.rate_limit import enforce_discover_rate_limit
 from .clips import PublicClipResponse
 
-router = APIRouter(prefix="/discover", tags=["discover"], dependencies=[Depends(enforce_stream_rate_limit)])
+router = APIRouter(prefix="/discover", tags=["discover"], dependencies=[Depends(enforce_discover_rate_limit)])
 
 
 class DiscoverClipsResponse(BaseModel):

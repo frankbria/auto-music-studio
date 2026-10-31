@@ -180,6 +180,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # app.state (not module-global) so each app instance — and each test — gets
     # an isolated window.
     app.state.stream_limiter = RateLimiter(settings.stream_rate_limit_per_minute)
+    app.state.discover_limiter = RateLimiter(settings.discover_rate_limit_per_minute)
     app.state.report_limiter = RateLimiter(
         settings.report_rate_limit_per_hour, 3600, detail="You have sent too many reports. Please try again later."
     )

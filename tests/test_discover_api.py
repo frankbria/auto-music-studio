@@ -2,7 +2,7 @@
 
 ``GET /discover/clips`` and ``GET /discover/facets`` are anonymous reads over the public
 pool: public, not removed by moderation, and not owned by a banned user. That rule lives in
-one shared filter (``services/discovery.public_clip_filter``), which similar-clips uses too.
+one shared filter (``services/clips.public_clip_filter``), which similar-clips uses too.
 """
 
 import itertools
@@ -110,6 +110,21 @@ class TestPublicPool:
                 assert await _ids(client, sort=sort, q=hidden) == []
         assert (await client.get(FACETS_URL)).json() == {"keys": ["A minor"], "models": ["ace-step-v1"]}
 
+    async def test_a_public_clip_written_before_visibility_existed_is_listed(self, client) -> None:
+        owner = await _owner()
+        legacy_id = PydanticObjectId()
+        legacy = {"_id": legacy_id, "user_id": owner.id, "workspace_id": PydanticObjectId(), "file_path": "x.wav"}
+        legacy |= {"style_tags": [], "is_public": True, "created_at": _BASE_TIME}
+        await Clip.get_pymongo_collection().insert_one(legacy)  # pre-US-20.7 shape: no visibility key
+        assert await _ids(client) == [str(legacy_id)]
+
+    async def test_discovery_has_its_own_rate_limit_bucket(self, settings) -> None:
+        app = create_app(settings.model_copy(update={"discover_rate_limit_per_minute": 1}))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
+            assert (await ac.get(CLIPS_URL)).status_code == 200
+            assert (await ac.get(FACETS_URL)).status_code == 429
+            assert (await ac.get(f"{API_V1_PREFIX}/clips/{PydanticObjectId()}/public")).status_code == 404
+
     async def test_total_counts_the_whole_match_not_the_page(self, client) -> None:
         for i in range(3):
             await _clip(minutes=i)
@@ -169,13 +184,21 @@ class TestFiltersAndSorts:
         assert await _ids(client, sort="relevance") == [str(new.id), str(old.id)]
 
     async def test_style_bpm_key_and_model_filters_combine(self, client) -> None:
-        match = await _clip(style_tags=["Rock"], bpm=120, key="E minor", model="turbo")
-        await _clip(style_tags=["rockabilly"], bpm=120, key="E minor", model="turbo")  # style is a whole tag
+        match = await _clip(style_tags=["Gritty ROCK anthem"], bpm=120, key="E minor", model="turbo")
+        await _clip(style_tags=["rockabilly"], bpm=120, key="E minor", model="turbo")  # a whole word, not a prefix
         await _clip(style_tags=["rock"], bpm=140, key="E minor", model="turbo")
         await _clip(style_tags=["rock"], bpm=120, key="A minor", model="turbo")
         await _clip(style_tags=["rock"], bpm=120, key="E minor", model="base")
         params = {"style": "rock", "bpm_min": 100, "bpm_max": 130, "key": "E minor", "model": "turbo"}
         assert await _ids(client, **params) == [str(match.id)]
+
+    async def test_a_genre_slug_matches_the_phrase_inside_a_generated_style_prompt(self, client) -> None:
+        # Generation stores the whole style prompt as the clip's one tag (tasks/processor.py).
+        spaced = await _clip(style_tags=["dark hip hop beat"], minutes=2)
+        hyphenated = await _clip(style_tags=["Hip-Hop"], minutes=1)
+        await _clip(style_tags=["hiphop"])
+        assert await _ids(client, style="hip-hop") == [str(spaced.id), str(hyphenated.id)]
+        assert await _ids(client, style="   ") == await _ids(client)
 
     async def test_bpm_bounds_are_inclusive(self, client) -> None:
         low = await _clip(bpm=100, minutes=1)

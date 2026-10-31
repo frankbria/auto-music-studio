@@ -191,6 +191,10 @@ class ApiSettings(BaseSettings):
     # deployments (swap for a shared store if the API runs multiple workers).
     stream_rate_limit_per_minute: int = Field(default=100, ge=1)
 
+    # Public discovery listings per client IP (#651). A bucket of their own, so browsing
+    # Feed or Search can't spend the playback budget above.
+    discover_rate_limit_per_minute: int = Field(default=120, ge=1)
+
     # Clip reports per user per hour (#534). The unique (clip, reporter) index
     # stops a repeat report, not one account reporting every public clip.
     report_rate_limit_per_hour: int = Field(default=20, ge=1)

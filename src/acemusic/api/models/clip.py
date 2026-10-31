@@ -117,7 +117,7 @@ class Clip(Document):
             # The moderation queue's "clips with automated flags" read (US-27.3).
             IndexModel([("moderation_flags", ASCENDING)]),
             # The public discovery pool, newest first with the keyset tiebreak (#651).
-            IndexModel([("visibility", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)]),
+            IndexModel([("is_public", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)]),
             # One ISRC per recording (US-13.4). Partial filter excludes the many
             # clips with no code so they don't collide on null.
             IndexModel(

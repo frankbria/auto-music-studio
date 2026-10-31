@@ -81,9 +81,10 @@ describe("parseSearchParams / buildSearchQuery round-trip", () => {
 
   it("falls back to defaults for missing or invalid values", () => {
     const parsed = parseSearchParams(
-      new URLSearchParams("bpm_min=notanumber&sort=bogus")
+      new URLSearchParams("bpm_min=notanumber&bpm_max=-5&sort=bogus")
     )
     expect(parsed.bpmMin).toBeNull()
+    expect(parsed.bpmMax).toBeNull()
     expect(parsed.sort).toBe(DEFAULT_SEARCH.sort)
   })
 
