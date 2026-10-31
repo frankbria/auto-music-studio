@@ -12,7 +12,7 @@ Live run against `scripts/demo_api_stack.py` (throwaway `acemusic_demo_559` data
 ```
 
 ```output
-{"rules":88,"by_action":{"block":23,"flag":65},"allow_terms":["rape awareness","rape crisis","suicide squad","suicide prevention","suicide hotline","suicide helpline","suicide lifeline","suicide doors","suicide blonde","spic and span","cut myself some slack","cutting myself some slack"],"fold_leetspeak":false,"block_threshold":3}
+{"rules":93,"by_action":{"block":23,"flag":70},"allow_terms":["rape awareness","rape crisis","suicide squad","suicide prevention","suicide hotline","suicide helpline","suicide lifeline","suicide doors","suicide blonde","spic and span","cut myself some slack","cutting myself some slack"],"fold_leetspeak":false,"block_threshold":3}
 ```
 
 ## 2. A new block term is refused before any credit is charged

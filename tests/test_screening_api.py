@@ -296,6 +296,7 @@ def test_every_default_rule_catches_its_own_term(rule):
         ("she was raped", False, ["sexual violence"]),
         ("a race war is coming", False, ["violent extremism"]),
         ("school shooters and terrorists", False, ["violent extremism", "graphic violence"]),
+        ("race wars and school shootings", False, ["violent extremism", "graphic violence"]),
         ("a school shooting", False, ["graphic violence"]),
         ("the king was beheaded", False, ["graphic violence"]),
         ("a suicide squad remix", False, []),
