@@ -203,10 +203,11 @@ class TestFiltersAndSorts:
         # Generation stores the whole style prompt as the clip's one tag (tasks/processor.py).
         spaced = await _clip(style_tags=["dark hip hop beat"], minutes=2)
         hyphenated = await _clip(style_tags=["Hip-Hop"], minutes=1)
-        await _clip(style_tags=["hiphop"])
+        joined = await _clip(style_tags=["hiphop"])
         assert await _ids(client, style="hip-hop") == [str(spaced.id), str(hyphenated.id)]
-        assert await _ids(client, style="   ") == await _ids(client)
-        assert await _ids(client, style="-") == await _ids(client)
+        everything = [str(spaced.id), str(hyphenated.id), str(joined.id)]
+        for blank in (None, "   ", "-"):  # no style, or one with no words, filters nothing
+            assert await _ids(client, **({"style": blank} if blank is not None else {})) == everything
 
     async def test_a_style_ending_in_a_symbol_still_matches_as_a_whole_word(self, client) -> None:
         coded = await _clip(style_tags=["chiptune c++ demo"])
