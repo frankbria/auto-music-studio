@@ -17,6 +17,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
 from acemusic.api.services.clips import find_similar_clips
+from acemusic.api.services.moderation import encode_cursor
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -235,6 +236,11 @@ class TestKeysetPaging:
 
     async def test_a_malformed_cursor_is_422(self, client) -> None:
         assert (await client.get(CLIPS_URL, params={"cursor": "not-a-cursor"})).status_code == 422
+
+    async def test_a_relevance_cursor_with_a_bad_id_is_422(self, client) -> None:
+        cursor = encode_cursor("discover_relevance", (3, _BASE_TIME.replace(tzinfo=None), "not-an-object-id"))
+        resp = await client.get(CLIPS_URL, params={"q": "echo", "sort": "relevance", "cursor": cursor})
+        assert resp.status_code == 422
 
     async def test_a_cursor_from_the_other_sort_is_422(self, client) -> None:
         for i in range(2):
