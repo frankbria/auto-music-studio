@@ -25,12 +25,13 @@ def _text_criteria(q: str, style: str | None) -> dict:
         # again for total); move to a search index once the public pool reaches tens of thousands.
         needle = re.compile(re.escape(q), re.IGNORECASE)
         criteria["$or"] = [{"title": needle}, {"style_tags": needle}, {"lyrics": needle}]
-    style = (style or "").strip()
-    if style:
+    words = [word for word in re.split(r"[\s-]+", style or "") if word]
+    if words:
         # Generated clips store their whole style prompt as one tag ("dark hip hop beat"), so a
         # genre is a whole word or phrase inside a tag, and a slug's hyphen matches a space too.
-        phrase = r"[\s-]".join(re.escape(word) for word in re.split(r"[\s-]+", style))
-        criteria["style_tags"] = re.compile(rf"\b{phrase}\b", re.IGNORECASE)
+        # Lookarounds, not \b, so a style that starts or ends in a symbol ("c++") still anchors.
+        phrase = r"[\s-]".join(map(re.escape, words))
+        criteria["style_tags"] = re.compile(rf"(?<!\w){phrase}(?!\w)", re.IGNORECASE)
     return criteria
 
 

@@ -128,7 +128,8 @@ class TestPublicPool:
         app = create_app(settings.model_copy(update={"discover_rate_limit_per_minute": 1}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
             assert (await ac.get(CLIPS_URL)).status_code == 200
-            assert (await ac.get(FACETS_URL)).status_code == 429
+            limited = await ac.get(FACETS_URL)
+            assert (limited.status_code, limited.json()["detail"]) == (429, "Too many discovery requests; slow down.")
             assert (await ac.get(f"{API_V1_PREFIX}/clips/{PydanticObjectId()}/public")).status_code == 404
 
     async def test_total_counts_the_whole_match_not_the_page(self, client) -> None:
@@ -205,6 +206,12 @@ class TestFiltersAndSorts:
         await _clip(style_tags=["hiphop"])
         assert await _ids(client, style="hip-hop") == [str(spaced.id), str(hyphenated.id)]
         assert await _ids(client, style="   ") == await _ids(client)
+        assert await _ids(client, style="-") == await _ids(client)
+
+    async def test_a_style_ending_in_a_symbol_still_matches_as_a_whole_word(self, client) -> None:
+        coded = await _clip(style_tags=["chiptune c++ demo"])
+        await _clip(style_tags=["c++x"])
+        assert await _ids(client, style="c++") == [str(coded.id)]
 
     async def test_bpm_bounds_are_inclusive(self, client) -> None:
         low = await _clip(bpm=100, minutes=1)
