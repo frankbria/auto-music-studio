@@ -228,6 +228,12 @@ class TestKeysetPaging:
         assert sorted(ids) == sorted(str(c.id) for c in clips)
         assert len(ids) == len(set(ids))
 
+    async def test_relevance_pages_cover_every_clip_once_when_score_and_time_tie(self, client) -> None:
+        clips = [await _clip(title="tie", minutes=i // 2) for i in range(5)]  # same score, pairs share created_at
+        ids = await _all_pages(client, q="tie", sort="relevance", limit=2)
+        assert sorted(ids) == sorted(str(c.id) for c in clips)
+        assert len(ids) == len(set(ids))
+
     async def test_a_newer_clip_inserted_between_pages_does_not_shift_the_next_page(self, client) -> None:
         for i in range(4):
             await _clip(minutes=i)
