@@ -2,16 +2,16 @@
 //
 // The public profile page (/@handle) has no backend: there is no public
 // "user by handle" endpoint, no published-clips-by-user endpoint, and no Follow
-// system. Like Explore (US-20.1), Search (US-20.2), Playlists (US-20.3), and the
-// Feed (US-20.4), the page runs on this local, typed mock layer whose shapes
-// mirror the eventual public profile API. Published songs are drawn from the same
-// discovery pool as Explore; public playlists from the playlists seam. When the
-// social API lands, swap each getter's body for a fetch and callers won't change.
+// system. Like Playlists (US-20.3), the page runs on this local, typed mock layer
+// whose shapes mirror the eventual public profile API. Published songs are drawn
+// from the mock clip pool (lib/mock-clips); public playlists from the playlists
+// seam. When the social API lands, swap each getter's body for a fetch and
+// callers won't change.
 //
 // ponytail: session-scoped mock, no persistence and no network delay — the reads
 // are synchronous local data. Add both when a getter becomes a real fetch.
 
-import { getAllClips } from "@/lib/explore"
+import { getAllClips } from "@/lib/mock-clips"
 import { initialPlaylists, type Playlist } from "@/lib/playlists"
 import type { Clip } from "@/lib/workspace-clips"
 
@@ -31,8 +31,8 @@ export type PublicProfile = {
   clip_ids: string[]
 }
 
-// A handful of mock creators, each owning a slice of the Explore discovery pool
-// (ids from lib/explore) as their published songs. Keyed by bare, lowercase handle.
+// A handful of mock creators, each owning a slice of the mock clip pool
+// (ids from lib/mock-clips) as their published songs. Keyed by bare, lowercase handle.
 const MOCK_PROFILES: Record<string, PublicProfile> = {
   nova: {
     handle: "nova",

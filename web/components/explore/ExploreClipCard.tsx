@@ -14,7 +14,7 @@ import { formatTime } from "@/lib/clips"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
 
-// Presentational discovery card for the Explore page (US-20.1). Deliberately NOT
+// Presentational discovery card for Explore and Search (US-20.1). Deliberately NOT
 // the workspace ClipCard: this one is for anonymous browsing, so it has no owner
 // actions (rename/publish/remix/drag/player dispatch) — the whole card is one
 // link to the public song detail page. Artwork shows a music-note glyph: there
@@ -34,14 +34,7 @@ function Stat({ icon, value }: { icon: typeof PlayIcon; value: number }) {
   )
 }
 
-export function ExploreClipCard({
-  clip,
-  rank,
-}: {
-  clip: Clip
-  /** Chart position (1-based); when set, shows a ranking-number overlay (AC4). */
-  rank?: number
-}) {
+export function ExploreClipCard({ clip }: { clip: Clip }) {
   const version = versionLabel(clip.model)
   const styleText = clip.style_tags.join(", ")
   const hasStats =
@@ -54,9 +47,9 @@ export function ExploreClipCard({
       <Link
         href={`/song/${clip.id}`}
         data-testid="explore-clip-card"
-        className="group/card flex flex-col gap-2 rounded-lg border border-border bg-card p-2 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="group/card flex flex-col gap-2 rounded-lg border border-border bg-card p-2 transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        {/* Square artwork placeholder with duration + optional rank overlays. */}
+        {/* Square artwork placeholder with a duration overlay. */}
         <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
           <HugeiconsIcon
             icon={MusicNote01Icon}
@@ -70,14 +63,6 @@ export function ExploreClipCard({
           >
             <HugeiconsIcon icon={PlayIcon} size={28} className="fill-current" />
           </span>
-          {rank != null && (
-            <span
-              data-testid="clip-rank"
-              className="absolute top-1 left-1 flex size-6 items-center justify-center rounded-md bg-background/85 text-sm font-bold tabular-nums"
-            >
-              {rank}
-            </span>
-          )}
           {clip.duration != null && (
             <span className="absolute right-1 bottom-1 rounded bg-background/80 px-1 text-[10px] tabular-nums">
               {formatTime(clip.duration)}
@@ -86,11 +71,17 @@ export function ExploreClipCard({
         </div>
 
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="truncate text-sm font-medium" title={clip.title ?? undefined}>
+          <span
+            className="truncate text-sm font-medium"
+            title={clip.title ?? undefined}
+          >
             {clip.title ?? "Untitled clip"}
           </span>
           {styleText && (
-            <p title={styleText} className="truncate text-xs text-muted-foreground">
+            <p
+              title={styleText}
+              className="truncate text-xs text-muted-foreground"
+            >
               {styleText}
             </p>
           )}

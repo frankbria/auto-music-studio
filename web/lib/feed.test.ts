@@ -1,67 +1,48 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import {
-  artistForClip,
-  clipInspirationHref,
-  FEED_AUDIO_URL,
-  FEED_MAX_PAGES,
-  FEED_PAGE_SIZE,
-  getFeedPage,
-} from "@/lib/feed"
+import { clipInspirationHref, FEED_PAGE_SIZE, getFeedPage } from "@/lib/feed"
+import { makeClip } from "@/test/clip-factory"
+import { clipRequests, discoverPage } from "@/test/discover-api"
 
-describe("artistForClip", () => {
-  it("is deterministic for a given id", () => {
-    expect(artistForClip("clip-neon")).toBe(artistForClip("clip-neon"))
-  })
-
-  it("always returns a non-empty name", () => {
-    for (const id of ["clip-neon", "clip-gold", "x", ""]) {
-      expect(artistForClip(id).length).toBeGreaterThan(0)
-    }
-  })
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe("getFeedPage", () => {
-  it("returns a full page of items with real clip ids and shared audio", () => {
-    const { items } = getFeedPage(1)
-    expect(items).toHaveLength(FEED_PAGE_SIZE)
-    for (const item of items) {
-      expect(item.id).toMatch(/^clip-/) // real clip id preserved for actions
-      expect(item.audioUrl).toBe(FEED_AUDIO_URL)
-      expect(item.artist).toBeTruthy()
-    }
+  it("requests the newest public clips, one page at a time", async () => {
+    const fetchMock = vi.fn(async () => discoverPage([]))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await getFeedPage()
+    await getFeedPage("c2")
+
+    expect(clipRequests(fetchMock)).toEqual([
+      { sort: "newest", limit: String(FEED_PAGE_SIZE) },
+      { sort: "newest", limit: String(FEED_PAGE_SIZE), cursor: "c2" },
+    ])
   })
 
-  it("gives every item a unique render key across pages", () => {
-    const keys = new Set<string>()
-    for (let p = 1; p <= FEED_MAX_PAGES; p++) {
-      for (const item of getFeedPage(p).items) keys.add(item.key)
-    }
-    expect(keys.size).toBe(FEED_PAGE_SIZE * FEED_MAX_PAGES)
-  })
+  it("gives each item its own stream URL and passes next_cursor on", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(discoverPage([makeClip({ id: "a b" })], "c2"))
+    )
 
-  it("reports hasMore until the last page (infinite scroll terminates)", () => {
-    expect(getFeedPage(1).hasMore).toBe(true)
-    expect(getFeedPage(FEED_MAX_PAGES).hasMore).toBe(false)
-  })
+    const page = await getFeedPage()
 
-  it("clamps out-of-range pages", () => {
-    expect(getFeedPage(0).page).toBe(1)
-    expect(getFeedPage(999).page).toBe(FEED_MAX_PAGES)
-  })
-
-  it("cycles the pool so later pages still have items", () => {
-    expect(getFeedPage(FEED_MAX_PAGES).items).toHaveLength(FEED_PAGE_SIZE)
+    expect(page.items[0].audioUrl).toBe("/api/clips/a%20b/stream")
+    expect(page.items[0].id).toBe("a b")
+    expect(page.nextCursor).toBe("c2")
   })
 })
 
 describe("clipInspirationHref", () => {
   it("links to Create with the clip as inspiration", () => {
-    const item = getFeedPage(1).items[0]
-    const href = clipInspirationHref(item)
-    const q = new URLSearchParams(href.split("?")[1])
-    expect(href.startsWith("/create?")).toBe(true)
-    expect(q.get("inspiration")).toBe(item.id)
-    expect(q.get("inspirationName")).toBe(item.title ?? "Untitled clip")
+    const item = { ...makeClip({ id: "c1", title: "Neon" }), audioUrl: "" }
+    const q = new URLSearchParams(clipInspirationHref(item).split("?")[1])
+    expect(clipInspirationHref(item).startsWith("/create?")).toBe(true)
+    expect(q.get("inspiration")).toBe("c1")
+    expect(q.get("inspirationName")).toBe("Neon")
   })
 })

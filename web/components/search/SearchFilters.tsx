@@ -19,8 +19,8 @@ import { type SearchParams } from "@/lib/search"
 import { cn } from "@/lib/utils"
 
 // Filter panel for the Search page (US-20.2). Prop-driven (no URL/router access)
-// so it renders in tests directly. Genre, BPM range, key, and model narrow the
-// mock discovery pool client-side; Duration and Creation Date are shown disabled
+// so it renders in tests directly. Genre, BPM range, key, and model are sent to
+// the discovery API as filters; Duration and Creation Date are shown disabled
 // because no backend contract for them exists yet (CodeRabbit design choice 2).
 
 type Patch = Partial<SearchParams>
@@ -51,7 +51,9 @@ function FilterSelect({
             className="justify-between gap-1"
             aria-label={`${label}: ${value ? optionLabel(value) : "Any"}`}
           >
-            <span className="truncate">{value ? optionLabel(value) : "Any"}</span>
+            <span className="truncate">
+              {value ? optionLabel(value) : "Any"}
+            </span>
             <HugeiconsIcon icon={ArrowDown01Icon} size={14} />
           </Button>
         </DropdownMenuTrigger>

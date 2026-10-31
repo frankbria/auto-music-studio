@@ -3,11 +3,9 @@ import type { Metadata } from "next"
 
 import { SearchPageClient } from "@/components/search/SearchPageClient"
 
-// Search page (US-20.2): full-text search over the discovery pool with genre/
-// BPM/key/model filters and relevance/newest/popular sort, all reflected in the
-// URL for shareable links. Data comes from the local mock seam (lib/search)
-// until a public discovery search endpoint exists — the `GET /clips` list is
-// auth-gated and owner-scoped, so it can't back an anonymous listener search.
+// Search page (US-20.2): full-text search over public clips with genre/BPM/key/
+// model filters and relevance/newest sort, all reflected in the URL for shareable
+// links. Results come from the public discovery API (#651) via lib/search.
 //
 // useSearchParams() requires a Suspense boundary in the App Router, so the URL
 // bridge renders inside one.

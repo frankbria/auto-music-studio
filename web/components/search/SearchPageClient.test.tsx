@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { discoverPage, stubDiscoverFetch } from "@/test/discover-api"
 
 const { searchParamsRef } = vi.hoisted(() => ({
   searchParamsRef: { current: new URLSearchParams() },
@@ -17,9 +19,14 @@ vi.mock("next/navigation", () => ({
 
 import { SearchPageClient } from "@/components/search/SearchPageClient"
 
+beforeEach(() => {
+  stubDiscoverFetch(() => discoverPage([]))
+})
+
 afterEach(() => {
   searchParamsRef.current = new URLSearchParams()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe("SearchPageClient", () => {
@@ -30,6 +37,15 @@ describe("SearchPageClient", () => {
     expect(screen.getByRole("button", { name: /sort by/i })).toHaveTextContent(
       "Newest"
     )
+  })
+
+  it("keeps the other filters when one changes (no page param to reset)", async () => {
+    searchParamsRef.current = new URLSearchParams("q=jazz&page=3")
+    render(<SearchPageClient />)
+    await userEvent.click(screen.getAllByRole("button", { name: "Rock" })[0])
+    expect(replace).toHaveBeenLastCalledWith("/search?q=jazz&style=rock", {
+      scroll: false,
+    })
   })
 
   it("reflects a filter change back into the URL (AC4)", async () => {

@@ -1,40 +1,67 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { FeedItemCard } from "@/components/feed/FeedItemCard"
-import { getFeedPage } from "@/lib/feed"
+import { Button } from "@/components/ui/button"
+import { getFeedPage, type FeedItem } from "@/lib/feed"
 
 // Short-form feed (US-20.4). A snap-scroll column of full-height items. Two
 // IntersectionObservers: one marks the most-visible item active (auto-play/pause),
-// the other watches a bottom sentinel to append the next page (infinite scroll).
-// State comes from the mock seam (lib/feed); no loading/error state to render since
-// getFeedPage is synchronous.
+// the other watches a bottom sentinel to fetch the next cursor page (infinite
+// scroll), until the API returns next_cursor: null.
+
+type FeedState = {
+  items: FeedItem[]
+  nextCursor: string | null
+  status: "loading" | "ready" | "error"
+}
 
 export function FeedView() {
-  const firstPage = useMemo(() => getFeedPage(1), [])
-  const [feed, setFeed] = useState(firstPage)
-  const [activeKey, setActiveKey] = useState(firstPage.items[0]?.key ?? "")
+  const [feed, setFeed] = useState<FeedState>({
+    items: [],
+    nextCursor: null,
+    status: "loading",
+  })
+  const [activeId, setActiveId] = useState("")
+  const currentId = activeId || feed.items[0]?.id
 
-  // Element + visibility bookkeeping for the active-item observer.
+  // Cursors already requested ("" = first page): the sentinel can fire again
+  // before a page lands, and StrictMode runs the mount effect twice.
+  const requestedCursors = useRef(new Set<string>())
   const itemEls = useRef(new Map<string, HTMLElement>())
   const ratios = useRef(new Map<string, number>())
   const activeObserver = useRef<IntersectionObserver | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  const loadMore = useCallback(() => {
-    setFeed((cur) => {
-      if (!cur.hasMore) return cur
-      const next = getFeedPage(cur.page + 1)
-      return {
-        page: next.page,
-        hasMore: next.hasMore,
-        items: [...cur.items, ...next.items],
+  const loadPage = useCallback((cursor: string | null) => {
+    const requestKey = cursor ?? ""
+    if (requestedCursors.current.has(requestKey)) return
+    requestedCursors.current.add(requestKey)
+    getFeedPage(cursor).then(
+      (page) =>
+        setFeed((current) => ({
+          items: [...current.items, ...page.items],
+          nextCursor: page.nextCursor,
+          status: "ready",
+        })),
+      () => {
+        requestedCursors.current.delete(requestKey)
+        setFeed((current) => ({ ...current, status: "error" }))
       }
-    })
+    )
   }, [])
+
+  useEffect(() => loadPage(null), [loadPage])
+
+  // A failed first page leaves nextCursor null, so this retries the first page;
+  // a failed later page left nextCursor on the cursor that failed.
+  const retry = () => {
+    setFeed((current) => ({ ...current, status: "loading" }))
+    loadPage(feed.nextCursor)
+  }
 
   // Active-item observer: track each item's visible ratio and make the most-
   // visible one active. Created once; items register via their ref callback.
@@ -42,18 +69,19 @@ export function FeedView() {
     const obs = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          const key = (e.target as HTMLElement).dataset.key
-          if (key) ratios.current.set(key, e.isIntersecting ? e.intersectionRatio : 0)
+          const id = (e.target as HTMLElement).dataset.key
+          if (id)
+            ratios.current.set(id, e.isIntersecting ? e.intersectionRatio : 0)
         }
-        let bestKey = ""
+        let bestId = ""
         let bestRatio = 0
-        for (const [key, ratio] of ratios.current) {
+        for (const [id, ratio] of ratios.current) {
           if (ratio > bestRatio) {
             bestRatio = ratio
-            bestKey = key
+            bestId = id
           }
         }
-        if (bestKey) setActiveKey(bestKey)
+        if (bestId) setActiveId(bestId)
       },
       { threshold: [0.25, 0.5, 0.75] }
     )
@@ -65,32 +93,57 @@ export function FeedView() {
     }
   }, [])
 
-  // Sentinel observer: append the next page when the loader scrolls into view.
-  // Re-bound when hasMore flips so it stops observing once the feed is exhausted.
+  const hasMore = feed.status !== "error" && feed.nextCursor !== null
+
+  // Sentinel observer: fetch the next page when the loader scrolls into view.
+  // Re-bound per cursor; unbound once the feed is exhausted or a page failed.
   useEffect(() => {
     const el = sentinelRef.current
-    if (!el || !feed.hasMore) return
+    const cursor = feed.nextCursor
+    if (!el || !hasMore) return
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMore()
+        if (entries.some((e) => e.isIntersecting)) loadPage(cursor)
       },
       { rootMargin: "300px" }
     )
     obs.observe(el)
     return () => obs.disconnect()
-  }, [loadMore, feed.hasMore])
+  }, [loadPage, feed.nextCursor, hasMore])
 
-  // Stable ref callback (reads the key from data-key). Kept identity-stable so a
-  // re-render — e.g. when the active item changes — doesn't detach/reattach every
-  // item and churn the ratio map. Items are append-only, so there's no per-item
-  // unobserve; the observer's disconnect() on unmount is the only cleanup needed.
+  // Stable ref callback (reads the clip id from data-key). Kept identity-stable
+  // so a re-render doesn't detach/reattach every item and churn the ratio map.
+  // Items are append-only, so disconnect() on unmount is the only cleanup.
   const registerItem = useCallback((el: HTMLElement | null) => {
     if (!el) return
-    const key = el.dataset.key
-    if (!key) return
-    itemEls.current.set(key, el)
+    const id = el.dataset.key
+    if (!id) return
+    itemEls.current.set(id, el)
     activeObserver.current?.observe(el)
   }, [])
+
+  if (feed.items.length === 0) {
+    return (
+      <div
+        data-testid="feed-scroll"
+        aria-label="Short-form feed"
+        className="flex h-full flex-col items-center justify-center gap-3 bg-black text-white/80"
+      >
+        {feed.status === "loading" && (
+          <>
+            <HugeiconsIcon
+              icon={Loading03Icon}
+              size={28}
+              className="animate-spin"
+            />
+            <span className="sr-only">Loading feed</span>
+          </>
+        )}
+        {feed.status === "error" && <FeedError onRetry={retry} />}
+        {feed.status === "ready" && <p>No public songs yet</p>}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -100,25 +153,45 @@ export function FeedView() {
     >
       {feed.items.map((item) => (
         <div
-          key={item.key}
-          data-key={item.key}
+          key={item.id}
+          data-key={item.id}
           ref={registerItem}
           className="h-full w-full snap-start snap-always"
         >
-          <FeedItemCard item={item} active={item.key === activeKey} />
+          <FeedItemCard item={item} active={item.id === currentId} />
         </div>
       ))}
 
-      {feed.hasMore && (
+      {hasMore && (
         <div
           ref={sentinelRef}
           data-testid="feed-sentinel"
           className="flex h-16 items-center justify-center text-white/60"
         >
-          <HugeiconsIcon icon={Loading03Icon} size={24} className="animate-spin" />
+          <HugeiconsIcon
+            icon={Loading03Icon}
+            size={24}
+            className="animate-spin"
+          />
           <span className="sr-only">Loading more</span>
         </div>
       )}
+      {feed.status === "error" && (
+        <div className="flex justify-center py-6 text-white/80">
+          <FeedError onRetry={retry} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FeedError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-center gap-3">
+      <p>Couldn&apos;t load the feed.</p>
+      <Button variant="secondary" size="sm" onClick={onRetry}>
+        Retry
+      </Button>
     </div>
   )
 }
