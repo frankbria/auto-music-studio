@@ -33,7 +33,10 @@ export function isSupportedProvider(provider: string): boolean {
  * external (`//host`, `/\host`), absolute, and protocol URLs so a crafted
  * `?from=` can't turn the login into an open redirect.
  */
-export function safeInternalPath(raw: string | null, fallback = "/create"): string {
+export function safeInternalPath(
+  raw: string | null,
+  fallback = "/create"
+): string {
   if (raw && raw[0] === "/" && raw[1] !== "/" && raw[1] !== "\\") return raw
   return fallback
 }
@@ -98,3 +101,6 @@ export function parseStateSetCookies(
   }
   return out
 }
+
+/** Sign-in refused because an admin suspended the account; the message says how to contest it (#581). */
+export class AccountSuspendedError extends Error {}

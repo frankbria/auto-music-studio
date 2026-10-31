@@ -13,6 +13,7 @@ ever applies to the audio endpoint.
 import asyncio
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +25,6 @@ from acemusic.constants import BPM_MAX, BPM_MIN
 from acemusic.storage import get_storage_backend
 
 from ..models import ArtworkOption, Clip, User, VisibilityState
-from ..models.common import utcnow
 from ..tasks.common import store_clip
 from . import (
     daw_export as daw_export_service,
@@ -265,13 +265,49 @@ def ensure_not_removed(clip: Clip) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This clip was removed by moderation.")
 
 
-async def take_down_visible(query: dict) -> int:
+async def take_down_visible(query: dict, banned_at: datetime) -> int:
     """Make every non-private clip matching ``query`` private and removed (the US-27.3 ban sweep); returns how many.
 
-    A private clip is left alone, so its owner keeps it if the ban is lifted.
+    A private clip is left alone, so its owner keeps it if the ban is lifted. Each clip records what it was taken
+    down from, and ``removed_at`` is the ban's own stamp, so :func:`restore_ban_sweep` finds exactly these (#581).
     """
-    result = await Clip.find({**query, "visibility": {"$ne": VisibilityState.PRIVATE.value}}).update(
-        {"$set": {"visibility": VisibilityState.PRIVATE.value, "is_public": False, "removed_at": utcnow()}}
+    # Pre-US-20.7 clips have no visibility key; is_public is what they were.
+    was = {
+        "$ifNull": [
+            "$visibility",
+            {"$cond": ["$is_public", VisibilityState.PUBLIC.value, VisibilityState.PRIVATE.value]},
+        ]
+    }
+    result = await Clip.get_pymongo_collection().update_many(
+        {**query, "visibility": {"$ne": VisibilityState.PRIVATE.value}},
+        [
+            {
+                "$set": {
+                    "visibility_before_ban": was,
+                    "visibility": VisibilityState.PRIVATE.value,
+                    "is_public": False,
+                    "removed_at": banned_at,
+                }
+            }
+        ],
+    )
+    return result.modified_count
+
+
+async def restore_ban_sweep(user_id: PydanticObjectId, banned_at: datetime) -> int:
+    """Put back what the ban stamped ``banned_at`` took down; returns how many. A removal since restamped is kept."""
+    result = await Clip.get_pymongo_collection().update_many(
+        {"user_id": user_id, "removed_at": banned_at, "visibility_before_ban": {"$ne": None}},
+        [
+            {
+                "$set": {
+                    "visibility": "$visibility_before_ban",
+                    "is_public": {"$eq": ["$visibility_before_ban", VisibilityState.PUBLIC.value]},
+                    "removed_at": None,
+                    "visibility_before_ban": None,
+                }
+            }
+        ],
     )
     return result.modified_count
 

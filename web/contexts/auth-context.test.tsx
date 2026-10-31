@@ -1,9 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AuthProvider } from "@/contexts/auth-context"
 import { useAuth } from "@/hooks/use-auth"
+import { AccountSuspendedError } from "@/lib/auth"
 
 const accessToken = `h.${Buffer.from(
   JSON.stringify({ sub: "u1", email: "musician@example.com" })
@@ -24,10 +26,29 @@ function Probe() {
   if (isLoading) return <p>loading</p>
   return (
     <div>
-      <p data-testid="state">
-        {isAuthenticated ? `in:${user?.email}` : "out"}
-      </p>
+      <p data-testid="state">{isAuthenticated ? `in:${user?.email}` : "out"}</p>
       <button onClick={() => logout()}>logout</button>
+    </div>
+  )
+}
+
+function SignInProbe() {
+  const { completeLogin } = useAuth()
+  const [failure, setFailure] = useState<string | null>(null)
+  return (
+    <div>
+      <button
+        onClick={() =>
+          completeLogin("google", "code", "state").catch((error: Error) =>
+            setFailure(
+              `${error instanceof AccountSuspendedError ? "suspended" : "other"}: ${error.message}`
+            )
+          )
+        }
+      >
+        sign in
+      </button>
+      {failure && <p role="alert">{failure}</p>}
     </div>
   )
 }
@@ -42,7 +63,9 @@ describe("AuthProvider", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url === "/api/auth/refresh" ? ok({ access_token: accessToken }) : unauthorized
+        url === "/api/auth/refresh"
+          ? ok({ access_token: accessToken })
+          : unauthorized
       )
     )
     render(
@@ -58,7 +81,10 @@ describe("AuthProvider", () => {
   })
 
   it("stays signed out when the refresh fails", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => unauthorized))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => unauthorized)
+    )
     render(
       <AuthProvider>
         <Probe />
@@ -116,7 +142,9 @@ describe("AuthProvider", () => {
         call += 1
         // Mount succeeds; the next (scheduled) refresh is rejected — the
         // refresh token was revoked, so the session is unrecoverable.
-        return call === 1 ? ok({ access_token: tokenExpiring(15 * 60) }) : unauthorized
+        return call === 1
+          ? ok({ access_token: tokenExpiring(15 * 60) })
+          : unauthorized
       })
       vi.stubGlobal("fetch", fetchMock)
       render(
@@ -149,7 +177,9 @@ describe("AuthProvider", () => {
         call += 1
         // Mount restores a token; the scheduled refresh then hits a 503. A
         // transient backend error must NOT sign the user out.
-        return call === 1 ? ok({ access_token: tokenExpiring(15 * 60) }) : serverError
+        return call === 1
+          ? ok({ access_token: tokenExpiring(15 * 60) })
+          : serverError
       })
       vi.stubGlobal("fetch", fetchMock)
       render(
@@ -268,6 +298,56 @@ describe("AuthProvider", () => {
       await gate
     })
     expect(screen.getByTestId("state")).toHaveTextContent("out")
+  })
+
+  it("rejects sign-in with the backend's reason when the account is suspended (#581)", async () => {
+    const detail =
+      "This account has been suspended. To contest it, contact appeals@example.com."
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.startsWith("/api/auth/callback/")
+          ? { ok: false, status: 403, json: async () => ({ detail }) }
+          : unauthorized
+      )
+    )
+    render(
+      <AuthProvider>
+        <SignInProbe />
+      </AuthProvider>
+    )
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "sign in" })
+    )
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      `suspended: ${detail}`
+    )
+  })
+
+  it("keeps the generic sign-in error for other failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ detail: "Invalid state." }),
+      }))
+    )
+    render(
+      <AuthProvider>
+        <SignInProbe />
+      </AuthProvider>
+    )
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "sign in" })
+    )
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "other: Authentication failed."
+    )
   })
 
   it("clears the session on logout", async () => {

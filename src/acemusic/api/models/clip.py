@@ -38,6 +38,8 @@ class Clip(Document):
     flagged_at: datetime | None = None
     #: US-27.3: taken down by moderation. Forced private, and the owner cannot make it public again.
     removed_at: datetime | None = None
+    #: #581: what a ban's sweep took this clip down from, so lifting the ban restores it.
+    visibility_before_ban: VisibilityState | None = None
     vocal_language: str | None = None
     model: str | None = None
     seed: int | None = None

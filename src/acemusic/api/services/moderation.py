@@ -43,7 +43,7 @@ from .common import coerce_object_id
 logger = logging.getLogger(__name__)
 
 ClipAction = Literal["approve", "remove", "flag"]
-UserAction = Literal["warn", "ban"]
+UserAction = Literal["warn", "ban", "unban"]
 QueueSource = Literal["report", "automated"]
 QueueSort = Literal["reports", "severity", "newest"]
 # #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
@@ -436,6 +436,10 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
             user_id=oid, event_type="moderation_warning", channel="in_app", payload={"reason": reason}
         ).insert()
         details: dict = {}
+    elif action == "unban":
+        if user.banned_at is None:
+            return ActionResult(ok=False, detail="This account is not banned.")
+        details = await _unban(user)
     else:
         if str(oid) == actor_id:
             return ActionResult(ok=False, detail="You cannot ban yourself.")
@@ -445,17 +449,31 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
 
 
 async def _ban(user: User) -> dict:
-    now = utcnow()
     if user.banned_at is None:
-        await user.set({"banned_at": now})
+        await user.set({"banned_at": utcnow()})
+    # The ban's own stamp marks what it took down, so an unban lifts exactly that (#581).
+    now = user.banned_at
     await revoke_all_user_tokens(user.id)
-    clips_removed = await clip_service.take_down_visible({"user_id": user.id})
+    clips_removed = await clip_service.take_down_visible({"user_id": user.id}, now)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
     videos = await Video.find({"user_id": user.id, "published": True}).update(
         {"$set": {"published": False, "removed_at": now}}
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
+
+
+async def _unban(user: User) -> dict:
+    """Lift a ban (#581): restore the clips its sweep took down and lift its video takedowns.
+
+    Videos stay unpublished for the owner to republish, as a moderator's restore leaves them (#571). Releases the ban
+    made private stay private: the owner re-publishes them.
+    """
+    banned_at = user.banned_at
+    await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
+    videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
+    return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:

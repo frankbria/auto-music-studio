@@ -362,7 +362,11 @@ Package manager: `uv` with `hatchling` build backend
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
-  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
+  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). The 403 says how to contest
+  it (`ACEMUSIC_API_SUSPENSION_CONTACT`, #581). The ban sweep stamps each clip's `removed_at` with the ban's own
+  `banned_at` and records `Clip.visibility_before_ban`, so `unban` (`/admin/moderation/users`, or Unban on the activity
+  log's ban rows) restores exactly those clips and lifts the ban's video stamps. A removal since restamps the clip and
+  stays. Videos and releases stay unpublished for the owner to re-publish. Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip`, `User` or `Release` fetched before a moderation action could land.
   Remove and ban also make the releases private and queue their SoundCloud tracks for un-share
   (`services/releases.unshare_releases`, #538/#569); dropping an artwork option that was the cover queues them too,

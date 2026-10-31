@@ -729,6 +729,9 @@ class TestRemovalMidUpload:
         )
 
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "This account has been suspended."
+        assert (
+            resp.json()["detail"]
+            == "This account has been suspended. To contest it, contact the platform's support team."
+        )
         await _drain(settings)
         assert shared == [("909", "private")]
