@@ -11,6 +11,7 @@ import re
 import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal
 
 from pymongo import ReturnDocument
 
@@ -19,20 +20,108 @@ from ..models.screening import Rule, ScreeningRules, ScreeningRulesDocument
 
 DEFAULT_BLOCK_THRESHOLD = 3
 
+
+def _rules(category: str, action: Literal["block", "flag"], *terms: str) -> list[Rule]:
+    return [Rule(term=term, category=category, action=action) for term in terms]
+
+
+#: English only (#559). Slurs with a reclaimed or everyday use ("fag" is a cigarette, "chink" a sound) are left
+#: out or flagged, so lyrics are reviewed rather than refused. A deployment that has saved rules keeps them.
 DEFAULT_RULES = ScreeningRules(
     rules=[
-        Rule(term="child porn", category="child sexual abuse", action="block"),
-        Rule(term="child pornography", category="child sexual abuse", action="block"),
-        Rule(term="sieg heil", category="hate speech", action="block"),
-        Rule(term="heil hitler", category="hate speech", action="block"),
-        Rule(term="white power", category="hate speech", action="block"),
-        Rule(term="gas the jews", category="hate speech", action="block"),
-        Rule(term="suicide", category="self-harm", action="flag"),
-        Rule(term="self harm", category="self-harm", action="flag"),
-        Rule(term="rape", category="sexual violence", action="flag"),
-        Rule(term="terrorist", category="violent extremism", action="flag"),
-        Rule(term="genocide", category="violent extremism", action="flag"),
-        Rule(term="mass shooting", category="graphic violence", action="flag"),
+        *_rules(
+            "child sexual abuse",
+            "block",
+            "child porn",
+            "child pornography",
+            "kiddie porn",
+            "kiddy porn",
+            "pedo porn",
+            "underage porn",
+            "preteen porn",
+            "lolicon",
+            "shotacon",
+        ),
+        *_rules("child sexual abuse", "flag", "jailbait", "pedophile", "paedophile"),
+        *_rules(
+            "hate speech",
+            "block",
+            "sieg heil",
+            "heil hitler",
+            "white power",
+            "gas the jews",
+            "kill the jews",
+            "kill all jews",
+            "kill all the jews",
+            "jews will not replace us",
+            "nigger",
+            "niggers",
+            "kike",
+            "kikes",
+        ),
+        *_rules(
+            "hate speech",
+            "flag",
+            "blood and soil",
+            "1488",
+            "white pride world wide",
+            "faggot",
+            "faggots",
+            "tranny",
+            "wetback",
+            "spic",
+            "gook",
+            "raghead",
+            "towelhead",
+        ),
+        *_rules(
+            "self-harm",
+            "flag",
+            "suicide",
+            "self harm",
+            "kill myself",
+            "killing myself",
+            "hang myself",
+            "cut myself",
+            "cutting myself",
+            "slit my wrists",
+            "end my life",
+            "thinspo",
+            "thinspiration",
+        ),
+        *_rules(
+            "sexual violence",
+            "flag",
+            "rape",
+            "raped",
+            "raping",
+            "rapist",
+            "sexual assault",
+            "molest",
+            "molested",
+            "molester",
+        ),
+        *_rules("violent extremism", "flag", "terrorist", "genocide", "ethnic cleansing", "race war"),
+        *_rules(
+            "graphic violence",
+            "flag",
+            "mass shooting",
+            "school shooting",
+            "school shooter",
+            "behead",
+            "beheaded",
+            "beheading",
+        ),
+    ],
+    allow_terms=[
+        "rape awareness",
+        "rape crisis",
+        "suicide squad",
+        "suicide prevention",
+        "suicide hotline",
+        "suicide doors",
+        "suicide blonde",
+        "spic and span",
     ],
     block_threshold=DEFAULT_BLOCK_THRESHOLD,
 )
