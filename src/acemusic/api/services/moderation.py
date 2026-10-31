@@ -105,6 +105,9 @@ _CURSORS: dict[str, TypeAdapter] = {
     # #543: the appeals lists, keyed on (created_at, id) like the log.
     "appeals_oldest": _cursor("appeals_oldest", NaiveDatetime, str),
     "appeals_newest": _cursor("appeals_newest", NaiveDatetime, str),
+    # #651: public discovery, newest first and by search relevance.
+    "discover_newest": _cursor("discover_newest", NaiveDatetime, str),
+    "discover_relevance": _cursor("discover_relevance", int, NaiveDatetime, str),
 }
 
 
@@ -112,7 +115,7 @@ def encode_cursor(kind: str, key: tuple) -> str:
     return base64.urlsafe_b64encode(_CURSORS[kind].dump_json((kind, *key))).decode()
 
 
-def _decode_cursor(kind: str, cursor: str) -> tuple:
+def decode_cursor(kind: str, cursor: str) -> tuple:
     try:
         return _CURSORS[kind].validate_json(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))[1:]
     except ValueError:  # bad base64, bad JSON, a wrong shape and another kind's cursor are all ValueErrors
@@ -123,7 +126,7 @@ def after_cursor(kind: str, cursor: str | None, newest_first: bool = True) -> di
     """The filter for rows past ``cursor`` in ``(created_at, _id)`` order; empty on the first page."""
     if not cursor:
         return {}
-    at, last_id = _decode_cursor(kind, cursor)
+    at, last_id = decode_cursor(kind, cursor)
     oid = coerce_object_id(last_id)
     if oid is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
@@ -155,7 +158,7 @@ async def get_queue(
     """One item per clip with open reports and/or unreviewed automated flags, and per flagged
     video, artwork option or voice model: a page of them in ``sort`` order, plus the cursor
     for the next page (None on the last)."""
-    after = _decode_cursor(sort, cursor) if cursor else None
+    after = decode_cursor(sort, cursor) if cursor else None
     groups = await ClipReport.aggregate(
         [
             {"$match": {"resolved_at": None}},

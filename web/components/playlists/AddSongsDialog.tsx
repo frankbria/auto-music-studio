@@ -2,7 +2,11 @@
 
 import { useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, MusicNote01Icon, Tick02Icon } from "@hugeicons/core-free-icons"
+import {
+  Add01Icon,
+  MusicNote01Icon,
+  Tick02Icon,
+} from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -13,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
-import { getAllClips } from "@/lib/explore"
+import { getAllClips } from "@/lib/mock-clips"
 import type { Clip } from "@/lib/workspace-clips"
 
 // Add-songs picker (US-20.3). Songs come from the same discovery pool as Explore.

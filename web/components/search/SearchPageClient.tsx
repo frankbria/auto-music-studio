@@ -25,10 +25,7 @@ export function SearchPageClient() {
   )
 
   const update = (patch: Partial<SearchParams>) => {
-    const next = { ...params, ...patch }
-    // Any change other than paging returns to the first page.
-    if (!("page" in patch)) next.page = 1
-    const query = buildSearchQuery(next)
+    const query = buildSearchQuery({ ...params, ...patch })
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
   }
 

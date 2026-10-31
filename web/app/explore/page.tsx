@@ -1,31 +1,24 @@
 import type { Metadata } from "next"
 
-import { ClipSection } from "@/components/explore/ClipSection"
 import { GenreChannels } from "@/components/explore/GenreChannels"
-import { TrendingSection } from "@/components/explore/TrendingSection"
-import { getCharts, getNewReleases, getStaffPicks } from "@/lib/explore"
+import { NewReleasesSection } from "@/components/explore/NewReleasesSection"
 
-// Explore page (US-20.1): five discovery sections — Trending (24h/7d),
-// Genre Channels, Staff Picks, New Releases, and Charts. Data comes from the
-// local mock service (lib/explore) until public discovery endpoints exist; the
-// page stays a server component and only Trending opts into the client for its
-// range toggle.
+// Explore page (US-20.1): static Genre Channels that deep-link into Search, and
+// New Releases from the public discovery API (#651), fetched client-side
+// through the BFF. Trending, Staff Picks and Charts are hidden until the
+// backend records the plays/likes/shares or editorial picks they rank by.
 
 export const metadata: Metadata = {
   title: "Explore · Auto Music Studio",
-  description:
-    "Discover trending songs, genre channels, staff picks, new releases, and charts.",
+  description: "Browse genre channels and the newest public songs.",
 }
 
 export default function ExplorePage() {
   return (
     <div className="flex flex-col gap-10 p-8">
       <h1 className="text-2xl font-semibold">Explore</h1>
-      <TrendingSection />
       <GenreChannels />
-      <ClipSection title="Staff Picks" clips={getStaffPicks()} />
-      <ClipSection title="New Releases" clips={getNewReleases()} />
-      <ClipSection title="Charts" clips={getCharts("plays")} ranked />
+      <NewReleasesSection />
     </div>
   )
 }

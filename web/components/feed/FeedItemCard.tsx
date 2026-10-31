@@ -22,7 +22,7 @@ import { clipInspirationHref, type FeedItem } from "@/lib/feed"
 import { cn } from "@/lib/utils"
 
 // One short-form feed item (US-20.4). Full-height card with a glyph artwork
-// backdrop (no authed artwork proxy), title/artist/tag overlays, and an action
+// backdrop (no authed artwork proxy), title/tag overlays, and an action
 // rail. Owns its own <audio>: an effect drives play/pause off the `active` prop
 // (the in-view item), which is a side-effect syncing to an external element — not
 // set-state-in-effect. The play/pause icon tracks the element's own events.
@@ -42,7 +42,7 @@ function RailButton({
   href?: string
 }) {
   const className = cn(
-    "flex flex-col items-center gap-1 rounded-lg p-2 text-white/90 outline-none transition-colors hover:bg-white/10 focus-visible:ring-3 focus-visible:ring-white/40",
+    "flex flex-col items-center gap-1 rounded-lg p-2 text-white/90 transition-colors outline-none hover:bg-white/10 focus-visible:ring-3 focus-visible:ring-white/40",
     active && "text-primary"
   )
   const inner = (
@@ -124,7 +124,7 @@ export function FeedItemCard({
     <section
       data-testid="feed-item"
       data-active={active}
-      aria-label={`${item.title ?? "Untitled clip"} by ${item.artist}`}
+      aria-label={item.title ?? "Untitled clip"}
       className="relative flex h-full w-full items-stretch justify-center p-3"
     >
       {/* Artwork backdrop: glyph + gradient for text legibility. */}
@@ -152,16 +152,19 @@ export function FeedItemCard({
         <span className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/70 to-transparent" />
       </button>
 
-      {/* Text overlays (title / artist / tags). */}
+      {/* Text overlays (title / tags). */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 mx-auto flex max-w-md flex-col gap-2 p-5 pr-16 text-white">
         <h2 className="text-lg font-semibold drop-shadow">
           {item.title ?? "Untitled clip"}
         </h2>
-        <p className="text-sm text-white/80 drop-shadow">{item.artist}</p>
         {styleText && (
           <div className="flex flex-wrap gap-1">
             {item.style_tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="bg-white/15 text-white">
+              <Badge
+                key={tag}
+                variant="secondary"
+                className="bg-white/15 text-white"
+              >
                 {tag}
               </Badge>
             ))}

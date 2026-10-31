@@ -191,4 +191,6 @@ class User(Document):
                 unique=True,
                 partialFilterExpression={"handle": {"$type": "string"}},
             ),
+            # Only banned users, so the public discovery filter (#651) reads them without a users scan.
+            IndexModel([("banned_at", ASCENDING)], partialFilterExpression={"banned_at": {"$type": "date"}}),
         ]

@@ -31,6 +31,7 @@ from .routers import (
     compute,
     credits,
     daw_export,
+    discover,
     distribution,
     editing,
     extraction,
@@ -179,6 +180,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # app.state (not module-global) so each app instance — and each test — gets
     # an isolated window.
     app.state.stream_limiter = RateLimiter(settings.stream_rate_limit_per_minute)
+    app.state.discover_limiter = RateLimiter(
+        settings.discover_rate_limit_per_minute, detail="Too many discovery requests; slow down."
+    )
     app.state.report_limiter = RateLimiter(
         settings.report_rate_limit_per_hour, 3600, detail="You have sent too many reports. Please try again later."
     )
@@ -229,6 +233,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(videos.router, prefix=API_V1_PREFIX)
     # US-22.3 delivery reads (metadata/playback/for-clip) open for the public song page.
     app.include_router(videos.public_router, prefix=API_V1_PREFIX)
+    # #651: anonymous public discovery listings (Feed, Explore, Search).
+    app.include_router(discover.router, prefix=API_V1_PREFIX)
     app.include_router(admin.router, prefix=API_V1_PREFIX)
 
     # A handle collision surfaces from the service layer as a domain exception;

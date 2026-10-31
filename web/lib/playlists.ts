@@ -1,17 +1,17 @@
 // Playlist data seam (US-20.3).
 //
 // Playlists have no backend yet (the coding plan's Beanie API is a later stage):
-// like Explore (US-20.1) and Search (US-20.2), the UI runs on a local, typed mock
-// layer whose shapes mirror the eventual `/playlists` API. Songs are drawn from the
-// same discovery pool as Explore. Mutations here are PURE — each returns a new
-// Playlist — so the client store (contexts/playlists-context) can hold them in React
-// state; swap these bodies for fetch()es when the API lands and callers won't change.
+// the UI runs on a local, typed mock layer whose shapes mirror the eventual
+// `/playlists` API. Songs are drawn from the mock clip pool (lib/mock-clips).
+// Mutations here are PURE — each returns a new Playlist — so the client store
+// (contexts/playlists-context) can hold them in React state; swap these bodies
+// for fetch()es when the API lands and callers won't change.
 //
 // ponytail: in-memory only, session-scoped — no localStorage/persistence (YAGNI until
 // there's a real backend to sync with). Custom covers are object URLs, so they also
 // live only for the session.
 
-import { getAllClips } from "@/lib/explore"
+import { getAllClips } from "@/lib/mock-clips"
 import type { Clip } from "@/lib/workspace-clips"
 
 export type PlaylistVisibility = "private" | "public"
@@ -47,7 +47,13 @@ export function initialPlaylists(): Playlist[] {
       name: "Late Night Drive",
       description: "Synthwave and lofi for the empty highway.",
       visibility: "public",
-      clipIds: ["clip-neon", "clip-velvet", "clip-pulse", "clip-paper", "clip-mono"],
+      clipIds: [
+        "clip-neon",
+        "clip-velvet",
+        "clip-pulse",
+        "clip-paper",
+        "clip-mono",
+      ],
       coverDataUrl: null,
       createdAt: "2026-07-18T12:00:00Z",
     },
@@ -86,11 +92,18 @@ export function createPlaylist(name: string, description = ""): Playlist {
 }
 
 /** Rename / re-describe a playlist (empty description → null). */
-export function renamePlaylist(pl: Playlist, name: string, description = ""): Playlist {
+export function renamePlaylist(
+  pl: Playlist,
+  name: string,
+  description = ""
+): Playlist {
   return { ...pl, name: name.trim(), description: description.trim() || null }
 }
 
-export function setVisibility(pl: Playlist, visibility: PlaylistVisibility): Playlist {
+export function setVisibility(
+  pl: Playlist,
+  visibility: PlaylistVisibility
+): Playlist {
   return { ...pl, visibility }
 }
 
@@ -123,9 +136,14 @@ export function setCover(pl: Playlist, coverDataUrl: string | null): Playlist {
 }
 
 /** Resolve `clipIds` to Clips in playlist order, dropping ids not in the pool. */
-export function playlistClips(pl: Playlist, pool: Clip[] = getAllClips()): Clip[] {
+export function playlistClips(
+  pl: Playlist,
+  pool: Clip[] = getAllClips()
+): Clip[] {
   const byId = new Map(pool.map((c) => [c.id, c]))
-  return pl.clipIds.map((id) => byId.get(id)).filter((c): c is Clip => c != null)
+  return pl.clipIds
+    .map((id) => byId.get(id))
+    .filter((c): c is Clip => c != null)
 }
 
 /** Public share URL for a playlist. `origin` comes from the caller (window.location). */
@@ -139,6 +157,9 @@ export function buildShareUrl(origin: string, id: string): string {
  * inspiration chip.
  */
 export function buildInspirationHref(pl: Playlist): string {
-  const q = new URLSearchParams({ inspiration: pl.id, inspirationName: pl.name })
+  const q = new URLSearchParams({
+    inspiration: pl.id,
+    inspirationName: pl.name,
+  })
   return `/create?${q.toString()}`
 }

@@ -12,17 +12,7 @@ describe("ExploreClipCard", () => {
     expect(link).toHaveAttribute("href", "/song/abc")
   })
 
-  it("shows a ranking number only when rank is provided (AC4)", () => {
-    const { rerender } = render(
-      <ExploreClipCard clip={makeClip()} rank={3} />
-    )
-    expect(screen.getByTestId("clip-rank")).toHaveTextContent("3")
-
-    rerender(<ExploreClipCard clip={makeClip()} />)
-    expect(screen.queryByTestId("clip-rank")).not.toBeInTheDocument()
-  })
-
-  it("renders engagement stats when present", () => {
+  it("renders engagement stats only when present", () => {
     render(
       <ExploreClipCard
         clip={makeClip({ play_count: 8200, like_count: 640, share_count: 210 })}
@@ -30,6 +20,11 @@ describe("ExploreClipCard", () => {
     )
     // Intl compact: 8200 → "8.2K".
     expect(screen.getByText("8.2K")).toBeInTheDocument()
+  })
+
+  it("renders no stats for a public clip without counters", () => {
+    render(<ExploreClipCard clip={makeClip({ duration: null, model: null })} />)
+    expect(screen.getByTestId("explore-clip-card")).not.toHaveTextContent(/\d/)
   })
 
   it("has a Report button outside the card link (US-27.2)", () => {
