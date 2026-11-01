@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
+import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
 import { fetchFacets, type DiscoverFacets } from "@/lib/discover"
 import { GENRES } from "@/lib/explore"
 import {
@@ -150,11 +151,17 @@ export function SearchView({
     fetchFacets().then(setFacets, () => {})
   }, [])
 
+  const { ready, token } = useDiscoveryAuth()
+
   useEffect(() => {
-    if (showSuggestions) return
+    if (showSuggestions || !ready) return
     let current = true
     // Rebuilt from the key so the effect keys on the search, not on params' identity.
-    searchClips(parseSearchParams(new URLSearchParams(searchKey))).then(
+    searchClips(
+      parseSearchParams(new URLSearchParams(searchKey)),
+      null,
+      token()
+    ).then(
       (page) => {
         if (current) setResults(settled(searchKey, false, page))
       },
@@ -165,7 +172,7 @@ export function SearchView({
     return () => {
       current = false
     }
-  }, [searchKey, showSuggestions, attempt])
+  }, [searchKey, showSuggestions, attempt, ready, token])
 
   const shown = results?.forKey === searchKey ? results : null
 
@@ -179,7 +186,7 @@ export function SearchView({
     setResults({ ...page, loadingMore: true, loadMoreFailed: false })
     const sameSearch = (latest: Results | null): latest is Results =>
       latest?.forKey === page.forKey
-    searchClips(params, page.nextCursor).then(
+    searchClips(params, page.nextCursor, token()).then(
       (next) =>
         setResults((latest) =>
           sameSearch(latest)
