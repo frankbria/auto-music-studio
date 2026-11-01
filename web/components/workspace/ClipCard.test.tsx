@@ -311,6 +311,17 @@ describe("ClipCard", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("hides Get Full Song when the caller can't handle it (#616)", () => {
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ duration: 30 })} />
+      </AllProviders>
+    )
+    expect(
+      screen.queryByRole("button", { name: /get full song/i })
+    ).not.toBeInTheDocument()
+  })
+
   it("renders all spec 9.2 actions in the more-options menu", async () => {
     renderCard()
     await userEvent.click(screen.getByRole("button", { name: /more options/i }))
@@ -706,6 +717,7 @@ describe("ClipCard for a visitor (#564)", () => {
     renderCard({
       clip: clip({ duration: 30, is_public: true }),
       isOwner: false,
+      onGetFullSong: vi.fn(),
     })
     for (const name of OWNER_CONTROLS) {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument()
@@ -732,7 +744,7 @@ describe("ClipCard for a visitor (#564)", () => {
   })
 
   it("shows the owner controls by default", () => {
-    renderCard({ clip: clip({ duration: 30 }) })
+    renderCard({ clip: clip({ duration: 30 }), onGetFullSong: vi.fn() })
     for (const name of OWNER_CONTROLS) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument()
     }
