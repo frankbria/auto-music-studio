@@ -112,6 +112,33 @@ describe("PluginTokenCard", () => {
     )
   })
 
+  it("explains the token limit, and shows the refusal at the limit (#526)", async () => {
+    stubFetch((_url, init) =>
+      init?.method === "POST"
+        ? jsonRes(
+            {
+              detail:
+                "You already have 10 plugin tokens. Revoke one below to create another.",
+            },
+            409
+          )
+        : jsonRes(TOKENS)
+    )
+    const user = userEvent.setup()
+    render(<PluginTokenCard accessToken="tok" />)
+    expect(
+      screen.getByText(/up to 10 plugin tokens at a time/i)
+    ).toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("button", { name: /create plugin token/i })
+    )
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /revoke one below to create another/i
+    )
+  })
+
   it("shows a spinner while the request is pending", async () => {
     let resolveCreate: (value: Response) => void = () => {}
     stubFetch((_url, init) =>
@@ -283,9 +310,7 @@ describe("PluginTokenCard", () => {
     // flag is not about unmounting — it is about the effect re-running. Two loads
     // are then in flight and the slower, older one must not win.
     const resolvers: ((value: Response) => void)[] = []
-    stubFetch(
-      () => new Promise<Response>((resolve) => resolvers.push(resolve))
-    )
+    stubFetch(() => new Promise<Response>((resolve) => resolvers.push(resolve)))
     const { rerender } = render(<PluginTokenCard accessToken="old" />)
     rerender(<PluginTokenCard accessToken="new" />)
     await waitFor(() => expect(resolvers).toHaveLength(2))

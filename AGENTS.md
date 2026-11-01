@@ -361,7 +361,8 @@ Package manager: `uv` with `hatchling` build backend
   `/api/v1/admin/moderation/{queue,clips,users,log}`. Queue and log are paged by keyset cursor (#540): a
   response's `next_cursor` goes back as `?cursor=`, and a malformed one or one minted under another sort is a 422. The queue sorts
   (`reports|severity|newest`) and filters (`source`, `category`) on the server, and log entries carry `actor_name`
-  and `target_label`. Removal stamps `Clip.removed_at`, and
+  and `target_label`. Remove and flag notify the owner (`moderation_clip_removed|flagged`, #589), and the web clip
+  lists (`useClips`) refetch on any new moderation notice. Removal stamps `Clip.removed_at`, and
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
@@ -405,7 +406,9 @@ Package manager: `uv` with `hatchling` build backend
   `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
   `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
 - **Public discovery (#651)**: Feed, Explore and Search read `GET /api/v1/discover/clips` (keyset-paged, `newest` |
-  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they are anonymous. Every public listing
+  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they need no sign-in. A signed-in
+  viewer's token is forwarded so `/discover/clips` marks their own clips `is_owner` (#653); the web reads it through
+  `useDiscoveryAuth`, which waits for the session and doesn't refetch when the token rotates. Every public listing
   filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
   uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
   `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them

@@ -454,6 +454,24 @@ class TestRemove:
         assert event.clip_id == clip.id
         assert event.payload == {"clip_id": str(clip.id), "title": "Bad Song", "reason": "Hate speech"}
 
+    async def test_creator_is_notified_of_a_flag(self, client, settings):
+        admin, owner = await _admin(), await _user()
+        clip = await _clip(owner, title="Edgy Song")
+
+        await _act_on_clips(client, admin, settings, "flag", [clip.id], reason="Graphic lyrics")
+
+        [event] = await NotificationEvent.find(NotificationEvent.user_id == owner.id).to_list()
+        assert (event.event_type, event.channel, event.clip_id) == ("moderation_clip_flagged", "in_app", clip.id)
+        assert event.payload == {"clip_id": str(clip.id), "title": "Edgy Song", "reason": "Graphic lyrics"}
+
+    async def test_approving_a_clip_notifies_no_one(self, client, settings):
+        admin, owner = await _admin(), await _user()
+        clip = await _clip(owner)
+
+        await _act_on_clips(client, admin, settings, "approve", [clip.id])
+
+        assert await NotificationEvent.find(NotificationEvent.user_id == owner.id).count() == 0
+
     @pytest.mark.parametrize("visibility", ["public", "unlisted"])
     async def test_owner_cannot_republish_a_removed_clip(self, client, settings, visibility):
         admin, owner = await _admin(), await _user()

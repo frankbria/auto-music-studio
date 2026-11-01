@@ -1,4 +1,4 @@
-"""Anonymous public discovery reads behind Feed, Explore and Search (#651)."""
+"""Public discovery reads behind Feed, Explore and Search (#651); a signed-in viewer's own clips are marked (#653)."""
 
 from datetime import datetime
 
@@ -35,13 +35,16 @@ async def list_public_clips(
     sort: discovery.DiscoverSort = "newest",
     limit: int = Query(default=20, ge=1, le=50),
     cursor: str | None = None,
+    current: CurrentUser | None = Depends(get_current_user_optional),
 ) -> DiscoverClipsResponse:
     """Public clips, keyset-paged: pass ``next_cursor`` back as ``cursor`` with the same filters."""
     clips, next_cursor, total = await discovery.list_public_clips(
         q=q, style=style, bpm_min=bpm_min, bpm_max=bpm_max, key=key, model=model, sort=sort, limit=limit, cursor=cursor
     )
     return DiscoverClipsResponse(
-        clips=[PublicClipResponse.from_clip_for(clip, None) for clip in clips], next_cursor=next_cursor, total=total
+        clips=[PublicClipResponse.from_clip_for(clip, current.user_id if current else None) for clip in clips],
+        next_cursor=next_cursor,
+        total=total,
     )
 
 

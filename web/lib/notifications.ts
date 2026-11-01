@@ -177,6 +177,12 @@ export function toAppNotification(
         `Moderation removed ${song}.${suffix("Reason", text(p, "reason"))}`,
         songHref
       )
+    case "moderation_clip_flagged":
+      return row(
+        "moderation",
+        `Moderation added a content warning to ${song}. You can appeal it from your Library.${suffix("Reason", text(p, "reason"))}`,
+        songHref
+      )
     case "moderation_warning":
       return row(
         "moderation",

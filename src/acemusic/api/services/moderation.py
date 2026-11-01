@@ -293,31 +293,56 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
         if not resolved:
             return ActionResult(ok=False, detail="Clip not found.")
     else:
-        updates: dict = {"moderation_reviewed_at": now}
-        if action == "remove":
-            # US-27.4: a reversed appeal restores the visibility recorded here.
-            details["previous_visibility"] = clip.visibility.value
-            updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
-            # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
-            details.update(await release_service.unshare_releases({"clip_id": oid}, {"_id": oid}))
-        elif action == "flag":
-            updates.update(content_warning=True, flagged_at=now)
-        await clip.set(updates)
-        resolved = await _resolve_reports(oid, now)
-        if action == "remove":
-            # And again once stamped: an upload or share that landed in between saw no removal either, so its
-            # track is queued and its release made private here. Both are idempotent; anything from here on
-            # sees removed_at and takes itself down (unshare_if_source_removed).
-            await release_service.unshare_releases({"clip_id": oid}, {"_id": oid})
-            await NotificationEvent(
-                user_id=clip.user_id,
-                clip_id=clip.id,
-                event_type="moderation_clip_removed",
-                channel="in_app",
-                payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
-            ).insert()
+        resolved, details = await _CLIP_ACTIONS[action](clip, now, reason)
     await log_action(actor_id, action, "clip", str(oid), reason, {"reports_resolved": resolved, **details})
     return ActionResult(ok=True)
+
+
+async def _approve_clip(clip: Clip, now: datetime, _reason: str | None) -> tuple[int, dict]:
+    await clip.set({"moderation_reviewed_at": now})
+    return await _resolve_reports(clip.id, now), {}
+
+
+async def _flag_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
+    await clip.set({"moderation_reviewed_at": now, "content_warning": True, "flagged_at": now})
+    resolved = await _resolve_reports(clip.id, now)
+    await _notify_clip_owner(clip, "moderation_clip_flagged", reason)
+    return resolved, {}
+
+
+async def _remove_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
+    # US-27.4: a reversed appeal restores the visibility recorded here.
+    details: dict = {"previous_visibility": clip.visibility.value}
+    # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
+    details.update(await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id}))
+    await clip.set(
+        {
+            "moderation_reviewed_at": now,
+            "visibility": VisibilityState.PRIVATE,
+            "is_public": False,
+            "removed_at": now,
+        }
+    )
+    resolved = await _resolve_reports(clip.id, now)
+    # And again once stamped: an upload or share that landed in between saw no removal either, so its
+    # track is queued and its release made private here. Both are idempotent; anything from here on
+    # sees removed_at and takes itself down (unshare_if_source_removed).
+    await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+    await _notify_clip_owner(clip, "moderation_clip_removed", reason)
+    return resolved, details
+
+
+async def _notify_clip_owner(clip: Clip, event_type: str, reason: str | None) -> None:
+    await NotificationEvent(
+        user_id=clip.user_id,
+        clip_id=clip.id,
+        event_type=event_type,
+        channel="in_app",
+        payload={"clip_id": str(clip.id), "title": clip.title, "reason": reason},
+    ).insert()
+
+
+_CLIP_ACTIONS = {"approve": _approve_clip, "flag": _flag_clip, "remove": _remove_clip}
 
 
 async def act_on_content(
