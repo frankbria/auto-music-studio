@@ -312,15 +312,16 @@ async def restore_releases(clip: Clip, previous: dict[str, str], removed_at: dat
     """Put back the releases a reversed removal made private and re-share their public tracks, best-effort (#582).
 
     The clip's queued un-shares go first, so the poller can't make a track private again after the reversal. A
-    release the owner changed since the removal (no longer private) is left as it is. A takedown that still applies
-    (the owner's ban, a cover dropped since) keeps everything down, and one landing meanwhile wins.
+    release the owner changed since the removal is left as it is. A takedown that still applies (the owner's ban,
+    a dropped cover still on the tracks, text the current rules block) keeps everything down, and one landing
+    meanwhile wins.
     """
-    if blocked := await _takedown_in_force(clip, removed_at):
+    if blocked := await _takedown_in_force(clip) or await _blocked_text(clip, previous):
         return {"releases_restore_skipped": blocked}
     await SoundCloudUnshare.find({"clip_id": clip.id}).delete()
     restored, failed = 0, []
     for release_id, visibility in previous.items():
-        release = await _put_back(release_id, visibility)
+        release = await _put_back(release_id, visibility, removed_at)
         if release is None:
             continue
         restored += 1
@@ -329,21 +330,28 @@ async def restore_releases(clip: Clip, previous: dict[str, str], removed_at: dat
     return _present(releases_restored=restored, soundcloud_reshare_failed=failed)
 
 
-async def _takedown_in_force(clip: Clip, removed_at: datetime) -> str | None:
+async def _takedown_in_force(clip: Clip) -> str | None:
     """Why the clip's tracks must stay private even though its removal was reversed, if they must."""
     owner = await User.get(clip.user_id)
     if owner is not None and owner.banned_at is not None:
         return "owner banned"
+    # Whenever it was dropped, before or after the removal: nothing replaces a track's artwork on SoundCloud (#619).
     cover_dropped = await ModerationLogEntry.find_one(
-        {
-            "action": "drop",
-            "target_type": "artwork",
-            "details.clip_id": str(clip.id),
-            "details.was_cover": True,
-            "created_at": {"$gt": removed_at},
-        }
+        {"action": "drop", "target_type": "artwork", "details.clip_id": str(clip.id), "details.was_cover": True}
     )
-    return "cover dropped since the removal" if cover_dropped else None
+    return "cover dropped" if cover_dropped else None
+
+
+async def _blocked_text(clip: Clip, previous: dict[str, str]) -> str | None:
+    """The rules may have changed while the appeal waited: the text going back out is screened again, and
+    flagged text re-queues the clip as any outgoing text does."""
+    releases = await Release.find({"_id": {"$in": [PydanticObjectId(rid) for rid in previous]}}).to_list()
+    texts = screening.clip_texts(clip) + [text for release in releases for text in release_texts(release.model_dump())]
+    try:
+        await clip_service.screen_outgoing(clip, texts)
+    except screening.ContentBlockedError:
+        return "blocked text"
+    return None
 
 
 async def _keep_later_takedowns(clip: Clip) -> None:
@@ -354,11 +362,13 @@ async def _keep_later_takedowns(clip: Clip) -> None:
         pass
 
 
-async def _put_back(release_id: str, visibility: str) -> Release | None:
-    """Set a release the removal made private back to ``visibility``; None if it is no longer private."""
-    return await Release.find_one(
-        {"_id": PydanticObjectId(release_id), "visibility": VisibilityState.PRIVATE.value}
-    ).update({"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT)
+async def _put_back(release_id: str, visibility: str, removed_at: datetime) -> Release | None:
+    """Set a release the removal made private back to ``visibility``; None if the owner has touched it since, for
+    instance making it private themselves, which the removal's own write is indistinguishable from otherwise."""
+    untouched = {"visibility": VisibilityState.PRIVATE.value, "updated_at": {"$lte": removed_at}}
+    return await Release.find_one({"_id": PydanticObjectId(release_id), **untouched}).update(
+        {"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT
+    )
 
 
 async def _reshare_failures(release: Release, settings: ApiSettings) -> list[str]:

@@ -28,7 +28,7 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import releases as release_service, soundcloud
+from acemusic.api.services import releases as release_service, screening, soundcloud
 from acemusic.api.settings import ApiSettings
 from tests.test_moderation_dashboard_api import _release, _sc_connection
 from tests.users import make_user
@@ -690,7 +690,7 @@ class TestReversalRestoresReleases:
         assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
         assert soundcloud_stand_in.puts == []
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
-        assert entry.details["releases_restore_skipped"] == "cover dropped since the removal"
+        assert entry.details["releases_restore_skipped"] == "cover dropped"
 
     async def test_a_removal_landing_mid_reversal_takes_the_reshared_track_down_again(
         self, client, settings, soundcloud_stand_in, monkeypatch
@@ -726,3 +726,51 @@ class TestReversalRestoresReleases:
         assert (await Clip.get(clip.id)).removed_at is None
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
         assert entry.details["releases_restore_failed"] is True
+
+    async def test_a_cover_dropped_before_the_removal_keeps_the_tracks_down(
+        self, client, settings, soundcloud_stand_in
+    ):
+        owner = await _user()
+        await _sc_connection(owner)
+        clip = await _clip(owner)
+        releases = [await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="t-public")]
+        await ModerationLogEntry(
+            actor_id=None,
+            action="drop",
+            target_type="artwork",
+            target_id=str(PydanticObjectId()),
+            details={"clip_id": str(clip.id), "was_cover": True},
+        ).insert()
+        await _moderate(client, settings, "remove", clip)
+        appeal = (await _appeal(client, settings, owner, clip)).json()
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private"]
+        assert soundcloud_stand_in.puts == []
+
+    async def test_text_the_rules_now_block_is_not_shared_again(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        rules = await screening.get_rules()
+        await screening.save_rules(
+            rules.model_copy(
+                update={"rules": [*rules.rules, screening.Rule(term="tune", category="x", action="block")]}
+            )
+        )
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "blocked text"
+
+    async def test_a_release_the_owner_made_private_since_stays_private(self, client, settings, soundcloud_stand_in):
+        clip, (public, unlisted, private), appeal = await _removed_with_releases(client, settings)
+        # The owner sets the public release private themselves while the appeal waits.
+        await Release.find_one(Release.id == public.id).update({"$set": {"updated_at": datetime.now(timezone.utc)}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities((public, unlisted, private)) == ["private", "unlisted", "private"]
+        assert soundcloud_stand_in.puts == []
