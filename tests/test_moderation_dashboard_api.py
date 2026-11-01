@@ -756,6 +756,23 @@ class TestUnban:
         assert (entry.target_id, entry.reason) == (str(user.id), "Appeal upheld")
         assert entry.details == {"clips_restored": 2, "videos_restored": 1}
 
+    async def test_a_video_unpublished_by_an_admin_during_the_ban_stays_down(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        swept, unpublished = await _video(clip, published=True).insert(), await _video(clip, published=True).insert()
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        resp = await client.post(
+            f"{ADMIN_URL}/moderation/content",
+            json={"target_type": "video", "action": "unpublish", "ids": [str(unpublished.id)]},
+            headers=_auth(admin, settings),
+        )
+        assert resp.status_code == 200 and resp.json()["results"][0]["ok"], resp.text
+
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert (await Video.get(swept.id)).removed_at is None
+        assert (await Video.get(unpublished.id)).removed_at is not None
+
     async def test_a_restored_clip_can_be_republished(self, client, settings):
         admin, user = await _admin(), await _user()
         clip = await _clip(user, VisibilityState.UNLISTED, style_tags=["house"])

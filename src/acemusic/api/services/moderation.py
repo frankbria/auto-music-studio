@@ -348,8 +348,7 @@ async def act_on_content(
             details["was_published"] = doc.published
             if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
                 notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-            # A video already down keeps its stamp: its edits carry that one, and restore matches on it.
-            updates.update(published=False, removed_at=doc.removed_at or now)
+            updates.update(published=False, removed_at=await _unpublish_stamp(doc, now))
         await doc.set(updates)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
@@ -360,6 +359,15 @@ async def act_on_content(
         except Exception:
             logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+async def _unpublish_stamp(video: Video, now: datetime) -> datetime:
+    """A video already down keeps its stamp: its edits carry that one, and restore matches on it. Not the owner's ban
+    stamp, though: an unban lifts those, and an admin's own unpublish has to outlive it (#581)."""
+    if video.removed_at is None:
+        return now
+    owner = await User.get(video.user_id)
+    return now if owner is not None and owner.banned_at == video.removed_at else video.removed_at
 
 
 async def _restore_video(video: Video) -> str | None:
