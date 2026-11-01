@@ -285,6 +285,14 @@ Conventions across every workflow (#425), enforced by `tests/test_workflow_pins.
   for the read-only CI/plugin/docker-publish workflows) or per job where a job needs
   write scope (CD, review bots).
 
+`.github/workflows/audio-ml.yml` — the `audio-ml` extra (#640):
+- Path-filtered to `pyproject.toml`, `uv.lock`, `stems_client.py` and its test, so only dependency
+  and stems changes pay for a torch install. Not a required check, since a path-filtered job is absent
+  from most PRs and a required check would block them
+- Installs the locked versions with torch from the CPU wheel index, filtering out the lock's CUDA
+  wheels (`nvidia-*`, `triton`), then smoke-imports torch and demucs and runs `test_stems_client.py`,
+  which every other job skips
+
 `.github/workflows/plugin.yml` — VST3 plugin (C++):
 - Path-filtered to `plugin/**`, so Python-only changes don't trigger a 3-OS C++ build
 - Matrix: ubuntu-latest (GCC), macos-latest (clang), windows-latest (MSVC)
