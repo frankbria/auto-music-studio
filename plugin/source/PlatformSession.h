@@ -59,9 +59,10 @@ private:
     mutable juce::CriticalSection lock;
     juce::String accessToken, refreshToken;
 
-    /** The refresh token the platform last refused (#516). Never sent again: a refusal is final, so only a new
-        token, pasted here or in another instance, is worth a request. */
-    juce::String rejectedRefreshToken;
+    /** The refresh token the platform last refused, and the server that refused it (#516). Never sent there
+        again: a refusal is final, so only a new token, or the same one against a corrected server URL, is worth
+        a request. */
+    juce::String rejectedRefreshToken, rejectedByServer;
 };
 
 } // namespace Platform

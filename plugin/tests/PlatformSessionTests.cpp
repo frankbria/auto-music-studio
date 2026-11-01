@@ -141,7 +141,15 @@ public:
             expect (again.errorMessage.containsIgnoreCase ("plugin token"), "unexpected message: " + again.errorMessage);
             expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 1, "the rejected token was refreshed again");
 
-            // ...until a new one is pasted.
+            // ...unless the musician corrects the server URL: another server hasn't refused it.
+            test::StubAceStepServer corrected;
+            expect (corrected.start() != 0);
+            corrected.setStatusFor ("/api/v1/auth/refresh", "HTTP/1.1 401 Unauthorized");
+            corrected.requireBearer ("access-never-issued");
+            listWorkspaces (session, corrected.getBaseUrl());
+            expectEquals (corrected.getRequestCountFor ("/api/v1/auth/refresh"), 1, "the corrected server was never asked");
+
+            // ...or a new token is pasted.
             session.setRefreshToken ("pasted-later");
             listWorkspaces (session, server.getBaseUrl());
             expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 2);

@@ -52,6 +52,7 @@ void Session::setRefreshToken (const juce::String& token)
         refreshToken = token.trim();
         accessToken.clear();
         rejectedRefreshToken.clear();
+        rejectedByServer.clear();
     }
     persist (token.trim());
 }
@@ -125,7 +126,7 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
 
         token = refreshToken;
 
-        if (token == rejectedRefreshToken)
+        if (token == rejectedRefreshToken && baseUrl == rejectedByServer)
             return tokenRejected;
     }
 
@@ -143,6 +144,7 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
 
         const juce::ScopedLock sl (lock);
         rejectedRefreshToken = token;
+        rejectedByServer = baseUrl;
         return tokenRejected;
     }
 
