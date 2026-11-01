@@ -13,6 +13,7 @@ import pytest
 from beanie import PydanticObjectId
 from fastapi.testclient import TestClient
 
+from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
@@ -145,6 +146,23 @@ class TestPublicPool:
         assert served["id"] == str(clip.id)
         assert (served["workspace_id"], served["seed"], served["inference_steps"]) == (None, None, None)
         assert (served["is_owner"], served["content_warning"]) == (False, True)
+
+    async def test_a_signed_in_viewer_sees_their_own_clip_marked(self, client, settings) -> None:
+        viewer = await _owner()
+        mine, theirs = await _clip(viewer, title="Mine"), await _clip(title="Theirs", minutes=1)
+        token = create_access_token(
+            user_id=str(viewer.id), email=viewer.email, subscription_tier=viewer.subscription_tier, settings=settings
+        )
+
+        signed_in = (await client.get(CLIPS_URL, headers={"Authorization": f"Bearer {token}"})).json()["clips"]
+        anonymous = (await client.get(CLIPS_URL)).json()["clips"]
+
+        assert {c["id"]: c["is_owner"] for c in signed_in} == {str(mine.id): True, str(theirs.id): False}
+        assert [c["is_owner"] for c in anonymous] == [False, False]
+
+    async def test_a_bad_token_is_401_not_silently_anonymous(self, client) -> None:
+        resp = await client.get(CLIPS_URL, headers={"Authorization": "Bearer not-a-jwt"})
+        assert resp.status_code == 401
 
     async def test_similar_clips_public_scope_skips_a_banned_owners_clip(self, mongo_db) -> None:
         viewer = await _owner()

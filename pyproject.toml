@@ -68,12 +68,28 @@ dev = [
 ]
 audio-ml-midi = [
     "basic-pitch>=0.3.0",
+    # basic-pitch runs its bundled ONNX model when TensorFlow is absent (#597).
+    "onnxruntime>=1.17",
+    # basic-pitch -> resampy imports pkg_resources, which TensorFlow's tree used to bring in (#597);
+    # setuptools 81 removes it.
+    "setuptools<81",
 ]
 api = [
     "uvicorn[standard]>=0.54.0",
 ]
 s3 = [
     "boto3>=1.43.114",
+]
+
+[tool.uv]
+# #597: basic-pitch 0.4.0 (the latest) requires tensorflow<2.15.1 on Linux, which pins keras 2.14 and protobuf 4,
+# both with open advisories patched only in versions TensorFlow 2.14 can't use. basic-pitch doesn't need it: with
+# TensorFlow absent it picks the ONNX backend (onnxruntime, in the audio-ml-midi extra). Dropping TensorFlow drops
+# keras, protobuf and tensorboard with it. The marker contradicts requires-python, so uv can prove it never applies and
+# leaves TensorFlow out of the lock entirely. Remove this once basic-pitch declares a backend-neutral dependency.
+override-dependencies = [
+    "tensorflow; python_version < '3.11'",
+    "tensorflow-macos; python_version < '3.11'",
 ]
 
 [tool.hatch.build.targets.wheel]

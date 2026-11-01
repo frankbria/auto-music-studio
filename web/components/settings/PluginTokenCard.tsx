@@ -154,7 +154,8 @@ export function PluginTokenCard({
           Paste this into the Token field of the plugin&apos;s Platform panel.
           The plugin uses it to keep itself signed in. It is shown only once
           here — creating another token leaves earlier ones working until you
-          revoke them below, and an unused token expires after 7 days.
+          revoke them below, and an unused token expires after 7 days. You can
+          have up to 10 plugin tokens at a time.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

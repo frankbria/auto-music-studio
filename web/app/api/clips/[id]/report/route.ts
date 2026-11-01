@@ -1,7 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  bodyTooLarge,
+  clientIpHeaders,
+  fetchWithTimeout,
+  readTextCapped,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST /api/v1/clips/{id}/report (US-27.2). Auth required;
 // status/body pass through verbatim (201, 400 own clip, 403 private, 404, 409 duplicate,
@@ -17,6 +22,9 @@ export async function POST(
   }
 
   const { id } = await ctx.params
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -29,7 +37,7 @@ export async function POST(
           "content-type": "application/json",
           ...clientIpHeaders(request),
         },
-        body: await request.text(),
+        body: payload,
       }
     )
   } catch {
