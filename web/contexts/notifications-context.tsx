@@ -89,6 +89,8 @@ export function NotificationsProvider({
   // Bumped on every (re)load, so a "Show older" page requested by a previous
   // session (sign-out, another user, retry) is dropped rather than appended.
   const session = useRef(0)
+  // Bumped by every mark-read, so a poll that left before it doesn't restore the old badge (#566).
+  const readsSent = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -129,6 +131,7 @@ export function NotificationsProvider({
     const token = tokenRef.current
     if (!token) return
     const requestedIn = session.current
+    const readsBefore = readsSent.current
     void fetchNotifications(token)
       .then((page) => {
         if (session.current !== requestedIn) return
@@ -136,9 +139,14 @@ export function NotificationsProvider({
           const seen = new Set(s.items.map((n) => n.id))
           const fresh = page.notifications.filter((n) => !seen.has(n.id))
           const liveUnread = s.items.filter((n) => isLive(n) && !n.read).length
+          // A read sent after this poll left isn't in its count: keep ours rather than undo it.
+          const unread =
+            readsSent.current === readsBefore
+              ? page.unreadCount + liveUnread
+              : s.unread + fresh.filter((n) => !n.read).length
           return {
             items: [...fresh, ...s.items],
-            unread: page.unreadCount + liveUnread,
+            unread,
             hasMore: s.loadFailed ? page.hasMore : s.hasMore,
             loadFailed: false,
           }
@@ -186,6 +194,7 @@ export function NotificationsProvider({
         unread: Math.max(0, s.unread - 1),
       }
     })
+    readsSent.current += 1
     const token = tokenRef.current
     if (token && !id.startsWith(LIVE_PREFIX))
       void markNotificationsRead(token, [id])
@@ -193,6 +202,7 @@ export function NotificationsProvider({
 
   const markAllRead = useCallback(() => {
     setStore((s) => ({ ...s, items: markAllReadIn(s.items), unread: 0 }))
+    readsSent.current += 1
     const token = tokenRef.current
     if (token) void markNotificationsRead(token)
   }, [])

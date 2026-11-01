@@ -367,4 +367,35 @@ describe("NotificationsProvider live inbox (#566)", () => {
 
     await waitFor(() => expect(appealFetches()).toBe(before + 1))
   })
+
+  it("a poll that left before Mark all read doesn't restore the old badge", async () => {
+    const { inbox, fetchMock } = liveInbox([
+      notificationEvent("a"),
+      notificationEvent("b"),
+    ])
+    const { result } = renderStore()
+    await waitFor(() => expect(result.current.unreadCount).toBe(2))
+
+    let answer: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (answer = resolve))
+    )
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    act(() => result.current.markAllRead())
+    await act(async () => {
+      answer(
+        new Response(
+          JSON.stringify({
+            notifications: inbox.first,
+            unread_count: 2,
+            has_more: false,
+          })
+        )
+      )
+    })
+
+    expect(result.current.unreadCount).toBe(0)
+  })
 })
