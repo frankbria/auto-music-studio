@@ -6,6 +6,7 @@ a notice for the creator and a moderation log entry. Status changes are conditio
 on an open appeal, so two admins deciding at once cannot both win.
 """
 
+import logging
 from datetime import datetime
 from typing import Literal
 
@@ -32,6 +33,8 @@ from . import releases as release_service
 from .clips import get_owned_clip
 from .common import coerce_object_id
 from .moderation import after_cursor, encode_cursor, log_action
+
+logger = logging.getLogger(__name__)
 
 AppealDecision = Literal["uphold", "reverse", "request_info"]
 QueueFilter = Literal["open", "all"]
@@ -276,7 +279,11 @@ async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry,
     releases = in_force.details.get("previous_release_visibility")
     if releases is None or not restored:
         return {}
-    return await release_service.restore_releases(clip.id, releases, settings)
+    try:
+        return await release_service.restore_releases(clip, releases, in_force.created_at, settings)
+    except Exception:  # best-effort: the appeal is already decided, so a raise here could never be retried
+        logger.exception("Restoring the releases of clip %s after a reversed removal failed", clip.id)
+        return {"releases_restore_failed": True}
 
 
 def _undo_removal(removal: ModerationLogEntry) -> dict:

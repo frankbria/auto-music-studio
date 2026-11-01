@@ -8,6 +8,7 @@ post-submission edit lock (409).
 """
 
 import logging
+from datetime import datetime
 
 from beanie import PydanticObjectId, UpdateResponse
 from beanie.operators import Eq
@@ -15,8 +16,8 @@ from fastapi import HTTPException, status
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from ..exceptions import DuplicateIdentifierError
-from ..models import Clip, Release, ReleaseStatus, SoundCloudUnshare, User
+from ..exceptions import AccountSuspendedError, DuplicateIdentifierError
+from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus, SoundCloudUnshare, User
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
@@ -307,13 +308,16 @@ async def visible_releases(clip_id: PydanticObjectId) -> dict[str, str]:
     return {str(release.id): release.visibility.value async for release in Release.find(query)}
 
 
-async def restore_releases(clip_id: PydanticObjectId, previous: dict[str, str], settings: ApiSettings) -> dict:
+async def restore_releases(clip: Clip, previous: dict[str, str], removed_at: datetime, settings: ApiSettings) -> dict:
     """Put back the releases a reversed removal made private and re-share their public tracks, best-effort (#582).
 
     The clip's queued un-shares go first, so the poller can't make a track private again after the reversal. A
-    release the owner changed since the removal (no longer private) is left as it is.
+    release the owner changed since the removal (no longer private) is left as it is. A takedown that still applies
+    (the owner's ban, a cover dropped since) keeps everything down, and one landing meanwhile wins.
     """
-    await SoundCloudUnshare.find({"clip_id": clip_id}).delete()
+    if blocked := await _takedown_in_force(clip, removed_at):
+        return {"releases_restore_skipped": blocked}
+    await SoundCloudUnshare.find({"clip_id": clip.id}).delete()
     restored, failed = 0, []
     for release_id, visibility in previous.items():
         release = await _put_back(release_id, visibility)
@@ -321,7 +325,33 @@ async def restore_releases(clip_id: PydanticObjectId, previous: dict[str, str], 
             continue
         restored += 1
         failed += await _reshare_failures(release, settings)
+    await _keep_later_takedowns(clip)
     return _present(releases_restored=restored, soundcloud_reshare_failed=failed)
+
+
+async def _takedown_in_force(clip: Clip, removed_at: datetime) -> str | None:
+    """Why the clip's tracks must stay private even though its removal was reversed, if they must."""
+    owner = await User.get(clip.user_id)
+    if owner is not None and owner.banned_at is not None:
+        return "owner banned"
+    cover_dropped = await ModerationLogEntry.find_one(
+        {
+            "action": "drop",
+            "target_type": "artwork",
+            "details.clip_id": str(clip.id),
+            "details.was_cover": True,
+            "created_at": {"$gt": removed_at},
+        }
+    )
+    return "cover dropped since the removal" if cover_dropped else None
+
+
+async def _keep_later_takedowns(clip: Clip) -> None:
+    """A removal or ban landing while tracks were re-shared un-shares them again; that is all this caller needs."""
+    try:
+        await unshare_if_source_removed(clip.id, clip.user_id)
+    except (HTTPException, AccountSuspendedError):
+        pass
 
 
 async def _put_back(release_id: str, visibility: str) -> Release | None:

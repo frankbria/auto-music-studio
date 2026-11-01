@@ -7,7 +7,7 @@ information. Each outcome records a notice for the creator and a moderation log 
 
 import itertools
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
@@ -24,10 +24,11 @@ from acemusic.api.models import (
     NotificationEvent,
     Release,
     SoundCloudUnshare,
+    User,
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import soundcloud
+from acemusic.api.services import releases as release_service, soundcloud
 from acemusic.api.settings import ApiSettings
 from tests.test_moderation_dashboard_api import _release, _sc_connection
 from tests.users import make_user
@@ -660,3 +661,68 @@ class TestReversalRestoresReleases:
         assert await _visibilities(releases) == ["public", "unlisted", "private"]
         entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
         assert entry.details["soundcloud_reshare_failed"] == ["t-public"]
+
+    async def test_a_banned_owners_releases_and_tracks_stay_down(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        await User.find_one(User.id == clip.user_id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "owner banned"
+
+    async def test_a_cover_dropped_since_the_removal_keeps_the_tracks_down(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        await ModerationLogEntry(
+            actor_id=None,
+            action="drop",
+            target_type="artwork",
+            target_id=str(PydanticObjectId()),
+            details={"clip_id": str(clip.id), "was_cover": True},
+        ).insert()
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "cover dropped since the removal"
+
+    async def test_a_removal_landing_mid_reversal_takes_the_reshared_track_down_again(
+        self, client, settings, soundcloud_stand_in, monkeypatch
+    ):
+        clip, _releases, appeal = await _removed_with_releases(client, settings)
+        real_update = soundcloud.update_track_sharing
+
+        async def share_then_removed(token, track_id, sharing):
+            result = await real_update(token, track_id, sharing)
+            now = datetime.now(timezone.utc)
+            await Clip.find_one(Clip.id == clip.id).update({"$set": {"removed_at": now, "moderation_reviewed_at": now}})
+            return result
+
+        monkeypatch.setattr(soundcloud, "update_track_sharing", share_then_removed)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert soundcloud_stand_in.puts == [("t-public", "public")]
+        queued = await SoundCloudUnshare.find({"clip_id": clip.id}).to_list()
+        assert {row.track_id for row in queued} == {"t-public", "t-unlisted"}
+
+    async def test_a_release_restore_error_is_recorded_not_raised(self, client, settings, monkeypatch):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+
+        async def broken(*_args):
+            raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(release_service, "restore_releases", broken)
+
+        resp = await _decide(client, settings, appeal["id"], "reverse")
+
+        assert resp.status_code == 200
+        assert (await Clip.get(clip.id)).removed_at is None
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_failed"] is True
