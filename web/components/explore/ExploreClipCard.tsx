@@ -86,6 +86,11 @@ export function ExploreClipCard({ clip }: { clip: Clip }) {
             </p>
           )}
           <div className="flex flex-wrap items-center gap-1">
+            {clip.content_warning && (
+              <Badge variant="destructive" className="text-[10px]">
+                Content warning
+              </Badge>
+            )}
             {version && (
               <Badge variant="secondary" className="text-[10px]">
                 {version}

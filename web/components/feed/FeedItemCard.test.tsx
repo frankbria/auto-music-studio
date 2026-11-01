@@ -56,6 +56,24 @@ describe("FeedItemCard", () => {
     }
   })
 
+  it("shows the content-warning badge only on a flagged clip (#578)", () => {
+    const { rerender } = render(
+      <PlayerProvider>
+        <FeedItemCard
+          item={{ ...item, content_warning: true }}
+          active={false}
+        />
+      </PlayerProvider>
+    )
+    expect(screen.getByText("Content warning")).toBeInTheDocument()
+    rerender(
+      <PlayerProvider>
+        <FeedItemCard item={item} active={false} />
+      </PlayerProvider>
+    )
+    expect(screen.queryByText("Content warning")).not.toBeInTheDocument()
+  })
+
   it("auto-plays when active and pauses when not (AC2)", () => {
     const { rerender } = renderCard(true)
     expect(play).toHaveBeenCalled()

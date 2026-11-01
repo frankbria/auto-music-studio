@@ -12,6 +12,15 @@ describe("ExploreClipCard", () => {
     expect(link).toHaveAttribute("href", "/song/abc")
   })
 
+  it("shows the content-warning badge only on a flagged clip (#578)", () => {
+    const { rerender } = render(
+      <ExploreClipCard clip={makeClip({ content_warning: true })} />
+    )
+    expect(screen.getByText("Content warning")).toBeInTheDocument()
+    rerender(<ExploreClipCard clip={makeClip({ content_warning: false })} />)
+    expect(screen.queryByText("Content warning")).not.toBeInTheDocument()
+  })
+
   it("renders engagement stats only when present", () => {
     render(
       <ExploreClipCard
