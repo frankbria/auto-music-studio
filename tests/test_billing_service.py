@@ -84,6 +84,18 @@ class TestSubscriptionFields:
         fields = billing.subscription_fields(_subscription("incomplete", current_period_end=None))
         assert fields["subscription_current_period_end"] is None
 
+    def test_items_ending_apart_take_the_latest_period_end(self) -> None:
+        items = {
+            "object": "list",
+            "data": [{"current_period_end": 1_900_000_000}, {"current_period_end": 1_800_000_000}],
+        }
+        fields = billing.subscription_fields(_subscription("active", items=items))
+        assert fields["subscription_current_period_end"].timestamp() == 1_900_000_000
+
+    def test_a_subscription_with_no_items_has_no_period_end(self) -> None:
+        fields = billing.subscription_fields(_subscription("active", items={"object": "list", "data": []}))
+        assert fields["subscription_current_period_end"] is None
+
     def test_a_deleted_subscription_downgrades(self) -> None:
         fields = billing.subscription_fields(_subscription("canceled"))
         assert fields["subscription_tier"] == tiers.FREE

@@ -128,10 +128,10 @@ def subscription_fields(subscription: dict[str, Any]) -> dict[str, Any]:
 
 
 def _current_period_end(subscription: dict[str, Any]) -> int | None:
-    """Since Stripe API 2025-03-31.basil the period lives on the subscription's items (#646); a single-price
-    subscription has one item, so its period is the subscription's."""
+    """Since Stripe API 2025-03-31.basil the period lives on the subscription's items (#646). Items with different
+    billing anchors can end apart, and access runs until the last of them."""
     items = (subscription.get("items") or {}).get("data") or []
-    return items[0].get("current_period_end") if items else None
+    return max((item["current_period_end"] for item in items if item.get("current_period_end")), default=None)
 
 
 def invoice_subscription_id(invoice: dict[str, Any]) -> str | None:
