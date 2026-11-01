@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST /api/v1/videos/{video_id}/edit (US-22.4).
 // Owner-only, so the Bearer token is required; status/body pass through verbatim
@@ -17,7 +18,8 @@ export async function POST(
   }
 
   const { jobId: videoId } = await ctx.params
-  const body = await request.text()
+  const body = await readTextCapped(request)
+  if (body === null) return bodyTooLarge()
   let res: Response
   try {
     res = await fetch(

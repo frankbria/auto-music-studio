@@ -58,13 +58,11 @@ describe("/api/admin/[...path]", () => {
   })
 
   it("forwards a POST body and the backend's rejection verbatim", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ detail: "Admin access required." }), {
-          status: 403,
-        })
-      )
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Admin access required." }), {
+        status: 403,
+      })
+    )
     vi.stubGlobal("fetch", fetchMock)
 
     const body = JSON.stringify({ action: "ban", user_ids: ["u2"] })
@@ -123,5 +121,24 @@ describe("/api/admin/[...path]", () => {
       ctx(["moderation", "queue"])
     )
     expect(res.status).toBe(502)
+  })
+})
+
+describe("/api/admin/[...path] body cap (#567)", () => {
+  it("413s an over-limit POST body and never reaches the backend", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await POST(
+      req("/api/admin/moderation/users", {
+        method: "POST",
+        headers: { authorization: "Bearer tok" },
+        body: "x".repeat(1024 * 1024 + 1),
+      }),
+      ctx(["moderation", "users"])
+    )
+
+    expect(res.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

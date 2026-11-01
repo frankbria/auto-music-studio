@@ -8,19 +8,20 @@ post-submission edit lock (409).
 """
 
 import logging
+from datetime import datetime
 
-from beanie import PydanticObjectId
+from beanie import PydanticObjectId, UpdateResponse
 from beanie.operators import Eq
 from fastapi import HTTPException, status
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from ..exceptions import DuplicateIdentifierError
-from ..models import Clip, Release, ReleaseStatus, SoundCloudUnshare, User
+from ..exceptions import AccountSuspendedError, DuplicateIdentifierError
+from ..models import Clip, ModerationLogEntry, Release, ReleaseStatus, SoundCloudUnshare, User
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers, screening, users as user_service
+from . import clips as clip_service, identifiers, screening, soundcloud as sc, users as user_service
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
 
@@ -300,6 +301,93 @@ async def unshare_if_source_removed(clip_id: PydanticObjectId, user_id: Pydantic
     if banned:
         user_service.reject_banned(owner)
     clip_service.ensure_not_removed(clip)
+
+
+async def visible_releases(clip_id: PydanticObjectId) -> dict[str, str]:
+    """Each of the clip's non-private releases and its visibility, for a removal to record (#582)."""
+    query = {"clip_id": clip_id, "visibility": {"$ne": VisibilityState.PRIVATE.value}}
+    return {str(release.id): release.visibility.value async for release in Release.find(query)}
+
+
+async def restore_releases(clip: Clip, previous: dict[str, str], removed_at: datetime, settings: ApiSettings) -> dict:
+    """Put back the releases a reversed removal made private and re-share their public tracks, best-effort (#582).
+
+    The clip's queued un-shares go first, so the poller can't make a track private again after the reversal. A
+    release the owner changed since the removal is left as it is. A takedown that still applies (the owner's ban,
+    a dropped cover still on the tracks, text the current rules block) keeps everything down, and one landing
+    meanwhile wins.
+    """
+    if blocked := await _takedown_in_force(clip) or await _blocked_text(clip, previous):
+        return {"releases_restore_skipped": blocked}
+    await SoundCloudUnshare.find({"clip_id": clip.id}).delete()
+    restored, failed = 0, []
+    for release_id, visibility in previous.items():
+        release = await _put_back(release_id, visibility, removed_at)
+        if release is None:
+            continue
+        restored += 1
+        failed += await _reshare_failures(release, settings)
+    await _keep_later_takedowns(clip)
+    return _present(releases_restored=restored, soundcloud_reshare_failed=failed)
+
+
+async def _takedown_in_force(clip: Clip) -> str | None:
+    """Why the clip's tracks must stay private even though its removal was reversed, if they must."""
+    owner = await User.get(clip.user_id)
+    if owner is not None and owner.banned_at is not None:
+        return "owner banned"
+    # Whenever it was dropped, before or after the removal: nothing replaces a track's artwork on SoundCloud (#619).
+    cover_dropped = await ModerationLogEntry.find_one(
+        {"action": "drop", "target_type": "artwork", "details.clip_id": str(clip.id), "details.was_cover": True}
+    )
+    return "cover dropped" if cover_dropped else None
+
+
+async def _blocked_text(clip: Clip, previous: dict[str, str]) -> str | None:
+    """The rules may have changed while the appeal waited: the text going back out is screened again, and
+    flagged text re-queues the clip as any outgoing text does."""
+    releases = await Release.find({"_id": {"$in": [PydanticObjectId(rid) for rid in previous]}}).to_list()
+    texts = screening.clip_texts(clip) + [text for release in releases for text in release_texts(release.model_dump())]
+    try:
+        await clip_service.screen_outgoing(clip, texts)
+    except screening.ContentBlockedError:
+        return "blocked text"
+    return None
+
+
+async def _keep_later_takedowns(clip: Clip) -> None:
+    """A removal or ban landing while tracks were re-shared un-shares them again; that is all this caller needs."""
+    try:
+        await unshare_if_source_removed(clip.id, clip.user_id)
+    except (HTTPException, AccountSuspendedError):
+        pass
+
+
+async def _put_back(release_id: str, visibility: str, removed_at: datetime) -> Release | None:
+    """Set a release the removal made private back to ``visibility``; None if the owner has touched it since, for
+    instance making it private themselves, which the removal's own write is indistinguishable from otherwise."""
+    untouched = {"visibility": VisibilityState.PRIVATE.value, "updated_at": {"$lte": removed_at}}
+    return await Release.find_one({"_id": PydanticObjectId(release_id), **untouched}).update(
+        {"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT
+    )
+
+
+async def _reshare_failures(release: Release, settings: ApiSettings) -> list[str]:
+    """Share a public release's SoundCloud track again; the track id, if SoundCloud refused."""
+    if release.visibility != VisibilityState.PUBLIC or not release.soundcloud_track_id:
+        return []
+    try:
+        connection = await sc.get_valid_connection(str(release.user_id), settings)
+        await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, "public")
+    except Exception:  # best-effort: the appeal is already decided, so nothing may stop the rest of the reversal
+        logger.warning("Re-sharing SoundCloud track %s of release %s failed", release.soundcloud_track_id, release.id)
+        return [release.soundcloud_track_id]
+    return []
+
+
+def _present(**fields: int | list[str]) -> dict:
+    """The fields worth a log entry: a zero count or an empty list says nothing."""
+    return {key: value for key, value in fields.items() if value}
 
 
 async def unshare_releases(release_query: dict, clip_query: dict) -> dict:

@@ -44,18 +44,22 @@ export const DEFAULT_SEARCH: SearchParams = {
 /** One page of public clips matching `params`; pass the previous page's cursor for the next. */
 export function searchClips(
   params: SearchParams,
-  cursor?: string | null
+  cursor?: string | null,
+  token?: string | null
 ): Promise<DiscoverPage> {
-  return fetchPublicClips({
-    q: params.q.trim().slice(0, QUERY_MAX_LENGTH),
-    style: params.style,
-    bpm_min: params.bpmMin,
-    bpm_max: params.bpmMax,
-    key: params.key,
-    model: params.model,
-    sort: params.sort,
-    cursor,
-  })
+  return fetchPublicClips(
+    {
+      q: params.q.trim().slice(0, QUERY_MAX_LENGTH),
+      style: params.style,
+      bpm_min: params.bpmMin,
+      bpm_max: params.bpmMax,
+      key: params.key,
+      model: params.model,
+      sort: params.sort,
+      cursor,
+    },
+    token
+  )
 }
 
 /** A BPM from the URL; a negative one is dropped, since the API rejects it with a 422. */

@@ -40,19 +40,25 @@ describe("forwardEdit", () => {
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain("/api/v1/clips/c/crop")
     expect(opts.method).toBe("POST")
-    expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
     expect(opts.body).toBe('{"start":"0s"}')
   })
 
   it("passes a 402 insufficient-credits body through verbatim", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({ detail: { error: "insufficient_credits", required: 1 } }),
-          { status: 402 }
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              detail: { error: "insufficient_credits", required: 1 },
+            }),
+            { status: 402 }
+          )
         )
-      )
     )
     const res = await forwardEdit(
       req({ headers: { authorization: "Bearer tok" }, body: "{}" }),
@@ -96,7 +102,9 @@ describe("route handlers", () => {
   it("crop route forwards to the crop op", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ job_id: "j" }), { status: 202 }))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "j" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
     const res = await cropPOST(
       req({ headers: { authorization: "Bearer tok" }, body: "{}" }),
@@ -109,10 +117,15 @@ describe("route handlers", () => {
   it("mashup route forwards to /api/v1/mashup", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ job_id: "m" }), { status: 202 }))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "m" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
     const res = await mashupPOST(
-      req({ headers: { authorization: "Bearer tok" }, body: '{"clip_ids":["a","b"]}' })
+      req({
+        headers: { authorization: "Bearer tok" },
+        body: '{"clip_ids":["a","b"]}',
+      })
     )
     expect(res.status).toBe(202)
     expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/mashup")
@@ -125,7 +138,7 @@ describe("route handlers", () => {
 })
 
 import { POST as versionPOST } from "@/app/api/clips/[id]/version/route"
-import { forwardEditUpload } from "@/lib/edit-proxy"
+import { VERSION_UPLOAD_LIMIT, forwardEditUpload } from "@/lib/edit-proxy"
 
 describe("forwardEditUpload", () => {
   function uploadReq(init: RequestInit = {}): NextRequest {
@@ -143,7 +156,9 @@ describe("forwardEditUpload", () => {
   it("forwards the raw body and preserves the multipart content-type", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ job_id: "v" }), { status: 202 }))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "v" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
     const res = await forwardEditUpload(
@@ -159,7 +174,9 @@ describe("forwardEditUpload", () => {
     expect(res.status).toBe(202)
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain("/api/v1/clips/c/version")
-    expect((opts.headers as Record<string, string>).authorization).toBe("Bearer tok")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
     expect((opts.headers as Record<string, string>)["content-type"]).toBe(
       "multipart/form-data; boundary=xyz"
     )
@@ -177,7 +194,9 @@ describe("forwardEditUpload", () => {
   it("version route forwards to the version op with the url-encoded id", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ job_id: "v" }), { status: 202 }))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "v" }), { status: 202 })
+      )
     vi.stubGlobal("fetch", fetchMock)
     const res = await versionPOST(
       uploadReq({ headers: { authorization: "Bearer tok" }, body: "x" }),
@@ -185,5 +204,59 @@ describe("forwardEditUpload", () => {
     )
     expect(res.status).toBe(202)
     expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/clips/abc/version")
+  })
+})
+
+describe("body caps (#567)", () => {
+  it("forwardEdit 413s an over-limit JSON body and never reaches the backend", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    const res = await forwardEdit(
+      new Request("http://localhost/api/mashup", {
+        method: "POST",
+        headers: { authorization: "Bearer tok" },
+        body: "x".repeat(1024 * 1024 + 1),
+      }) as unknown as NextRequest,
+      "/api/v1/mashup"
+    )
+    expect(res.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("forwardEditUpload takes a body far past the JSON cap, up to its own limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job_id: "v" }), { status: 202 })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+    const twoMiB = new Uint8Array(2 * 1024 * 1024)
+    const res = await forwardEditUpload(
+      new Request("http://localhost/api/clips/c/version", {
+        method: "POST",
+        headers: { authorization: "Bearer tok", "content-type": "audio/wav" },
+        body: twoMiB,
+      }) as unknown as NextRequest,
+      "/api/v1/clips/c/version"
+    )
+    expect(res.status).toBe(202)
+  })
+
+  it("forwardEditUpload 413s a declared size over its limit", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    const res = await forwardEditUpload(
+      new Request("http://localhost/api/clips/c/version", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer tok",
+          "content-length": String(VERSION_UPLOAD_LIMIT + 1),
+        },
+        body: "x",
+      }) as unknown as NextRequest,
+      "/api/v1/clips/c/version"
+    )
+    expect(res.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

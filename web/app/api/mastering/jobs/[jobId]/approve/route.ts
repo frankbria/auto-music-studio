@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST /api/v1/mastering/jobs/{job_id}/approve (US-21.2).
 // Promotes a chosen preview to the final master. Status/body pass through
@@ -16,6 +17,9 @@ export async function POST(
   }
 
   const { jobId } = await ctx.params
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetch(
@@ -27,7 +31,7 @@ export async function POST(
           "content-type": "application/json",
           accept: "application/json",
         },
-        body: await request.text(),
+        body: payload,
       }
     )
   } catch {

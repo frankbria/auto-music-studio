@@ -6,7 +6,10 @@ information. Each outcome records a notice for the creator and a moderation log 
 """
 
 import itertools
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -14,8 +17,20 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, ClipAppeal, ModerationLogEntry, NotificationEvent, VisibilityState, Workspace
+from acemusic.api.models import (
+    Clip,
+    ClipAppeal,
+    ModerationLogEntry,
+    NotificationEvent,
+    Release,
+    SoundCloudUnshare,
+    User,
+    VisibilityState,
+    Workspace,
+)
+from acemusic.api.services import releases as release_service, screening, soundcloud
 from acemusic.api.settings import ApiSettings
+from tests.test_moderation_dashboard_api import _release, _sc_connection
 from tests.users import make_user
 
 CLIPS_URL = f"{API_V1_PREFIX}/clips"
@@ -522,3 +537,240 @@ class TestPagination:
         resp = await client.get(APPEALS_URL, params={"status": "all", "cursor": cursor}, headers=admin)
 
         assert resp.status_code == 422
+
+
+class _SoundCloudStandIn:
+    """A real HTTP server in place of api.soundcloud.com's ``PUT /tracks/{id}``: records each call, answers ``status``."""
+
+    def __init__(self) -> None:
+        self.puts: list[tuple[str, str]] = []
+        self.status = 200
+        stand_in = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_PUT(self) -> None:
+                body = parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode())
+                stand_in.puts.append((self.path.rsplit("/", 1)[-1], body["track[sharing]"][0]))
+                self.send_response(stand_in.status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+
+@pytest.fixture
+def soundcloud_stand_in(monkeypatch):
+    stand_in = _SoundCloudStandIn()
+    monkeypatch.setattr(soundcloud, "SOUNDCLOUD_UPLOAD_URL", f"http://127.0.0.1:{stand_in.server.server_port}/tracks")
+    yield stand_in
+    stand_in.server.shutdown()
+
+
+async def _removed_with_releases(client, settings):
+    """A public clip with a public, an unlisted and a private release (the first two on SoundCloud), then removed."""
+    owner = await _user()
+    await _sc_connection(owner)
+    clip = await _clip(owner)
+    public = await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="t-public")
+    unlisted = await _release(clip, visibility=VisibilityState.UNLISTED, soundcloud_track_id="t-unlisted")
+    private = await _release(clip, visibility=VisibilityState.PRIVATE)
+    await _moderate(client, settings, "remove", clip)
+    resp = await _appeal(client, settings, owner, clip)
+    assert resp.status_code == 201, resp.text
+    return clip, (public, unlisted, private), resp.json()
+
+
+async def _visibilities(releases) -> list[str]:
+    return [(await Release.get(r.id)).visibility.value for r in releases]
+
+
+@pytest.mark.integration
+class TestReversalRestoresReleases:
+    async def test_reverse_restores_release_visibility_and_reshares_the_public_track(
+        self, client, settings, soundcloud_stand_in
+    ):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["public", "unlisted", "private"]
+        # The poller must not make the track private again after the reversal.
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 0
+        # SoundCloud has only public/private: the unlisted release's track stays private.
+        assert soundcloud_stand_in.puts == [("t-public", "public")]
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restored"] == 2
+        assert "soundcloud_reshare_failed" not in entry.details
+
+    async def test_a_failed_reshare_is_recorded_and_the_release_still_restored(
+        self, client, settings, soundcloud_stand_in
+    ):
+        soundcloud_stand_in.status = 500
+        _clip_, releases, appeal = await _removed_with_releases(client, settings)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["public", "unlisted", "private"]
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["soundcloud_reshare_failed"] == ["t-public"]
+
+    async def test_releases_of_a_removal_logged_before_the_snapshot_stay_private(
+        self, client, settings, soundcloud_stand_in
+    ):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        await ModerationLogEntry.find({"target_id": str(clip.id), "action": "remove"}).update(
+            {"$unset": {"details.previous_release_visibility": ""}}
+        )
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert soundcloud_stand_in.puts == []
+
+    async def test_a_release_the_owner_changed_since_the_removal_is_left_alone(
+        self, client, settings, soundcloud_stand_in
+    ):
+        clip, (public, unlisted, private), appeal = await _removed_with_releases(client, settings)
+        await Release.find_one(Release.id == unlisted.id).update({"$set": {"title": "Renamed"}})
+        await Release.find_one(Release.id == public.id).update({"$set": {"visibility": "unlisted"}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        # Only a release still private (as the removal left it) is put back.
+        assert await _visibilities((public, unlisted, private)) == ["unlisted", "unlisted", "private"]
+        assert soundcloud_stand_in.puts == []
+
+    async def test_an_unexpected_reshare_error_is_recorded_not_raised(self, client, settings, monkeypatch):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+
+        async def broken(*_args):
+            raise RuntimeError("connection pool exhausted")
+
+        # The appeal is marked reversed before the re-share, so an error escaping here could never be retried.
+        monkeypatch.setattr(soundcloud, "get_valid_connection", broken)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["public", "unlisted", "private"]
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["soundcloud_reshare_failed"] == ["t-public"]
+
+    async def test_a_banned_owners_releases_and_tracks_stay_down(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        await User.find_one(User.id == clip.user_id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "owner banned"
+
+    async def test_a_cover_dropped_since_the_removal_keeps_the_tracks_down(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        await ModerationLogEntry(
+            actor_id=None,
+            action="drop",
+            target_type="artwork",
+            target_id=str(PydanticObjectId()),
+            details={"clip_id": str(clip.id), "was_cover": True},
+        ).insert()
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert await SoundCloudUnshare.find({"clip_id": clip.id}).count() == 2
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "cover dropped"
+
+    async def test_a_removal_landing_mid_reversal_takes_the_reshared_track_down_again(
+        self, client, settings, soundcloud_stand_in, monkeypatch
+    ):
+        clip, _releases, appeal = await _removed_with_releases(client, settings)
+        real_update = soundcloud.update_track_sharing
+
+        async def share_then_removed(token, track_id, sharing):
+            result = await real_update(token, track_id, sharing)
+            now = datetime.now(timezone.utc)
+            await Clip.find_one(Clip.id == clip.id).update({"$set": {"removed_at": now, "moderation_reviewed_at": now}})
+            return result
+
+        monkeypatch.setattr(soundcloud, "update_track_sharing", share_then_removed)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert soundcloud_stand_in.puts == [("t-public", "public")]
+        queued = await SoundCloudUnshare.find({"clip_id": clip.id}).to_list()
+        assert {row.track_id for row in queued} == {"t-public", "t-unlisted"}
+
+    async def test_a_release_restore_error_is_recorded_not_raised(self, client, settings, monkeypatch):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+
+        async def broken(*_args):
+            raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(release_service, "restore_releases", broken)
+
+        resp = await _decide(client, settings, appeal["id"], "reverse")
+
+        assert resp.status_code == 200
+        assert (await Clip.get(clip.id)).removed_at is None
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_failed"] is True
+
+    async def test_a_cover_dropped_before_the_removal_keeps_the_tracks_down(
+        self, client, settings, soundcloud_stand_in
+    ):
+        owner = await _user()
+        await _sc_connection(owner)
+        clip = await _clip(owner)
+        releases = [await _release(clip, visibility=VisibilityState.PUBLIC, soundcloud_track_id="t-public")]
+        await ModerationLogEntry(
+            actor_id=None,
+            action="drop",
+            target_type="artwork",
+            target_id=str(PydanticObjectId()),
+            details={"clip_id": str(clip.id), "was_cover": True},
+        ).insert()
+        await _moderate(client, settings, "remove", clip)
+        appeal = (await _appeal(client, settings, owner, clip)).json()
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private"]
+        assert soundcloud_stand_in.puts == []
+
+    async def test_text_the_rules_now_block_is_not_shared_again(self, client, settings, soundcloud_stand_in):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+        rules = await screening.get_rules()
+        await screening.save_rules(
+            rules.model_copy(
+                update={"rules": [*rules.rules, screening.Rule(term="tune", category="x", action="block")]}
+            )
+        )
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["private", "private", "private"]
+        assert soundcloud_stand_in.puts == []
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["releases_restore_skipped"] == "blocked text"
+
+    async def test_a_release_the_owner_made_private_since_stays_private(self, client, settings, soundcloud_stand_in):
+        clip, (public, unlisted, private), appeal = await _removed_with_releases(client, settings)
+        # The owner sets the public release private themselves while the appeal waits.
+        await Release.find_one(Release.id == public.id).update({"$set": {"updated_at": datetime.now(timezone.utc)}})
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities((public, unlisted, private)) == ["private", "unlisted", "private"]
+        assert soundcloud_stand_in.puts == []

@@ -9,7 +9,9 @@ import {
   clipRequests,
   discoverPage,
   stubDiscoverFetch,
+  stubViewerAwareDiscover,
 } from "@/test/discover-api"
+import { SignedIn } from "@/test/signed-in"
 
 const params = (over: Partial<SearchParams> = {}): SearchParams => ({
   ...DEFAULT_SEARCH,
@@ -196,5 +198,31 @@ describe("SearchView", () => {
     expect(onChange).not.toHaveBeenCalled()
     act(() => vi.advanceTimersByTime(300))
     expect(onChange).toHaveBeenCalledWith({ q: "jazz" })
+  })
+})
+
+describe("SearchView viewer ownership (#653)", () => {
+  it("sends the viewer's token and offers Report only on someone else's clip", async () => {
+    const fetchMock = stubViewerAwareDiscover(
+      [
+        makeClip({ id: "mine", title: "Mine" }),
+        makeClip({ id: "theirs", title: "Theirs" }),
+      ],
+      "mine"
+    )
+    render(
+      <SignedIn>
+        <SearchView params={params({ q: "night" })} onChange={vi.fn()} />
+      </SignedIn>
+    )
+
+    await screen.findByText("Theirs")
+    expect(screen.getAllByRole("button", { name: /report/i })).toHaveLength(1)
+    const search = fetchMock.mock.calls.find(([url]) =>
+      String(url).startsWith("/api/discover/clips")
+    )
+    expect(new Headers(search?.[1]?.headers).get("authorization")).toBe(
+      "Bearer tok"
+    )
   })
 })
