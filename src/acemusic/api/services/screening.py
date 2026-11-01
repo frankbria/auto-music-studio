@@ -283,10 +283,13 @@ def _phrase(term: str, leet: bool) -> re.Pattern[str]:
 _LETTER = re.compile(r"[^\W\d_]")
 
 
-def _found(term: str, leet: bool, text: str) -> bool:
+def _counts(term: str, leet: bool, matched: str) -> bool:
     """Under leet, a term with letters needs a letter in the match too: "to" must not match "70" (#561)."""
-    needs_letter = leet and _LETTER.search(term)
-    return any(not needs_letter or _LETTER.search(m.group()) for m in _phrase(term, leet).finditer(text))
+    return not (leet and _LETTER.search(term)) or bool(_LETTER.search(matched))
+
+
+def _found(term: str, leet: bool, text: str) -> bool:
+    return any(_counts(term, leet, m.group()) for m in _phrase(term, leet).finditer(text))
 
 
 def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult:
@@ -297,7 +300,8 @@ def match(rules: ScreeningRules, texts: Iterable[str | None]) -> ScreeningResult
     for allowed in rules.allow_terms:
         if _words(allowed):
             # Replaced by the field joiner, which no pattern spans: a space would let "white [house] power" join up.
-            text = _phrase(allowed, leet).sub(" | ", text)
+            # The same letter rule as rule terms (#614): an allow term "to" must not erase, and so hide, "70".
+            text = _phrase(allowed, leet).sub(lambda m: " | " if _counts(allowed, leet, m.group()) else m.group(), text)
 
     blocked: list[str] = []
     flagged: list[str] = []
@@ -333,15 +337,29 @@ async def get_rules() -> ScreeningRules:
 async def save_rules(rules: ScreeningRules, fields: set[str] | None = None) -> ScreeningRules:
     """Write ``fields`` (all by default) atomically and return what is stored. The other fields only seed a
     first save, so a PATCH can't undo a concurrent save of a field it wasn't sent."""
+    return (await swap_rules(rules, fields))[1]
+
+
+def _partial_upsert(values: dict, sent: Iterable[str]) -> dict:
+    """Writes the sent fields; the rest only seed a first save."""
+    return {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}}
+
+
+async def swap_rules(rules: ScreeningRules, fields: set[str] | None = None) -> tuple[ScreeningRules, ScreeningRules]:
+    """``save_rules``, also returning what the write replaced: both come from the one atomic write, so an audit
+    entry's before and after bracket exactly this save, whatever landed in between (#614)."""
     values = rules.model_dump()
     sent = values.keys() if fields is None else fields
-    stored = await ScreeningRulesDocument.get_pymongo_collection().find_one_and_update(
+    replaced = await ScreeningRulesDocument.get_pymongo_collection().find_one_and_update(
         {"key": "global"},
-        {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}},
+        _partial_upsert(values, sent),
         upsert=True,
-        return_document=ReturnDocument.AFTER,
+        return_document=ReturnDocument.BEFORE,
     )
-    return ScreeningRules.model_validate(stored)
+    if replaced is None:
+        return DEFAULT_RULES, rules
+    before = ScreeningRules.model_validate(replaced)
+    return before, before.model_copy(update={k: getattr(rules, k) for k in sent})
 
 
 async def flag_sources(texts: dict[str, str | None]) -> list[str]:
