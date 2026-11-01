@@ -91,6 +91,9 @@ export function NotificationsProvider({
   const session = useRef(0)
   // Bumped by every mark-read, so a poll that left before it doesn't restore the old badge (#566).
   const readsSent = useRef(0)
+  // Bumped by "Mark all as read", which the server applies to every unread notice, including one a poll
+  // that left before it is about to bring in (#566).
+  const allReadsSent = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -132,12 +135,16 @@ export function NotificationsProvider({
     if (!token) return
     const requestedIn = session.current
     const readsBefore = readsSent.current
+    const allReadsBefore = allReadsSent.current
     void fetchNotifications(token)
       .then((page) => {
         if (session.current !== requestedIn) return
         setStore((s) => {
           const seen = new Set(s.items.map((n) => n.id))
-          const fresh = page.notifications.filter((n) => !seen.has(n.id))
+          const markedAllSince = allReadsSent.current !== allReadsBefore
+          const fresh = page.notifications
+            .filter((n) => !seen.has(n.id))
+            .map((n) => (markedAllSince ? { ...n, read: true } : n))
           const liveUnread = s.items.filter((n) => isLive(n) && !n.read).length
           // A read sent after this poll left isn't in its count: keep ours rather than undo it.
           const unread =
@@ -203,6 +210,7 @@ export function NotificationsProvider({
   const markAllRead = useCallback(() => {
     setStore((s) => ({ ...s, items: markAllReadIn(s.items), unread: 0 }))
     readsSent.current += 1
+    allReadsSent.current += 1
     const token = tokenRef.current
     if (token) void markNotificationsRead(token)
   }, [])

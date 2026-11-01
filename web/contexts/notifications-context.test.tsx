@@ -388,8 +388,8 @@ describe("NotificationsProvider live inbox (#566)", () => {
       answer(
         new Response(
           JSON.stringify({
-            notifications: inbox.first,
-            unread_count: 2,
+            notifications: [notificationEvent("arrived"), ...inbox.first],
+            unread_count: 3,
             has_more: false,
           })
         )
@@ -397,5 +397,9 @@ describe("NotificationsProvider live inbox (#566)", () => {
     })
 
     expect(result.current.unreadCount).toBe(0)
+    // Mark all read on the server covered the notice this poll brought in, too.
+    expect(
+      result.current.notifications.find((n) => n.id === "arrived")?.read
+    ).toBe(true)
   })
 })
