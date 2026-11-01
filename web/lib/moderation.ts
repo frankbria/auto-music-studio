@@ -49,6 +49,8 @@ export type ModerationLogEntry = {
   reason: string | null
   details: Record<string, unknown>
   created_at: string
+  /** A video unpublish Restore can still lift: that video's latest, while it is still down (#624). */
+  restorable: boolean
 }
 
 export type ClipAction = "approve" | "remove" | "flag"

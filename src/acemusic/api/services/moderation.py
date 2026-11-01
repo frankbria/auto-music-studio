@@ -366,24 +366,9 @@ async def act_on_content(
     doc = await _CONTENT_DOCS[target_type].get(oid)
     if doc is None:
         return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
-    now = utcnow()
-    details: dict = {}
-    notice: tuple[str, dict] | None = None
-    if action == "drop":
-        details = await _drop_artwork(doc)
-        notice = ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
-    elif action == "restore":
-        if refused := await _restore_video(doc):
-            return ActionResult(ok=False, detail=refused)
-        notice = ("moderation_video_restored", {"video_id": str(oid)})
-    else:
-        updates: dict = {"moderation_reviewed_at": now}
-        if action == "unpublish":
-            details["was_published"] = doc.published
-            if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
-                notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-            updates.update(published=False, removed_at=await _unpublish_stamp(doc, now))
-        await doc.set(updates)
+    refused, details, notice = await _CONTENT_HANDLERS[action](doc, utcnow())
+    if refused:
+        return ActionResult(ok=False, detail=refused)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
     # already stamped, lifted or deleted), so a failed insert must not report the action as failed.
@@ -393,6 +378,64 @@ async def act_on_content(
         except Exception:
             logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+# Each content action: (refusal, log details, owner notice). A refusal means nothing was written or logged.
+_ContentOutcome = tuple[str | None, dict, tuple[str, dict] | None]
+
+
+async def _approve_content(doc: Video | ArtworkOption | VoiceModel, now: datetime) -> _ContentOutcome:
+    await doc.set({"moderation_reviewed_at": now})
+    return None, {}, None
+
+
+async def _unpublish_content(video: Video, now: datetime) -> _ContentOutcome:
+    details = {"was_published": video.published}
+    if not await _take_down_video(video, now):  # already down, or a concurrent unpublish notified (#624)
+        return None, details, None
+    return None, details, ("moderation_video_unpublished", {"video_id": str(video.id)})
+
+
+async def _restore_content(video: Video, _now: datetime) -> _ContentOutcome:
+    if refused := await _restore_video(video):
+        return refused, {}, None
+    return None, {}, ("moderation_video_restored", {"video_id": str(video.id)})
+
+
+async def _drop_content(option: ArtworkOption, _now: datetime) -> _ContentOutcome:
+    details = await _drop_artwork(option)
+    if details is None:  # a concurrent drop got there first and has logged and notified (#624)
+        return "Artwork option not found.", {}, None
+    return None, details, ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
+
+
+_CONTENT_HANDLERS = {
+    "approve": _approve_content,
+    "unpublish": _unpublish_content,
+    "restore": _restore_content,
+    "drop": _drop_content,
+}
+
+
+async def _take_down_video(video: Video, now: datetime) -> bool:
+    """Unpublish and stamp the takedown; True only for the write that took the video down (#624).
+
+    Conditional on the video still being up, so of two concurrent unpublishes one notifies the owner. A video
+    already down (or taken down meanwhile) is re-read, so its stamp is kept rather than overwritten.
+    """
+    taken_down = await Video.find({"_id": video.id, "removed_at": None}).update(
+        {"$set": {"published": False, "removed_at": now, "moderation_reviewed_at": now}}
+    )
+    if taken_down.modified_count:
+        return True
+    current = await Video.find_one({"_id": video.id})
+    if current is None:
+        return False
+    if current.removed_at is None:  # restored since the write above: this takedown is new, so it notifies
+        return await _take_down_video(current, now)
+    stamp = await _unpublish_stamp(current, now)
+    await current.set({"published": False, "removed_at": stamp, "moderation_reviewed_at": now})
+    return False
 
 
 async def _unpublish_stamp(video: Video, now: datetime) -> datetime:
@@ -435,15 +478,20 @@ async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str
     ).insert()
 
 
-async def _drop_artwork(option: ArtworkOption) -> dict:
-    """Delete a generated cover option, and clear the clip's cover if it was that option."""
+async def _drop_artwork(option: ArtworkOption) -> dict | None:
+    """Delete a generated cover option, and clear the clip's cover if it was that option.
+
+    None when a concurrent drop deleted it first: that drop logs and notifies, so this one doesn't (#624).
+    """
     queued: list[str] = []
     is_cover = await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}) is not None
     if is_cover:
         # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it. Queued
         # before anything is deleted, so a failure here leaves the drop retryable.
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
-    await option.delete()
+    deleted = await ArtworkOption.get_pymongo_collection().delete_one({"_id": option.id})
+    if not deleted.deleted_count:
+        return None
     cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
         {"$set": {"artwork_path": None}}
     )
@@ -451,14 +499,18 @@ async def _drop_artwork(option: ArtworkOption) -> dict:
         # And again once cleared: an upload that recorded its track in between still saw the cover. Anything
         # recorded from here on sees the cover gone and queues itself (routers/distribution.soundcloud_upload).
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
-    try:
-        await asyncio.to_thread(get_storage_backend().delete, option.storage_path)
-    except Exception:  # best-effort: the option can no longer be selected or served either way
-        logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
+    await _delete_artwork_object(option.storage_path)
     details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
     if queued:
         details["soundcloud_unshare_queued"] = queued
     return details
+
+
+async def _delete_artwork_object(path: str) -> None:
+    try:
+        await asyncio.to_thread(get_storage_backend().delete, path)
+    except Exception:  # best-effort: the option can no longer be selected or served either way
+        logger.warning("Failed to delete dropped artwork object %s", path)
 
 
 async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
@@ -561,6 +613,8 @@ class LogItem(BaseModel):
     reason: str | None
     details: dict
     created_at: datetime
+    # A video unpublish Restore can still lift: the video's latest, while it is still down (#624).
+    restorable: bool = False
 
 
 async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem], str | None]:
@@ -573,6 +627,7 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
     )
     page = entries[:limit]
     actors, labels = await _log_names(page)
+    restorable = await _restorable_unpublishes(page)
     items = [
         LogItem(
             id=str(e.id),
@@ -585,11 +640,45 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
             reason=e.reason,
             details=e.details,
             created_at=e.created_at,
+            restorable=str(e.id) in restorable,
         )
         for e in page
     ]
     more = len(entries) > limit
     return items, encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
+
+
+def _is_video_unpublish(entry: ModerationLogEntry) -> bool:
+    return entry.action == "unpublish" and entry.target_type == "video"
+
+
+def _unpublished_video_ids(entries: list[ModerationLogEntry]) -> list[PydanticObjectId]:
+    ids = {e.target_id for e in entries if _is_video_unpublish(e)}
+    return [oid for oid in map(coerce_object_id, ids) if oid is not None]
+
+
+async def _restorable_videos(oids: list[PydanticObjectId]) -> set[str]:
+    """Of these videos, the ones down whose owner isn't banned: Restore refuses a banned owner's."""
+    videos = await Video.find({"_id": {"$in": oids}, "removed_at": {"$ne": None}}).to_list()
+    owners = list({v.user_id for v in videos})
+    banned = {u.id for u in await User.find({"_id": {"$in": owners}, "banned_at": {"$ne": None}}).to_list()}
+    return {str(v.id) for v in videos if v.user_id not in banned}
+
+
+async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
+    """The page's video unpublish entries in force: each still-down video's latest unpublish."""
+    oids = _unpublished_video_ids(entries)
+    if not oids:
+        return set()
+    down = await _restorable_videos(oids)
+    latest = await ModerationLogEntry.aggregate(
+        [
+            {"$match": {"target_type": "video", "action": "unpublish", "target_id": {"$in": sorted(down)}}},
+            {"$sort": {"created_at": -1, "_id": -1}},
+            {"$group": {"_id": "$target_id", "entry_id": {"$first": "$_id"}}},
+        ]
+    ).to_list()
+    return {str(row["entry_id"]) for row in latest}
 
 
 async def _log_names(

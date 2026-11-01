@@ -496,6 +496,131 @@ class TestVideoRestore:
 
 
 @pytest.mark.integration
+class TestOneOutcomePerTakedown:
+    """#624: Restore is offered only on the takedown in force, and a racing action never notifies twice."""
+
+    async def _log(self, client, admin, settings) -> list[dict]:
+        resp = await client.get(LOG_URL, headers=_auth(admin, settings))
+        assert resp.status_code == 200, resp.text
+        return resp.json()["entries"]
+
+    async def test_only_the_latest_unpublish_of_a_video_still_down_is_restorable(self, client, settings):
+        admin = await _admin()
+        video = await _video(published=True)
+        other = await _video(published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id], reason="first")
+        await _act(client, admin, settings, "video", "unpublish", [video.id], reason="second")
+        await _act(client, admin, settings, "video", "unpublish", [other.id], reason="other")
+
+        restorable = {e["reason"]: e["restorable"] for e in await self._log(client, admin, settings)}
+        assert restorable == {"first": False, "second": True, "other": True}
+
+        await _act(client, admin, settings, "video", "restore", [video.id])
+        restorable = {
+            e["reason"]: e["restorable"] for e in await self._log(client, admin, settings) if e["reason"] is not None
+        }
+        assert restorable == {"first": False, "second": False, "other": True}
+
+    async def test_a_concurrent_unpublish_notifies_the_owner_once(self, client, settings, monkeypatch):
+        admin = await _admin()
+        video = await _video(published=True)
+        real_get = Video.get
+        raced = False
+
+        async def another_unpublish_lands_after_the_read(*args, **kwargs):
+            nonlocal raced
+            doc = await real_get(*args, **kwargs)
+            if not raced:
+                raced = True
+                await moderation.act_on_content(str(admin.id), "video", "unpublish", str(video.id), "racing")
+            return doc
+
+        monkeypatch.setattr(Video, "get", another_unpublish_lands_after_the_read)
+
+        [result] = await _act(client, admin, settings, "video", "unpublish", [video.id])
+
+        assert raced and result["ok"]
+        notices = await NotificationEvent.find({"event_type": "moderation_video_unpublished"}).to_list()
+        assert len(notices) == 1
+        assert (await real_get(video.id)).removed_at is not None
+
+    async def test_a_banned_owners_unpublish_is_not_restorable(self, client, settings):
+        admin = await _admin()
+        owner = await _user()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id], reason="down")
+        await moderation.act_on_user(str(admin.id), "ban", str(owner.id), "banned")
+
+        [entry] = [e for e in await self._log(client, admin, settings) if e["reason"] == "down"]
+        assert entry["restorable"] is False
+
+    async def test_an_unpublish_that_lost_to_one_a_restore_then_lifted_takes_down_and_notifies(
+        self, client, settings, monkeypatch
+    ):
+        """#624 review: the losing unpublish re-reads the video; if a restore lifted the winner's takedown meanwhile,
+        this unpublish takes it down again, and its owner hears about it."""
+        admin = await _admin()
+        video = await _video(published=True)
+        real_get, real_find_one = Video.get, Video.find_one
+        stage = 0
+
+        async def another_unpublish_lands_after_the_read(*args, **kwargs):
+            nonlocal stage
+            doc = await real_get(*args, **kwargs)
+            if stage == 0:
+                stage = -1  # Video.get reads through find_one, so arm the restore only once the winner is done
+                await moderation.act_on_content(str(admin.id), "video", "unpublish", str(video.id), "winner")
+                stage = 1
+            return doc
+
+        def a_restore_lands_before_the_reread(*args, **kwargs):
+            nonlocal stage
+            query = real_find_one(*args, **kwargs)
+            if stage != 1:
+                return query
+
+            async def restored_first():
+                nonlocal stage
+                stage = 2
+                await moderation.act_on_content(str(admin.id), "video", "restore", str(video.id), "restored")
+                return await query
+
+            return restored_first()
+
+        monkeypatch.setattr(Video, "get", another_unpublish_lands_after_the_read)
+        monkeypatch.setattr(Video, "find_one", staticmethod(a_restore_lands_before_the_reread))
+
+        [result] = await _act(client, admin, settings, "video", "unpublish", [video.id], reason="loser")
+
+        assert stage == 2 and result["ok"]
+        assert (await real_get(video.id)).removed_at is not None
+        unpublished = await NotificationEvent.find({"event_type": "moderation_video_unpublished"}).to_list()
+        assert len(unpublished) == 2
+
+    async def test_a_concurrent_drop_logs_and_notifies_once(self, client, settings, monkeypatch):
+        admin = await _admin()
+        option, _clip_ = await _artwork()
+        real_get = ArtworkOption.get
+        raced = False
+
+        async def another_drop_lands_after_the_read(*args, **kwargs):
+            nonlocal raced
+            doc = await real_get(*args, **kwargs)
+            if not raced:
+                raced = True
+                await moderation.act_on_content(str(admin.id), "artwork", "drop", str(option.id), "racing")
+            return doc
+
+        monkeypatch.setattr(ArtworkOption, "get", another_drop_lands_after_the_read)
+
+        [result] = await _act(client, admin, settings, "artwork", "drop", [option.id])
+
+        assert raced and not result["ok"]
+        assert len(await ModerationLogEntry.find({"action": "drop"}).to_list()) == 1
+        assert len(await NotificationEvent.find({"event_type": "moderation_artwork_dropped"}).to_list()) == 1
+
+
+@pytest.mark.integration
 class TestArtworkActions:
     async def test_approve_keeps_the_option(self, client, settings):
         admin = await _admin()
