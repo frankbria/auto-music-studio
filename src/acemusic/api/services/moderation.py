@@ -312,7 +312,10 @@ async def _flag_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int
 
 async def _remove_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
     # US-27.4: a reversed appeal restores the visibility recorded here.
-    details: dict = {"previous_visibility": clip.visibility.value}
+    details: dict = {
+        "previous_visibility": clip.visibility.value,
+        "previous_release_visibility": await release_service.visible_releases(clip.id),
+    }
     # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
     details.update(await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id}))
     await clip.set(
