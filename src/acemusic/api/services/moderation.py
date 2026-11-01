@@ -366,7 +366,7 @@ async def act_on_content(
     doc = await _CONTENT_DOCS[target_type].get(oid)
     if doc is None:
         return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
-    refused, details, notice = await _CONTENT_HANDLERS.get(action, _approve_content)(doc, utcnow())
+    refused, details, notice = await _CONTENT_HANDLERS[action](doc, utcnow())
     if refused:
         return ActionResult(ok=False, detail=refused)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
@@ -409,7 +409,12 @@ async def _drop_content(option: ArtworkOption, _now: datetime) -> _ContentOutcom
     return None, details, ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
 
 
-_CONTENT_HANDLERS = {"unpublish": _unpublish_content, "restore": _restore_content, "drop": _drop_content}
+_CONTENT_HANDLERS = {
+    "approve": _approve_content,
+    "unpublish": _unpublish_content,
+    "restore": _restore_content,
+    "drop": _drop_content,
+}
 
 
 async def _take_down_video(video: Video, now: datetime) -> bool:
@@ -424,9 +429,12 @@ async def _take_down_video(video: Video, now: datetime) -> bool:
     if taken_down.modified_count:
         return True
     current = await Video.find_one({"_id": video.id})
-    if current is not None:
-        stamp = await _unpublish_stamp(current, now)
-        await current.set({"published": False, "removed_at": stamp, "moderation_reviewed_at": now})
+    if current is None:
+        return False
+    if current.removed_at is None:  # restored since the write above: this takedown is new, so it notifies
+        return await _take_down_video(current, now)
+    stamp = await _unpublish_stamp(current, now)
+    await current.set({"published": False, "removed_at": stamp, "moderation_reviewed_at": now})
     return False
 
 
@@ -649,12 +657,20 @@ def _unpublished_video_ids(entries: list[ModerationLogEntry]) -> list[PydanticOb
     return [oid for oid in map(coerce_object_id, ids) if oid is not None]
 
 
+async def _restorable_videos(oids: list[PydanticObjectId]) -> set[str]:
+    """Of these videos, the ones down whose owner isn't banned: Restore refuses a banned owner's."""
+    videos = await Video.find({"_id": {"$in": oids}, "removed_at": {"$ne": None}}).to_list()
+    owners = list({v.user_id for v in videos})
+    banned = {u.id for u in await User.find({"_id": {"$in": owners}, "banned_at": {"$ne": None}}).to_list()}
+    return {str(v.id) for v in videos if v.user_id not in banned}
+
+
 async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
     """The page's video unpublish entries in force: each still-down video's latest unpublish."""
     oids = _unpublished_video_ids(entries)
     if not oids:
         return set()
-    down = {str(v.id) for v in await Video.find({"_id": {"$in": oids}, "removed_at": {"$ne": None}}).to_list()}
+    down = await _restorable_videos(oids)
     latest = await ModerationLogEntry.aggregate(
         [
             {"$match": {"target_type": "video", "action": "unpublish", "target_id": {"$in": sorted(down)}}},
