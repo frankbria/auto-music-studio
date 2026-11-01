@@ -243,24 +243,8 @@ async def decide(
     )
     if appeal is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
-    # A moderation action landing since the read replaced the decision (#587): a reversal must not undo it,
-    # and neither outcome may reach the creator, so the appeal goes back to how it was.
-    if decision != "uphold" and clip is not None and not await _still_in_force(clip, appeal, in_force, decision):
-        await ClipAppeal.find_one({"_id": oid, "status": new_status}).update(
-            {
-                "$set": {
-                    "status": existing.status,
-                    "admin_note": existing.admin_note,
-                    "decided_at": existing.decided_at,
-                    "decided_by": existing.decided_by,
-                }
-            }
-        )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
-
-    restored: dict = {}
-    if decision == "reverse" and clip is not None and appeal.action == "remove":
-        restored = await _restore_releases(clip, in_force, settings)
+    await _reject_if_superseded(existing, appeal, clip, in_force, decision)
+    restored = await _restore_releases(clip, appeal, in_force, decision, settings)
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
@@ -294,8 +278,36 @@ async def _still_in_force(
     return await _set_unless_moderated_since(clip, fields)
 
 
-async def _restore_releases(clip: Clip, in_force: ModerationLogEntry, settings: ApiSettings) -> dict:
+async def _reject_if_superseded(
+    existing: ClipAppeal, appeal: ClipAppeal, clip: Clip | None, in_force: ModerationLogEntry, decision: AppealDecision
+) -> None:
+    """A moderation action landing since the read replaced the decision (#587): a reversal must not undo it,
+    and neither outcome may reach the creator, so the appeal goes back to how it was."""
+    if decision == "uphold" or clip is None or await _still_in_force(clip, appeal, in_force, decision):
+        return
+    await ClipAppeal.find_one({"_id": existing.id, "status": appeal.status}).update(
+        {
+            "$set": {
+                "status": existing.status,
+                "admin_note": existing.admin_note,
+                "decided_at": existing.decided_at,
+                "decided_by": existing.decided_by,
+            }
+        }
+    )
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
+
+
+def _reverses_a_removal(clip: Clip | None, appeal: ClipAppeal, decision: AppealDecision) -> bool:
+    return decision == "reverse" and clip is not None and appeal.action == "remove"
+
+
+async def _restore_releases(
+    clip: Clip | None, appeal: ClipAppeal, in_force: ModerationLogEntry, decision: AppealDecision, settings: ApiSettings
+) -> dict:
     """What the reversal's log entry records about the releases a reversed removal put back."""
+    if not _reverses_a_removal(clip, appeal, decision):
+        return {}
     releases = in_force.details.get("previous_release_visibility")
     if releases is None:
         return {}
