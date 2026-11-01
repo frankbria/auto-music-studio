@@ -110,7 +110,7 @@ _CURSORS: dict[str, TypeAdapter] = {
     "appeals_newest": _cursor("appeals_newest", AwareDatetime, str),
     # #651: public discovery, newest first and by search relevance.
     "discover_newest": _cursor("discover_newest", AwareDatetime, str),
-    "discover_relevance": _cursor("discover_relevance", int, AwareDatetime, str),
+    "discover_relevance": _cursor("discover_relevance", float, AwareDatetime, str),
 }
 
 
@@ -554,6 +554,8 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
         return_document=ReturnDocument.AFTER,
     )
     stamp = claimed["banned_at"]
+    # First, so public listings drop every clip of theirs at once, whatever its visibility (#655).
+    await Clip.find({"user_id": user.id}).update({"$set": {"owner_banned_at": stamp}})
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
@@ -562,8 +564,9 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     if (in_force := await clip_service.hand_over_ban_sweep(user.id, stamp)) != stamp:
-        # The ban's videos follow its clips: back up, or onto the ban now in force.
+        # The ban's videos and its owner stamp follow its clips: back up, or onto the ban now in force.
         await Video.find({"user_id": user.id, "removed_at": stamp}).update({"$set": {"removed_at": in_force}})
+        await Clip.find({"user_id": user.id, "owner_banned_at": stamp}).update({"$set": {"owner_banned_at": in_force}})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
@@ -582,6 +585,7 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         return "This account is not banned."
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
     try:
+        await Clip.find({"user_id": user.id, "owner_banned_at": banned_at}).update({"$set": {"owner_banned_at": None}})
         videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
         lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
     except Exception:
@@ -589,6 +593,7 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         # the account is unbanned and its restored clips must stay up.
         if (await User.get(user.id)).banned_at == banned_at:
             await clip_service.take_down_visible({"user_id": user.id}, banned_at)
+            await Clip.find({"user_id": user.id}).update({"$set": {"owner_banned_at": banned_at}})
         raise
     if not lifted.modified_count:
         return "This account is not banned."

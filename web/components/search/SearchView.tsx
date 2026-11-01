@@ -19,7 +19,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
 import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
-import { fetchFacets, type DiscoverFacets } from "@/lib/discover"
+import {
+  fetchFacets,
+  type DiscoverFacets,
+  type DiscoverPage,
+} from "@/lib/discover"
 import { GENRES } from "@/lib/explore"
 import {
   buildSearchQuery,
@@ -52,7 +56,7 @@ type Results = {
 const settled = (
   forKey: string,
   failed: boolean,
-  page?: Pick<Results, "clips" | "nextCursor" | "total">
+  page?: Pick<DiscoverPage, "clips" | "nextCursor" | "total">
 ): Results => ({
   forKey,
   failed,
@@ -197,7 +201,7 @@ export function SearchView({
                 ...latest,
                 clips: [...latest.clips, ...next.clips],
                 nextCursor: next.nextCursor,
-                total: next.total,
+                total: next.total ?? latest.total,
                 loadingMore: false,
               }
             : latest

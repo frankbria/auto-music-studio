@@ -246,16 +246,13 @@ async def public_clip_filter() -> dict:
     Moderation already makes a removed clip and a banned owner's clips private; this checks both
     itself, so a clip written around those paths still stays out of every listing.
     """
-    # shortcut: the banned-owner list is read whole on every listing; fine while bans number in the
-    # thousands, move to a denormalized owner_banned flag on Clip if that list grows past that.
-    banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
     # Both copies must agree, so a writer that sets one without the other can't leak a clip. A missing
     # visibility ($in matches null) is a clip written before US-20.7, which only ever had is_public.
     return {
         "is_public": True,
         "visibility": {"$in": [VisibilityState.PUBLIC.value, None]},
         "removed_at": None,
-        "user_id": {"$nin": banned},
+        "owner_banned_at": None,
     }
 
 

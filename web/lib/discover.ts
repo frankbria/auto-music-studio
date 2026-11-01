@@ -22,7 +22,8 @@ export type DiscoverPage = {
   clips: Clip[]
   /** Opaque keyset cursor for the next page; null on the last page. */
   nextCursor: string | null
-  total: number
+  /** Counted on the first page only; null on a later page, so callers keep the first count (#655). */
+  total: number | null
 }
 
 export type DiscoverFacets = { keys: string[]; models: string[] }
@@ -51,7 +52,7 @@ export async function fetchPublicClips(
   const body = await getJson<{
     clips: Clip[]
     next_cursor: string | null
-    total: number
+    total: number | null
   }>(`/api/discover/clips${qs ? `?${qs}` : ""}`, token)
   return { clips: body.clips, nextCursor: body.next_cursor, total: body.total }
 }

@@ -131,6 +131,21 @@ describe("SearchView", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("keeps the first page's total when a later page has none (#655)", async () => {
+    stubDiscoverFetch((url) =>
+      url.includes("cursor=c2")
+        ? discoverPage([makeClip({ id: "b" })], null, null)
+        : discoverPage([makeClip({ id: "a" })], "c2", 2)
+    )
+    render(<SearchView params={params({ q: "x" })} onChange={vi.fn()} />)
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Load more" })
+    )
+
+    expect(await screen.findAllByTestId("explore-clip-card")).toHaveLength(2)
+    expect(screen.getByText(/2 results/)).toBeInTheDocument()
+  })
+
   it("keeps the results and reports it when Load more fails", async () => {
     stubDiscoverFetch((url) =>
       url.includes("cursor=c2")

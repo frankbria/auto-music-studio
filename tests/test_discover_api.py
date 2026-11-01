@@ -17,6 +17,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
+from acemusic.api.services import discovery
 from acemusic.api.services.clips import find_similar_clips
 from acemusic.api.services.moderation import encode_cursor
 from acemusic.api.settings import ApiSettings
@@ -45,6 +46,14 @@ def settings(mongo_db, mongo_settings) -> ApiSettings:
     return mongo_settings.model_copy(
         update={"jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx", "job_processor_enabled": False}
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_facets():
+    """The facet cache is per process; each test changes the pool."""
+    discovery.clear_facets_cache()
+    yield
+    discovery.clear_facets_cache()
 
 
 @pytest.fixture
@@ -104,7 +113,10 @@ class TestPublicPool:
         # Written straight to the database, past the ban sweep and the removal path that would
         # also make them private: the shared filter must hold on its own.
         await _clip(title="Removed", removed_at=utcnow(), key="D minor", model="m-removed")
-        await _clip(await _owner(banned_at=utcnow()), title="Banned", key="E minor", model="m-banned")
+        stamp = utcnow()
+        await _clip(
+            await _owner(banned_at=stamp), title="Banned", owner_banned_at=stamp, key="E minor", model="m-banned"
+        )
 
         for sort in ("newest", "relevance"):
             assert await _ids(client, sort=sort) == [str(listed.id)]
@@ -168,7 +180,8 @@ class TestPublicPool:
         viewer = await _owner()
         seed = await _clip(style_tags=["lofi"])
         kept = await _clip(style_tags=["lofi"])
-        await _clip(await _owner(banned_at=utcnow()), style_tags=["lofi"])
+        stamp = utcnow()
+        await _clip(await _owner(banned_at=stamp), style_tags=["lofi"], owner_banned_at=stamp)
         await _clip(style_tags=["lofi"], removed_at=utcnow())
         for scope in ("public", "all"):
             similar, total = await find_similar_clips(str(seed.id), str(viewer.id), scope=scope)
@@ -182,26 +195,48 @@ class TestFiltersAndSorts:
         new = await _clip(minutes=2)
         assert await _ids(client) == [str(new.id), str(old.id)]
 
-    async def test_free_text_matches_title_tags_and_lyrics_case_insensitively(self, client) -> None:
+    async def test_free_text_matches_whole_words_in_title_tags_and_lyrics_case_insensitively(self, client) -> None:
+        """#655: the text index matches stemmed whole words, not substrings."""
         by_title = await _clip(title="Neon NIGHTS", minutes=3)
-        by_tag = await _clip(title="A", style_tags=["nightcore"], minutes=2)
+        by_tag = await _clip(title="A", style_tags=["late night drive"], minutes=2)
         by_lyrics = await _clip(title="B", lyrics="all night long", minutes=1)
-        await _clip(title="C", style_tags=["jazz"])
+        await _clip(title="C", style_tags=["nightcore"])
         assert await _ids(client, q="night") == [str(by_title.id), str(by_tag.id), str(by_lyrics.id)]
 
-    async def test_free_text_is_literal_not_a_regex(self, client) -> None:
-        await _clip(title="Anything")
-        dotted = await _clip(title="a.b")
-        assert await _ids(client, q=".") == [str(dotted.id)]
+    async def test_free_text_is_stemmed_and_a_partial_word_finds_nothing(self, client) -> None:
+        loving = await _clip(title="Loving You")
+        assert await _ids(client, q="love") == [str(loving.id)]
+        assert await _ids(client, q="lov") == []
 
-    async def test_relevance_ranks_title_prefix_then_title_then_tag_then_lyrics(self, client) -> None:
-        lyrics = await _clip(title="Zzz", lyrics="glow", minutes=4)
-        tag = await _clip(title="Yyy", style_tags=["glowwave"], minutes=3)
-        title = await _clip(title="Afterglow", minutes=2)
-        prefix = await _clip(title="Glow Up", minutes=1)
-        expected = [str(prefix.id), str(title.id), str(tag.id), str(lyrics.id)]
+    async def test_free_text_symbols_are_not_operators(self, client) -> None:
+        await _clip(title="Anything")
+        for q in (".", "(", "[a-z]+", "$where"):
+            resp = await client.get(CLIPS_URL, params={"q": q})
+            assert resp.status_code == 200, (q, resp.text)
+            assert resp.json()["clips"] == []
+
+    async def test_relevance_ranks_title_then_tag_then_lyrics(self, client) -> None:
+        lyrics = await _clip(title="Zzz", lyrics="glow", minutes=3)
+        tag = await _clip(title="Yyy", style_tags=["glow"], minutes=2)
+        title = await _clip(title="Glow Up", minutes=1)
+        expected = [str(title.id), str(tag.id), str(lyrics.id)]
         assert await _ids(client, q="glow", sort="relevance") == expected
         assert await _all_pages(client, q="glow", sort="relevance", limit=1) == expected
+
+    async def test_facets_are_cached_briefly(self, client) -> None:
+        await _clip(key="A minor", model="m1")
+        assert (await client.get(FACETS_URL)).json()["keys"] == ["A minor"]
+        await _clip(key="B minor", model="m1")
+        assert (await client.get(FACETS_URL)).json()["keys"] == ["A minor"]
+        discovery.clear_facets_cache()
+        assert (await client.get(FACETS_URL)).json()["keys"] == ["A minor", "B minor"]
+
+    async def test_total_is_counted_on_the_first_page_only(self, client) -> None:
+        for i in range(3):
+            await _clip(title="Count", minutes=i)
+        first = (await client.get(CLIPS_URL, params={"limit": 2})).json()
+        second = (await client.get(CLIPS_URL, params={"limit": 2, "cursor": first["next_cursor"]})).json()
+        assert (first["total"], second["total"]) == (3, None)
 
     async def test_relevance_without_a_query_is_newest(self, client) -> None:
         old = await _clip(minutes=1)

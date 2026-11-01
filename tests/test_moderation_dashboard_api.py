@@ -745,6 +745,23 @@ def _video(clip, **fields) -> Video:
 
 @pytest.mark.integration
 class TestUnban:
+    async def test_ban_stamps_every_owner_clip_and_unban_clears_it(self, client, settings):
+        """#655: public listings exclude a banned owner by this stamp, not by reading every banned id."""
+        owner, admin = await _user(), await _admin()
+        public = await _clip(owner)
+        private = await _clip(owner, VisibilityState.PRIVATE)
+        other = await _clip(await _user())
+
+        await _act_on_users(client, admin, settings, "ban", [owner.id])
+
+        banned_at = (await User.get(owner.id)).banned_at
+        assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {banned_at}
+        assert (await Clip.get(other.id)).owner_banned_at is None
+
+        await _act_on_users(client, admin, settings, "unban", [owner.id])
+
+        assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {None}
+
     async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
         admin, user = await _admin(), await _user()
         public, unlisted, private = (
