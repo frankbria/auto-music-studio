@@ -361,7 +361,8 @@ Package manager: `uv` with `hatchling` build backend
   `/api/v1/admin/moderation/{queue,clips,users,log}`. Queue and log are paged by keyset cursor (#540): a
   response's `next_cursor` goes back as `?cursor=`, and a malformed one or one minted under another sort is a 422. The queue sorts
   (`reports|severity|newest`) and filters (`source`, `category`) on the server, and log entries carry `actor_name`
-  and `target_label`. Removal stamps `Clip.removed_at`, and
+  and `target_label`. Remove and flag notify the owner (`moderation_clip_removed|flagged`, #589), and the web clip
+  lists (`useClips`) refetch on any new moderation notice. Removal stamps `Clip.removed_at`, and
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
