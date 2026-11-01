@@ -297,6 +297,7 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
         if action == "remove":
             # US-27.4: a reversed appeal restores the visibility recorded here.
             details["previous_visibility"] = clip.visibility.value
+            details["previous_release_visibility"] = await release_service.visible_releases(oid)
             updates.update(visibility=VisibilityState.PRIVATE, is_public=False, removed_at=now)
             # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
             details.update(await release_service.unshare_releases({"clip_id": oid}, {"_id": oid}))

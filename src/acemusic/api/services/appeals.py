@@ -27,6 +27,8 @@ from ..models import (
 )
 from ..models.clip_appeal import AppealedAction
 from ..models.common import utcnow
+from ..settings import ApiSettings
+from . import releases as release_service
 from .clips import get_owned_clip
 from .common import coerce_object_id
 from .moderation import after_cursor, encode_cursor, log_action
@@ -212,7 +214,9 @@ async def list_queue(which: QueueFilter, limit: int, cursor: str | None) -> tupl
     return items, next_cursor
 
 
-async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: str | None) -> ClipAppeal:
+async def decide(
+    actor_id: str, appeal_id: str, decision: AppealDecision, note: str | None, settings: ApiSettings
+) -> ClipAppeal:
     """404 unknown appeal, 409 already upheld or reversed, or a newer decision replaced it.
 
     A superseded appeal can still be upheld, which closes it: reversing it would undo the newer decision, and
@@ -237,8 +241,9 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
     if appeal is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
 
+    restored: dict = {}
     if decision == "reverse" and clip is not None:
-        await _restore(clip, appeal, in_force)
+        restored = await _restore(clip, appeal, in_force, settings)
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
@@ -257,12 +262,13 @@ async def decide(actor_id: str, appeal_id: str, decision: AppealDecision, note: 
         "clip",
         str(appeal.clip_id),
         note,
-        {"appeal_id": str(appeal.id), "appealed_action": appeal.action},
+        {"appeal_id": str(appeal.id), "appealed_action": appeal.action, **restored},
     )
     return appeal
 
 
-async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry) -> None:
+async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry, settings: ApiSettings) -> dict:
+    """Undo the appealed decision; returns what the reversal's log entry records about the releases."""
     if appeal.action == "flag":
         restore: dict = {"content_warning": False}
     else:
@@ -272,9 +278,13 @@ async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry)
         if previous is not None:
             restore.update(visibility=previous, is_public=previous == VisibilityState.PUBLIC.value)
     # Every moderation action stamps moderation_reviewed_at, so one landing after the read above is not undone.
-    await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).update(
+    result = await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).update(
         {"$set": restore}
     )
+    releases = in_force.details.get("previous_release_visibility")
+    if appeal.action == "flag" or releases is None or not result.modified_count:
+        return {}
+    return await release_service.restore_releases(clip.id, releases, settings)
 
 
 def _appeal_not_found() -> HTTPException:

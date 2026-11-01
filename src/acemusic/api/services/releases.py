@@ -9,7 +9,7 @@ post-submission edit lock (409).
 
 import logging
 
-from beanie import PydanticObjectId
+from beanie import PydanticObjectId, UpdateResponse
 from beanie.operators import Eq
 from fastapi import HTTPException, status
 from pymongo import ReturnDocument
@@ -20,7 +20,7 @@ from ..models import Clip, Release, ReleaseStatus, SoundCloudUnshare, User
 from ..models.common import utcnow
 from ..models.distribution import VisibilityState
 from ..settings import ApiSettings
-from . import clips as clip_service, identifiers, screening, users as user_service
+from . import clips as clip_service, identifiers, screening, soundcloud as sc, users as user_service
 from .common import coerce_object_id
 from .mastering import APPROVED_GENERATION_MODE
 
@@ -299,6 +299,47 @@ async def unshare_if_source_removed(clip_id: PydanticObjectId, user_id: Pydantic
     if banned:
         user_service.reject_banned(owner)
     clip_service.ensure_not_removed(clip)
+
+
+async def visible_releases(clip_id: PydanticObjectId) -> dict[str, str]:
+    """Each of the clip's non-private releases and its visibility, for a removal to record (#582)."""
+    query = {"clip_id": clip_id, "visibility": {"$ne": VisibilityState.PRIVATE.value}}
+    return {str(release.id): release.visibility.value async for release in Release.find(query)}
+
+
+async def restore_releases(clip_id: PydanticObjectId, previous: dict[str, str], settings: ApiSettings) -> dict:
+    """Put back the releases a reversed removal made private and re-share their public tracks, best-effort (#582).
+
+    The clip's queued un-shares go first, so the poller can't make a track private again after the reversal. A
+    release the owner changed since the removal (no longer private) is left as it is.
+    """
+    await SoundCloudUnshare.find({"clip_id": clip_id}).delete()
+    restored, failed = 0, []
+    for release_id, visibility in previous.items():
+        release = await Release.find_one(
+            {"_id": PydanticObjectId(release_id), "visibility": VisibilityState.PRIVATE.value}
+        ).update(
+            {"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT
+        )
+        if release is None:
+            continue
+        restored += 1
+        if track_id := await _reshare_failure(release, settings):
+            failed.append(track_id)
+    outcome = {"releases_restored": restored, "soundcloud_reshare_failed": failed}
+    return {key: value for key, value in outcome.items() if value}
+
+
+async def _reshare_failure(release: Release, settings: ApiSettings) -> str | None:
+    """Share a public release's SoundCloud track again; return its id if SoundCloud refused."""
+    if release.visibility != VisibilityState.PUBLIC or not release.soundcloud_track_id:
+        return None
+    try:
+        connection = await sc.get_valid_connection(str(release.user_id), settings)
+        await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, "public")
+    except sc.SoundCloudError:
+        return release.soundcloud_track_id
+    return None
 
 
 async def unshare_releases(release_query: dict, clip_query: dict) -> dict:
