@@ -619,6 +619,24 @@ class TestRefresh:
         assert resp.status_code == 403
         assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
 
+    async def test_a_refresh_whose_access_token_cannot_be_minted_leaves_no_live_token(
+        self, client, settings, monkeypatch
+    ):
+        from acemusic.api.models import RefreshToken, User
+        from acemusic.api.routers import auth as auth_router
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-mint", email="mint@example.com")
+        user = await User.find_one(User.email == "mint@example.com")
+
+        def broken_mint(*_args):
+            raise RuntimeError("signing key unavailable")
+
+        monkeypatch.setattr(auth_router, "_mint_access_token", broken_mint)
+        with pytest.raises(RuntimeError):
+            await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
     async def test_refresh_revoked_token_401(self, client, settings, monkeypatch):
         tokens = await _login(client, settings, monkeypatch)
         from acemusic.api.auth.services import revoke_refresh_token
