@@ -157,6 +157,14 @@ export function FeedItemCard({
         <h2 className="text-lg font-semibold drop-shadow">
           {item.title ?? "Untitled clip"}
         </h2>
+        {item.content_warning && (
+          <Badge
+            variant="destructive"
+            className="self-start bg-destructive text-white"
+          >
+            Content warning
+          </Badge>
+        )}
         {styleText && (
           <div className="flex flex-wrap gap-1">
             {item.style_tags.map((tag) => (
