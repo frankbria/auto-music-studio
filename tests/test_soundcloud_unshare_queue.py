@@ -16,7 +16,7 @@ from pymongo.errors import DuplicateKeyError
 from acemusic.api.models import Clip, ModerationLogEntry, Release, SoundCloudUnshare, Workspace
 from acemusic.api.models.common import utcnow
 from acemusic.api.services import releases as release_service, soundcloud as sc
-from acemusic.api.tasks.soundcloud_poller import MAX_UNSHARE_BACKOFF, SoundCloudStatusPoller
+from acemusic.api.tasks.soundcloud_poller import MAX_UNSHARE_BACKOFF, UNSHARE_STUCK_AFTER, SoundCloudStatusPoller
 from tests.test_releases_api import FULL_METADATA as RELEASE_METADATA
 from tests.users import make_user
 
@@ -222,6 +222,64 @@ class TestDraining:
         assert entry.details["soundcloud_unshare_failed"] == [
             {"track_id": "t1", "error": "Updating the SoundCloud track sharing failed."}
         ]
+
+    async def test_two_drainers_never_unshare_the_same_track_twice(self, mongo_db, mongo_settings):
+        """#620: a row is claimed before SoundCloud is called, so a second API instance draining meanwhile skips it."""
+        user = await make_user("d-two-drainers@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        other, other_calls = _poller(mongo_settings)
+
+        async def _other_instance_drains(_track_id):
+            await other.drain_unshares()
+
+        poller, calls = _poller(mongo_settings, sharing=_other_instance_drains)
+
+        assert await poller.drain_unshares() == 1
+        assert calls == [("t1", "private")]
+        assert other_calls == []
+        assert len(await _log("soundcloud_unshared")) == 1
+
+    async def test_a_failing_track_is_tried_once_per_drain_even_when_its_retry_is_already_due(
+        self, mongo_db, mongo_settings
+    ):
+        """#620 review: claiming in a loop must not re-claim a row this pass already retried and rescheduled."""
+
+        async def _down(_track_id):
+            raise sc.SoundCloudError("down")
+
+        user = await make_user("d-once-per-drain@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        poller, calls = _poller(mongo_settings, sharing=_down, interval=0.0)
+
+        await poller.drain_unshares()
+
+        assert calls == [("t1", "private")]
+
+    async def test_a_track_still_failing_after_a_day_of_retries_is_logged_again(self, mongo_db, mongo_settings):
+        """#620: past UNSHARE_STUCK_AFTER attempts a stuck track is reported once more, so an admin acts on it."""
+
+        async def _forbidden(_track_id):
+            raise sc.SoundCloudError("403 Forbidden")
+
+        user = await make_user("d-stuck@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        await SoundCloudUnshare.find_one(SoundCloudUnshare.track_id == "t1").update(
+            {"$set": {"attempts": UNSHARE_STUCK_AFTER - 1}}
+        )
+        poller, _ = _poller(mongo_settings, sharing=_forbidden)
+
+        await poller.drain_unshares()
+        await SoundCloudUnshare.find_one(SoundCloudUnshare.track_id == "t1").update(
+            {"$set": {"next_attempt_at": utcnow()}}
+        )
+        await poller.drain_unshares()
+
+        [entry] = await _log("soundcloud_unshare_failed")
+        assert entry.details["stuck_after_attempts"] == UNSHARE_STUCK_AFTER
+        assert entry.details["soundcloud_unshare_failed"] == [{"track_id": "t1", "error": "403 Forbidden"}]
 
     async def test_backoff_is_capped(self, mongo_db, mongo_settings):
         async def _down(_track_id):

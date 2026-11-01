@@ -1445,6 +1445,36 @@ class TestRemovalUnsharesSoundCloud:
         assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PRIVATE
 
+    async def test_a_removal_landing_before_the_shares_release_write_leaves_the_release_private(
+        self, client, settings, monkeypatch
+    ):
+        # #620: the share's clip update matched before the removal stamped the clip, the removal then privatized the
+        # releases, and only then does the share's release.set(public) land. The route's trailing check undoes it.
+        owner, admin = await _user(), await _admin()
+        clip = await _clip(owner, visibility=VisibilityState.PRIVATE)
+        release = await _release(clip, visibility=VisibilityState.PRIVATE)
+        real_set = Release.set
+        removed = False
+
+        async def removal_lands_first(self, expression, *args, **kwargs):
+            nonlocal removed
+            if not removed and expression.get("visibility") == VisibilityState.PUBLIC:
+                removed = True
+                await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), None)
+            return await real_set(self, expression, *args, **kwargs)
+
+        monkeypatch.setattr(Release, "set", removal_lands_first)
+
+        resp = await client.patch(
+            f"{RELEASES_URL}/{release.id}/visibility", json={"state": "public"}, headers=_auth(owner, settings)
+        )
+
+        assert removed
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == REMOVED
+        assert (await Release.get(release.id)).visibility == VisibilityState.PRIVATE
+        assert (await Clip.get(clip.id)).removed_at is not None
+
     async def test_a_ban_landing_mid_publish_of_a_private_clip_leaves_the_track_private(
         self, client, settings, monkeypatch
     ):
