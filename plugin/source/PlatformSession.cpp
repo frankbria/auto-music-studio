@@ -22,6 +22,13 @@ namespace
         static juce::CriticalSection instance;
         return instance;
     }
+
+    /** The same, across processes (#516): two DAWs on one token file would otherwise both refresh with it. The
+        process-wide lock is still needed, because a file lock doesn't exclude threads of the same process. */
+    juce::String interProcessLockName (const juce::File& tokenFile)
+    {
+        return "acemusic-platform-token-" + juce::String::toHexString (tokenFile.getFullPathName().hashCode64());
+    }
 }
 
 Session::Session (juce::File file)
@@ -44,6 +51,7 @@ void Session::setRefreshToken (const juce::String& token)
         const juce::ScopedLock sl (lock);
         refreshToken = token.trim();
         accessToken.clear();
+        rejectedRefreshToken.clear();
     }
     persist (token.trim());
 }
@@ -90,6 +98,17 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
                              const std::function<bool()>& shouldCancel)
 {
     const juce::ScopedLock refreshing (refreshLock());
+
+    // Held across the network call and the persist below, so the next process reads the rotated token.
+    std::unique_ptr<juce::InterProcessLock> acrossProcesses;
+    std::unique_ptr<juce::InterProcessLock::ScopedLockType> refreshingAcrossProcesses;
+
+    if (tokenFile != juce::File())
+    {
+        acrossProcesses = std::make_unique<juce::InterProcessLock> (interProcessLockName (tokenFile));
+        refreshingAcrossProcesses = std::make_unique<juce::InterProcessLock::ScopedLockType> (*acrossProcesses);
+    }
+
     juce::String token;
 
     {
@@ -105,6 +124,9 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
                 refreshToken = onDisk;
 
         token = refreshToken;
+
+        if (token == rejectedRefreshToken)
+            return tokenRejected;
     }
 
     // Checked right before connecting, which covers a stop that arrived while this call
@@ -115,7 +137,14 @@ juce::String Session::renew (const juce::String& baseUrl, const juce::String& re
         return stopped;
 
     if (! refreshed.ok)
-        return refreshed.unauthorised ? juce::String (tokenRejected) : refreshed.errorMessage;
+    {
+        if (! refreshed.unauthorised)
+            return refreshed.errorMessage;
+
+        const juce::ScopedLock sl (lock);
+        rejectedRefreshToken = token;
+        return tokenRejected;
+    }
 
     {
         const juce::ScopedLock sl (lock);

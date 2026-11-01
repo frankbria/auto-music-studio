@@ -18,7 +18,8 @@ namespace Platform
     away. It lives in its own 0600 file rather than the settings file because every plugin
     instance in a DAW keeps its own copy of the settings in memory, and any of them saving
     would write back a spent token. Before refreshing, the file is re-read, which is how an
-    instance picks up a rotation another one made.
+    instance picks up a rotation another one made. Refreshes are serialised across processes too,
+    with a lock file per token file, so two DAWs sharing one token never spend it twice (#516).
 
     Thread-safe: the panel and a voiced generation call it from different workers.
 */
@@ -57,6 +58,10 @@ private:
     const juce::File tokenFile;
     mutable juce::CriticalSection lock;
     juce::String accessToken, refreshToken;
+
+    /** The refresh token the platform last refused (#516). Never sent again: a refusal is final, so only a new
+        token, pasted here or in another instance, is worth a request. */
+    juce::String rejectedRefreshToken;
 };
 
 } // namespace Platform
