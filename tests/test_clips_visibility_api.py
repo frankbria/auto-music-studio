@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, VisibilityState, Workspace
+from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
 from tests.users import make_user
@@ -275,25 +276,24 @@ class TestVisibilityTransitions:
 
 @pytest.mark.integration
 class TestVisibilityAudioAccess:
-    async def test_non_owner_can_get_audio_for_unlisted_clip(self, client, settings, local_storage) -> None:
+    @pytest.mark.parametrize("visibility", [VisibilityState.PUBLIC, VisibilityState.UNLISTED, VisibilityState.PRIVATE])
+    @pytest.mark.parametrize("stranger_tier", [None, "pro"])
+    async def test_audio_downloads_are_owner_only(
+        self, client, settings, local_storage, visibility, stranger_tier
+    ) -> None:
+        """#617: visitors may stream a clip, never download it; a non-owner gets the same 404 as any owner-only route."""
         owner = await make_user(f"vis-audio-owner-{next(_SEQ)}@example.com")
-        stranger = await make_user(f"vis-audio-stranger-{next(_SEQ)}@example.com")
+        extra = {"tier": PRO} if stranger_tier else {}
+        stranger = await make_user(f"vis-audio-stranger-{next(_SEQ)}@example.com", **extra)
         workspace = await _make_workspace(owner)
-        clip = await _insert_clip(
-            owner, workspace, visibility=VisibilityState.UNLISTED, store_bytes=b"RIFF....WAVEfake"
-        )
+        clip = await _insert_clip(owner, workspace, visibility=visibility, store_bytes=b"RIFF....WAVEfake")
 
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/audio", headers=_auth_headers(stranger, settings))
-        assert resp.status_code == 200
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Clip not found."
 
-    async def test_non_owner_gets_403_for_private_clip_audio(self, client, settings, local_storage) -> None:
-        owner = await make_user(f"vis-audio-private-owner-{next(_SEQ)}@example.com")
-        stranger = await make_user(f"vis-audio-private-stranger-{next(_SEQ)}@example.com")
-        workspace = await _make_workspace(owner)
-        clip = await _insert_clip(owner, workspace, visibility=VisibilityState.PRIVATE, store_bytes=b"RIFF....WAVEfake")
-
-        resp = await client.get(f"{CLIPS_URL}/{clip.id}/audio", headers=_auth_headers(stranger, settings))
-        assert resp.status_code == 403
+        own = await client.get(f"{CLIPS_URL}/{clip.id}/audio", headers=_auth_headers(owner, settings))
+        assert own.status_code == 200
 
 
 @pytest.mark.integration
