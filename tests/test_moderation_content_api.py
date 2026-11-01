@@ -1043,7 +1043,6 @@ class TestVideoAppeals:
         [entry] = await ModerationLogEntry.find({"action": "unpublish", "target_id": str(video.id)}).to_list()
         assert datetime.fromisoformat(detail["taken_down_at"]) == entry.created_at
 
-        # #690: an approve of the still-down video is not a new takedown, so the date holds.
         await _act(client, admin, settings, "video", "approve", [video.id])
         detail = (await client.get(f"{VIDEOS_URL}/{video.id}", headers=_auth(owner, settings))).json()
         assert datetime.fromisoformat(detail["taken_down_at"]) == entry.created_at
