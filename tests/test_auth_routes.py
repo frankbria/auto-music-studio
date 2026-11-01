@@ -637,6 +637,48 @@ class TestPluginToken:
         assert resp.status_code == 404
 
 
+class TestPluginTokenCap:
+    """#526: an account holds at most PLUGIN_TOKEN_CAP live plugin tokens, so the Settings list stays readable."""
+
+    async def test_minting_past_the_cap_is_a_409_until_one_is_revoked(self, client, settings, monkeypatch):
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-cap", email="cap@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        for _ in range(PLUGIN_TOKEN_CAP):
+            assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
+
+        refused = await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == (
+            f"You already have {PLUGIN_TOKEN_CAP} plugin tokens. Revoke one below to create another."
+        )
+
+        oldest = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()[-1]
+        await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{oldest['id']}", headers=auth)
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
+
+    async def test_an_account_already_over_the_cap_lists_them_all_and_cannot_mint_more(
+        self, client, settings, monkeypatch
+    ):
+        from acemusic.api.auth.services import store_refresh_token
+        from acemusic.api.auth.tokens import create_refresh_token
+        from acemusic.api.models import User
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-over", email="over@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        user = await User.find_one(User.email == "over@example.com")
+        expires = datetime.now(timezone.utc) + timedelta(days=7)
+        for _ in range(PLUGIN_TOKEN_CAP + 2):  # minted before the cap existed
+            await store_refresh_token(user.id, create_refresh_token(), expires, kind="plugin")
+
+        listed = await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)
+        assert listed.status_code == 200
+        assert len(listed.json()) == PLUGIN_TOKEN_CAP + 2
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 409
+
+
 class TestPluginTokenList:
     """``GET``/``DELETE /auth/plugin-tokens`` (#515): see and revoke plugin tokens."""
 
