@@ -16,15 +16,16 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { AuthContext } from "@/contexts/auth-context"
 import {
-  addAppealContext,
-  submitClipAppeal,
+  addContext,
+  submitAppeal,
+  type AppealTarget,
   type AppealView,
 } from "@/lib/appeals"
 import type { Clip } from "@/lib/workspace-clips"
 
-// Moderation status + appeal entry point for a single clip card (US-27.4).
-// Renders nothing for a clip that was never moderated and has no appeal
-// history. Reads AuthContext directly (not useAuth) so a card rendered outside
+// Moderation status + appeal entry point for a single clip card (US-27.4), or
+// a taken-down video (#623). Renders nothing for a clip that was never
+// moderated and has no appeal history. Reads AuthContext directly (not useAuth) so a card rendered outside
 // an AuthProvider just shows the read-only status, no interactive controls.
 
 type Phase = { kind: "form"; error?: string } | { kind: "submitting" }
@@ -44,6 +45,52 @@ export function ClipAppealStatus({
   /** The caller's latest appeal against this clip's current (or most recent) decision. */
   appeal: AppealView | null
 }) {
+  const removed = clip.removed_at != null
+  return (
+    <ModerationAppealStatus
+      target={{ kind: "clip", id: clip.id }}
+      removed={removed}
+      flagged={clip.content_warning === true}
+      decidedAt={(removed ? clip.removed_at : clip.flagged_at) ?? null}
+      appeal={appeal}
+    />
+  )
+}
+
+/** A video moderation took down (#623); the caller only renders it for one. */
+export function VideoAppealStatus({
+  videoId,
+  appeal,
+}: {
+  videoId: string
+  /** The caller's latest appeal against this video's unpublishes. */
+  appeal: AppealView | null
+}) {
+  return (
+    <ModerationAppealStatus
+      target={{ kind: "video", id: videoId }}
+      removed
+      flagged={false}
+      decidedAt={null}
+      appeal={appeal}
+    />
+  )
+}
+
+function ModerationAppealStatus({
+  target,
+  removed,
+  flagged,
+  decidedAt,
+  appeal,
+}: {
+  target: AppealTarget
+  removed: boolean
+  flagged: boolean
+  /** When the decision in force was made, if known: an appeal older than it is against an earlier one. */
+  decidedAt: string | null
+  appeal: AppealView | null
+}) {
   const auth = useContext(AuthContext)
   // What this card last submitted, and the `appeal` prop it replaced. A refetch
   // hands down a new prop object, which supersedes it (#543).
@@ -61,17 +108,15 @@ export function ClipAppealStatus({
   const [infoDone, setInfoDone] = useState<string | null>(null)
 
   const current = override?.over === appeal ? override.value : appeal
-  const removed = clip.removed_at != null
-  const flagged = clip.content_warning === true
   if (!removed && !flagged && !current) return null
 
   // An appeal only blocks the decision it was filed against. A later removal
   // restamps removed_at, and a re-flag flagged_at (#543), so a decision newer
   // than the appeal is a new one.
-  const decidedAt = removed ? clip.removed_at : clip.flagged_at
+  const removalAction = target.kind === "video" ? "unpublish" : "remove"
   const coversCurrentDecision =
     !!current &&
-    current.action === (removed ? "remove" : "flag") &&
+    current.action === (removed ? removalAction : "flag") &&
     !(
       decidedAt != null &&
       new Date(decidedAt).getTime() > new Date(current.created_at).getTime()
@@ -100,7 +145,7 @@ export function ClipAppealStatus({
   async function submit() {
     if (!accessToken || !reason.trim()) return
     setPhase({ kind: "submitting" })
-    const result = await submitClipAppeal(clip.id, reason, context, accessToken)
+    const result = await submitAppeal(target, reason, context, accessToken)
     if (result.status === "submitted") {
       setOverride({ over: appeal, value: result.appeal })
       setDoneMessage(result.message)
@@ -113,7 +158,7 @@ export function ClipAppealStatus({
   async function sendMoreInfo() {
     if (!accessToken || !infoContext.trim()) return
     setInfoPhase({ kind: "submitting" })
-    const result = await addAppealContext(clip.id, infoContext, accessToken)
+    const result = await addContext(target, infoContext, accessToken)
     if (result.status === "submitted") {
       setOverride({ over: appeal, value: result.appeal })
       setInfoDone(result.message)
@@ -180,11 +225,11 @@ export function ClipAppealStatus({
               void sendMoreInfo()
             }}
           >
-            <Label htmlFor={`appeal-more-info-${clip.id}`}>
+            <Label htmlFor={`appeal-more-info-${target.kind}-${target.id}`}>
               Additional context
             </Label>
             <Textarea
-              id={`appeal-more-info-${clip.id}`}
+              id={`appeal-more-info-${target.kind}-${target.id}`}
               value={infoContext}
               onChange={(e) => setInfoContext(e.target.value)}
               maxLength={2000}

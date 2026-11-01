@@ -283,6 +283,17 @@ describe("publishVideo", () => {
     expect(await publishVideo("v1", "tok")).toEqual({ status: "not_found" })
   })
 
+  it("tells a moderation takedown apart from other refusals (#623)", async () => {
+    mockFetch(403, { detail: "This video was removed by moderation." })
+    expect(await publishVideo("v1", "tok")).toEqual({ status: "removed" })
+    vi.restoreAllMocks()
+    mockFetch(403, { detail: "Your account is suspended." })
+    expect(await publishVideo("v1", "tok")).toEqual({
+      status: "error",
+      detail: "Your account is suspended.",
+    })
+  })
+
   it("classifies a network error", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"))
     expect(await publishVideo("v1", "tok")).toEqual({

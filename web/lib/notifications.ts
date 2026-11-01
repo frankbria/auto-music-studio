@@ -141,6 +141,17 @@ export type NotificationsPage = {
   hasMore: boolean
 }
 
+/** The takedown notice opens the video page with its appeal (#623). */
+function videoAppealHref(
+  clipId: string | null | undefined,
+  videoId: string | null
+): string {
+  if (!clipId) return "/notifications"
+  return videoId
+    ? `/video/${clipId}?appeal=${encodeURIComponent(videoId)}`
+    : `/video/${clipId}`
+}
+
 function text(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key]
   return typeof value === "string" && value.trim() ? value : null
@@ -193,7 +204,7 @@ export function toAppNotification(
       return row(
         "moderation",
         `Moderation unpublished your video for ${song}.${suffix("Reason", text(p, "reason"))}`,
-        event.clip_id ? `/video/${event.clip_id}` : "/notifications"
+        videoAppealHref(event.clip_id, text(p, "video_id"))
       )
     case "moderation_video_restored":
       return row(

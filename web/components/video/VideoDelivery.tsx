@@ -3,6 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 
+import { VideoAppealPanel } from "@/components/moderation/VideoAppealPanel"
 import { Button } from "@/components/ui/button"
 import { VideoEditor } from "@/components/video/VideoEditor"
 import { useAuth } from "@/hooks/use-auth"
@@ -12,6 +13,7 @@ type PublishState =
   | { status: "idle" }
   | { status: "publishing" }
   | { status: "published" }
+  | { status: "removed" }
   | { status: "error"; message: string }
 
 /**
@@ -47,6 +49,9 @@ export function VideoDelivery({
           status: "error",
           message: "Please sign in again to publish.",
         })
+        return
+      case "removed":
+        setPublish({ status: "removed" })
         return
       case "not_found":
         setPublish({
@@ -114,6 +119,7 @@ export function VideoDelivery({
           Published — it now appears on the song page.
         </p>
       )}
+      {publish.status === "removed" && <VideoAppealPanel videoId={videoId} />}
       {publish.status === "error" && (
         <p role="alert" className="text-sm text-destructive">
           {publish.message}

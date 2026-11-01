@@ -27,11 +27,7 @@ export type VideoTransitions = "auto" | "cut" | "fade" | "dissolve"
 
 /** The render lifecycle states the status endpoint reports. */
 export type VideoState =
-  | "queued"
-  | "rendering"
-  | "encoding"
-  | "complete"
-  | "failed"
+  "queued" | "rendering" | "encoding" | "complete" | "failed"
 
 // Backend request bounds (src/acemusic/api/routers/videos.py).
 export const MAX_REFERENCE_IMAGES = 5
@@ -200,6 +196,8 @@ export type PublishVideoResult =
   | { status: "published"; video: VideoDetail }
   | { status: "unauthorized" }
   | { status: "not_found" }
+  /** Moderation took it down (#623): the owner can appeal rather than retry. */
+  | { status: "removed" }
   | { status: "error"; detail: string }
 
 /** A single status poll's outcome, classified for the job state machine. */
@@ -317,6 +315,9 @@ export function videoStreamUrl(
   return opts?.download ? `${base}?download=1` : base
 }
 
+/** The API's refusal for a video moderation took down (routers/videos.py). */
+const VIDEO_REMOVED = "This video was removed by moderation."
+
 /** Publish a rendered video (owner-only) through the BFF proxy and classify it. */
 export async function publishVideo(
   videoId: string,
@@ -336,6 +337,8 @@ export async function publishVideo(
   if (res.status === 404) return { status: "not_found" }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
+    if (res.status === 403 && extractDetail(body, "") === VIDEO_REMOVED)
+      return { status: "removed" }
     return {
       status: "error",
       detail: extractDetail(body, "Publishing failed. Please try again."),
@@ -354,10 +357,7 @@ export async function publishVideo(
 
 /** The non-destructive edit operations (mirrors the backend VideoEditRequest). */
 export type VideoEditOperation =
-  | "trim"
-  | "replace_scene"
-  | "lyrics_overlay"
-  | "transitions"
+  "trim" | "replace_scene" | "lyrics_overlay" | "transitions"
 
 /** A single edit request payload (only the fields the operation needs). */
 export type VideoEditPayload =

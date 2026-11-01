@@ -161,6 +161,17 @@ describe("toAppNotification (#537)", () => {
     expect(row).toMatchObject({ type: "moderation", message, href })
   })
 
+  it("opens a takedown notice on the video's appeal (#623)", () => {
+    const row = toAppNotification(
+      event({
+        event_type: "moderation_video_unpublished",
+        clip_id: "c1",
+        payload: { title: "Song", reason: null, video_id: "v1" },
+      })
+    )
+    expect(row.href).toBe("/video/c1?appeal=v1")
+  })
+
   it("says when a dropped artwork image was the cover (#571)", () => {
     const row = toAppNotification(
       event({

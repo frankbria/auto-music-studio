@@ -73,6 +73,13 @@ describe("AppealsPanel", () => {
     expect(await screen.findByText("Clip deleted")).toBeInTheDocument()
   })
 
+  it("names a video appeal by its song and its action (#623)", async () => {
+    stubBackend([item({ video_id: "v1", action: "unpublish" })])
+    render(<AppealsPanel accessToken="tok" />)
+    expect(await screen.findByText("Video for Song A")).toBeInTheDocument()
+    expect(screen.getByText("Video unpublished")).toBeInTheDocument()
+  })
+
   it("defaults to the open queue, and toggling to All refetches", async () => {
     const fetchMock = stubBackend([item()])
     render(<AppealsPanel accessToken="tok" />)

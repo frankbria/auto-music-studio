@@ -8,6 +8,12 @@ vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({ accessToken: "tok" }),
 }))
 
+vi.mock("@/components/moderation/VideoAppealPanel", () => ({
+  VideoAppealPanel: ({ videoId }: { videoId: string }) => (
+    <p>appeal panel for {videoId}</p>
+  ),
+}))
+
 // Keep videoStreamUrl real (a pure URL builder); stub only the network call.
 vi.mock("@/lib/video", async (orig) => ({
   ...(await orig<typeof import("@/lib/video")>()),
@@ -45,30 +51,57 @@ describe("VideoDelivery", () => {
     })
     render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
 
-    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /publish to song page/i })
+    )
     expect(publishMock).toHaveBeenCalledWith("v1", "tok")
 
     const link = await screen.findByRole("link", { name: /view on song page/i })
     expect(link).toHaveAttribute("href", "/song/s1")
-    expect(screen.getByText(/it now appears on the song page/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/it now appears on the song page/i)
+    ).toBeInTheDocument()
   })
 
   it("surfaces a publish error", async () => {
-    publishMock.mockResolvedValue({ status: "error", detail: "Publishing failed. Please try again." })
+    publishMock.mockResolvedValue({
+      status: "error",
+      detail: "Publishing failed. Please try again.",
+    })
     render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
 
-    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /publish to song page/i })
+    )
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(/publishing failed/i)
     )
     // Still publishable — the button stays (no false "published" state).
-    expect(screen.getByRole("button", { name: /publish to song page/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /publish to song page/i })
+    ).toBeInTheDocument()
+  })
+
+  it("offers the appeal when moderation took the video down (#623)", async () => {
+    publishMock.mockResolvedValue({ status: "removed" })
+    render(<VideoDelivery videoId="v1" songId="s1" onReset={() => {}} />)
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /publish to song page/i })
+    )
+
+    expect(await screen.findByText("appeal panel for v1")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 
   it("maps unauthorized and not_found to their own messages", async () => {
     publishMock.mockResolvedValueOnce({ status: "unauthorized" })
-    const { unmount } = render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
-    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    const { unmount } = render(
+      <VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: /publish to song page/i })
+    )
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(/sign in again/i)
     )
@@ -76,9 +109,13 @@ describe("VideoDelivery", () => {
 
     publishMock.mockResolvedValueOnce({ status: "not_found" })
     render(<VideoDelivery videoId="v1" songId="s1" onReset={vi.fn()} />)
-    fireEvent.click(screen.getByRole("button", { name: /publish to song page/i }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /publish to song page/i })
+    )
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(/no longer available/i)
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /no longer available/i
+      )
     )
   })
 
