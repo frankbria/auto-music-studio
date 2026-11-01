@@ -20,7 +20,7 @@ An appeal outcome (`moderation_appeal_reversed`) is inserted into `notification_
 
 ## 3. The tab regains focus, and the notice and the badge arrive with no reload
 
-`window.dispatchEvent(new Event("focus"))`, then the page text, and the count of inbox requests the page made (the first load plus the refreshes):
+`window.dispatchEvent(new Event("focus"))`, then the page text, and the number of inbox requests the page made: the first load, which React dev mode runs twice, plus the focus refresh.
 
 ```output
 "Notifications\n\n2 unread\n\nMark all as read\nYour appeal for \"Demo clip 1\" was accepted and the decision reversed. Note: Licence checked\njust now\nModeration removed \"Demo clip 1\". Reason: Uncleared sample\n1h ago"
