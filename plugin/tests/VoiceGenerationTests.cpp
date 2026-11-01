@@ -811,6 +811,8 @@ public:
         {
             test::StubAceStepServer server;
             expect (server.start() != 0);
+            // A route, because the stub only counts fragments it has one for.
+            server.setResponseFor ("/preview", "not audio");
             server.holdResponse();
 
             ScopedClipCleanup cleanup;
