@@ -46,6 +46,11 @@ int main (int argc, char** argv)
     if (argc == 4 && juce::String (argv[1]) == "--refresh-session")
         return refreshSessionOnce (argv[2], argv[3]);
 
+    juce::SystemStats::setApplicationCrashHandler ([] (void*)
+    {
+        std::cout << "CRASH backtrace:\n" << juce::SystemStats::getStackBacktrace() << std::endl;
+    });
+
     StdoutTestRunner runner;
     runner.setAssertOnFailure (false);
 
