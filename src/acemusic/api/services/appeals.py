@@ -238,12 +238,14 @@ async def decide(
     updates: dict = {"status": new_status, "admin_note": note}
     if decision != "request_info":
         updates.update(decided_at=utcnow(), decided_by=PydanticObjectId(actor_id))
-    appeal = await ClipAppeal.find_one({"_id": oid, "status": {"$in": list(OPEN_APPEAL_STATUSES)}}).update(
-        {"$set": updates}, response_type=UpdateResponse.NEW_DOCUMENT
+    # The pre-claim state, not `existing`: a creator's answer landing before the claim must survive a rollback.
+    claimed_from = await ClipAppeal.find_one({"_id": oid, "status": {"$in": list(OPEN_APPEAL_STATUSES)}}).update(
+        {"$set": updates}, response_type=UpdateResponse.OLD_DOCUMENT
     )
-    if appeal is None:
+    if claimed_from is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
-    await _reject_if_superseded(existing, appeal, clip, in_force, decision)
+    appeal = claimed_from.model_copy(update=updates)
+    await _apply_unless_superseded(claimed_from, appeal, clip, in_force, decision)
     restored = await _restore_releases(clip, appeal, in_force, decision, settings)
     await NotificationEvent(
         user_id=appeal.user_id,
@@ -278,20 +280,28 @@ async def _still_in_force(
     return await _set_unless_moderated_since(clip, fields)
 
 
-async def _reject_if_superseded(
-    existing: ClipAppeal, appeal: ClipAppeal, clip: Clip | None, in_force: ModerationLogEntry, decision: AppealDecision
+async def _apply_unless_superseded(
+    claimed_from: ClipAppeal,
+    appeal: ClipAppeal,
+    clip: Clip | None,
+    in_force: ModerationLogEntry,
+    decision: AppealDecision,
 ) -> None:
-    """A moderation action landing since the read replaced the decision (#587): a reversal must not undo it,
-    and neither outcome may reach the creator, so the appeal goes back to how it was."""
+    """Applies a reversal to the clip, or 409s if a moderation action landed since the read (#587).
+
+    A superseded decision must not be undone, and neither outcome may reach the creator, so the claimed appeal
+    goes back to how it was. Owner edits that add a screening flag also reset the stamp checked here, so they
+    earn the same 409; it is retryable and errs toward leaving the decision in force.
+    """
     if decision == "uphold" or clip is None or await _still_in_force(clip, appeal, in_force, decision):
         return
-    await ClipAppeal.find_one({"_id": existing.id, "status": appeal.status}).update(
+    await ClipAppeal.find_one({"_id": claimed_from.id, "status": appeal.status}).update(
         {
             "$set": {
-                "status": existing.status,
-                "admin_note": existing.admin_note,
-                "decided_at": existing.decided_at,
-                "decided_by": existing.decided_by,
+                "status": claimed_from.status,
+                "admin_note": claimed_from.admin_note,
+                "decided_at": claimed_from.decided_at,
+                "decided_by": claimed_from.decided_by,
             }
         }
     )

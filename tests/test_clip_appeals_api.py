@@ -331,6 +331,26 @@ class TestDecideAppeal:
             is None
         )
 
+    async def test_a_rolled_back_decision_keeps_an_answer_that_landed_before_it(self, client, settings, monkeypatch):
+        owner, clip, appeal = await _appealed(client, settings)
+        assert (await _decide(client, settings, appeal["id"], "request_info", note="Send the stems")).status_code == 200
+        admin = await _user(is_admin=True)
+        read_in_force = appeal_service._appealable_action
+
+        async def answer_and_removal_land_after_the_read(clip_read):
+            in_force = await read_in_force(clip_read)
+            await appeal_service.answer_info_request(str(clip.id), str(owner.id), "Stems attached")
+            await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), "Removed again")
+            return in_force
+
+        monkeypatch.setattr(appeal_service, "_appealable_action", answer_and_removal_land_after_the_read)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 409
+
+        kept = await ClipAppeal.get(appeal["id"])
+        assert kept.status == "pending"
+        assert "Stems attached" in kept.context
+
     async def test_the_queue_marks_an_appeal_a_newer_decision_replaced(self, client, settings):
         _, clip, stale = await _appealed(client, settings)
         _, _, live = await _appealed(client, settings)
