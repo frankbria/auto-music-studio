@@ -678,6 +678,21 @@ class TestPluginTokenCap:
         assert len(listed.json()) == PLUGIN_TOKEN_CAP + 2
         assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 409
 
+    async def test_expired_tokens_do_not_count_toward_the_cap(self, client, settings, monkeypatch):
+        from acemusic.api.auth.services import store_refresh_token
+        from acemusic.api.auth.tokens import create_refresh_token
+        from acemusic.api.models import User
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-exp", email="expired-cap@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        user = await User.find_one(User.email == "expired-cap@example.com")
+        expired = datetime.now(timezone.utc) - timedelta(days=1)
+        for _ in range(PLUGIN_TOKEN_CAP):
+            await store_refresh_token(user.id, create_refresh_token(), expired, kind="plugin")
+
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
+
 
 class TestPluginTokenList:
     """``GET``/``DELETE /auth/plugin-tokens`` (#515): see and revoke plugin tokens."""
