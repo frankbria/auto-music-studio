@@ -17,6 +17,7 @@ from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import (
     ArtworkOption,
     Clip,
+    ClipAppeal,
     Job,
     ModerationLogEntry,
     NotificationEvent,
@@ -29,6 +30,7 @@ from acemusic.api.models import (
     Workspace,
 )
 from acemusic.api.services import (
+    appeals as appeal_service,
     artwork as artwork_service,
     moderation,
     releases as release_service,
@@ -46,6 +48,8 @@ LOG_URL = f"{ADMIN_URL}/log"
 VIDEOS_URL = f"{API_V1_PREFIX}/videos"
 VOICE_URL = f"{API_V1_PREFIX}/voice-models"
 VIDEO_REMOVED = "This video was removed by moderation."
+APPEALS_URL = f"{ADMIN_URL}/appeals"
+SUPERSEDED = "A newer moderation decision has replaced the one appealed."
 
 _SEQ = itertools.count(1)
 
@@ -415,7 +419,7 @@ class TestVideoRestore:
         stale = await Video.get(video.id)
         await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 2, 1)}})
 
-        assert await moderation._restore_video(stale) == "This video is not taken down."
+        assert await moderation.restore_video(stale) == "This video is not taken down."
         assert (await Video.get(video.id)).removed_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
 
     async def test_unpublishing_a_video_already_down_does_not_notify_again(self, client, settings):
@@ -898,3 +902,146 @@ def test_moderated_documents_are_never_whole_document_saved():
         if f"{name}.save()" in text:
             offenders.append(f"{rel}: {name}.save()")
     assert offenders == []
+
+
+async def _appeal_video(client, owner, settings, video, reason="It's footage I shot myself"):
+    return await client.post(f"{VIDEOS_URL}/{video.id}/appeal", json={"reason": reason}, headers=_auth(owner, settings))
+
+
+async def _decide(client, admin, settings, appeal_id, decision, note=None):
+    body = {"decision": decision} | ({"note": note} if note else {})
+    return await client.post(f"{APPEALS_URL}/{appeal_id}", json=body, headers=_auth(admin, settings))
+
+
+@pytest.mark.integration
+class TestVideoAppeals:
+    """#623: an owner contests the unpublish in force on their video, one appeal per decision."""
+
+    async def _unpublished(self, client, settings):
+        owner, admin = await _user(), await _admin()
+        video = await _video(owner, published=True)
+        await _act(client, admin, settings, "video", "unpublish", [video.id], reason="gore")
+        return owner, admin, video
+
+    async def test_appeal_reverse_republish(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+
+        resp = await _appeal_video(client, owner, settings, video)
+        assert resp.status_code == 201, resp.text
+        appeal = resp.json()
+        assert (appeal["video_id"], appeal["clip_id"], appeal["action"]) == (
+            str(video.id),
+            str(video.clip_id),
+            "unpublish",
+        )
+
+        decided = await _decide(client, admin, settings, appeal["id"], "reverse", note="Original footage")
+        assert decided.status_code == 200, decided.text
+        assert decided.json()["status"] == "reversed"
+        assert (await Video.get(video.id)).removed_at is None
+        [notice] = await NotificationEvent.find({"event_type": "moderation_appeal_reversed"}).to_list()
+        assert notice.user_id == owner.id and notice.payload["note"] == "Original footage"
+        [entry] = await ModerationLogEntry.find({"action": "appeal_reversed"}).to_list()
+        assert (entry.target_type, entry.target_id) == ("video", str(video.id))
+
+        republish = await client.post(f"{VIDEOS_URL}/{video.id}/publish", headers=_auth(owner, settings))
+        assert republish.status_code == 200, republish.text
+        assert (await Video.get(video.id)).published is True
+
+    async def test_reversal_lifts_the_takedown_its_edits_inherited(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        source = await Video.get(video.id)
+        edit = await Video(
+            clip_id=video.clip_id,
+            user_id=owner.id,
+            job_id=PydanticObjectId(),
+            storage_path="edit.mp4",
+            resolution="720p",
+            aspect_ratio="16:9",
+            removed_at=source.removed_at,
+        ).insert()
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+
+        assert (await _decide(client, admin, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert (await Video.get(edit.id)).removed_at is None
+
+    async def test_one_appeal_per_decision(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        assert (await _appeal_video(client, owner, settings, video)).status_code == 201
+
+        again = await _appeal_video(client, owner, settings, video)
+
+        assert again.status_code == 409
+        assert again.json()["detail"] == "You have already appealed this decision."
+
+    async def test_only_the_owner_appeals_and_only_a_video_taken_down(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        up = await _video(owner, published=True)
+
+        assert (await _appeal_video(client, await _user(), settings, video)).status_code == 404
+        not_down = await _appeal_video(client, owner, settings, up)
+        assert not_down.status_code == 400
+        assert not_down.json()["detail"] == "This video has no moderation decision to appeal."
+
+    async def test_a_newer_unpublish_supersedes_the_appeal(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+        await _act(client, admin, settings, "video", "unpublish", [video.id], reason="again")
+
+        resp = await _decide(client, admin, settings, appeal["id"], "reverse")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == SUPERSEDED
+        assert (await Video.get(video.id)).removed_at is not None
+        queue = (await client.get(f"{APPEALS_URL}?status=all", headers=_auth(admin, settings))).json()["appeals"]
+        [item] = [a for a in queue if a["id"] == appeal["id"]]
+        assert item["superseded"] is True and item["video_id"] == str(video.id)
+        assert (await _decide(client, admin, settings, appeal["id"], "uphold")).status_code == 200
+
+    async def test_an_unpublish_landing_mid_decision_is_not_lifted(self, client, settings, monkeypatch):
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+        read_in_force = appeal_service._video_in_force
+
+        async def unpublish_lands_after_the_read(video_read):
+            in_force = await read_in_force(video_read)
+            await moderation.act_on_content(str(admin.id), "video", "unpublish", str(video.id), "again")
+            return in_force
+
+        monkeypatch.setattr(appeal_service, "_video_in_force", unpublish_lands_after_the_read)
+
+        resp = await _decide(client, admin, settings, appeal["id"], "reverse")
+
+        assert resp.status_code == 409, resp.text
+        assert (await Video.get(video.id)).removed_at is not None
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+        assert await NotificationEvent.find_one({"event_type": "moderation_appeal_reversed"}) is None
+
+    async def test_info_is_answered_on_the_video_not_its_song(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+        assert (
+            await _decide(client, admin, settings, appeal["id"], "request_info", note="Raw files?")
+        ).status_code == 200
+
+        on_song = await client.patch(
+            f"{API_V1_PREFIX}/clips/{video.clip_id}/appeal", json={"context": "here"}, headers=_auth(owner, settings)
+        )
+        assert on_song.status_code == 409
+
+        on_video = await client.patch(
+            f"{VIDEOS_URL}/{video.id}/appeal", json={"context": "Raw files attached"}, headers=_auth(owner, settings)
+        )
+        assert on_video.status_code == 200, on_video.text
+        assert on_video.json()["status"] == "pending"
+
+    async def test_the_queue_and_my_appeals_carry_the_video(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+
+        queue = (await client.get(APPEALS_URL, headers=_auth(admin, settings))).json()["appeals"]
+        [item] = [a for a in queue if a["id"] == appeal["id"]]
+        assert (item["video_id"], item["action"], item["superseded"]) == (str(video.id), "unpublish", False)
+        mine = (await client.get(f"{API_V1_PREFIX}/users/me/appeals", headers=_auth(owner, settings))).json()
+        assert [a["video_id"] for a in mine["appeals"]] == [str(video.id)]

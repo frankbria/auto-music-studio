@@ -1,7 +1,8 @@
-"""A creator's appeal of a moderation decision on their clip (US-27.4).
+"""A creator's appeal of a moderation decision on their clip (US-27.4), or on one of its videos (#623).
 
 An appeal targets one moderation action: the ``ModerationLogEntry`` that removed or flagged
-the clip. The unique ``action_id`` index is what makes "one appeal per decision" hold under
+the clip, or unpublished the video. A video appeal carries ``video_id``; ``clip_id`` is then the
+video's song, so clip-scoped reads must exclude video appeals. The unique ``action_id`` index is what makes "one appeal per decision" hold under
 concurrent submits; a later removal is a new log entry, so it can be appealed afresh.
 """
 
@@ -15,12 +16,13 @@ from pymongo import ASCENDING, DESCENDING, IndexModel
 from .common import utcnow
 
 AppealStatus = Literal["pending", "info_requested", "upheld", "reversed"]
-AppealedAction = Literal["remove", "flag"]
+AppealedAction = Literal["remove", "flag", "unpublish"]
 OPEN_APPEAL_STATUSES: tuple[AppealStatus, ...] = ("pending", "info_requested")
 
 
 class ClipAppeal(Document):
     clip_id: PydanticObjectId
+    video_id: PydanticObjectId | None = None
     user_id: PydanticObjectId
     action_id: PydanticObjectId
     action: AppealedAction
@@ -39,4 +41,5 @@ class ClipAppeal(Document):
             IndexModel([("status", ASCENDING), ("created_at", DESCENDING)]),
             IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
             IndexModel([("clip_id", ASCENDING), ("created_at", DESCENDING)]),
+            IndexModel([("video_id", ASCENDING), ("created_at", DESCENDING)]),
         ]

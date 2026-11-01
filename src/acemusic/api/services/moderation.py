@@ -397,7 +397,7 @@ async def _unpublish_content(video: Video, now: datetime) -> _ContentOutcome:
 
 
 async def _restore_content(video: Video, _now: datetime) -> _ContentOutcome:
-    if refused := await _restore_video(video):
+    if refused := await restore_video(video):
         return refused, {}, None
     return None, {}, ("moderation_video_restored", {"video_id": str(video.id)})
 
@@ -447,7 +447,7 @@ async def _unpublish_stamp(video: Video, now: datetime) -> datetime:
     return now if owner is not None and owner.banned_at == video.removed_at else video.removed_at
 
 
-async def _restore_video(video: Video) -> str | None:
+async def restore_video(video: Video) -> str | None:
     """Lift a takedown so the owner may publish again (#571). The video stays unpublished until they do."""
     if video.removed_at is None:
         return "This video is not taken down."
@@ -455,8 +455,11 @@ async def _restore_video(video: Video) -> str | None:
     if owner is not None and owner.banned_at is not None:
         return "The video's owner is banned."
     # Conditional on the takedown read: of two concurrent restores only one applies, and an unpublish that
-    # re-stamps removed_at meanwhile is not lifted by a restore aimed at the older one.
-    lifted = await Video.find({"_id": video.id, "removed_at": video.removed_at}).update({"$set": {"removed_at": None}})
+    # re-stamps removed_at meanwhile is not lifted by a restore aimed at the older one. A re-unpublish of a video
+    # already down keeps its stamp but refreshes moderation_reviewed_at, so that is matched too (#623).
+    lifted = await Video.find(
+        {"_id": video.id, "removed_at": video.removed_at, "moderation_reviewed_at": video.moderation_reviewed_at}
+    ).update({"$set": {"removed_at": None}})
     if not lifted.modified_count:
         return "This video is not taken down."
     # Edits copy their source's removed_at (tasks/video.py), so the same stamp on this song's videos is this takedown.
@@ -666,11 +669,16 @@ async def _restorable_videos(oids: list[PydanticObjectId]) -> set[str]:
 
 
 async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
-    """The page's video unpublish entries in force: each still-down video's latest unpublish."""
-    oids = _unpublished_video_ids(entries)
-    if not oids:
+    """The page's video unpublish entries in force."""
+    return await unpublishes_in_force(_unpublished_video_ids(entries))
+
+
+async def unpublishes_in_force(video_ids: list[PydanticObjectId]) -> set[str]:
+    """The unpublish log entries in force on these videos: each still-down video's latest, unless its owner is
+    banned. What Restore can lift (#624), and what a video appeal targets (#623)."""
+    if not video_ids:
         return set()
-    down = await _restorable_videos(oids)
+    down = await _restorable_videos(video_ids)
     latest = await ModerationLogEntry.aggregate(
         [
             {"$match": {"target_type": "video", "action": "unpublish", "target_id": {"$in": sorted(down)}}},
