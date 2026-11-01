@@ -23,6 +23,7 @@ The dialog read back from the DOM after the click:
 `ClipCard` now renders Get Full Song only when `onGetFullSong` is passed:
 
 ```output
-✓ components/workspace/ClipCard.test.tsx > hides Get Full Song when the caller can't handle it (#616)
-✓ components/song/RelatedSongs.test.tsx > RelatedSongs Get Full Song (#616) > opens the full-song wizard for your own short clip
+✓ components/workspace/ClipCard.test.tsx > ClipCard > hides Get Full Song when the caller can't handle it (#616)
+ ✓ components/song/RelatedSongs.test.tsx > RelatedSongs Get Full Song (#616) > opens the full-song wizard for your own short clip
+      Tests  2 passed | 47 skipped (49)
 ```
