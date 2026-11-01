@@ -6,7 +6,7 @@ stamp, show up in the queue under their own type, and take the actions that fit 
 """
 
 import itertools
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -416,7 +416,7 @@ class TestVideoRestore:
         await Video.find({"_id": video.id}).update({"$set": {"removed_at": datetime(2026, 2, 1)}})
 
         assert await moderation._restore_video(stale) == "This video is not taken down."
-        assert (await Video.get(video.id)).removed_at == datetime(2026, 2, 1)
+        assert (await Video.get(video.id)).removed_at == datetime(2026, 2, 1, tzinfo=timezone.utc)
 
     async def test_unpublishing_a_video_already_down_does_not_notify_again(self, client, settings):
         owner = await _user()
@@ -466,7 +466,7 @@ class TestVideoRestore:
         await _act(client, admin, settings, "video", "restore", [video.id])
 
         assert (await Video.get(edit.id)).removed_at is None
-        assert (await Video.get(other.id)).removed_at == datetime(2026, 1, 1)
+        assert (await Video.get(other.id)).removed_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
         resp = await client.post(f"{VIDEOS_URL}/{edit.id}/publish", headers=_auth(owner, settings))
         assert resp.status_code == 200, resp.text
 
