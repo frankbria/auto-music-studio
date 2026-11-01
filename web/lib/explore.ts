@@ -18,7 +18,8 @@ export const GENRES: Genre[] = [
   { id: "g-classical", name: "Classical", slug: "classical" },
   { id: "g-jazz", name: "Jazz", slug: "jazz" },
   { id: "g-pop", name: "Pop", slug: "pop" },
-  { id: "g-rnb", name: "R&B", slug: "rnb" },
+  // The style match anchors at symbol edges, so "r&b" finds "smooth r&b groove"; "rnb" found nothing (#657).
+  { id: "g-rnb", name: "R&B", slug: "r&b" },
   { id: "g-country", name: "Country", slug: "country" },
 ]
 
