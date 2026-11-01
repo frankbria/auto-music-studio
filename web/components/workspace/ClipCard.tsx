@@ -181,7 +181,8 @@ export function ClipCard({
   const version = versionLabel(clip.model)
   const metadataLabel = modeLabel(clip.generation_mode)
   const styleText = clip.style_tags.join(", ")
-  const showFullSong = isOwner && isFullSongEligible(clip)
+  // Only where a caller handles it: a card without the handler would show a button that does nothing (#616).
+  const showFullSong = isOwner && isFullSongEligible(clip) && !!onGetFullSong
 
   function startEdit() {
     setDraft(title ?? "")
@@ -411,7 +412,7 @@ export function ClipCard({
               variant="outline"
               size="sm"
               className="ml-1"
-              onClick={() => onGetFullSong?.(clip.id)}
+              onClick={() => onGetFullSong(clip.id)}
             >
               Get Full Song
             </Button>
