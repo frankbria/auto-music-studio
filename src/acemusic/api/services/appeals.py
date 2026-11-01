@@ -243,10 +243,24 @@ async def decide(
     )
     if appeal is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
+    # A moderation action landing since the read replaced the decision (#587): a reversal must not undo it,
+    # and neither outcome may reach the creator, so the appeal goes back to how it was.
+    if decision != "uphold" and clip is not None and not await _still_in_force(clip, appeal, in_force, decision):
+        await ClipAppeal.find_one({"_id": oid, "status": new_status}).update(
+            {
+                "$set": {
+                    "status": existing.status,
+                    "admin_note": existing.admin_note,
+                    "decided_at": existing.decided_at,
+                    "decided_by": existing.decided_by,
+                }
+            }
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
 
     restored: dict = {}
-    if decision == "reverse" and clip is not None:
-        restored = await _restore(clip, appeal, in_force, settings)
+    if decision == "reverse" and clip is not None and appeal.action == "remove":
+        restored = await _restore_releases(clip, in_force, settings)
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
@@ -270,14 +284,20 @@ async def decide(
     return appeal
 
 
-async def _restore(clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry, settings: ApiSettings) -> dict:
-    """Undo the appealed decision; returns what the reversal's log entry records about the releases."""
-    if appeal.action == "flag":
-        await _set_unless_moderated_since(clip, {"content_warning": False})
-        return {}
-    restored = await _set_unless_moderated_since(clip, _undo_removal(in_force))
+async def _still_in_force(
+    clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry, decision: AppealDecision
+) -> bool:
+    """A reversal undoes the decision here, only if no moderation action landed since the clip was read."""
+    if decision == "request_info":
+        return await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).exists()
+    fields = {"content_warning": False} if appeal.action == "flag" else _undo_removal(in_force)
+    return await _set_unless_moderated_since(clip, fields)
+
+
+async def _restore_releases(clip: Clip, in_force: ModerationLogEntry, settings: ApiSettings) -> dict:
+    """What the reversal's log entry records about the releases a reversed removal put back."""
     releases = in_force.details.get("previous_release_visibility")
-    if releases is None or not restored:
+    if releases is None:
         return {}
     try:
         return await release_service.restore_releases(clip, releases, in_force.created_at, settings)
@@ -299,7 +319,7 @@ async def _set_unless_moderated_since(clip: Clip, fields: dict) -> bool:
     result = await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).update(
         {"$set": fields}
     )
-    return bool(result.modified_count)
+    return bool(result.matched_count)
 
 
 def _appeal_not_found() -> HTTPException:
