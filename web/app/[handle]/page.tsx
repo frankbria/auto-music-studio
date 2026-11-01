@@ -7,15 +7,16 @@ import { ProfileView } from "@/components/profile/ProfileView"
 // Public profile route /@handle (US-20.5). This is a root dynamic segment, so it
 // also catches unknown top-level paths — static routes (/explore, /search, …) win
 // over it, and anything reaching here that isn't "@handle" is a 404. The "@" is
-// part of the captured param; ProfileView strips it and 404s on an unknown handle.
+// part of the captured param; fetchPublicProfile strips it, and ProfileView 404s
+// on an unknown handle.
 
 export default function ProfilePage() {
   const params = useParams<{ handle: string }>()
   const handle = decodeHandle(params?.handle)
   if (!handle.startsWith("@")) notFound()
   // key={handle} forces a fresh mount per profile: the App Router reuses this
-  // component instance across /@a → /@b navigations, which would otherwise carry
-  // ProfileView's optimistic follow state onto the next profile.
+  // component instance across /@a → /@b navigations, which would otherwise keep
+  // showing the previous profile until the next one loads.
   return <ProfileView key={handle} handle={handle} />
 }
 

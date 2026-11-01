@@ -19,6 +19,7 @@ from beanie import PydanticObjectId
 from beanie.operators import In
 from fastapi import HTTPException, status
 from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
+from pymongo import ReturnDocument
 
 from acemusic.storage import get_storage_backend
 
@@ -43,7 +44,7 @@ from .common import coerce_object_id
 logger = logging.getLogger(__name__)
 
 ClipAction = Literal["approve", "remove", "flag"]
-UserAction = Literal["warn", "ban"]
+UserAction = Literal["warn", "ban", "unban"]
 QueueSource = Literal["report", "automated"]
 QueueSort = Literal["reports", "severity", "newest"]
 # #539: screening flags outputs that aren't clips too; each type takes the actions that fit it.
@@ -80,6 +81,8 @@ class QueueItem(BaseModel):
     report_count: int
     categories: dict[str, int]
     moderation_flags: list[str]
+    # #605: which outgoing text raised an automated flag, when it isn't on the clip itself.
+    flag_sources: list[str] = []
     sources: list[QueueSource]
     severity: int
     latest_at: datetime
@@ -274,6 +277,7 @@ def _queue_item(
         report_count=sum(categories.values()),
         categories=categories,
         moderation_flags=flags,
+        flag_sources=clip.moderation_flag_sources if flags else [],
         sources=sources,
         severity=severity,
         latest_at=report["latest"] if report else clip.created_at,
@@ -299,12 +303,14 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
 
 
 async def _approve_clip(clip: Clip, now: datetime, _reason: str | None) -> tuple[int, dict]:
-    await clip.set({"moderation_reviewed_at": now})
+    await clip.set({"moderation_reviewed_at": now, "moderation_flag_sources": []})
     return await _resolve_reports(clip.id, now), {}
 
 
 async def _flag_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
-    await clip.set({"moderation_reviewed_at": now, "content_warning": True, "flagged_at": now})
+    await clip.set(
+        {"moderation_reviewed_at": now, "moderation_flag_sources": [], "content_warning": True, "flagged_at": now}
+    )
     resolved = await _resolve_reports(clip.id, now)
     await _notify_clip_owner(clip, "moderation_clip_flagged", reason)
     return resolved, {}
@@ -312,12 +318,16 @@ async def _flag_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int
 
 async def _remove_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
     # US-27.4: a reversed appeal restores the visibility recorded here.
-    details: dict = {"previous_visibility": clip.visibility.value}
+    details: dict = {
+        "previous_visibility": clip.visibility.value,
+        "previous_release_visibility": await release_service.visible_releases(clip.id),
+    }
     # Before the write, so a failure here leaves nothing half-applied and the admin can retry (#569).
     details.update(await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id}))
     await clip.set(
         {
             "moderation_reviewed_at": now,
+            "moderation_flag_sources": [],
             "visibility": VisibilityState.PRIVATE,
             "is_public": False,
             "removed_at": now,
@@ -372,8 +382,7 @@ async def act_on_content(
             details["was_published"] = doc.published
             if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
                 notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-            # A video already down keeps its stamp: its edits carry that one, and restore matches on it.
-            updates.update(published=False, removed_at=doc.removed_at or now)
+            updates.update(published=False, removed_at=await _unpublish_stamp(doc, now))
         await doc.set(updates)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
@@ -384,6 +393,15 @@ async def act_on_content(
         except Exception:
             logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+async def _unpublish_stamp(video: Video, now: datetime) -> datetime:
+    """A video already down keeps its stamp: its edits carry that one, and restore matches on it. Not the owner's ban
+    stamp, though: an unban lifts those, and an admin's own unpublish has to outlive it (#581)."""
+    if video.removed_at is None:
+        return now
+    owner = await User.get(video.user_id)
+    return now if owner is not None and owner.banned_at == video.removed_at else video.removed_at
 
 
 async def _restore_video(video: Video) -> str | None:
@@ -455,32 +473,74 @@ async def act_on_user(actor_id: str, action: UserAction, user_id: str, reason: s
     user = await User.get(oid)
     if user is None:
         return ActionResult(ok=False, detail="User not found.")
-
-    if action == "warn":
-        await NotificationEvent(
-            user_id=oid, event_type="moderation_warning", channel="in_app", payload={"reason": reason}
-        ).insert()
-        details: dict = {}
-    else:
-        if str(oid) == actor_id:
-            return ActionResult(ok=False, detail="You cannot ban yourself.")
-        details = await _ban(user)
-    await log_action(actor_id, action, "user", str(oid), reason, details)
+    outcome = await _USER_ACTIONS[action](actor_id, user, reason)
+    if isinstance(outcome, str):
+        return ActionResult(ok=False, detail=outcome)
+    await log_action(actor_id, action, "user", str(oid), reason, outcome)
     return ActionResult(ok=True)
 
 
-async def _ban(user: User) -> dict:
-    now = utcnow()
-    if user.banned_at is None:
-        await user.set({"banned_at": now})
+async def _warn(_actor_id: str, user: User, reason: str | None) -> dict:
+    await NotificationEvent(
+        user_id=user.id, event_type="moderation_warning", channel="in_app", payload={"reason": reason}
+    ).insert()
+    return {}
+
+
+async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
+    """The log entry's details, or why the ban was refused."""
+    if str(user.id) == actor_id:
+        return "You cannot ban yourself."
+    # Claimed or read in one atomic write, so concurrent bans share one stamp and an unban landing meanwhile can't
+    # leave it unset: the stamp marks what the ban took down, and an unban lifts exactly that (#581).
+    claimed = await User.get_pymongo_collection().find_one_and_update(
+        {"_id": user.id},
+        [{"$set": {"banned_at": {"$ifNull": ["$banned_at", utcnow()]}}}],
+        return_document=ReturnDocument.AFTER,
+    )
+    stamp = claimed["banned_at"]
     await revoke_all_user_tokens(user.id)
-    clips_removed = await clip_service.take_down_visible({"user_id": user.id})
+    clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
     videos = await Video.find({"user_id": user.id, "published": True}).update(
-        {"$set": {"published": False, "removed_at": now}}
+        {"$set": {"published": False, "removed_at": stamp}}
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
+    if (in_force := await clip_service.hand_over_ban_sweep(user.id, stamp)) != stamp:
+        # The ban's videos follow its clips: back up, or onto the ban now in force.
+        await Video.find({"user_id": user.id, "removed_at": stamp}).update({"$set": {"removed_at": in_force}})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
+
+
+async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
+    """Lift a ban (#581): restore the clips its sweep took down and lift its video takedowns.
+
+    Videos stay unpublished for the owner to republish, as a moderator's restore leaves them (#571). Releases the ban
+    made private stay private: the owner re-publishes them. Refused when the account isn't banned, including when a
+    concurrent unban got there first.
+
+    Restores while the account is still banned, then lifts the ban, so a failure part-way leaves it banned and the
+    unban retryable. A process crash between the two leaves the clips up on a banned account until an unban is retried.
+    """
+    banned_at = user.banned_at
+    if banned_at is None:
+        return "This account is not banned."
+    clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
+    try:
+        videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
+        lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    except Exception:
+        # Only while this ban is still in force: a clear whose reply was lost, or a concurrent unban that won, means
+        # the account is unbanned and its restored clips must stay up.
+        if (await User.get(user.id)).banned_at == banned_at:
+            await clip_service.take_down_visible({"user_id": user.id}, banned_at)
+        raise
+    if not lifted.modified_count:
+        return "This account is not banned."
+    return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
+
+
+_USER_ACTIONS = {"warn": _warn, "ban": _ban, "unban": _unban}
 
 
 async def log_screening_rules_update(actor_id: str, before: dict, after: dict) -> None:

@@ -1,10 +1,8 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-const notFound = vi.fn(() => {
-  throw new Error("NEXT_NOT_FOUND")
-})
+const notFound = vi.fn()
 // The shared setup mock omits notFound; the profile 404 path needs it.
 vi.mock("next/navigation", () => ({
   usePathname: () => "/@nova",
@@ -12,82 +10,111 @@ vi.mock("next/navigation", () => ({
   notFound: () => notFound(),
 }))
 
-const authState = { isAuthenticated: true }
-vi.mock("@/hooks/use-auth", () => ({
-  useAuth: () => authState,
-}))
-
 import { ProfileView } from "@/components/profile/ProfileView"
-import { getProfileByHandle, profileClips } from "@/lib/profiles"
+import type { PublicProfile } from "@/lib/profiles"
+import { makeClip } from "@/test/clip-factory"
+import { SignedIn } from "@/test/signed-in"
+
+const NOVA: PublicProfile = {
+  handle: "nova",
+  display_name: "Nova Bloom",
+  bio: "Synthwave and neon-lit electronic.",
+  style_tags: ["synthwave", "ambient"],
+  joined_at: "2026-01-14T12:00:00+00:00",
+  clips: [
+    makeClip({ id: "c1", title: "Neon Skyline", is_public: true }),
+    makeClip({ id: "c2", title: "Pulse Theory", is_public: true }),
+  ],
+}
+
+function stubProfile(...responses: Response[]) {
+  const fetchMock = vi.fn()
+  for (const res of responses) fetchMock.mockResolvedValueOnce(res)
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status })
 
 afterEach(() => {
-  authState.isAuthenticated = true
+  notFound.mockReset()
+  vi.unstubAllGlobals()
 })
 
-describe("ProfileView (US-20.5)", () => {
-  it("renders identity, bio, and style pills (AC1, AC4)", () => {
+describe("ProfileView (US-20.5, #654)", () => {
+  it("renders identity, bio, style tags, join date and the songs grid", async () => {
+    const fetchMock = stubProfile(json(NOVA))
     render(<ProfileView handle="@nova" />)
+
+    expect(screen.getByText(/Loading profile/)).toBeInTheDocument()
     expect(
-      screen.getByRole("heading", { name: "Nova Bloom" })
+      await screen.findByRole("heading", { name: "Nova Bloom" })
     ).toBeInTheDocument()
     expect(screen.getByText("@nova")).toBeInTheDocument()
-    // Style tags render as badges.
-    for (const tag of getProfileByHandle("nova")!.style_tags) {
+    expect(screen.getAllByText(NOVA.bio!).length).toBeGreaterThan(0)
+    for (const tag of NOVA.style_tags) {
       expect(screen.getAllByText(tag).length).toBeGreaterThan(0)
     }
+    expect(screen.getAllByText("Joined January 2026").length).toBeGreaterThan(0)
+    expect(screen.getAllByTestId("explore-clip-card")).toHaveLength(2)
+    expect(screen.getByText("Neon Skyline")).toBeInTheDocument()
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/discover/profiles/nova")
   })
 
-  it("renders the published songs grid (AC2)", () => {
-    render(<ProfileView handle="@nova" />)
-    const expected = profileClips(getProfileByHandle("nova")!)
-    expect(screen.getAllByTestId("explore-clip-card")).toHaveLength(
-      expected.length
+  it("has no follow, follower counts or playlists tab", async () => {
+    stubProfile(json(NOVA))
+    render(
+      <SignedIn>
+        <ProfileView handle="@nova" />
+      </SignedIn>
     )
-    expect(screen.getByText(expected[0].title!)).toBeInTheDocument()
+    await screen.findByRole("heading", { name: "Nova Bloom" })
+    expect(screen.queryByText(/followers/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /follow/i })).toBeNull()
+    expect(screen.queryByRole("tab", { name: "Playlists" })).toBeNull()
+    expect(screen.getByRole("tab", { name: "About" })).toBeInTheDocument()
   })
 
-  it("toggles follow state and moves the follower count by one (AC3)", async () => {
-    const user = userEvent.setup()
+  it("falls back to @handle without a display name, and shows an empty songs state", async () => {
+    stubProfile(json({ ...NOVA, display_name: null, bio: null, clips: [] }))
     render(<ProfileView handle="@nova" />)
-    const base = getProfileByHandle("nova")!.follower_count
-
-    const btn = screen.getByTestId("follow-button")
-    const count = screen.getByTestId("follower-count")
-    expect(btn).toHaveTextContent("Follow")
-    expect(count).toHaveAttribute("title", base.toLocaleString("en"))
-
-    await user.click(btn)
-    expect(btn).toHaveTextContent("Following")
-    expect(btn).toHaveAttribute("aria-pressed", "true")
-    expect(count).toHaveAttribute("title", (base + 1).toLocaleString("en"))
-
-    await user.click(btn)
-    expect(btn).toHaveTextContent("Follow")
-    expect(btn).toHaveAttribute("aria-pressed", "false")
-    expect(count).toHaveAttribute("title", base.toLocaleString("en"))
+    expect(
+      await screen.findByRole("heading", { name: "@nova" })
+    ).toBeInTheDocument()
+    expect(screen.getByText("No published songs yet.")).toBeInTheDocument()
   })
 
-  it("hides the follow button for anonymous viewers", () => {
-    authState.isAuthenticated = false
-    render(<ProfileView handle="@nova" />)
-    expect(screen.queryByTestId("follow-button")).not.toBeInTheDocument()
-  })
-
-  it("shows public playlists on the Playlists tab (AC5)", async () => {
-    const user = userEvent.setup()
-    render(<ProfileView handle="@nova" />)
-    await user.click(screen.getByRole("tab", { name: "Playlists" }))
-    // Public seed playlists ("Late Night Drive", "Summer Anthems") link out.
-    expect(screen.getByText("Late Night Drive")).toBeInTheDocument()
-    expect(screen.getByText("Summer Anthems")).toBeInTheDocument()
-    // The private "Deep Focus" seed must not leak.
-    expect(screen.queryByText("Deep Focus")).not.toBeInTheDocument()
-  })
-
-  it("404s on an unknown handle", () => {
-    expect(() => render(<ProfileView handle="@nobody" />)).toThrow(
-      "NEXT_NOT_FOUND"
+  it("sends the signed-in viewer's token", async () => {
+    const fetchMock = stubProfile(json(NOVA))
+    render(
+      <SignedIn>
+        <ProfileView handle="@nova" />
+      </SignedIn>
     )
-    expect(notFound).toHaveBeenCalled()
+    await screen.findByRole("heading", { name: "Nova Bloom" })
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers)
+    expect(headers.get("authorization")).toBe("Bearer tok")
+  })
+
+  it("404s on an unknown handle", async () => {
+    stubProfile(json({ detail: "Profile not found." }, 404))
+    render(<ProfileView handle="@ghost" />)
+    await waitFor(() => expect(notFound).toHaveBeenCalled())
+  })
+
+  it("shows an error with a retry that reloads the profile", async () => {
+    const fetchMock = stubProfile(json({}, 502), json(NOVA))
+    render(<ProfileView handle="@nova" />)
+
+    expect(
+      await screen.findByText("Couldn't load this profile.")
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(
+      await screen.findByRole("heading", { name: "Nova Bloom" })
+    ).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(notFound).not.toHaveBeenCalled()
   })
 })

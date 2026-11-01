@@ -1,15 +1,25 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { SearchView } from "@/components/search/SearchView"
+import { GENRES } from "@/lib/explore"
 import { DEFAULT_SEARCH, type SearchParams } from "@/lib/search"
 import { makeClip } from "@/test/clip-factory"
 import {
   clipRequests,
   discoverPage,
   stubDiscoverFetch,
+  stubViewerAwareDiscover,
 } from "@/test/discover-api"
+import { SignedIn } from "@/test/signed-in"
 
 const params = (over: Partial<SearchParams> = {}): SearchParams => ({
   ...DEFAULT_SEARCH,
@@ -196,5 +206,68 @@ describe("SearchView", () => {
     expect(onChange).not.toHaveBeenCalled()
     act(() => vi.advanceTimersByTime(300))
     expect(onChange).toHaveBeenCalledWith({ q: "jazz" })
+  })
+})
+
+describe("SearchView viewer ownership (#653)", () => {
+  it("sends the viewer's token and offers Report only on someone else's clip", async () => {
+    const fetchMock = stubViewerAwareDiscover(
+      [
+        makeClip({ id: "mine", title: "Mine" }),
+        makeClip({ id: "theirs", title: "Theirs" }),
+      ],
+      "mine"
+    )
+    render(
+      <SignedIn>
+        <SearchView params={params({ q: "night" })} onChange={vi.fn()} />
+      </SignedIn>
+    )
+
+    await screen.findByText("Theirs")
+    expect(screen.getAllByRole("button", { name: /report/i })).toHaveLength(1)
+    const search = fetchMock.mock.calls.find(([url]) =>
+      String(url).startsWith("/api/discover/clips")
+    )
+    expect(new Headers(search?.[1]?.headers).get("authorization")).toBe(
+      "Bearer tok"
+    )
+  })
+})
+
+describe("SearchView polish (#657)", () => {
+  it("drops a Load more answer when its search was replaced and restored meanwhile", async () => {
+    let answerMore: (r: Response) => void = () => {}
+    stubDiscoverFetch((url) => {
+      if (url.includes("cursor=c2")) {
+        return new Promise<Response>((resolve) => (answerMore = resolve))
+      }
+      // Page 1 of "a" changes between the two loads: a newer clip landed.
+      const restored = url.includes("q=a") && pageOneLoads++ > 0
+      return url.includes("q=a")
+        ? discoverPage([makeClip({ id: restored ? "new" : "a1" })], "c2", 3)
+        : discoverPage([makeClip({ id: "b1" })], null, 1)
+    })
+    let pageOneLoads = 0
+    const { rerender } = render(
+      <SearchView params={params({ q: "a" })} onChange={vi.fn()} />
+    )
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Load more" })
+    )
+    rerender(<SearchView params={params({ q: "b" })} onChange={vi.fn()} />)
+    await waitFor(() => expect(hrefs()).toEqual(["/song/b1"]))
+    rerender(<SearchView params={params({ q: "a" })} onChange={vi.fn()} />)
+    await waitFor(() => expect(hrefs()).toEqual(["/song/new"]))
+
+    await act(async () => {
+      answerMore(discoverPage([makeClip({ id: "a2" })], null, 3))
+    })
+
+    expect(hrefs()).toEqual(["/song/new"])
+  })
+
+  it("links the R&B tile to the style generated tags use", () => {
+    expect(GENRES.find((g) => g.name === "R&B")?.slug).toBe("r&b")
   })
 })

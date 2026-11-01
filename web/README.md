@@ -42,6 +42,17 @@ npm run typecheck && npm run lint && npm test && npm run build
 pinned exactly) passes typecheck, lint, *and* `next build`, and fails only under vitest —
 that regression shipped once already, as PR #417.
 
+Coverage (#592): `npx vitest run --coverage` writes `coverage/lcov.info` (and prints a summary).
+To check only the lines a branch changed, the way the Python gate does:
+
+```bash
+npx vitest run --coverage
+cd .. && uvx diff-cover web/coverage/lcov.info --compare-branch=origin/main --fail-under=85
+```
+
+The lcov paths are written relative to the repo root (`web/app/...`), as git names them, so run
+`diff-cover` from there.
+
 ## Application shell (US-15.2)
 
 The four-zone shell lives in `components/layout/` and wraps every route via
@@ -71,8 +82,8 @@ A persistent bottom player that keeps playing across client-side navigation.
 - `hooks/use-player-shortcuts.ts` — space / arrows / `m`, ignored while typing.
 - `components/player/` — `Playbar` and its controls (transport, scrubber,
   volume, mini-waveform, song info, queue panel, mode toggles, like).
-- `lib/clips.ts` builds the backend media URLs; `lib/demo-tracks.ts` +
-  `public/demo/sample.wav` seed a demo queue until a clip-browsing UI exists.
+- `lib/clips.ts` builds the backend media URLs. The queue starts empty; clip
+  cards and the song page load tracks into it.
 
 ## Song Detail Page (US-17.1)
 

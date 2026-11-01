@@ -6,7 +6,7 @@ Endpoints (mounted under ``/api/v1/auth``):
 * ``POST /callback/{provider}`` → exchange code, upsert the user, mint tokens
 * ``POST /refresh``             → rotate the refresh token, mint a new access token
 * ``POST /logout``              → revoke a refresh token (idempotent, 204)
-* ``POST /plugin-token``        → mint a separate token pair for the VST3 plugin (#445)
+* ``POST /plugin-token``        → mint a separate token pair for the VST3 plugin (#445); 409 at the cap (#526)
 * ``GET /plugin-tokens``        → list the caller's live plugin tokens, metadata only (#515)
 * ``DELETE /plugin-tokens/{id}`` → revoke one plugin token (#515)
 
@@ -290,23 +290,35 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = await User.get(user_id)
-    if user is None:
-        # The token validated but the user is gone — treat as unauthorized.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user_service.reject_banned(user)
-
-    access = _mint_access_token(user, settings)
+    try:
+        user = await User.get(user_id)
+        if user is None:
+            # The token validated but the user is gone — treat as unauthorized.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user_service.reject_banned(user)
+        access = _mint_access_token(user, settings)
+    except Exception:
+        # The rotated token goes to nobody, so it can't stay live (#527). Rotating first keeps the swap the
+        # single-use gate and keeps replay detection (#525), which a validate-first order would bypass.
+        await services.revoke_refresh_token(new_refresh)
+        raise
 
     return TokenResponse(
         access_token=access,
         refresh_token=new_refresh,
         expires_in=settings.access_token_expire_minutes * 60,
     )
+
+
+#: Live plugin tokens one account may hold (#526): one per DAW machine with room to spare, and a Settings list short
+#: enough to find the one to revoke. Minting past it is a 409 rather than revoking the oldest, which would sign a
+#: DAW out without warning.
+#: shortcut: two mints racing at the cap can both pass the count; add a per-user counter if that ever matters.
+PLUGIN_TOKEN_CAP = 10
 
 
 @router.post("/plugin-token", response_model=TokenResponse)
@@ -322,6 +334,11 @@ async def plugin_token(request: Request, current: CurrentUser = Depends(get_curr
         # The access token outlived the account; nothing to mint for.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     user_service.reject_banned(user)
+    if len(await services.list_plugin_tokens(user.id)) >= PLUGIN_TOKEN_CAP:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"You already have {PLUGIN_TOKEN_CAP} plugin tokens. Revoke one below to create another.",
+        )
     access, refresh = _mint_token_pair(user, settings)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     # Tagged so it can be listed and revoked apart from the browser session (#515).

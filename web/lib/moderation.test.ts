@@ -303,6 +303,7 @@ describe("formatLogAction", () => {
 
   it("labels known actions and falls back for new ones", () => {
     expect(formatLogAction("ban")).toBe("Banned user")
+    expect(formatLogAction("unban")).toBe("Unbanned user")
     expect(formatLogAction("update_screening_rules")).toBe(
       "Updated screening rules"
     )

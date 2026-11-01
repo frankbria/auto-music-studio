@@ -1,11 +1,7 @@
 "use client"
 
-import { useEffect } from "react"
-
-import { usePlayer } from "@/contexts/player-context"
 import { useAudioEngine } from "@/hooks/use-audio-engine"
 import { usePlayerShortcuts } from "@/hooks/use-player-shortcuts"
-import { DEMO_TRACKS } from "@/lib/demo-tracks"
 import { LAYOUT } from "@/lib/constants/layout"
 
 import { LikeButton } from "./LikeButton"
@@ -23,19 +19,8 @@ import { VolumeControl } from "./VolumeControl"
  * lays out every control across three sections.
  */
 export function Playbar() {
-  const { state, dispatch } = usePlayer()
   useAudioEngine()
   usePlayerShortcuts()
-
-  // ponytail: seed the demo queue on first load so the bar is populated and
-  // demoable. Remove once tracks arrive from a clip-browsing UI.
-  useEffect(() => {
-    if (!state.current && state.queue.length === 0) {
-      dispatch({ type: "load", tracks: DEMO_TRACKS })
-    }
-    // Run once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   return (
     <>

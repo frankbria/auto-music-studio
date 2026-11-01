@@ -1,31 +1,29 @@
 "use client"
 
-import { useState } from "react"
-import Link from "next/link"
+import { useCallback, useEffect, useState } from "react"
 import { notFound } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Loading03Icon,
   MusicNote01Icon,
-  PlayListIcon,
   UserIcon,
 } from "@hugeicons/core-free-icons"
 
 import { ExploreClipCard } from "@/components/explore/ExploreClipCard"
-import { FollowButton } from "@/components/profile/FollowButton"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useAuth } from "@/hooks/use-auth"
-import {
-  getProfileByHandle,
-  profileClips,
-  publicPlaylists,
-} from "@/lib/profiles"
+import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
+import { fetchPublicProfile, type PublicProfile } from "@/lib/profiles"
 
-// Public creator profile (US-20.5) at /@handle. Header (avatar, name, bio, style
-// pills, follower/following) + Follow button + Songs / Playlists / About tabs.
-// Data comes from the lib/profiles mock seam; the route shim passes the handle.
+// Public creator profile (US-20.5) at /@handle, read from the public profile API
+// (#654): avatar, name, bio, style tags, then Songs / About tabs.
 
-const compact = new Intl.NumberFormat("en", { notation: "compact" })
+type ProfileState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "not-found" }
+  | { status: "ready"; profile: PublicProfile }
 
 /** First-letter initials for the glyph avatar (no authed artwork proxy). */
 function initials(name: string): string {
@@ -36,79 +34,81 @@ function initials(name: string): string {
     .join("")
 }
 
-function Stat({
-  label,
-  value,
-  testid,
-}: {
-  label: string
-  value: number
-  testid?: string
-}) {
-  const exact = value.toLocaleString("en")
-  return (
-    <span className="flex items-baseline gap-1">
-      {/* Compact display, exact count on hover (and for assertions) — a single */}
-      {/* follow won't move "12.8K", so the title carries the real number. The */}
-      {/* visible compact form is aria-hidden; screen readers get the sr-only exact. */}
-      <span
-        data-testid={testid}
-        title={exact}
-        aria-hidden
-        className="font-semibold tabular-nums text-foreground"
-      >
-        {compact.format(value)}
-      </span>
-      <span aria-hidden className="text-sm text-muted-foreground">
-        {label}
-      </span>
-      <span className="sr-only">
-        {exact} {label}
-      </span>
-    </span>
-  )
-}
-
 export function ProfileView({ handle }: { handle: string }) {
-  const profile = getProfileByHandle(handle)
-  if (!profile) notFound()
+  const [state, setState] = useState<ProfileState>({ status: "loading" })
+  const { ready, token } = useDiscoveryAuth()
 
-  const { isAuthenticated } = useAuth()
-  // Optimistic, session-only follow state — there's no Follow backend yet, so the
-  // follower count moves locally by ±1 (AC3). The base count is the seam's value.
-  // ponytail: no persistence and no self-view guard — the session user carries no
-  // handle (AuthUser is {id, email}), so "don't show Follow on my own profile"
-  // needs a handle on the token first. Gate on auth alone until then.
-  const [following, setFollowing] = useState(false)
-  const followerCount = profile.follower_count + (following ? 1 : 0)
+  const load = useCallback(() => {
+    fetchPublicProfile(handle, token()).then(
+      (profile) =>
+        setState(
+          profile ? { status: "ready", profile } : { status: "not-found" }
+        ),
+      () => setState({ status: "error" })
+    )
+  }, [handle, token])
 
-  const clips = profileClips(profile)
-  const playlists = publicPlaylists()
+  useEffect(() => {
+    if (ready) load()
+  }, [load, ready])
+
+  const retry = () => {
+    setState({ status: "loading" })
+    load()
+  }
+
+  if (state.status === "not-found") return notFound()
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
+        <HugeiconsIcon
+          icon={Loading03Icon}
+          size={16}
+          className="animate-spin"
+        />
+        Loading profile…
+      </div>
+    )
+  }
+
+  if (state.status === "error") {
+    return (
+      <div role="alert" className="flex items-center gap-3 p-8 text-sm">
+        <span className="text-muted-foreground">
+          Couldn&apos;t load this profile.
+        </span>
+        <Button variant="outline" size="sm" onClick={retry}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  const { profile } = state
+  const name = profile.display_name || `@${profile.handle}`
+  const joined = `Joined ${new Date(profile.joined_at).toLocaleDateString(
+    "en",
+    { month: "long", year: "numeric" }
+  )}`
 
   return (
     <div className="flex flex-col gap-8 p-8">
-      {/* Header */}
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start">
         <div
           aria-hidden
           className="flex size-24 shrink-0 items-center justify-center rounded-full bg-muted text-2xl font-semibold text-muted-foreground"
         >
-          {initials(profile.display_name) || (
+          {initials(profile.display_name ?? "") || (
             <HugeiconsIcon icon={UserIcon} size={32} />
           )}
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h1 className="text-2xl font-semibold">{profile.display_name}</h1>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold">{name}</h1>
+            {profile.display_name && (
               <p className="text-sm text-muted-foreground">@{profile.handle}</p>
-            </div>
-            {isAuthenticated && (
-              <FollowButton
-                following={following}
-                onToggle={() => setFollowing((f) => !f)}
-              />
             )}
           </div>
 
@@ -126,60 +126,24 @@ export function ProfileView({ handle }: { handle: string }) {
             </div>
           )}
 
-          <div className="flex flex-wrap gap-4">
-            <Stat label="followers" value={followerCount} testid="follower-count" />
-            <Stat label="following" value={profile.following_count} />
-          </div>
+          <p className="text-sm text-muted-foreground">{joined}</p>
         </div>
       </header>
 
-      {/* Tabs */}
       <Tabs defaultValue="songs">
         <TabsList>
           <TabsTrigger value="songs">Songs</TabsTrigger>
-          <TabsTrigger value="playlists">Playlists</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
 
         <TabsContent value="songs">
-          {clips.length === 0 ? (
+          {profile.clips.length === 0 ? (
             <EmptyState label="No published songs yet." />
           ) : (
             <ul className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-3">
-              {clips.map((clip) => (
+              {profile.clips.map((clip) => (
                 <li key={clip.id} className="flex">
                   <ExploreClipCard clip={clip} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </TabsContent>
-
-        <TabsContent value="playlists">
-          {playlists.length === 0 ? (
-            <EmptyState label="No public playlists yet." />
-          ) : (
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
-              {playlists.map((pl) => (
-                <li key={pl.id} className="flex">
-                  <Link
-                    href={`/playlists/${pl.id}`}
-                    className="group flex w-full items-center gap-3 rounded-lg border border-border bg-card p-3 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
-                  >
-                    <span
-                      aria-hidden
-                      className="flex size-12 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-                    >
-                      <HugeiconsIcon icon={PlayListIcon} size={22} />
-                    </span>
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate text-sm font-medium">{pl.name}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {pl.clipIds.length}{" "}
-                        {pl.clipIds.length === 1 ? "song" : "songs"}
-                      </span>
-                    </span>
-                  </Link>
                 </li>
               ))}
             </ul>
@@ -201,13 +165,7 @@ export function ProfileView({ handle }: { handle: string }) {
                 </div>
               </div>
             )}
-            <p className="text-muted-foreground">
-              Joined{" "}
-              {new Date(profile.joined_at).toLocaleDateString("en", {
-                month: "long",
-                year: "numeric",
-              })}
-            </p>
+            <p className="text-muted-foreground">{joined}</p>
           </div>
         </TabsContent>
       </Tabs>

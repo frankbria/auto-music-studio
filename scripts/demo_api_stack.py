@@ -3,8 +3,9 @@
 Every API demo used to rebuild this by hand (#538, #555). One process runs all of it, so one ``kill`` stops it::
 
     setsid uv run python scripts/demo_api_stack.py --dir /tmp/demo-555 --db acemusic_demo_555 --clips 4 &
-    . /tmp/demo-555/env.sh       # TOKEN, USER_ID, WORKSPACE_ID, CLIP_1..N, plus the helpers below
+    . /tmp/demo-555/env.sh       # TOKEN, USER_ID, WORKSPACE_ID, CLIP_1..N, ADMIN_TOKEN, plus the helpers below
     api POST /releases '{"clip_id": "'$CLIP_1'", ...}'   # prints "HTTP <code>" and the body
+    admin_api GET /admin/moderation/log                    # the same, as the seeded admin
     M 'db.clips.findOne()'       # mongosh against the demo database
     soundcloud_uploads           # how many tracks reached the stand-in
     kill $(cat /tmp/demo-555/pid)
@@ -14,8 +15,9 @@ The script writes its own pid: ``$!`` names ``setsid`` or ``uv``, and killing ei
 The database is dropped and re-seeded on every start, so only ``acemusic_demo_*`` names on the local mongod
 are accepted. ``--dir`` must sit outside the repo: ``env.sh`` holds a live JWT. The seeded user is a Pro
 musician with 50 credits, a workspace, ``--clips`` clips with real WAV audio in local storage, and a linked
-SoundCloud account. SoundCloud calls go to a local stand-in on ``--port + 1`` that answers ``POST /tracks``
-and ``PUT /tracks/{id}`` and logs one line per request to ``$DIR/soundcloud.log``.
+SoundCloud account. A second user, ``admin@example.com``, is an admin (``ADMIN_TOKEN``). SoundCloud calls go
+to a local stand-in on ``--port + 1`` that answers ``POST /tracks`` and ``PUT /tracks/{id}`` and logs one line
+per request to ``$DIR/soundcloud.log``.
 """
 
 import argparse
@@ -134,6 +136,14 @@ async def seed(settings, clips: int) -> dict[str, str]:
         token_expires_at=utcnow() + timedelta(days=1),
     ).insert()
     ids["TOKEN"] = create_access_token(user_id=str(user.id), email=user.email, subscription_tier=PRO, settings=settings)
+    admin = await user_service.get_or_create_user(
+        email="admin@example.com", provider="google", oauth_id="g-demo-admin", name="Demo Admin"
+    )
+    await admin.set({User.is_admin: True})
+    ids["ADMIN_ID"] = str(admin.id)
+    ids["ADMIN_TOKEN"] = create_access_token(
+        user_id=str(admin.id), email=admin.email, subscription_tier=admin.subscription_tier, settings=settings
+    )
     await close_db()
     return ids
 
@@ -142,9 +152,11 @@ def write_env(directory: Path, port: int, db: str, ids: dict[str, str]) -> None:
     exports = {"DEMO_DIR": str(directory), "DEMO_API": f"http://127.0.0.1:{port}/api/v1", "DEMO_DB": db, **ids}
     lines = [f"export {key}={shlex.quote(value)}" for key, value in exports.items()]
     lines += [
-        'api() { local code; code=$(curl -s -o "$DEMO_DIR/last_body.json" -w \'%{http_code}\' -X "$1" '
-        '"$DEMO_API$2" -H "Authorization: Bearer $TOKEN" -H \'Content-Type: application/json\' ${3:+-d "$3"}); '
+        'call() { local code; code=$(curl -s -o "$DEMO_DIR/last_body.json" -w \'%{http_code}\' -X "$2" '
+        '"$DEMO_API$3" -H "Authorization: Bearer $1" -H \'Content-Type: application/json\' ${4:+-d "$4"}); '
         'echo "HTTP $code"; cat "$DEMO_DIR/last_body.json"; echo; }',
+        'api() { call "$TOKEN" "$@"; }',
+        'admin_api() { call "$ADMIN_TOKEN" "$@"; }',
         'M() { mongosh --quiet "$DEMO_DB" --eval "$1"; }',
         'soundcloud_uploads() { echo "uploads received by SoundCloud stand-in: '
         '$(grep -c \'^POST /tracks\' "$DEMO_DIR/soundcloud.log")"; }',

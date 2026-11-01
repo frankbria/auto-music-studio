@@ -61,6 +61,7 @@ const VERBS: Record<TargetAction | UserAction, string> = {
   drop: "Dropped",
   warn: "Warned",
   ban: "Banned",
+  unban: "Unbanned",
 }
 
 const NOUNS: Record<QueueTarget, string> = {
@@ -113,6 +114,12 @@ const CONFIRMED: Partial<
     description:
       "Banned accounts are signed out, cannot sign back in, and their public clips, releases and SoundCloud tracks are taken down.",
     destructive: true,
+  },
+  unban: {
+    verb: "Unban",
+    description:
+      "Unbanned accounts can sign in again. Clips the ban took down return to their earlier visibility. Videos and releases stay unpublished until their creators publish them again.",
+    destructive: false,
   },
 }
 
@@ -232,7 +239,12 @@ export function ModerationDashboard({
       // Restore acts from the activity log, on targets no longer in the queue.
       return log.rows?.find((e) => e.target_id === id)?.target_label ?? id
     }
-    return all.find((i) => i.creator_id === id)?.creator_name ?? id
+    return (
+      all.find((i) => i.creator_id === id)?.creator_name ??
+      // Unban acts from the activity log, on users no longer in the queue.
+      log.rows?.find((e) => e.target_id === id)?.target_label ??
+      id
+    )
   }
 
   async function run(pending: Pending, why?: string) {
@@ -627,6 +639,24 @@ export function ModerationDashboard({
                               Restore
                             </Button>
                           )}
+                        {entry.action === "ban" &&
+                          entry.target_type === "user" &&
+                          entry.target_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() =>
+                                request({
+                                  kind: "user",
+                                  action: "unban",
+                                  ids: [entry.target_id!],
+                                })
+                              }
+                            >
+                              Unban
+                            </Button>
+                          )}
                       </td>
                     </tr>
                   ))}
@@ -799,6 +829,11 @@ function QueueRow({
               className="font-mono text-xs text-muted-foreground"
             >
               {flag}
+            </span>
+          ))}
+          {item.flag_sources?.map((source) => (
+            <span key={source} className="text-xs text-muted-foreground">
+              from {source}
             </span>
           ))}
         </div>

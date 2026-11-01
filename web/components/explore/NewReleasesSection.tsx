@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
 import { getNewReleases } from "@/lib/explore"
 import type { Clip } from "@/lib/workspace-clips"
 import { ExploreClipCard } from "./ExploreClipCard"
@@ -22,14 +23,18 @@ type ReleasesState =
 export function NewReleasesSection() {
   const [state, setState] = useState<ReleasesState>({ status: "loading" })
 
+  const { ready, token } = useDiscoveryAuth()
+
   const load = useCallback(() => {
-    getNewReleases().then(
+    getNewReleases(token()).then(
       (clips) => setState({ status: "ready", clips }),
       () => setState({ status: "error" })
     )
-  }, [])
+  }, [token])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    if (ready) load()
+  }, [load, ready])
 
   const retry = () => {
     setState({ status: "loading" })

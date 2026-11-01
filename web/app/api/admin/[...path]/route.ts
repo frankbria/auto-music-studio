@@ -1,7 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  bodyTooLarge,
+  clientIpHeaders,
+  fetchWithTimeout,
+  readTextCapped,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for /api/v1/admin/* (US-27.3). One catch-all because the
 // moderation endpoints (queue, log, clip and user actions) forward identically. Only
@@ -34,7 +39,9 @@ async function proxy(
   const init: RequestInit = { method, headers }
   if (method === "POST") {
     headers["content-type"] = "application/json"
-    init.body = await request.text()
+    const payload = await readTextCapped(request)
+    if (payload === null) return bodyTooLarge()
+    init.body = payload
   }
 
   const target = `${BACKEND_URL}/api/v1/admin/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`

@@ -320,7 +320,10 @@ class TestCallback:
         state = _bind_state(client, "google", settings)
         resp = await client.post(f"{API_V1_PREFIX}/auth/callback/google", json={"code": "auth-code", "state": state})
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "This account has been suspended."
+        assert (
+            resp.json()["detail"]
+            == "This account has been suspended. To contest it, contact the platform's support team."
+        )
         assert "refresh_token" not in resp.json()
 
     async def test_existing_user_is_updated_not_duplicated(self, client, settings, monkeypatch):
@@ -593,6 +596,50 @@ class TestRefresh:
         resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": "never-issued"})
         assert resp.status_code == 401
 
+    async def test_a_refresh_failing_after_rotation_leaves_no_live_token(self, client, settings, monkeypatch):
+        """#527: the account vanished mid-refresh. The rotated token went to nobody, so it must not stay live."""
+        from acemusic.api.models import RefreshToken, User
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-gone", email="gone@example.com")
+        user = await User.find_one(User.email == "gone@example.com")
+        await user.delete()
+
+        resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert resp.status_code == 401
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
+    async def test_a_banned_refresh_leaves_no_live_token(self, client, settings, monkeypatch):
+        from acemusic.api.models import RefreshToken, User
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-ban", email="ban-mid@example.com")
+        user = await User.find_one(User.email == "ban-mid@example.com")
+        # Banned directly, without the ban action's token sweep: the token is still live going in.
+        await User.find_one(User.id == user.id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+
+        resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert resp.status_code == 403
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
+    async def test_a_refresh_whose_access_token_cannot_be_minted_leaves_no_live_token(
+        self, client, settings, monkeypatch
+    ):
+        from acemusic.api.models import RefreshToken, User
+        from acemusic.api.routers import auth as auth_router
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-mint", email="mint@example.com")
+        user = await User.find_one(User.email == "mint@example.com")
+
+        def broken_mint(*_args):
+            raise RuntimeError("signing key unavailable")
+
+        monkeypatch.setattr(auth_router, "_mint_access_token", broken_mint)
+        with pytest.raises(RuntimeError):
+            await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
     async def test_refresh_revoked_token_401(self, client, settings, monkeypatch):
         tokens = await _login(client, settings, monkeypatch)
         from acemusic.api.auth.services import revoke_refresh_token
@@ -635,6 +682,63 @@ class TestPluginToken:
             headers={"Authorization": f"Bearer {tokens['access_token']}"},
         )
         assert resp.status_code == 404
+
+
+class TestPluginTokenCap:
+    """#526: an account holds at most PLUGIN_TOKEN_CAP live plugin tokens, so the Settings list stays readable."""
+
+    async def test_minting_past_the_cap_is_a_409_until_one_is_revoked(self, client, settings, monkeypatch):
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-cap", email="cap@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        for _ in range(PLUGIN_TOKEN_CAP):
+            assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
+
+        refused = await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == (
+            f"You already have {PLUGIN_TOKEN_CAP} plugin tokens. Revoke one below to create another."
+        )
+
+        oldest = (await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)).json()[-1]
+        await client.delete(f"{API_V1_PREFIX}/auth/plugin-tokens/{oldest['id']}", headers=auth)
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
+
+    async def test_an_account_already_over_the_cap_lists_them_all_and_cannot_mint_more(
+        self, client, settings, monkeypatch
+    ):
+        from acemusic.api.auth.services import store_refresh_token
+        from acemusic.api.auth.tokens import create_refresh_token
+        from acemusic.api.models import User
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-over", email="over@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        user = await User.find_one(User.email == "over@example.com")
+        expires = datetime.now(timezone.utc) + timedelta(days=7)
+        for _ in range(PLUGIN_TOKEN_CAP + 2):  # minted before the cap existed
+            await store_refresh_token(user.id, create_refresh_token(), expires, kind="plugin")
+
+        listed = await client.get(f"{API_V1_PREFIX}/auth/plugin-tokens", headers=auth)
+        assert listed.status_code == 200
+        assert len(listed.json()) == PLUGIN_TOKEN_CAP + 2
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 409
+
+    async def test_expired_tokens_do_not_count_toward_the_cap(self, client, settings, monkeypatch):
+        from acemusic.api.auth.services import store_refresh_token
+        from acemusic.api.auth.tokens import create_refresh_token
+        from acemusic.api.models import User
+        from acemusic.api.routers.auth import PLUGIN_TOKEN_CAP
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-exp", email="expired-cap@example.com")
+        auth = {"Authorization": f"Bearer {tokens['access_token']}"}
+        user = await User.find_one(User.email == "expired-cap@example.com")
+        expired = datetime.now(timezone.utc) - timedelta(days=1)
+        for _ in range(PLUGIN_TOKEN_CAP):
+            await store_refresh_token(user.id, create_refresh_token(), expired, kind="plugin")
+
+        assert (await client.post(f"{API_V1_PREFIX}/auth/plugin-token", headers=auth)).status_code == 200
 
 
 class TestPluginTokenList:

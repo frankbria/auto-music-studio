@@ -1,8 +1,11 @@
-"""Anonymous public discovery reads behind Feed, Explore and Search (#651)."""
+"""Public discovery reads behind Feed, Explore and Search (#651); a signed-in viewer's own clips are marked (#653)."""
+
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from ..auth.dependencies import CurrentUser, get_current_user_optional
 from ..services import discovery
 from ..utils.rate_limit import enforce_discover_rate_limit
 from .clips import PublicClipResponse
@@ -32,13 +35,16 @@ async def list_public_clips(
     sort: discovery.DiscoverSort = "newest",
     limit: int = Query(default=20, ge=1, le=50),
     cursor: str | None = None,
+    current: CurrentUser | None = Depends(get_current_user_optional),
 ) -> DiscoverClipsResponse:
     """Public clips, keyset-paged: pass ``next_cursor`` back as ``cursor`` with the same filters."""
     clips, next_cursor, total = await discovery.list_public_clips(
         q=q, style=style, bpm_min=bpm_min, bpm_max=bpm_max, key=key, model=model, sort=sort, limit=limit, cursor=cursor
     )
     return DiscoverClipsResponse(
-        clips=[PublicClipResponse.from_clip_for(clip, None) for clip in clips], next_cursor=next_cursor, total=total
+        clips=[PublicClipResponse.from_clip_for(clip, current.user_id if current else None) for clip in clips],
+        next_cursor=next_cursor,
+        total=total,
     )
 
 
@@ -46,3 +52,29 @@ async def list_public_clips(
 async def public_facets() -> DiscoverFacetsResponse:
     """The musical keys and models present in the public pool, for Search's filter options."""
     return DiscoverFacetsResponse(**await discovery.public_facets())
+
+
+class PublicProfileResponse(BaseModel):
+    """What /@handle shows (#654). Only fields the creator set for their public profile, never their email."""
+
+    handle: str
+    display_name: str | None
+    bio: str | None
+    style_tags: list[str]
+    joined_at: datetime
+    clips: list[PublicClipResponse]
+
+
+@router.get("/profiles/{handle}", response_model=PublicProfileResponse)
+async def get_public_profile(
+    handle: str, current: CurrentUser | None = Depends(get_current_user_optional)
+) -> PublicProfileResponse:
+    user, clips = await discovery.public_profile(handle)
+    return PublicProfileResponse(
+        handle=user.handle,
+        display_name=user.display_name,
+        bio=user.bio,
+        style_tags=user.style_tags,
+        joined_at=user.created_at,
+        clips=[PublicClipResponse.from_clip_for(clip, current.user_id if current else None) for clip in clips],
+    )

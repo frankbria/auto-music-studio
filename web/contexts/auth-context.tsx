@@ -11,7 +11,12 @@ import {
 } from "react"
 import { useRouter } from "next/navigation"
 
-import { decodeAccessToken, decodeTokenExp, type AuthUser } from "@/lib/auth"
+import {
+  SignInRefusedError,
+  decodeAccessToken,
+  decodeTokenExp,
+  type AuthUser,
+} from "@/lib/auth"
 
 // Refresh this long before the access token's `exp` so a renewed token is in
 // hand before the old one dies. Also the "near expiry" window the visibility
@@ -33,7 +38,11 @@ type AuthContextValue = {
   /** Begin an OAuth flow; redirects the browser to the provider on success. */
   login: (provider: string) => Promise<void>
   /** Exchange an OAuth callback's code/state for a session. */
-  completeLogin: (provider: string, code: string, state: string) => Promise<void>
+  completeLogin: (
+    provider: string,
+    code: string,
+    state: string
+  ) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -164,7 +173,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code, state }),
       })
-      if (!res.ok) throw new Error("Authentication failed.")
+      if (!res.ok) {
+        const { detail } = await res.json().catch(() => ({}))
+        if (res.status === 403 && typeof detail === "string") {
+          throw new SignInRefusedError(detail)
+        }
+        throw new Error("Authentication failed.")
+      }
       const { access_token } = await res.json()
       setAccessToken(access_token)
     },

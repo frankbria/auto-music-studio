@@ -72,6 +72,10 @@ def create_refresh_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+#: How far apart two clocks may be before a token reads as not yet valid, or expired a moment early (#613).
+CLOCK_SKEW_LEEWAY = timedelta(seconds=10)
+
+
 def decode_access_token(token: str, settings: ApiSettings) -> dict:
     """Verify signature + expiry and return the token's claims.
 
@@ -86,6 +90,9 @@ def decode_access_token(token: str, settings: ApiSettings) -> dict:
             secret,
             algorithms=[settings.jwt_algorithm],
             options={"require": ["sub", "exp", "type"]},
+            # A clock stepped backwards (WSL2 resyncs; skewed API instances) would read a token minted a
+            # moment ago as "not yet valid (iat)" and 401 a fresh session (#613).
+            leeway=CLOCK_SKEW_LEEWAY,
         )
     except jwt.ExpiredSignatureError as exc:
         raise TokenExpiredError("Access token has expired.") from exc
