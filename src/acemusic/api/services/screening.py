@@ -344,6 +344,12 @@ async def save_rules(rules: ScreeningRules, fields: set[str] | None = None) -> S
     return ScreeningRules.model_validate(stored)
 
 
+async def flag_sources(texts: dict[str, str | None]) -> list[str]:
+    """Which labelled text raised which flag, as "<category> (<label>)" (#605)."""
+    rules = await get_rules()
+    return [f"{category} ({label})" for label, text in texts.items() if text for category in match(rules, [text]).flags]
+
+
 async def enforce(*texts: str | None, saving: bool = False) -> list[str]:
     """Raise :class:`ContentBlockedError` for blocked text; return the flag categories otherwise.
 

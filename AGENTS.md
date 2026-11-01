@@ -366,7 +366,11 @@ Package manager: `uv` with `hatchling` build backend
   `services/clips.ensure_not_removed` is the single rule that refuses re-publishing (owner PATCH, releases,
   SoundCloud upload). A new path that can make a clip public must call it too. Bans set `User.banned_at`;
   `services/users.reject_banned` guards login, refresh, plugin-token, `require_existing_user`,
-  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
+  `require_admin` and `charge_and_create` (so a live access token can't spend after a ban). The 403 says how to contest
+  it (`ACEMUSIC_API_SUSPENSION_CONTACT`, #581). The ban sweep stamps each clip's `removed_at` with the ban's own
+  `banned_at` and records `Clip.visibility_before_ban`, so `unban` (`/admin/moderation/users`, or Unban on the activity
+  log's ban rows) restores exactly those clips and lifts the ban's video stamps. A removal since restamps the clip and
+  stays. Videos and releases stay unpublished for the owner to re-publish. Every admin action writes a `ModerationLogEntry`. Moderation writes are atomic `$set`s:
   never whole-document `save()` a `Clip`, `User` or `Release` fetched before a moderation action could land.
   Remove and ban also make the releases private and queue their SoundCloud tracks for un-share
   (`services/releases.unshare_releases`, #538/#569); dropping an artwork option that was the cover queues them too,
@@ -406,7 +410,9 @@ Package manager: `uv` with `hatchling` build backend
   `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
   `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
 - **Public discovery (#651)**: Feed, Explore and Search read `GET /api/v1/discover/clips` (keyset-paged, `newest` |
-  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they are anonymous. Every public listing
+  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they need no sign-in. A signed-in
+  viewer's token is forwarded so `/discover/clips` marks their own clips `is_owner` (#653); the web reads it through
+  `useDiscoveryAuth`, which waits for the session and doesn't refetch when the token rotates. Every public listing
   filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
   uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
   `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them

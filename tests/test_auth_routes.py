@@ -320,7 +320,10 @@ class TestCallback:
         state = _bind_state(client, "google", settings)
         resp = await client.post(f"{API_V1_PREFIX}/auth/callback/google", json={"code": "auth-code", "state": state})
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "This account has been suspended."
+        assert (
+            resp.json()["detail"]
+            == "This account has been suspended. To contest it, contact the platform's support team."
+        )
         assert "refresh_token" not in resp.json()
 
     async def test_existing_user_is_updated_not_duplicated(self, client, settings, monkeypatch):
@@ -592,6 +595,50 @@ class TestRefresh:
     async def test_refresh_invalid_token_401(self, client):
         resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": "never-issued"})
         assert resp.status_code == 401
+
+    async def test_a_refresh_failing_after_rotation_leaves_no_live_token(self, client, settings, monkeypatch):
+        """#527: the account vanished mid-refresh. The rotated token went to nobody, so it must not stay live."""
+        from acemusic.api.models import RefreshToken, User
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-gone", email="gone@example.com")
+        user = await User.find_one(User.email == "gone@example.com")
+        await user.delete()
+
+        resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert resp.status_code == 401
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
+    async def test_a_banned_refresh_leaves_no_live_token(self, client, settings, monkeypatch):
+        from acemusic.api.models import RefreshToken, User
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-ban", email="ban-mid@example.com")
+        user = await User.find_one(User.email == "ban-mid@example.com")
+        # Banned directly, without the ban action's token sweep: the token is still live going in.
+        await User.find_one(User.id == user.id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+
+        resp = await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert resp.status_code == 403
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
+
+    async def test_a_refresh_whose_access_token_cannot_be_minted_leaves_no_live_token(
+        self, client, settings, monkeypatch
+    ):
+        from acemusic.api.models import RefreshToken, User
+        from acemusic.api.routers import auth as auth_router
+
+        tokens = await _login(client, settings, monkeypatch, oauth_id="r-mint", email="mint@example.com")
+        user = await User.find_one(User.email == "mint@example.com")
+
+        def broken_mint(*_args):
+            raise RuntimeError("signing key unavailable")
+
+        monkeypatch.setattr(auth_router, "_mint_access_token", broken_mint)
+        with pytest.raises(RuntimeError):
+            await client.post(f"{API_V1_PREFIX}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+        assert await RefreshToken.find({"user_id": user.id, "revoked": False}).count() == 0
 
     async def test_refresh_revoked_token_401(self, client, settings, monkeypatch):
         tokens = await _login(client, settings, monkeypatch)

@@ -9,6 +9,11 @@ import {
   collectStateCookies,
   cookieOptions,
 } from "@/lib/auth-server"
+import {
+  bodyTooLarge,
+  parseJsonObject,
+  readBodyCapped,
+} from "@/lib/proxy-fetch"
 
 // Finish an OAuth flow: forward the state cookie + code to the backend, then
 // keep the refresh token in an httpOnly cookie and hand the access token back.
@@ -20,12 +25,17 @@ export async function POST(
   if (!isSupportedProvider(provider)) {
     return NextResponse.json({ detail: "Unknown provider." }, { status: 400 })
   }
-  const { code, state } = (await request.json().catch(() => ({}))) as {
+  const raw = await readBodyCapped(request)
+  if (raw === null) return bodyTooLarge()
+  const { code, state } = parseJsonObject(raw) as {
     code?: string
     state?: string
   }
   if (!code || !state) {
-    return NextResponse.json({ detail: "Missing code or state." }, { status: 400 })
+    return NextResponse.json(
+      { detail: "Missing code or state." },
+      { status: 400 }
+    )
   }
 
   const cookieHeader = collectStateCookies(request)
@@ -50,9 +60,17 @@ export async function POST(
     access_token: body.access_token,
     expires_in: body.expires_in,
   })
-  out.cookies.set(REFRESH_COOKIE, body.refresh_token, cookieOptions(REFRESH_MAX_AGE))
+  out.cookies.set(
+    REFRESH_COOKIE,
+    body.refresh_token,
+    cookieOptions(REFRESH_MAX_AGE)
+  )
   // Clip-scoped access cookie so <audio> can stream private clips (issue #282).
-  out.cookies.set(ACCESS_COOKIE, body.access_token, accessCookieOptions(body.expires_in))
+  out.cookies.set(
+    ACCESS_COOKIE,
+    body.access_token,
+    accessCookieOptions(body.expires_in)
+  )
   clearStateCookies(request, out)
   return out
 }

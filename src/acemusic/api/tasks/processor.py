@@ -108,6 +108,7 @@ class JobProcessor:
         poll_timeout: float = 600.0,
         ace_poll_interval: float = 2.0,
         stale_after: float | None = None,
+        sweep_interval: float | None = None,
         heartbeat_interval: float = 30.0,
         client_factory: Callable[[], AceStepClient] | None = None,
         runpod_client_factory: Callable[[], RunPodClient] | None = None,
@@ -152,6 +153,10 @@ class JobProcessor:
         # takes; the window only needs to dwarf the interval, and poll_timeout +
         # 300s does that with room for a stalled event loop.
         self._stale_after = stale_after if stale_after is not None else poll_timeout + 300.0
+        # The sweep also re-runs this often while the processor is up (#502), so a job orphaned by a crashed
+        # sibling is recovered without a restart. No sooner than the window, which a live worker always beats, and
+        # at least a minute, so a tiny window can't turn the sweep into a busy loop.
+        self._sweep_interval = sweep_interval if sweep_interval is not None else max(self._stale_after, 60.0)
         self._heartbeat_interval = heartbeat_interval
         self._client_factory = client_factory or _default_client_factory
         self._storage_factory = storage_factory or get_storage_backend
@@ -199,6 +204,7 @@ class JobProcessor:
             self._handlers.update(handlers)
         self._running = False
         self._worker_task: asyncio.Task[None] | None = None
+        self._sweeper_task: asyncio.Task[None] | None = None
         self._active: set[asyncio.Task[None]] = set()
 
     # -- lifecycle ---------------------------------------------------------
@@ -210,18 +216,20 @@ class JobProcessor:
         self._running = True
         await self._requeue_stale_jobs()
         self._worker_task = asyncio.create_task(self._run_worker())
+        self._sweeper_task = asyncio.create_task(self._sweep_periodically())
         logger.info("Job processor started (concurrency=%d)", self._concurrency)
 
     async def stop(self) -> None:
         """Stop polling and cancel any in-flight jobs, awaiting their unwind."""
         self._running = False
-        if self._worker_task is not None:
-            self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
-            self._worker_task = None
+        for task in (self._worker_task, self._sweeper_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._worker_task = self._sweeper_task = None
         active = list(self._active)
         for task in active:
             task.cancel()
@@ -266,6 +274,15 @@ class JobProcessor:
                 if slot_held:
                     self._semaphore.release()
 
+    async def _sweep_periodically(self) -> None:
+        """Re-run the stale-job sweep every ``sweep_interval`` while the processor is up (#502)."""
+        while self._running:
+            await asyncio.sleep(self._sweep_interval)
+            try:
+                await self._requeue_stale_jobs()
+            except Exception:  # keep sweeping: one failed pass must not end recovery for the process's lifetime
+                logger.exception("Periodic stale-job sweep failed")
+
     async def _process_and_release(self, job: Job) -> None:
         try:
             await self._process_job(job)
@@ -298,7 +315,7 @@ class JobProcessor:
         return job
 
     async def _requeue_stale_jobs(self) -> None:
-        """Reset *stale* ``processing`` jobs back to ``queued`` on startup.
+        """Reset *stale* ``processing`` jobs back to ``queued``: on startup, then every ``sweep_interval``.
 
         A ``processing`` job whose ``heartbeat_at`` is older than ``stale_after``
         is orphaned: the worker that claimed it crashed or was cancelled, since a

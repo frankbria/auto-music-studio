@@ -1,7 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clearScLinkCookies, collectScLinkCookies } from "@/lib/distribution-server"
+import {
+  clearScLinkCookies,
+  collectScLinkCookies,
+} from "@/lib/distribution-server"
+import {
+  bodyTooLarge,
+  parseJsonObject,
+  readBodyCapped,
+} from "@/lib/proxy-fetch"
 
 const TARGET = `${BACKEND_URL}/api/v1/distribution/soundcloud/callback`
 
@@ -10,14 +18,20 @@ const TARGET = `${BACKEND_URL}/api/v1/distribution/soundcloud/callback`
 // Mirrors app/api/auth/callback/[provider].
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const auth = request.headers.get("authorization")
-  if (!auth) return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
+  if (!auth)
+    return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
 
-  const { code, state } = (await request.json().catch(() => ({}))) as {
+  const raw = await readBodyCapped(request)
+  if (raw === null) return bodyTooLarge()
+  const { code, state } = parseJsonObject(raw) as {
     code?: string
     state?: string
   }
   if (!code || !state) {
-    return NextResponse.json({ detail: "Missing code or state." }, { status: 400 })
+    return NextResponse.json(
+      { detail: "Missing code or state." },
+      { status: 400 }
+    )
   }
 
   const cookieHeader = collectScLinkCookies(request)
@@ -33,7 +47,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       body: JSON.stringify({ code, state }),
     })
   } catch {
-    return NextResponse.json({ detail: "SoundCloud is unavailable." }, { status: 502 })
+    return NextResponse.json(
+      { detail: "SoundCloud is unavailable." },
+      { status: 502 }
+    )
   }
 
   const body = await res.json().catch(() => ({}))
