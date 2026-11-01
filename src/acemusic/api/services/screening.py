@@ -340,6 +340,11 @@ async def save_rules(rules: ScreeningRules, fields: set[str] | None = None) -> S
     return (await swap_rules(rules, fields))[1]
 
 
+def _partial_upsert(values: dict, sent: Iterable[str]) -> dict:
+    """Writes the sent fields; the rest only seed a first save."""
+    return {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}}
+
+
 async def swap_rules(rules: ScreeningRules, fields: set[str] | None = None) -> tuple[ScreeningRules, ScreeningRules]:
     """``save_rules``, also returning what the write replaced: both come from the one atomic write, so an audit
     entry's before and after bracket exactly this save, whatever landed in between (#614)."""
@@ -347,7 +352,7 @@ async def swap_rules(rules: ScreeningRules, fields: set[str] | None = None) -> t
     sent = values.keys() if fields is None else fields
     replaced = await ScreeningRulesDocument.get_pymongo_collection().find_one_and_update(
         {"key": "global"},
-        {"$set": {k: values[k] for k in sent}, "$setOnInsert": {k: v for k, v in values.items() if k not in sent}},
+        _partial_upsert(values, sent),
         upsert=True,
         return_document=ReturnDocument.BEFORE,
     )
