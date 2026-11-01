@@ -1,7 +1,5 @@
 # #591: the appeals queue reads one log row per clip and action
 
-**
-
 `_in_force_actions` decides whether each appeal on a queue page is superseded. It used to read every `remove` and `flag` log entry for the page's clips and keep the newest per clip in Python, so its cost grew with each clip's moderation history.
 
 It is now one aggregation: `$match` on the page's clip ids and actions, `$sort` newest first, and `$group` by `(target_id, action)` taking the first `_id`. That returns at most two rows per clip, however long its history. The `(target_id, created_at)` index serves the match and sort.
