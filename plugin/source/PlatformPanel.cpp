@@ -560,6 +560,49 @@ void PlatformPanel::pushClip (const juce::File& clip)
     });
 }
 
+juce::File PlatformPanel::getVoicePreviewDirectory()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("AceMusic voice previews");
+}
+
+void PlatformPanel::fetchVoicePreview (const juce::String& voiceModelId,
+                                       std::function<void (const juce::File&)> onDone)
+{
+    const auto directory = getVoicePreviewDirectory();
+    const auto stem = juce::File::createLegalFileName (voiceModelId.trim());
+
+    // A model's preview is its first reference recording, which never changes, so a
+    // cached copy is reused. Re-downloading would also replace a file the player may
+    // still hold open.
+    for (const auto& cached : directory.findChildFiles (juce::File::findFiles, false, stem + ".*"))
+    {
+        if (cached.getFileExtension() != ".partial")
+        {
+            onDone (cached);
+            return;
+        }
+    }
+
+    const auto url = getUrl();
+    juce::WeakReference<PlatformPanel> self (this);
+    auto* queuePtr = &queue;
+
+    queue.enqueue ([self, url, voiceModelId, directory, onDone, queuePtr, sessionRef = session]
+    {
+        const std::function<bool()> stopping = [queuePtr] { return queuePtr->isStopping(); };
+        const auto result = sessionRef->run (url, [&url, &voiceModelId, &directory, &stopping] (const juce::String& access)
+        {
+            return Platform::downloadVoicePreview (url, access, voiceModelId, directory, stopping);
+        }, stopping);
+
+        queuePtr->callOnMessageThread ([self, result, onDone]
+        {
+            if (self.get() != nullptr && ! result.cancelled)
+                onDone (result.ok ? result.file : juce::File());
+        });
+    });
+}
+
 void PlatformPanel::refreshVoiceModels()
 {
     if (onVoiceModelsChanged == nullptr)

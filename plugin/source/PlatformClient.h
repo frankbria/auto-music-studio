@@ -131,6 +131,16 @@ namespace Platform
                          std::function<bool()> shouldCancel = nullptr,
                          int timeoutMs = 60000);
 
+    /** `GET /api/v1/voice-models/{id}/preview` (#497): the voice's first reference
+        recording, saved into `directory` as `<id>.<ext>`. The extension comes from the
+        response's Content-Type, because the clip player picks its reader by extension. */
+    Result downloadVoicePreview (const juce::String& baseUrl,
+                                 const juce::String& apiKey,
+                                 const juce::String& voiceModelId,
+                                 const juce::File& directory,
+                                 std::function<bool()> shouldCancel = nullptr,
+                                 int timeoutMs = 60000);
+
     /** `POST /api/v1/clips/upload` — pushes a local clip into a workspace. */
     Result uploadClip (const juce::String& baseUrl,
                        const juce::String& apiKey,

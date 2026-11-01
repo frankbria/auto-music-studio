@@ -214,4 +214,11 @@ if(ACEMUSIC_JUCE_CURL)
     target_link_libraries(AceMusicPluginTests PRIVATE CURL::libcurl)
 endif()
 
+# Symbols for the crash handler's backtrace in TestMain: a Windows crash in CI
+# otherwise reports only "SegFault".
+if(MSVC)
+    target_compile_options(AceMusicPluginTests PRIVATE /Zi)
+    target_link_options(AceMusicPluginTests PRIVATE /DEBUG)
+endif()
+
 add_test(NAME unit COMMAND AceMusicPluginTests)

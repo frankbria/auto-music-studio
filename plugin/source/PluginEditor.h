@@ -33,6 +33,10 @@ private:
     ResultsPanel     resultsPanel;
     PlatformPanel    platformPanel;
 
+    /** The voice whose preview is being fetched (#497). A click for it again is ignored,
+        and a fetch finishing after a newer request is dropped rather than played. */
+    juce::String pendingVoicePreview;
+
 public:
     /** Test seam — lets a test drive the real widgets rather than re-deriving them. */
     ConnectionPanel& getConnectionPanel() noexcept            { return connectionPanel; }

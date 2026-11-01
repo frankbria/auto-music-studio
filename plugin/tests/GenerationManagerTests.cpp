@@ -330,6 +330,10 @@ public:
             harness.generation.start (Harness::request());
             expect (harness.generation.isBusy());
 
+            // The first submit is asynchronous: counted before it lands, it reads as a second.
+            expect (pumpUntil ([&] { return harness.server.getRequestCountFor ("/release_task") > 0; }, 30000),
+                    "the first run never submitted");
+
             const auto submitsBefore = harness.server.getRequestCountFor ("/release_task");
             harness.generation.start (Harness::request());
 

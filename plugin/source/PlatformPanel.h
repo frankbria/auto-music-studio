@@ -41,6 +41,16 @@ public:
     void refreshClips();
     void refreshVoiceModels();
 
+    /** Where voice previews are kept: outside the clip cache, whose browser lists every
+        subdirectory as a generation and could neither delete nor clear this one. */
+    static juce::File getVoicePreviewDirectory();
+
+    /** The voice's preview recording, fetched once and reused after (#497). `onDone` gets
+        an empty File when there is nothing to play: signed out, no reference recording,
+        or the fetch failed. A cached copy calls back immediately, a fetch asynchronously. */
+    void fetchVoicePreview (const juce::String& voiceModelId,
+                            std::function<void (const juce::File&)> onDone);
+
     /** Downloads the selected clip into the cache and shows it in Results. */
     void importSelectedClip();
 

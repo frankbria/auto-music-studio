@@ -22,6 +22,17 @@ namespace
 
         return result.ok ? 0 : 1;
     }
+
+    /** JUCE's default logs through Logger, which on Windows is OutputDebugString, so a
+        crash there left no trace of the test that was running. Flushed per line for the
+        same reason. */
+    class StdoutTestRunner final : public juce::UnitTestRunner
+    {
+        void logMessage (const juce::String& message) override
+        {
+            std::cout << message << std::endl;
+        }
+    };
 }
 
 // Console runner for the plugin's juce::UnitTest suites. Suites register
@@ -35,7 +46,12 @@ int main (int argc, char** argv)
     if (argc == 4 && juce::String (argv[1]) == "--refresh-session")
         return refreshSessionOnce (argv[2], argv[3]);
 
-    juce::UnitTestRunner runner;
+    juce::SystemStats::setApplicationCrashHandler ([] (void*)
+    {
+        std::cout << "CRASH backtrace:\n" << juce::SystemStats::getStackBacktrace() << std::endl;
+    });
+
+    StdoutTestRunner runner;
     runner.setAssertOnFailure (false);
 
     // Our suites only — runAllTests() would also run JUCE's own module tests,
