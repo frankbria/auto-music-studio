@@ -638,6 +638,63 @@ public:
             captureIfRequested (editor, "us396-minimum-size");
         }
 
+        beginTest ("running out of credits says so, with the numbers");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 402 Payment Required");
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"detail": {"error": "insufficient_credits", "balance": 0.5, "required": 1.0,
+                                       "message": "This action needs 1.0 credits; balance is 0.5."}})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+            request.voiceModelId = "vm-ready";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.containsIgnoreCase ("credits"), "got: " + result.errorMessage);
+        }
+
+        beginTest ("a validation error names the field the platform rejected");
+        {
+            // FastAPI sends 422 detail as a list of {loc, msg, type}, not a string.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusLine ("HTTP/1.1 422 Unprocessable Entity");
+            server.setResponseFor ("/api/v1/generate",
+                                   R"({"detail": [{"loc": ["body", "prompt"], "msg": "Field required",
+                                       "type": "missing"}, {"loc": ["body", "duration"],
+                                       "msg": "Input should be a valid number", "type": "float_parsing"}]})");
+
+            GenerationRequest request;
+            request.prompt = "a calm piano ballad";
+
+            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
+                                                            request.toPlatformPayloadJson(), nullptr, 5000);
+
+            expect (! result.ok);
+            expect (result.errorMessage.contains ("Field required"), "got: " + result.errorMessage);
+            expect (result.errorMessage.contains ("body.prompt"), "got: " + result.errorMessage);
+        }
+    }
+};
+
+static VoiceGenerationTests voiceGenerationTests;
+
+/** #497, in a suite of its own: VoiceGeneration's runTest already holds enough locals
+    that adding these to it overflowed MSVC's 1 MB stack on entry. */
+class VoicePreviewTests final : public juce::UnitTest
+{
+public:
+    VoicePreviewTests() : juce::UnitTest ("VoicePreview", "acemusic") {}
+
+    void runTest() override
+    {
+        using namespace acemusic;
+
         beginTest ("#497: a voice preview is saved under the voice's id, typed by Content-Type");
         {
             ScopedClipCleanup cleanup;
@@ -772,49 +829,7 @@ public:
             expect (panel.getVoiceSelector().isVisible(), "losing the preview took the voice with it");
             expectEquals (panel.getStatusLabel().getText(), statusBefore);
         }
-
-        beginTest ("running out of credits says so, with the numbers");
-        {
-            test::StubAceStepServer server;
-            expect (server.start() != 0);
-            server.setStatusLine ("HTTP/1.1 402 Payment Required");
-            server.setResponseFor ("/api/v1/generate",
-                                   R"({"detail": {"error": "insufficient_credits", "balance": 0.5, "required": 1.0,
-                                       "message": "This action needs 1.0 credits; balance is 0.5."}})");
-
-            GenerationRequest request;
-            request.prompt = "a calm piano ballad";
-            request.voiceModelId = "vm-ready";
-
-            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
-                                                            request.toPlatformPayloadJson(), nullptr, 5000);
-
-            expect (! result.ok);
-            expect (result.errorMessage.containsIgnoreCase ("credits"), "got: " + result.errorMessage);
-        }
-
-        beginTest ("a validation error names the field the platform rejected");
-        {
-            // FastAPI sends 422 detail as a list of {loc, msg, type}, not a string.
-            test::StubAceStepServer server;
-            expect (server.start() != 0);
-            server.setStatusLine ("HTTP/1.1 422 Unprocessable Entity");
-            server.setResponseFor ("/api/v1/generate",
-                                   R"({"detail": [{"loc": ["body", "prompt"], "msg": "Field required",
-                                       "type": "missing"}, {"loc": ["body", "duration"],
-                                       "msg": "Input should be a valid number", "type": "float_parsing"}]})");
-
-            GenerationRequest request;
-            request.prompt = "a calm piano ballad";
-
-            const auto result = Platform::submitGeneration (server.getBaseUrl(), "token",
-                                                            request.toPlatformPayloadJson(), nullptr, 5000);
-
-            expect (! result.ok);
-            expect (result.errorMessage.contains ("Field required"), "got: " + result.errorMessage);
-            expect (result.errorMessage.contains ("body.prompt"), "got: " + result.errorMessage);
-        }
     }
 };
 
-static VoiceGenerationTests voiceGenerationTests;
+static VoicePreviewTests voicePreviewTests;
