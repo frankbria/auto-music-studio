@@ -16,7 +16,8 @@ export default defineConfig({
     // `npx vitest run --coverage` writes coverage/lcov.info, which diff-cover reads to gate changed lines (#592).
     coverage: {
       provider: "v8",
-      reporter: ["text-summary", "lcov"],
+      // Paths relative to the repo root, as git (and so diff-cover) names them: web/app/..., not app/...
+      reporter: ["text-summary", ["lcov", { projectRoot: ".." }]],
       include: ["app/**", "components/**", "contexts/**", "hooks/**", "lib/**"],
       exclude: ["**/*.test.{ts,tsx}"],
     },

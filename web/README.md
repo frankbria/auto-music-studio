@@ -47,8 +47,11 @@ To check only the lines a branch changed, the way the Python gate does:
 
 ```bash
 npx vitest run --coverage
-uvx diff-cover coverage/lcov.info --compare-branch=origin/main --fail-under=85
+cd .. && uvx diff-cover web/coverage/lcov.info --compare-branch=origin/main --fail-under=85
 ```
+
+The lcov paths are written relative to the repo root (`web/app/...`), as git names them, so run
+`diff-cover` from there.
 
 ## Application shell (US-15.2)
 
