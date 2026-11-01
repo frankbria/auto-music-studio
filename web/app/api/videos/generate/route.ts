@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST /api/v1/videos/generate (US-22.2). The client
 // holds the access token in memory and sends it as a Bearer header; this route
@@ -15,6 +16,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetch(TARGET, {
@@ -24,7 +28,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: await request.text(),
+      body: payload,
     })
   } catch {
     return NextResponse.json(

@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  bodyTooLarge,
+  fetchWithTimeout,
+  readTextCapped,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for /api/v1/clips/{clip_id} (GET US-17.1, DELETE US-17.2,
 // PATCH US-17.6). The client holds the access token in memory and sends it as a
@@ -47,6 +51,9 @@ export async function PATCH(
   }
 
   const { id } = await ctx.params
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -58,7 +65,7 @@ export async function PATCH(
           "content-type": "application/json",
           accept: "application/json",
         },
-        body: await request.text(),
+        body: payload,
       }
     )
   } catch {

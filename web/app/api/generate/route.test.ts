@@ -44,7 +44,9 @@ describe("POST /api/generate", () => {
     expect((opts.headers as Record<string, string>).authorization).toBe(
       "Bearer tok"
     )
-    expect(opts.body).toBe(JSON.stringify({ prompt: "hi", instrumental: false }))
+    expect(opts.body).toBe(
+      JSON.stringify({ prompt: "hi", instrumental: false })
+    )
   })
 
   it("returns a controlled 502 when the upstream fetch rejects", async () => {
@@ -59,14 +61,33 @@ describe("POST /api/generate", () => {
   it("surfaces a 422 verbatim", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ detail: "bad" }), { status: 422 })
-      )
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ detail: "bad" }), { status: 422 })
+        )
     )
     const res = await POST(
       req({ headers: { authorization: "Bearer tok" }, body: "{}" })
     )
     expect(res.status).toBe(422)
     expect(await res.json()).toEqual({ detail: "bad" })
+  })
+})
+
+describe("POST /api/generate body cap (#567)", () => {
+  it("413s an over-limit body and never reaches the backend", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await POST(
+      req({
+        headers: { authorization: "Bearer tok" },
+        body: "x".repeat(1024 * 1024 + 1),
+      })
+    )
+
+    expect(res.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

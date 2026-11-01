@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for the billing endpoints (US-26.3), following the pattern in
 // app/api/users/me. One catch-all instead of a file per endpoint because these four
@@ -49,7 +50,8 @@ async function proxy(
     headers: { authorization: auth, accept: "application/json" },
   }
   if (method === "POST") {
-    const body = await request.text()
+    const body = await readTextCapped(request)
+    if (body === null) return bodyTooLarge()
     if (body) {
       init.headers = { ...init.headers, "content-type": "application/json" }
       init.body = body

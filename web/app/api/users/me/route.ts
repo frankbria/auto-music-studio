@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for the authenticated profile endpoints. The client holds
 // the access token in memory and sends it as a Bearer header; this route just
@@ -29,7 +30,9 @@ async function proxy(
   }
   if (method === "PATCH") {
     init.headers = { ...init.headers, "content-type": "application/json" }
-    init.body = await request.text()
+    const payload = await readTextCapped(request)
+    if (payload === null) return bodyTooLarge()
+    init.body = payload
   }
 
   const res = await fetch(TARGET, init)

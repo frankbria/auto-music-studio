@@ -1,7 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  bodyTooLarge,
+  fetchWithTimeout,
+  readBodyCapped,
+  readTextCapped,
+} from "@/lib/proxy-fetch"
+
+/** "Save as version" ships a whole encoded WAV, so it gets the API's own clip-upload cap, not the JSON one (#567). */
+export const VERSION_UPLOAD_LIMIT = 200 * 1024 * 1024
 
 // Shared same-origin proxy for the editing/iterative endpoints (US-17.3). Every
 // modal submits to an `app/api/...` route that delegates here; the client holds
@@ -24,6 +32,9 @@ export async function forwardEdit(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetchWithTimeout(`${BACKEND_URL}${backendPath}`, {
@@ -33,7 +44,7 @@ export async function forwardEdit(
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: await request.text(),
+      body: payload,
     })
   } catch {
     // Backend unreachable — a controlled 502 the modal can surface as a generic
@@ -62,6 +73,8 @@ export async function forwardEditUpload(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
   const contentType = request.headers.get("content-type")
+  const upload = await readBodyCapped(request, VERSION_UPLOAD_LIMIT)
+  if (upload === null) return bodyTooLarge()
 
   let res: Response
   try {
@@ -72,7 +85,7 @@ export async function forwardEditUpload(
         accept: "application/json",
         ...(contentType ? { "content-type": contentType } : {}),
       },
-      body: await request.arrayBuffer(),
+      body: upload,
     })
   } catch {
     return NextResponse.json(
