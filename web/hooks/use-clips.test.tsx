@@ -141,7 +141,9 @@ describe("useClips", () => {
   })
 
   it("refetches when a moderation notice arrives, not on other notices (#589)", async () => {
-    const fetchMock = vi.fn(async () => listRes())
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () =>
+      listRes()
+    )
     vi.stubGlobal("fetch", fetchMock)
     function withNotices({ children }: { children: ReactNode }) {
       return wrapper({
