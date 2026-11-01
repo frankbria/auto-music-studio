@@ -619,7 +619,7 @@ export function ModerationDashboard({
                       </td>
                       <td className="py-2">{entry.reason ?? "-"}</td>
                       <td className="py-2 pl-3">
-                        {entry.action === "unpublish" &&
+                        {entry.restorable &&
                           entry.target_type === "video" &&
                           entry.target_id && (
                             <Button

@@ -200,6 +200,7 @@ function logEntry(
     reason: null,
     details: {},
     created_at: "2026-09-20T12:00:00Z",
+    restorable: false,
     ...overrides,
   }
 }
@@ -433,6 +434,15 @@ describe("ModerationDashboard", () => {
           target_type: "video",
           target_id: "v1",
           target_label: "Song V",
+          restorable: true,
+        }),
+        logEntry({
+          id: "l3",
+          action: "unpublish",
+          target_type: "video",
+          target_id: "v1",
+          target_label: "Song V (earlier)",
+          restorable: false,
         }),
         logEntry({
           id: "l2",
@@ -450,6 +460,11 @@ describe("ModerationDashboard", () => {
     const artRow = (await screen.findByText("Song Art")).closest("tr")!
     expect(
       within(artRow).queryByRole("button", { name: "Restore" })
+    ).not.toBeInTheDocument()
+    // #624: an unpublish a newer one (or a restore) replaced offers no Restore.
+    const supersededRow = screen.getByText("Song V (earlier)").closest("tr")!
+    expect(
+      within(supersededRow).queryByRole("button", { name: "Restore" })
     ).not.toBeInTheDocument()
     const videoRow = screen.getByText("Song V").closest("tr")!
     await userEvent.click(
@@ -536,6 +551,7 @@ describe("ModerationDashboard", () => {
           target_type: "video",
           target_id: "v1",
           target_label: "Song V",
+          restorable: true,
         }),
       ],
       results: [{ ok: false, detail: "This video is not taken down." }],

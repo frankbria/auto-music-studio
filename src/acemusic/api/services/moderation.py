@@ -371,19 +371,19 @@ async def act_on_content(
     notice: tuple[str, dict] | None = None
     if action == "drop":
         details = await _drop_artwork(doc)
+        if details is None:  # a concurrent drop got there first and has logged and notified (#624)
+            return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
         notice = ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
     elif action == "restore":
         if refused := await _restore_video(doc):
             return ActionResult(ok=False, detail=refused)
         notice = ("moderation_video_restored", {"video_id": str(oid)})
+    elif action == "unpublish":
+        details["was_published"] = doc.published
+        if await _take_down_video(doc, now):
+            notice = ("moderation_video_unpublished", {"video_id": str(oid)})
     else:
-        updates: dict = {"moderation_reviewed_at": now}
-        if action == "unpublish":
-            details["was_published"] = doc.published
-            if doc.removed_at is None:  # re-unpublishing a video already down tells the owner nothing new
-                notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-            updates.update(published=False, removed_at=await _unpublish_stamp(doc, now))
-        await doc.set(updates)
+        await doc.set({"moderation_reviewed_at": now})
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
     # already stamped, lifted or deleted), so a failed insert must not report the action as failed.
@@ -393,6 +393,24 @@ async def act_on_content(
         except Exception:
             logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+async def _take_down_video(video: Video, now: datetime) -> bool:
+    """Unpublish and stamp the takedown; True only for the write that took the video down (#624).
+
+    Conditional on the video still being up, so of two concurrent unpublishes one notifies the owner. A video
+    already down (or taken down meanwhile) is re-read, so its stamp is kept rather than overwritten.
+    """
+    taken_down = await Video.find({"_id": video.id, "removed_at": None}).update(
+        {"$set": {"published": False, "removed_at": now, "moderation_reviewed_at": now}}
+    )
+    if taken_down.modified_count:
+        return True
+    current = await Video.find_one({"_id": video.id})
+    if current is not None:
+        stamp = await _unpublish_stamp(current, now)
+        await current.set({"published": False, "removed_at": stamp, "moderation_reviewed_at": now})
+    return False
 
 
 async def _unpublish_stamp(video: Video, now: datetime) -> datetime:
@@ -435,15 +453,20 @@ async def _notify_owner(doc: Video | ArtworkOption, event_type: str, reason: str
     ).insert()
 
 
-async def _drop_artwork(option: ArtworkOption) -> dict:
-    """Delete a generated cover option, and clear the clip's cover if it was that option."""
+async def _drop_artwork(option: ArtworkOption) -> dict | None:
+    """Delete a generated cover option, and clear the clip's cover if it was that option.
+
+    None when a concurrent drop deleted it first: that drop logs and notifies, so this one doesn't (#624).
+    """
     queued: list[str] = []
     is_cover = await Clip.find_one({"_id": option.clip_id, "artwork_path": option.storage_path}) is not None
     if is_cover:
         # #569: the cover went out with the song's SoundCloud uploads, so those tracks come down with it. Queued
         # before anything is deleted, so a failure here leaves the drop retryable.
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
-    await option.delete()
+    deleted = await ArtworkOption.get_pymongo_collection().delete_one({"_id": option.id})
+    if not deleted.deleted_count:
+        return None
     cleared = await Clip.find({"_id": option.clip_id, "artwork_path": option.storage_path}).update(
         {"$set": {"artwork_path": None}}
     )
@@ -561,6 +584,8 @@ class LogItem(BaseModel):
     reason: str | None
     details: dict
     created_at: datetime
+    # A video unpublish Restore can still lift: the video's latest, while it is still down (#624).
+    restorable: bool = False
 
 
 async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem], str | None]:
@@ -573,6 +598,7 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
     )
     page = entries[:limit]
     actors, labels = await _log_names(page)
+    restorable = await _restorable_unpublishes(page)
     items = [
         LogItem(
             id=str(e.id),
@@ -585,11 +611,29 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
             reason=e.reason,
             details=e.details,
             created_at=e.created_at,
+            restorable=str(e.id) in restorable,
         )
         for e in page
     ]
     more = len(entries) > limit
     return items, encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
+
+
+async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
+    """The page's video unpublish entries in force: each still-down video's latest unpublish."""
+    video_ids = {e.target_id for e in entries if e.action == "unpublish" and e.target_type == "video"}
+    oids = [oid for oid in map(coerce_object_id, video_ids) if oid is not None]
+    if not oids:
+        return set()
+    down = {str(v.id) for v in await Video.find({"_id": {"$in": oids}, "removed_at": {"$ne": None}}).to_list()}
+    latest = await ModerationLogEntry.aggregate(
+        [
+            {"$match": {"target_type": "video", "action": "unpublish", "target_id": {"$in": sorted(down)}}},
+            {"$sort": {"created_at": -1, "_id": -1}},
+            {"$group": {"_id": "$target_id", "entry_id": {"$first": "$_id"}}},
+        ]
+    ).to_list()
+    return {str(row["entry_id"]) for row in latest}
 
 
 async def _log_names(
