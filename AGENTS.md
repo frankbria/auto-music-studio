@@ -412,7 +412,12 @@ Package manager: `uv` with `hatchling` build backend
   moderation log (`limit`/`cursor`/`next_cursor`, #543). The web Library `ClipCard` shows appeal UI
   only when passed an `appeal` prop. It compares the appeal's `created_at` with `Clip.removed_at`/`Clip.flagged_at`
   (restamped by each removal or flag) to tell a new decision from the appealed one. `useMyAppeals` refetches when a
-  new `moderation` notice reaches the inbox store. Outcomes are `NotificationEvent(moderation_appeal_*)`
+  new `moderation` notice reaches the inbox store. Outcomes are `NotificationEvent(moderation_appeal_*)`.
+  Video takedowns are appealable too (#623): `POST/PATCH /videos/{id}/appeal` file a `ClipAppeal` with `video_id` set and
+  `action="unpublish"` against the unpublish in force (`moderation.unpublishes_in_force`, the rule Restore uses).
+  `clip_id` is then the video's song, so clip-scoped appeal reads exclude `video_id` appeals. Reversal runs the admin
+  restore (`moderation.restore_video`). On the web, the takedown notice opens `/video/{song}?appeal={video}`, and a
+  Publish refused for a takedown shows the same `VideoAppealPanel`
 - **Notification inbox (#537)**: `services/notifications.py` behind `GET /api/v1/users/me/notifications`
   (newest first, `limit`/`offset`, global `unread_count`) and `POST /api/v1/users/me/notifications/read`
   (`ids`, or all). Reading a notice sets `NotificationEvent.delivered_at`. Every writer (moderation, appeals,
