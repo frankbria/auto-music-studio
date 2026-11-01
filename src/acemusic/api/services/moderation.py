@@ -673,6 +673,16 @@ async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]
     return await unpublishes_in_force(_unpublished_video_ids(entries))
 
 
+async def unpublish_in_force_at(video_id: PydanticObjectId) -> datetime | None:
+    """When the unpublish in force on this video was made; None if none is (#690).
+
+    Not ``moderation_reviewed_at``: an approve of a still-down video refreshes that without a new takedown.
+    """
+    in_force = await unpublishes_in_force([video_id])
+    entry = await ModerationLogEntry.get(PydanticObjectId(next(iter(in_force)))) if in_force else None
+    return entry.created_at if entry else None
+
+
 async def unpublishes_in_force(video_ids: list[PydanticObjectId]) -> set[str]:
     """The unpublish log entries in force on these videos: each still-down video's latest, unless its owner is
     banned. What Restore can lift (#624), and what a video appeal targets (#623)."""
