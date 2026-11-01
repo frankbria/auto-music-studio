@@ -475,7 +475,7 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
     concurrent unban got there first.
 
     Restores while the account is still banned, then lifts the ban, so a failure part-way leaves it banned and the
-    unban retryable.
+    unban retryable. A process crash between the two leaves the clips up on a banned account until an unban is retried.
     """
     banned_at = user.banned_at
     if banned_at is None:
@@ -485,8 +485,10 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
         lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
     except Exception:
-        # Still banned, so its clips go back down rather than stay streamable until someone retries.
-        await clip_service.take_down_visible({"user_id": user.id}, banned_at)
+        # Only while this ban is still in force: a clear whose reply was lost, or a concurrent unban that won, means
+        # the account is unbanned and its restored clips must stay up.
+        if (await User.get(user.id)).banned_at == banned_at:
+            await clip_service.take_down_visible({"user_id": user.id}, banned_at)
         raise
     if not lifted.modified_count:
         return "This account is not banned."

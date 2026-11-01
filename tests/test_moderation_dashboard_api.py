@@ -867,6 +867,31 @@ class TestUnban:
         assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)
         assert (await client.get(f"{CLIPS_URL}/{clip.id}/public")).status_code == 404
 
+    async def test_a_failed_unban_does_not_take_down_clips_another_unban_restored(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        real_restore = moderation.clip_service.restore_ban_sweep
+
+        async def restore_then_another_unban_completes(*args):
+            restored = await real_restore(*args)
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+            return restored
+
+        class VideoUpdateTimesOut:
+            @staticmethod
+            def find(*_args):
+                raise RuntimeError("timed out")
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", restore_then_another_unban_completes)
+        monkeypatch.setattr(moderation, "Video", VideoUpdateTimesOut)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is None
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
+
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
         stale = await User.get(user.id)
