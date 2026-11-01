@@ -375,20 +375,26 @@ class TestDownload:
         assert resp.headers["content-disposition"] == 'attachment; filename="cool-track_Export.zip"'
         assert resp.content == b"PK\x03\x04 zip-bytes"
 
-    async def test_other_users_private_clip_returns_403(self, client, settings, local_storage) -> None:
+    async def test_other_users_private_clip_returns_404(self, client, settings, local_storage) -> None:
         user, workspace, clip = await _user_with_clip("daw-priv-owner@example.com")
         get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK")
         other = await make_user("daw-priv-other@example.com", tier=PRO)
         resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
-    async def test_public_clip_export_downloadable_by_other_user(self, client, settings, local_storage) -> None:
+    async def test_public_clip_export_is_owner_only(self, client, settings, local_storage) -> None:
+        """#617: a public clip's DAW export downloads for its owner only."""
         user, workspace, clip = await _user_with_clip("daw-pub-owner@example.com", is_public=True)
         get_storage_backend().upload(export_storage_path(user.id, workspace.id, clip.id), b"PK-public")
-        other = await make_user("daw-pub-other@example.com", tier=PRO)
-        resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
-        assert resp.status_code == 200
-        assert resp.content == b"PK-public"
+        for other in [
+            await make_user("daw-pub-other-free@example.com"),
+            await make_user("daw-pub-other-pro@example.com", tier=PRO),
+        ]:
+            resp = await client.get(_daw_url(clip.id), headers=_auth_headers(other, settings))
+            assert resp.status_code == 404
+        own = await client.get(_daw_url(clip.id), headers=_auth_headers(user, settings))
+        assert own.status_code == 200
+        assert own.content == b"PK-public"
 
 
 # ---------------------------------------------------------------------------

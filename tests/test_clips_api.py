@@ -477,22 +477,17 @@ class TestClipAudioRetrieval:
         resp = await client.get(_audio_url("not-an-object-id"), headers=_auth_headers(user, settings))
         assert resp.status_code == 404
 
-    async def test_other_users_private_clip_returns_403(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await make_user("clips-owner@example.com")
-        other = await make_user("clips-other@example.com")
-        clip = await _make_clip(owner, wav_bytes, is_public=False)
+    @pytest.mark.parametrize("is_public", [False, True])
+    async def test_other_users_clip_audio_returns_404(
+        self, client, settings, local_storage, wav_bytes, is_public
+    ) -> None:
+        """#617: downloads are owner-only; a visitor streams a public clip instead."""
+        owner = await make_user(f"clips-owner-{is_public}@example.com")
+        other = await make_user(f"clips-other-{is_public}@example.com")
+        clip = await _make_clip(owner, wav_bytes, is_public=is_public)
 
         resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(other, settings))
-        assert resp.status_code == 403
-
-    async def test_other_users_public_clip_returns_200(self, client, settings, local_storage, wav_bytes) -> None:
-        owner = await make_user("clips-pub-owner@example.com")
-        other = await make_user("clips-pub-other@example.com")
-        clip = await _make_clip(owner, wav_bytes, is_public=True)
-
-        resp = await client.get(_audio_url(str(clip.id)), headers=_auth_headers(other, settings))
-        assert resp.status_code == 200
-        assert resp.content == wav_bytes
+        assert resp.status_code == 404
 
     async def test_clip_with_missing_audio_file_returns_404(self, client, settings, local_storage) -> None:
         user = await make_user("clips-nofile@example.com")

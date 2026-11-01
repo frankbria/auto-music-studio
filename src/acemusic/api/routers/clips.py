@@ -41,7 +41,7 @@ from ..auth.dependencies import (
 from ..models import Clip, ReportCategory, VisibilityState
 from ..services import appeals as appeal_service, clips as clip_service, reports as report_service
 from ..services.audio_conversion import convert_audio_format
-from ..services.clips import get_clip_for_audio_access, get_clip_for_streaming
+from ..services.clips import get_clip_for_streaming
 from ..services.tiers import Capability
 from ..utils.media_types import get_audio_content_type
 from ..utils.range_requests import stream_stored_object
@@ -560,8 +560,8 @@ async def get_clip_audio(
     ),
     current: CurrentUser = Depends(get_current_user),
 ) -> Response:
-    """Return the clip's audio — full (200) or a requested byte range (206)."""
-    clip = await get_clip_for_audio_access(clip_id, current.user_id)
+    """The owner's clip audio, full (200) or a byte range (206). Visitors stream instead (#617)."""
+    clip = await clip_service.get_owned_clip(clip_id, current.user_id)
 
     # US-26.2: the free tier is "MP3 download only". Gated on the requested format rather
     # than the endpoint, so ordinary playback of a clip in its stored format is untouched

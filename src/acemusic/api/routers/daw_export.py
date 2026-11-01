@@ -83,8 +83,8 @@ async def download_daw_export(
     clip_id: str,
     current: CurrentUser = Depends(get_current_user),
 ) -> Response:
-    """Download the assembled DAW bundle ZIP; 404 until the export has been built."""
-    clip = await clip_service.get_clip_for_audio_access(clip_id, current.user_id)
+    """Download the owner's assembled DAW bundle ZIP; 404 until it has been built, or to anyone else (#617)."""
+    clip = await clip_service.get_owned_clip(clip_id, current.user_id)
     storage = get_storage_backend()
     try:
         data = await asyncio.to_thread(storage.download, _export_path(clip))
