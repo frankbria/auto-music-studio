@@ -20,6 +20,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // `npx vitest run --coverage` writes an HTML report here (#592).
+    "coverage/**",
   ]),
 ]);
 
