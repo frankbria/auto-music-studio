@@ -849,7 +849,7 @@ class TestClipMetadataScreening:
 
         monkeypatch.setattr(screening, "enforce", removed_while_screening)
         resp = await self._patch(client, settings, user, clip, {"visibility": "public"})
-        assert resp.status_code == 403
+        assert resp.status_code == 403, resp.text
         stored = await Clip.get(clip.id)
         assert stored.visibility == VisibilityState.PRIVATE and stored.removed_at is not None
 
