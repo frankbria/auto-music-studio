@@ -206,9 +206,11 @@ Environment variables (see `.env.example`):
 - Coverage target: >85%
 - Integration tests marked `@pytest.mark.integration` (excluded by default)
 - Integration tests require a live ACE-Step server (auto-started via `ACESTEP_API_CMD` env var, or skipped)
-- Mongo-backed integration tests build and drop a whole database per test, so mongod's disk dominates their
-  runtime. Run a throwaway Mongo on tmpfs (`docker run --rm --tmpfs /data/db:size=2g -p 27017:27017 mongo:7`):
-  locally it cut a 259-test subset from 540s to 52s. CI's mongo service does the same (#590)
+- Mongo-backed integration tests share one database per session (#599): Beanie builds its collections and
+  indexes once, and `mongo_settings` deletes every document after each test, so no test sees another's rows.
+  A test that changes indexes or collection options would leak into the next one; give it its own database.
+  A throwaway Mongo on tmpfs still helps (`docker run --rm --tmpfs /data/db:size=2g -p 27017:27017 mongo:7`),
+  and CI's mongo service runs that way (#590)
 - Test config: `testpaths = ["tests"]`, `bdd_features_base_dir = "tests/features"`
 - **`tests/conftest.py` pops `FORCE_COLOR`/`CLICOLOR_FORCE` at import time (#520)**, so CLI
   substring assertions never see Rich's ANSI escapes. It has to happen at import, not in a
