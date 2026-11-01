@@ -28,7 +28,13 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import releases as release_service, screening, soundcloud
+from acemusic.api.services import (
+    appeals as appeal_service,
+    moderation,
+    releases as release_service,
+    screening,
+    soundcloud,
+)
 from acemusic.api.settings import ApiSettings
 from tests.test_moderation_dashboard_api import _release, _sc_connection
 from tests.users import make_user
@@ -301,6 +307,49 @@ class TestDecideAppeal:
         )
         # It can still be closed without touching the newer decision.
         assert (await _decide(client, settings, appeal["id"], "uphold")).status_code == 200
+
+    @pytest.mark.parametrize("decision", ["reverse", "request_info"])
+    async def test_a_removal_landing_mid_decision_is_not_overridden(self, client, settings, monkeypatch, decision):
+        owner, clip, appeal = await _appealed(client, settings)
+        admin = await _user(is_admin=True)
+        read_in_force = appeal_service._appealable_action
+
+        async def removal_lands_after_the_read(clip_read):
+            in_force = await read_in_force(clip_read)
+            await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), "Removed again")
+            return in_force
+
+        monkeypatch.setattr(appeal_service, "_appealable_action", removal_lands_after_the_read)
+
+        resp = await _decide(client, settings, appeal["id"], decision, note="Send the stems")
+
+        assert resp.status_code == 409, resp.text
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+        assert (await Clip.get(clip.id)).removed_at is not None
+        assert (
+            await NotificationEvent.find_one({"user_id": owner.id, "event_type": {"$regex": "^moderation_appeal_"}})
+            is None
+        )
+
+    async def test_a_rolled_back_decision_keeps_an_answer_that_landed_before_it(self, client, settings, monkeypatch):
+        owner, clip, appeal = await _appealed(client, settings)
+        assert (await _decide(client, settings, appeal["id"], "request_info", note="Send the stems")).status_code == 200
+        admin = await _user(is_admin=True)
+        read_in_force = appeal_service._appealable_action
+
+        async def answer_and_removal_land_after_the_read(clip_read):
+            in_force = await read_in_force(clip_read)
+            await appeal_service.answer_info_request(str(clip.id), str(owner.id), "Stems attached")
+            await moderation.act_on_clip(str(admin.id), "remove", str(clip.id), "Removed again")
+            return in_force
+
+        monkeypatch.setattr(appeal_service, "_appealable_action", answer_and_removal_land_after_the_read)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 409
+
+        kept = await ClipAppeal.get(appeal["id"])
+        assert kept.status == "pending"
+        assert "Stems attached" in kept.context
 
     async def test_the_queue_marks_an_appeal_a_newer_decision_replaced(self, client, settings):
         _, clip, stale = await _appealed(client, settings)
