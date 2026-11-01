@@ -159,6 +159,13 @@ public:
         statusRoutes.set (pathFragment, line);
     }
 
+    /** Serve `type` as the Content-Type for paths containing `pathFragment`. */
+    void setContentTypeFor (const juce::String& pathFragment, const juce::String& type)
+    {
+        const juce::ScopedLock sl (lock);
+        contentTypeRoutes.set (pathFragment, type);
+    }
+
     /** Behave like the platform's auth (#445): any request outside `/auth/` that does
         not carry `Authorization: Bearer <token>` gets a 401. Empty turns it off. */
     void requireBearer (const juce::String& token)       { const juce::ScopedLock sl (lock); requiredBearer = token; }
@@ -223,7 +230,7 @@ private:
 
             const auto bytesRead = (int) whole.getNumBytesAsUTF8();
 
-            juce::String body, status;
+            juce::String body, status, contentType { "application/json" };
             bool isRefresh = false;
             {
                 const juce::ScopedLock sl (lock);
@@ -276,6 +283,15 @@ private:
                     }
                 }
 
+                for (auto& route : contentTypeRoutes)
+                {
+                    if (lastPath.contains (route.name.toString()))
+                    {
+                        contentType = route.value.toString();
+                        break;
+                    }
+                }
+
                 isRefresh = lastPath.contains ("/auth/refresh");
 
                 if (isRefresh && liveRefreshToken.isNotEmpty())
@@ -314,7 +330,7 @@ private:
                                                        : (int) body.getNumBytesAsUTF8();
 
             const auto response = status + "\r\n"
-                                + "Content-Type: application/json\r\n"
+                                + "Content-Type: " + contentType + "\r\n"
                                 + "Content-Length: " + juce::String (declaredLength) + "\r\n"
                                 + "Connection: close\r\n\r\n"
                                 + body;
@@ -344,7 +360,7 @@ private:
 
     mutable juce::CriticalSection lock;
     juce::String lastRequest, lastBody, lastPath;
-    juce::NamedValueSet routes, statusRoutes;
+    juce::NamedValueSet routes, statusRoutes, contentTypeRoutes;
     juce::String requiredBearer;
     mutable juce::HashMap<juce::String, int> pathCounts;
     mutable juce::HashMap<juce::String, juce::String> pathBodies;

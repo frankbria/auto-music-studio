@@ -247,6 +247,12 @@ GenerationPanel::GenerationPanel (GenerationManager& generationToUse,
     voiceSelector.setSelectedId (1, juce::dontSendNotification);
     voiceSelector.onChange = [this] { refresh(); };
     addChildComponent (voiceSelector);
+    voicePreviewButton.onClick = [this]
+    {
+        if (onPreviewVoice != nullptr)
+            onPreviewVoice (getSelectedVoiceModelId());
+    };
+    addChildComponent (voicePreviewButton);
 
     captureLabel.setFont (juce::FontOptions (12.0f));
     captureLabel.setColour (juce::Label::textColourId, genColours::textDim);
@@ -379,6 +385,12 @@ void GenerationPanel::resized()
         // The voice selector takes the right of this row. It shares rather than adding a
         // row of its own because the editor's minimum height is already tight, and every
         // prior story's comment here warns about squeezing the readouts.
+        if (voicePreviewButton.isVisible())
+        {
+            voicePreviewButton.setBounds (legoRow.removeFromRight (64));
+            legoRow.removeFromRight (6);
+        }
+
         voiceSelector.setBounds (legoRow.removeFromRight (150));
         legoRow.removeFromRight (6);
         voiceLabel.setBounds (legoRow.removeFromRight (42));
@@ -751,6 +763,7 @@ void GenerationPanel::setVoiceModels (const juce::Array<Platform::VoiceModel>& m
     // Only trained adapters can generate; offering one that is still training would earn
     // the musician a 409 they did not ask for.
     voiceModels = Platform::readyVoiceModels (models);
+    voicesWithoutPreview.clear();
 
     voiceSelector.clear (juce::dontSendNotification);
     voiceSelector.addItem ("None", 1);
@@ -771,6 +784,12 @@ void GenerationPanel::setVoiceModels (const juce::Array<Platform::VoiceModel>& m
     // Visibility is refresh()'s call: it also knows the mode, and a voice is only offered
     // in Text to Music. Signed out or nothing trained yet means nothing to choose, so the
     // control is not shown at all rather than shown reading "None".
+    refresh();
+}
+
+void GenerationPanel::hideVoicePreview (const juce::String& voiceModelId)
+{
+    voicesWithoutPreview.addIfNotAlreadyThere (voiceModelId);
     refresh();
 }
 
@@ -950,10 +969,15 @@ void GenerationPanel::refresh()
     if (! offerVoice && voiceSelector.getSelectedId() != 1)
         voiceSelector.setSelectedId (1, juce::dontSendNotification);
 
-    if (voiceSelector.isVisible() != offerVoice)
+    const auto selectedVoice = getSelectedVoiceModelId();
+    const auto offerPreview = offerVoice && selectedVoice.isNotEmpty()
+                                && ! voicesWithoutPreview.contains (selectedVoice);
+
+    if (voiceSelector.isVisible() != offerVoice || voicePreviewButton.isVisible() != offerPreview)
     {
         voiceSelector.setVisible (offerVoice);
         voiceLabel.setVisible (offerVoice);
+        voicePreviewButton.setVisible (offerPreview);
         resized();
     }
 
@@ -971,7 +995,7 @@ void GenerationPanel::refresh()
     for (auto* control : std::initializer_list<juce::Component*> {
              &promptEditor, &lyricsEditor, &lyricsToggle, &languageSelector, &instrumentalToggle,
              &bpmEditor, &keySelector, &durationEditor, &seedEditor, &qualitySelector, &modeSelector,
-             &voiceSelector })
+             &voiceSelector, &voicePreviewButton })
     {
         control->setEnabled (! busy);
     }

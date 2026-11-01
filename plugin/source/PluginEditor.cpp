@@ -46,6 +46,17 @@ PluginEditor::PluginEditor (PluginProcessor& p)
         generationPanel.setVoiceModels (models);
     };
 
+    // #497: the preview plays through the same player as Results, so it reaches the host
+    // output the same way. A voice with nothing playable loses its Preview control.
+    generationPanel.onPreviewVoice = [this, &player = p.getClipPlayer()] (const juce::String& voiceModelId)
+    {
+        platformPanel.fetchVoicePreview (voiceModelId, [this, &player, voiceModelId] (const juce::File& file)
+        {
+            if (file == juce::File() || ! player.toggle (file))
+                generationPanel.hideVoicePreview (voiceModelId);
+        });
+    };
+
     setResizable (true, true);
     // Three real panels need the room: the 520 default from US-23.1 left Results
     // squeezed to a single line once it had waveforms in it. The minimum is raised

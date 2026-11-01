@@ -69,6 +69,15 @@ public:
     juce::Label&        getLegoLabel() noexcept            { return legoLabel; }
     juce::ComboBox&     getVoiceSelector() noexcept        { return voiceSelector; }
     juce::Label&        getVoiceLabel() noexcept           { return voiceLabel; }
+    juce::TextButton&   getVoicePreviewButton() noexcept   { return voicePreviewButton; }
+
+    /** Asked to play the selected voice's preview (#497). The editor owns both the
+        platform session and the clip player, so it answers. */
+    std::function<void (const juce::String& voiceModelId)> onPreviewVoice;
+
+    /** This voice has nothing playable: drop its Preview control rather than offer a
+        button that only ever fails. */
+    void hideVoicePreview (const juce::String& voiceModelId);
 
     /** Offer these voice models, or hide the selector entirely when the list is empty
         (#396).
@@ -220,6 +229,10 @@ private:
     juce::ComboBox   legoTrackSelector;
     juce::Label      legoLabel;
     juce::Label      voiceLabel;
+    juce::TextButton voicePreviewButton { "Preview" };
+    /** shortcut: a failed fetch hides Preview until the voice list is next refreshed;
+        retry per click if a transient network error turns out to hide it too often. */
+    juce::StringArray voicesWithoutPreview;
     juce::ComboBox   voiceSelector;
 
     /** Parallel to the selector's items 2..n; item 1 is always "None". An id alone cannot

@@ -628,9 +628,149 @@ public:
             expect (panel.getVoiceSelector().isVisible(), "not offered in Text to Music");
             expect (panel.getVoiceSelector().getWidth() > 0, "the voice selector collapsed");
             expect (panel.getVoiceLabel().getWidth() > 0, "the caption collapsed");
+
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+            expect (panel.getVoicePreviewButton().getWidth() > 0, "the Preview button collapsed");
+            expect (! panel.getVoicePreviewButton().getBounds().intersects (panel.getVoiceSelector().getBounds()),
+                    "Preview overlaps the voice selector");
             expect (editor.getLocalBounds().contains (panel.getBounds()), "the panel escaped the editor");
             expect (! panel.getLegoTrackSelector().isVisible(), "lego and voice were both visible");
             captureIfRequested (editor, "us396-minimum-size");
+        }
+
+        beginTest ("#497: a voice preview is saved under the voice's id, typed by Content-Type");
+        {
+            ScopedClipCleanup cleanup;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setResponseFor ("/voice-models/vm-ready/preview", "RIFF....WAVEfmt fake audio payload");
+            server.setContentTypeFor ("/voice-models/vm-ready/preview", "audio/wav");
+
+            const auto result = Platform::downloadVoicePreview (server.getBaseUrl(), "token", "vm-ready",
+                                                                cleanup.root, nullptr, 5000);
+
+            expect (result.ok, result.errorMessage);
+            expectEquals (result.file.getFileName(), juce::String ("vm-ready.wav"));
+            expect (result.file.getSize() > 0, "nothing was written");
+            expect (server.getLastPath().endsWith ("/api/v1/voice-models/vm-ready/preview"), server.getLastPath());
+        }
+
+        beginTest ("#497: a voice with no preview is a failure and leaves no file");
+        {
+            ScopedClipCleanup cleanup;
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.setStatusFor ("/preview", "HTTP/1.1 404 Not Found");
+            server.setResponseFor ("/preview", R"({"detail":"Voice model preview not found."})");
+
+            const auto result = Platform::downloadVoicePreview (server.getBaseUrl(), "token", "vm-ready",
+                                                                cleanup.root, nullptr, 5000);
+
+            expect (! result.ok, "a 404 was accepted as a preview");
+            expectEquals (cleanup.root.getNumberOfChildFiles (juce::File::findFiles, "vm-ready*"), 0);
+        }
+
+        beginTest ("#497: Preview is offered only while a voice is selected, and reports which");
+        {
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+            juce::String asked;
+            panel.onPreviewVoice = [&asked] (const juce::String& id) { asked = id; };
+
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            panel.setVoiceModels (models);
+
+            expect (! panel.getVoicePreviewButton().isVisible(), "Preview shown with no voice selected");
+
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+            expect (panel.getVoicePreviewButton().isVisible(), "Preview not offered for a selected voice");
+
+            panel.getVoicePreviewButton().triggerClick();
+            pumpUntil ([&asked] { return asked.isNotEmpty(); }, 2000);
+            expectEquals (asked, juce::String ("vm-ready"));
+
+            panel.hideVoicePreview ("vm-ready");
+            expect (! panel.getVoicePreviewButton().isVisible(), "Preview survived a voice with nothing to play");
+
+            panel.setVoiceModels (models);
+            expect (panel.getVoicePreviewButton().isVisible(), "a fresh voice list did not offer Preview again");
+        }
+
+        beginTest ("#497 AC: Preview plays the voice's recording through the clip player");
+        {
+            ScopedClipCleanup cleanup;
+            const auto previews = cleanup.root.getChildFile ("clips").getChildFile ("voice-previews");
+            previews.createDirectory();
+            const auto recording = previews.getChildFile ("vm-ready.wav");
+
+            {
+                juce::AudioBuffer<float> buffer (1, 44100);
+                buffer.clear();
+                juce::WavAudioFormat format;
+                std::unique_ptr<juce::OutputStream> stream (recording.createOutputStream());
+                const auto options = juce::AudioFormatWriterOptions{}.withSampleRate (44100.0)
+                                                                     .withNumChannels (1)
+                                                                     .withBitsPerSample (16);
+                if (auto writer = format.createWriterFor (stream, options))
+                    writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+            }
+
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            processor.prepareToPlay (44100.0, 512);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+
+            auto& panel = editor.getGenerationPanel();
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+
+            panel.getVoicePreviewButton().triggerClick();
+            auto& player = processor.getClipPlayer();
+            pumpUntil ([&player] { return player.isPlaying(); }, 3000);
+
+            expect (player.isPlaying(), "the preview did not start");
+            expectEquals (player.getCurrentFile().getFullPathName(), recording.getFullPathName());
+            captureIfRequested (editor, "issue497-voice-preview");
+
+            panel.getVoicePreviewButton().triggerClick();
+            pumpUntil ([&player] { return ! player.isPlaying(); }, 3000);
+            expect (! player.isPlaying(), "a second click did not stop the preview");
+            processor.releaseResources();
+        }
+
+        beginTest ("#497 AC: signed out, Preview degrades to no control rather than an error");
+        {
+            // The platform answers 401 to a bare request, as it does with no session.
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.requireBearer ("never-issued");
+
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+            editor.getPlatformPanel().getUrlEditor().setText (server.getBaseUrl(), false);
+
+            auto& panel = editor.getGenerationPanel();
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-ready", "My Voice", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+            const auto statusBefore = panel.getStatusLabel().getText();
+
+            panel.getVoicePreviewButton().triggerClick();
+            pumpUntil ([&panel] { return ! panel.getVoicePreviewButton().isVisible(); }, 5000);
+
+            expect (! panel.getVoicePreviewButton().isVisible(), "Preview stayed with nothing to fetch it from");
+            expect (panel.getVoiceSelector().isVisible(), "losing the preview took the voice with it");
+            expectEquals (panel.getStatusLabel().getText(), statusBefore);
         }
 
         beginTest ("running out of credits says so, with the numbers");

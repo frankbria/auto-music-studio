@@ -313,6 +313,103 @@ Result listClips (const juce::String& baseUrl,
     return result;
 }
 
+namespace
+{
+    /** Streams `path` to the file `destinationFor` names from the response's
+        Content-Type, via a `.partial` sibling. */
+    Result downloadTo (const juce::String& baseUrl,
+                       const juce::String& apiKey,
+                       const juce::String& path,
+                       const std::function<juce::File (const juce::String& contentType)>& destinationFor,
+                       const std::function<bool()>& shouldCancel,
+                       int timeoutMs)
+    {
+        if (const auto problem = findUrlProblem (baseUrl); problem.isNotEmpty())
+            return failure (problem);
+
+        const auto endpoint = Http::prepareEndpoint (baseUrl, apiKey, path);
+
+        if (endpoint.error.isNotEmpty())
+            return failure (endpoint.error);
+
+        if (wasCancelled (shouldCancel))
+            return cancelledResult();
+
+        juce::WebInputStream stream (endpoint.url, false);
+        Http::configure (stream, endpoint, timeoutMs);
+
+        if (! stream.connect (nullptr))
+        {
+            return wasCancelled (shouldCancel)
+                     ? cancelledResult()
+                     : failure ("Could not reach the platform at " + baseUrl.trim());
+        }
+
+        if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key); status.isNotEmpty())
+            return statusFailure (stream.getStatusCode(), status);
+
+        const auto destination = destinationFor (stream.getResponseHeaders()
+                                                     .getValue ("Content-Type", {})
+                                                     .upToFirstOccurrenceOf (";", false, false)
+                                                     .trim()
+                                                     .toLowerCase());
+        destination.getParentDirectory().createDirectory();
+
+        // Downloaded to a temporary and moved into place, so a cancelled or failed
+        // transfer never leaves a truncated file that later looks like a finished clip.
+        const auto partial = destination.getSiblingFile (destination.getFileName() + ".partial");
+        partial.deleteFile();
+
+        {
+            juce::FileOutputStream out (partial);
+
+            if (out.failedToOpen())
+                return failure ("Could not write to " + destination.getFullPathName());
+
+            juce::HeapBlock<char> buffer (32768);
+
+            while (! stream.isExhausted())
+            {
+                if (wasCancelled (shouldCancel))
+                {
+                    partial.deleteFile();
+                    return cancelledResult();
+                }
+
+                const auto read = stream.read (buffer, 32768);
+
+                if (read <= 0)
+                    break;
+
+                if (! out.write (buffer, (size_t) read))
+                {
+                    partial.deleteFile();
+                    return failure ("Ran out of space writing " + destination.getFileName());
+                }
+            }
+        }
+
+        if (partial.getSize() <= 0)
+        {
+            partial.deleteFile();
+            return failure ("The platform returned an empty clip");
+        }
+
+        destination.deleteFile();
+
+        if (! partial.moveFileTo (destination))
+        {
+            partial.deleteFile();
+            return failure ("Could not save the clip to " + destination.getFullPathName());
+        }
+
+        Result result;
+        result.ok = true;
+        result.file = destination;
+        return result;
+    }
+} // namespace
+
 Result downloadClip (const juce::String& baseUrl,
                      const juce::String& apiKey,
                      const juce::String& clipId,
@@ -323,87 +420,41 @@ Result downloadClip (const juce::String& baseUrl,
     if (clipId.trim().isEmpty())
         return failure ("No clip selected");
 
-    if (const auto problem = findUrlProblem (baseUrl); problem.isNotEmpty())
-        return failure (problem);
-
     const auto path = juce::String (apiPrefix) + "/clips/"
                         + juce::URL::addEscapeChars (clipId.trim(), false) + "/audio";
-    const auto endpoint = Http::prepareEndpoint (baseUrl, apiKey, path);
+    auto result = downloadTo (baseUrl, apiKey, path, [&destination] (const juce::String&) { return destination; },
+                              shouldCancel, timeoutMs);
 
-    if (endpoint.error.isNotEmpty())
-        return failure (endpoint.error);
+    if (result.ok)
+        result.clipId = clipId.trim();
 
-    if (wasCancelled (shouldCancel))
-        return cancelledResult();
-
-    juce::WebInputStream stream (endpoint.url, false);
-    Http::configure (stream, endpoint, timeoutMs);
-
-    if (! stream.connect (nullptr))
-    {
-        return wasCancelled (shouldCancel)
-                 ? cancelledResult()
-                 : failure ("Could not reach the platform at " + baseUrl.trim());
-    }
-
-    if (const auto status = Http::describeStatus (stream.getStatusCode(), endpoint.key); status.isNotEmpty())
-        return statusFailure (stream.getStatusCode(), status);
-
-    destination.getParentDirectory().createDirectory();
-
-    // Downloaded to a temporary and moved into place, so a cancelled or failed
-    // transfer never leaves a truncated file that later looks like a finished clip.
-    const auto partial = destination.getSiblingFile (destination.getFileName() + ".partial");
-    partial.deleteFile();
-
-    {
-        juce::FileOutputStream out (partial);
-
-        if (out.failedToOpen())
-            return failure ("Could not write to " + destination.getFullPathName());
-
-        juce::HeapBlock<char> buffer (32768);
-
-        while (! stream.isExhausted())
-        {
-            if (wasCancelled (shouldCancel))
-            {
-                partial.deleteFile();
-                return cancelledResult();
-            }
-
-            const auto read = stream.read (buffer, 32768);
-
-            if (read <= 0)
-                break;
-
-            if (! out.write (buffer, (size_t) read))
-            {
-                partial.deleteFile();
-                return failure ("Ran out of space writing " + destination.getFileName());
-            }
-        }
-    }
-
-    if (partial.getSize() <= 0)
-    {
-        partial.deleteFile();
-        return failure ("The platform returned an empty clip");
-    }
-
-    destination.deleteFile();
-
-    if (! partial.moveFileTo (destination))
-    {
-        partial.deleteFile();
-        return failure ("Could not save the clip to " + destination.getFullPathName());
-    }
-
-    Result result;
-    result.ok = true;
-    result.clipId = clipId.trim();
-    result.file = destination;
     return result;
+}
+
+Result downloadVoicePreview (const juce::String& baseUrl,
+                             const juce::String& apiKey,
+                             const juce::String& voiceModelId,
+                             const juce::File& directory,
+                             std::function<bool()> shouldCancel,
+                             int timeoutMs)
+{
+    if (voiceModelId.trim().isEmpty())
+        return failure ("No voice selected");
+
+    const auto id = voiceModelId.trim();
+    const auto path = juce::String (apiPrefix) + "/voice-models/"
+                        + juce::URL::addEscapeChars (id, false) + "/preview";
+
+    return downloadTo (baseUrl, apiKey, path, [&directory, &id] (const juce::String& contentType)
+    {
+        // The platform's own map (api/utils/media_types.py), for the formats JUCE reads.
+        const auto extension = contentType == "audio/wav"  ? "wav"
+                             : contentType == "audio/flac" ? "flac"
+                             : contentType == "audio/mpeg" ? "mp3"
+                             : contentType == "audio/ogg"  ? "ogg"
+                                                           : "audio";
+        return directory.getChildFile (juce::File::createLegalFileName (id) + "." + extension);
+    }, shouldCancel, timeoutMs);
 }
 
 Result uploadClip (const juce::String& baseUrl,
