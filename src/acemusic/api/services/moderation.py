@@ -19,6 +19,7 @@ from beanie import PydanticObjectId
 from beanie.operators import In
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, NaiveDatetime, TypeAdapter
+from pymongo import ReturnDocument
 
 from acemusic.storage import get_storage_backend
 
@@ -448,10 +449,14 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
     """The log entry's details, or why the ban was refused."""
     if str(user.id) == actor_id:
         return "You cannot ban yourself."
-    # Claimed conditionally and read back, so concurrent bans share one stamp: it marks what the ban took down,
-    # and an unban lifts exactly that (#581).
-    await User.find({"_id": user.id, "banned_at": None}).update({"$set": {"banned_at": utcnow()}})
-    stamp = (await User.get(user.id)).banned_at
+    # Claimed or read in one atomic write, so concurrent bans share one stamp and an unban landing meanwhile can't
+    # leave it unset: the stamp marks what the ban took down, and an unban lifts exactly that (#581).
+    claimed = await User.get_pymongo_collection().find_one_and_update(
+        {"_id": user.id},
+        [{"$set": {"banned_at": {"$ifNull": ["$banned_at", utcnow()]}}}],
+        return_document=ReturnDocument.AFTER,
+    )
+    stamp = claimed["banned_at"]
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
@@ -476,8 +481,13 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
     if banned_at is None:
         return "This account is not banned."
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
-    videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
-    lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    try:
+        videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
+        lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    except Exception:
+        # Still banned, so its clips go back down rather than stay streamable until someone retries.
+        await clip_service.take_down_visible({"user_id": user.id}, banned_at)
+        raise
     if not lifted.modified_count:
         return "This account is not banned."
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}

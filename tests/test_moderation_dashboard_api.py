@@ -847,6 +847,26 @@ class TestUnban:
         assert retried["ok"] is True
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
 
+    async def test_an_unban_failing_after_the_restore_takes_the_clips_back_down(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        class BrokenVideo:
+            @staticmethod
+            def find(*_args):
+                raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(moderation, "Video", BrokenVideo)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is not None
+        # Restored by then, but the account is still banned: the clip must not stay streamable.
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)
+        assert (await client.get(f"{CLIPS_URL}/{clip.id}/public")).status_code == 404
+
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
         stale = await User.get(user.id)
