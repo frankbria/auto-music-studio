@@ -172,6 +172,17 @@ describe("toAppNotification (#537)", () => {
     expect(row.href).toBe("/video/c1?appeal=v1")
   })
 
+  it("opens a video appeal's outcome on the video's appeal (#623)", () => {
+    const row = toAppNotification(
+      event({
+        event_type: "moderation_appeal_info_requested",
+        clip_id: "c1",
+        payload: { title: "Song", note: "Raw files?", video_id: "v1" },
+      })
+    )
+    expect(row.href).toBe("/video/c1?appeal=v1")
+  })
+
   it("says when a dropped artwork image was the cover (#571)", () => {
     const row = toAppNotification(
       event({

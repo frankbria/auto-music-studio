@@ -19,8 +19,16 @@ const pendingVideoAppeal: AppealView = {
   decided_at: null,
 }
 
-function stubBackend(myAppeals: AppealView[]) {
+function stubBackend(
+  myAppeals: AppealView[],
+  takenDownAt: string | null = null
+) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/videos/v1")
+      return new Response(
+        JSON.stringify({ id: "v1", taken_down_at: takenDownAt }),
+        { status: 200 }
+      )
     if (url.startsWith("/api/users/me/appeals"))
       return new Response(
         JSON.stringify({ appeals: myAppeals, next_cursor: null }),
@@ -69,8 +77,22 @@ describe("VideoAppealPanel (#623)", () => {
     )
   })
 
+  it("offers a fresh appeal when the takedown in force is newer than the last appeal", async () => {
+    // The appealed takedown was restored and the video taken down again after it.
+    stubBackend([pendingVideoAppeal], "2026-02-01T00:00:00Z")
+    render(
+      <SignedIn>
+        <VideoAppealPanel videoId="v1" />
+      </SignedIn>
+    )
+
+    expect(
+      await screen.findByRole("button", { name: "Appeal" })
+    ).toBeInTheDocument()
+  })
+
   it("shows a pending appeal instead of offering another", async () => {
-    stubBackend([pendingVideoAppeal])
+    stubBackend([pendingVideoAppeal], "2025-12-01T00:00:00Z")
     render(
       <SignedIn>
         <VideoAppealPanel videoId="v1" />

@@ -1018,6 +1018,44 @@ class TestVideoAppeals:
         assert (await ClipAppeal.get(appeal["id"])).status == "pending"
         assert await NotificationEvent.find_one({"event_type": "moderation_appeal_reversed"}) is None
 
+    async def test_an_unpublish_landing_mid_info_request_rolls_it_back(self, client, settings, monkeypatch):
+        """#623 review: a re-unpublish keeps removed_at, so request_info must match the moderation stamp too."""
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+        read_in_force = appeal_service._video_in_force
+
+        async def unpublish_lands_after_the_read(video_read):
+            in_force = await read_in_force(video_read)
+            await moderation.act_on_content(str(admin.id), "video", "unpublish", str(video.id), "again")
+            return in_force
+
+        monkeypatch.setattr(appeal_service, "_video_in_force", unpublish_lands_after_the_read)
+
+        resp = await _decide(client, admin, settings, appeal["id"], "request_info", note="Raw files?")
+
+        assert resp.status_code == 409, resp.text
+        assert (await ClipAppeal.get(appeal["id"])).status == "pending"
+        assert await NotificationEvent.find_one({"event_type": "moderation_appeal_info_requested"}) is None
+
+    async def test_the_owner_sees_when_the_takedown_in_force_was_made(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        detail = (await client.get(f"{VIDEOS_URL}/{video.id}", headers=_auth(owner, settings))).json()
+        stored = await Video.get(video.id)
+        assert datetime.fromisoformat(detail["taken_down_at"]) == stored.moderation_reviewed_at
+
+        await _act(client, admin, settings, "video", "restore", [video.id])
+        detail = (await client.get(f"{VIDEOS_URL}/{video.id}", headers=_auth(owner, settings))).json()
+        assert detail["taken_down_at"] is None
+
+    async def test_an_outcome_notice_names_the_video(self, client, settings):
+        owner, admin, video = await self._unpublished(client, settings)
+        appeal = (await _appeal_video(client, owner, settings, video)).json()
+
+        await _decide(client, admin, settings, appeal["id"], "request_info", note="Raw files?")
+
+        notice = await NotificationEvent.find_one({"event_type": "moderation_appeal_info_requested"})
+        assert notice.payload["video_id"] == str(video.id)
+
     async def test_info_is_answered_on_the_video_not_its_song(self, client, settings):
         owner, admin, video = await self._unpublished(client, settings)
         appeal = (await _appeal_video(client, owner, settings, video)).json()

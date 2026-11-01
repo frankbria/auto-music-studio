@@ -189,6 +189,8 @@ export type VideoDetail = {
   aspect_ratio: VideoAspectRatio | string
   published: boolean
   created_at: string
+  /** When moderation last acted on it while it is taken down (#623); null while up. */
+  taken_down_at?: string | null
 }
 
 /** The outcome of publishing a video, classified for the delivery UI. */

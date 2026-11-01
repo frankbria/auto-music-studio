@@ -1,5 +1,6 @@
 "use client"
 
+import { Suspense } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 
 import { VideoAppealPanel } from "@/components/moderation/VideoAppealPanel"
@@ -10,13 +11,20 @@ import { VideoCreator } from "@/components/video/VideoCreator"
 export default function VideoPage() {
   const params = useParams<{ songId: string }>()
   const songId = params?.songId
-  // The takedown notice links here with the video it took down (#623).
-  const appealVideoId = useSearchParams()?.get("appeal")
   if (!songId) return null
   return (
     <>
-      {appealVideoId && <VideoAppealPanel videoId={appealVideoId} />}
+      {/* Suspense: reading search params bails out of prerender; see app/create/page.tsx. */}
+      <Suspense fallback={null}>
+        <AppealFromNotice />
+      </Suspense>
       <VideoCreator songId={songId} />
     </>
   )
+}
+
+/** The takedown notice links here with the video it took down (#623). */
+function AppealFromNotice() {
+  const videoId = useSearchParams()?.get("appeal")
+  return videoId ? <VideoAppealPanel videoId={videoId} /> : null
 }

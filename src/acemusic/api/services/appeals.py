@@ -333,6 +333,8 @@ async def decide(
         payload={
             "appeal_id": str(appeal.id),
             "clip_id": str(appeal.clip_id),
+            # A video appeal's outcome opens that video's appeal panel (#623).
+            "video_id": str(appeal.video_id) if appeal.video_id else None,
             "title": clip.title if clip else None,
             "note": note,
         },
@@ -377,7 +379,10 @@ async def _still_in_force(
 async def _video_still_in_force(video: Video, decision: AppealDecision) -> bool:
     """Reversal runs the admin restore (#571), which lifts only the takedown read and its edits' copies of it."""
     if decision == "request_info":
-        return await Video.find_one({"_id": video.id, "removed_at": video.removed_at}).exists()
+        # Both stamps: a re-unpublish keeps removed_at and only refreshes moderation_reviewed_at.
+        return await Video.find_one(
+            {"_id": video.id, "removed_at": video.removed_at, "moderation_reviewed_at": video.moderation_reviewed_at}
+        ).exists()
     return await moderation.restore_video(video) is None
 
 

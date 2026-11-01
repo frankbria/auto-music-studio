@@ -273,6 +273,9 @@ class VideoDetailResponse(BaseModel):
     aspect_ratio: str
     published: bool
     created_at: datetime
+    # When moderation last acted on it while it is taken down, so the owner's appeal UI can tell an appeal of an
+    # earlier takedown from one of this one (#623). None while it is up.
+    taken_down_at: datetime | None = None
 
     @classmethod
     def from_video(cls, video: Video) -> "VideoDetailResponse":
@@ -284,6 +287,7 @@ class VideoDetailResponse(BaseModel):
             aspect_ratio=video.aspect_ratio,
             published=video.published,
             created_at=video.created_at,
+            taken_down_at=video.moderation_reviewed_at if video.removed_at else None,
         )
 
 

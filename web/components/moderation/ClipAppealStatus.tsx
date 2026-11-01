@@ -60,9 +60,12 @@ export function ClipAppealStatus({
 /** A video moderation took down (#623); the caller only renders it for one. */
 export function VideoAppealStatus({
   videoId,
+  decidedAt,
   appeal,
 }: {
   videoId: string
+  /** When the takedown in force was made, so an appeal of an earlier one doesn't hide Appeal. */
+  decidedAt: string | null
   /** The caller's latest appeal against this video's unpublishes. */
   appeal: AppealView | null
 }) {
@@ -71,7 +74,7 @@ export function VideoAppealStatus({
       target={{ kind: "video", id: videoId }}
       removed
       flagged={false}
-      decidedAt={null}
+      decidedAt={decidedAt}
       appeal={appeal}
     />
   )
