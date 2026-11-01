@@ -50,10 +50,24 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     // output the same way. A voice with nothing playable loses its Preview control.
     generationPanel.onPreviewVoice = [this, &player = p.getClipPlayer()] (const juce::String& voiceModelId)
     {
+        if (voiceModelId == pendingVoicePreview)
+            return;
+
+        pendingVoicePreview = voiceModelId;
+
         platformPanel.fetchVoicePreview (voiceModelId, [this, &player, voiceModelId] (const juce::File& file)
         {
+            if (voiceModelId != pendingVoicePreview)
+                return;
+
+            pendingVoicePreview.clear();
+
             if (file == juce::File() || ! player.toggle (file))
+            {
+                // An unreadable cached copy would otherwise be offered again on every refresh.
+                file.deleteFile();
                 generationPanel.hideVoicePreview (voiceModelId);
+            }
         });
     };
 

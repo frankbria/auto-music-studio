@@ -761,9 +761,11 @@ public:
         beginTest ("#497 AC: Preview plays the voice's recording through the clip player");
         {
             ScopedClipCleanup cleanup;
-            const auto previews = cleanup.root.getChildFile ("clips").getChildFile ("voice-previews");
+            // The preview directory is shared, so the id is unique to this run.
+            const auto voiceId = "vm-" + juce::Uuid().toString();
+            const auto previews = PlatformPanel::getVoicePreviewDirectory();
             previews.createDirectory();
-            const auto recording = previews.getChildFile ("vm-ready.wav");
+            const auto recording = previews.getChildFile (voiceId + ".wav");
 
             {
                 juce::AudioBuffer<float> buffer (1, 44100);
@@ -777,6 +779,9 @@ public:
                     writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
             }
 
+            // Declared before the processor so the player has let go of the file first.
+            const struct RemoveOnExit { juce::File file; ~RemoveOnExit() { file.deleteFile(); } } removeRecording { recording };
+
             PluginProcessor processor (std::move (cleanup.properties), false);
             processor.prepareToPlay (44100.0, 512);
             PluginEditor editor (processor);
@@ -784,7 +789,7 @@ public:
 
             auto& panel = editor.getGenerationPanel();
             juce::Array<Platform::VoiceModel> models;
-            models.add ({ "vm-ready", "My Voice", "ready" });
+            models.add ({ voiceId, "My Voice", "ready" });
             panel.setVoiceModels (models);
             panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
 
@@ -802,6 +807,34 @@ public:
             processor.releaseResources();
         }
 
+        beginTest ("#497: a second click while the preview downloads starts no second download");
+        {
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.holdResponse();
+
+            ScopedClipCleanup cleanup;
+            PluginProcessor processor (std::move (cleanup.properties), false);
+            PluginEditor editor (processor);
+            editor.setSize (860, 1080);
+            editor.getPlatformPanel().getUrlEditor().setText (server.getBaseUrl(), false);
+
+            auto& panel = editor.getGenerationPanel();
+            juce::Array<Platform::VoiceModel> models;
+            models.add ({ "vm-" + juce::Uuid().toString(), "My Voice", "ready" });
+            panel.setVoiceModels (models);
+            panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
+
+            panel.getVoicePreviewButton().triggerClick();
+            pumpUntil ([&server] { return server.getRequestCountFor ("/preview") > 0; }, 5000);
+            panel.getVoicePreviewButton().triggerClick();
+            pumpUntil ([] { return false; }, 300);
+            server.releaseResponse();
+
+            pumpUntil ([&panel] { return ! panel.getVoicePreviewButton().isVisible(); }, 5000);
+            expectEquals (server.getRequestCountFor ("/preview"), 1);
+        }
+
         beginTest ("#497 AC: signed out, Preview degrades to no control rather than an error");
         {
             // The platform answers 401 to a bare request, as it does with no session.
@@ -817,7 +850,7 @@ public:
 
             auto& panel = editor.getGenerationPanel();
             juce::Array<Platform::VoiceModel> models;
-            models.add ({ "vm-ready", "My Voice", "ready" });
+            models.add ({ "vm-" + juce::Uuid().toString(), "My Voice", "ready" });
             panel.setVoiceModels (models);
             panel.getVoiceSelector().setSelectedId (2, juce::sendNotificationSync);
             const auto statusBefore = panel.getStatusLabel().getText();

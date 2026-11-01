@@ -995,7 +995,7 @@ void GenerationPanel::refresh()
     for (auto* control : std::initializer_list<juce::Component*> {
              &promptEditor, &lyricsEditor, &lyricsToggle, &languageSelector, &instrumentalToggle,
              &bpmEditor, &keySelector, &durationEditor, &seedEditor, &qualitySelector, &modeSelector,
-             &voiceSelector, &voicePreviewButton })
+             &voiceSelector })
     {
         control->setEnabled (! busy);
     }

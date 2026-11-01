@@ -357,7 +357,9 @@ namespace
 
         // Downloaded to a temporary and moved into place, so a cancelled or failed
         // transfer never leaves a truncated file that later looks like a finished clip.
-        const auto partial = destination.getSiblingFile (destination.getFileName() + ".partial");
+        // Unique per transfer: two plugin instances can fetch the same file into a shared cache.
+        const auto partial = destination.getSiblingFile (destination.getFileName() + "."
+                                                         + juce::Uuid().toString() + ".partial");
         partial.deleteFile();
 
         {

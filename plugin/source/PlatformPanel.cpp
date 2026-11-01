@@ -560,10 +560,15 @@ void PlatformPanel::pushClip (const juce::File& clip)
     });
 }
 
+juce::File PlatformPanel::getVoicePreviewDirectory()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("AceMusic voice previews");
+}
+
 void PlatformPanel::fetchVoicePreview (const juce::String& voiceModelId,
                                        std::function<void (const juce::File&)> onDone)
 {
-    const auto directory = generation.getClipDirectory().getChildFile ("voice-previews");
+    const auto directory = getVoicePreviewDirectory();
     const auto stem = juce::File::createLegalFileName (voiceModelId.trim());
 
     // A model's preview is its first reference recording, which never changes, so a
