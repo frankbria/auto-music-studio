@@ -146,13 +146,17 @@ async def public_facets() -> dict[str, list[str]]:
     global _facets_cache
     if _facets_cache is not None and time.monotonic() - _facets_cache[0] < FACETS_TTL_SECONDS:
         return _facets_cache[1]
+    facets = await _read_facets()
+    _facets_cache = (time.monotonic(), facets)
+    return facets
+
+
+async def _read_facets() -> dict[str, list[str]]:
     pool = await public_clip_filter()
-    facets = {
+    return {
         "keys": sorted(v for v in await Clip.find(pool).distinct("key") if v),
         "models": sorted(v for v in await Clip.find(pool).distinct("model") if v),
     }
-    _facets_cache = (time.monotonic(), facets)
-    return facets
 
 
 def clear_facets_cache() -> None:
