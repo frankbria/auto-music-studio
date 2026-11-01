@@ -23,7 +23,11 @@ import { AddSongsDialog } from "@/components/playlists/AddSongsDialog"
 import { PlaylistCover } from "@/components/playlists/PlaylistCover"
 import { PlaylistSongRow } from "@/components/playlists/PlaylistSongRow"
 import { usePlaylists } from "@/contexts/playlists-context"
-import { buildInspirationHref, buildShareUrl, playlistClips } from "@/lib/playlists"
+import {
+  buildInspirationHref,
+  buildShareUrl,
+  playlistClips,
+} from "@/lib/playlists"
 
 // Playlist detail page (US-20.3): songs with playback links, add/remove/reorder,
 // visibility toggle, cover (auto-mosaic / custom upload), public share link, and
@@ -31,6 +35,7 @@ import { buildInspirationHref, buildShareUrl, playlistClips } from "@/lib/playli
 
 export function PlaylistDetail({ playlistId }: { playlistId: string }) {
   const {
+    clipsById,
     getPlaylist,
     setVisibility,
     addClip,
@@ -56,7 +61,7 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
     )
   }
 
-  const clips = playlistClips(playlist)
+  const clips = playlistClips(playlist, clipsById)
   const isPublic = playlist.visibility === "public"
 
   // Free the previous object URL before replacing/clearing so uploads don't leak
@@ -122,7 +127,9 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
           </div>
           <h1 className="text-2xl font-semibold">{playlist.name}</h1>
           {playlist.description && (
-            <p className="text-sm text-muted-foreground">{playlist.description}</p>
+            <p className="text-sm text-muted-foreground">
+              {playlist.description}
+            </p>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
@@ -190,7 +197,10 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
                   onClick={copyShare}
                   aria-label="Copy share link"
                 >
-                  <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} size={14} />
+                  <HugeiconsIcon
+                    icon={copied ? Tick02Icon : Copy01Icon}
+                    size={14}
+                  />
                   {copied ? "Copied" : "Copy link"}
                 </Button>
               </div>
@@ -251,7 +261,7 @@ export function PlaylistDetail({ playlistId }: { playlistId: string }) {
       <AddSongsDialog
         open={showAdd}
         existingIds={playlist.clipIds}
-        onAdd={(clipId) => addClip(playlist.id, clipId)}
+        onAdd={(clip) => addClip(playlist.id, clip)}
         onOpenChange={setShowAdd}
       />
     </div>

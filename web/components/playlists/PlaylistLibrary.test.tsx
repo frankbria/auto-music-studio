@@ -16,28 +16,36 @@ function renderLibrary() {
 const cardFor = (name: string) =>
   screen.getByText(name).closest("[class*='group/card']") as HTMLElement
 
+async function createPlaylist(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string
+) {
+  await user.click(screen.getAllByRole("button", { name: "New playlist" })[0])
+  await user.type(screen.getByLabelText("Name"), name)
+  await user.click(screen.getByRole("button", { name: "Create" }))
+}
+
 describe("PlaylistLibrary", () => {
-  it("lists the seeded playlists", () => {
+  it("starts with no playlists", () => {
     renderLibrary()
-    expect(screen.getByText("Late Night Drive")).toBeInTheDocument()
-    expect(screen.getByText("Deep Focus")).toBeInTheDocument()
-    expect(screen.getByText("Summer Anthems")).toBeInTheDocument()
+    expect(screen.getByTestId("playlists-empty")).toBeInTheDocument()
   })
 
   it("creates a playlist (AC1)", async () => {
     const user = userEvent.setup()
     renderLibrary()
-    await user.click(screen.getByRole("button", { name: "New playlist" }))
-    await user.type(screen.getByLabelText("Name"), "Roadtrip")
-    await user.click(screen.getByRole("button", { name: "Create" }))
+    await createPlaylist(user, "Roadtrip")
     expect(screen.getByText("Roadtrip")).toBeInTheDocument()
   })
 
   it("renames a playlist (AC1)", async () => {
     const user = userEvent.setup()
     renderLibrary()
+    await createPlaylist(user, "Deep Focus")
     const card = cardFor("Deep Focus")
-    await user.click(within(card).getByRole("button", { name: "Actions for Deep Focus" }))
+    await user.click(
+      within(card).getByRole("button", { name: "Actions for Deep Focus" })
+    )
     await user.click(await screen.findByRole("menuitem", { name: /Rename/ }))
     const input = screen.getByLabelText("Name")
     await user.clear(input)
@@ -50,8 +58,11 @@ describe("PlaylistLibrary", () => {
   it("deletes a playlist with confirmation (AC1)", async () => {
     const user = userEvent.setup()
     renderLibrary()
+    await createPlaylist(user, "Summer Anthems")
     const card = cardFor("Summer Anthems")
-    await user.click(within(card).getByRole("button", { name: "Actions for Summer Anthems" }))
+    await user.click(
+      within(card).getByRole("button", { name: "Actions for Summer Anthems" })
+    )
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }))
     // Confirmation dialog, then the actual delete.
     await user.click(screen.getByRole("button", { name: "Delete" }))

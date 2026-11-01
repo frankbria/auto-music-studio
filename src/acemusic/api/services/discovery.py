@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import HTTPException, status
 
-from ..models import Clip
+from ..models import Clip, User
 from .clips import public_clip_filter
 from .common import coerce_object_id
 from .moderation import after_cursor, decode_cursor, encode_cursor
@@ -134,3 +134,22 @@ async def public_facets() -> dict[str, list[str]]:
         "keys": sorted(v for v in await Clip.find(pool).distinct("key") if v),
         "models": sorted(v for v in await Clip.find(pool).distinct("model") if v),
     }
+
+
+#: shortcut: a profile lists its newest public clips without paging; page it when a creator publishes more than this.
+PROFILE_CLIP_LIMIT = 50
+
+
+async def public_profile(handle: str) -> tuple[User, list[Clip]]:
+    """A creator's public profile and newest public clips (#654); 404 for an unknown handle or a banned creator."""
+    user = await User.find_one({"handle": handle.removeprefix("@"), "banned_at": None})
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+    clips = (
+        # $and, not a merged dict: the filter's own user_id predicate is what keeps out a creator banned since.
+        await Clip.find({"$and": [await public_clip_filter(), {"user_id": user.id}]})
+        .sort(-Clip.created_at, -Clip.id)
+        .limit(PROFILE_CLIP_LIMIT)
+        .to_list()
+    )
+    return user, clips

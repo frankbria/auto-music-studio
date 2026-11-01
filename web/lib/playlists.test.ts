@@ -102,26 +102,19 @@ describe("setCover", () => {
 })
 
 describe("playlistClips", () => {
-  const pool = [
-    { id: "x", title: "X" },
-    { id: "y", title: "Y" },
-    { id: "z", title: "Z" },
-  ] as never[]
+  const known = new Map(
+    ["x", "y", "z"].map((id) => [id, { id, title: id.toUpperCase() } as never])
+  )
   const pl: Playlist = { ...base(), clipIds: ["z", "missing", "x"] }
 
-  it("resolves ids to clips in playlist order, dropping unknown ids", () => {
-    expect(playlistClips(pl, pool).map((c) => c.id)).toEqual(["z", "x"])
+  it("resolves ids to the known clips in playlist order, dropping unknown ids", () => {
+    expect(playlistClips(pl, known).map((c) => c.id)).toEqual(["z", "x"])
   })
 })
 
 describe("initialPlaylists", () => {
-  it("seeds playlists that reference real Explore clips", () => {
-    const seeds = initialPlaylists()
-    expect(seeds.length).toBeGreaterThan(0)
-    for (const pl of seeds) {
-      // every seeded id must resolve against the real discovery pool
-      expect(playlistClips(pl).length).toBe(pl.clipIds.length)
-    }
+  it("starts empty: playlists live only for the session", () => {
+    expect(initialPlaylists()).toEqual([])
   })
 })
 
@@ -133,7 +126,11 @@ describe("url builders", () => {
   })
 
   it("builds an inspiration href with encoded name", () => {
-    const href = buildInspirationHref({ ...base(), id: "pl-9", name: "Chill & Focus" })
+    const href = buildInspirationHref({
+      ...base(),
+      id: "pl-9",
+      name: "Chill & Focus",
+    })
     expect(href).toContain("/create?")
     const q = new URLSearchParams(href.split("?")[1])
     expect(q.get("inspiration")).toBe("pl-9")
