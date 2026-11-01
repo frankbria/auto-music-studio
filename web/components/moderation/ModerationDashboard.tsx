@@ -832,6 +832,11 @@ function QueueRow({
               {flag}
             </span>
           ))}
+          {item.flag_sources?.map((source) => (
+            <span key={source} className="text-xs text-muted-foreground">
+              from {source}
+            </span>
+          ))}
         </div>
       </td>
       <td className="py-2 pr-3">

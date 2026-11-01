@@ -542,18 +542,25 @@ async def screened_update(clip: Clip, texts: list[str | None], fields: dict) -> 
     }
 
 
-async def screen_outgoing(clip: Clip | None, texts: list[str | None]) -> None:
+async def screen_outgoing(clip: Clip | None, texts: dict[str, str | None]) -> None:
     """Screen text about to leave the platform with ``clip`` (#555): a release, a bundle, a SoundCloud upload.
 
     Blocked text is the usual 422. Flagged text goes out, and sends the source clip back to the moderation
-    queue, since that is what a moderator acts on. A deleted source clip has nothing to flag.
+    queue, since that is what a moderator acts on, with the label of each flagged text (#605): it may sit in
+    a release or an upload the moderator's clip view never shows. A deleted source clip has nothing to flag.
     """
     if clip is None:
-        await screening.enforce(*texts, saving=True)
+        await screening.enforce(*texts.values(), saving=True)
         return
-    update = await screened_update(clip, texts, {})
+    update = await screened_update(clip, list(texts.values()), {})
     if "$addToSet" in update:
+        update["$addToSet"]["moderation_flag_sources"] = {"$each": await screening.flag_sources(texts)}
         await Clip.find_one({"_id": clip.id}).update(update)
+
+
+def labelled_clip_texts(clip: Clip) -> dict[str, str | None]:
+    """``screening.clip_texts`` with the label a moderator reads for each (#605)."""
+    return dict(zip(("clip title", "clip style tags", "clip lyrics"), screening.clip_texts(clip)))
 
 
 async def update_clip_fields(

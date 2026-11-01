@@ -39,8 +39,9 @@ _MAX_MINT_ATTEMPTS = 5
 _TEXT_FIELDS = ("title", "artist", "genre", "album_name", "description", "copyright", "language", "credits")
 
 
-def release_texts(fields: dict) -> list[str | None]:
-    return [fields.get(field) for field in _TEXT_FIELDS]
+def release_texts(fields: dict) -> dict[str, str | None]:
+    """A release's free text, labelled for the moderation queue (#605)."""
+    return {f"release {field.replace('_', ' ')}": fields.get(field) for field in _TEXT_FIELDS}
 
 
 def _duplicate_field(exc: DuplicateKeyError) -> str:
@@ -237,7 +238,7 @@ async def ensure_distributable(release: Release) -> None:
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
     if clip is not None:
         clip_service.ensure_not_removed(clip)
-    texts = release_texts(release.model_dump()) + (screening.clip_texts(clip) if clip is not None else [])
+    texts = release_texts(release.model_dump()) | (clip_service.labelled_clip_texts(clip) if clip is not None else {})
     await clip_service.screen_outgoing(clip, texts)
 
 
@@ -348,7 +349,10 @@ async def _blocked_text(clip: Clip, previous: dict[str, str]) -> str | None:
     """The rules may have changed while the appeal waited: the text going back out is screened again, and
     flagged text re-queues the clip as any outgoing text does."""
     releases = await Release.find({"_id": {"$in": [PydanticObjectId(rid) for rid in previous]}}).to_list()
-    texts = screening.clip_texts(clip) + [text for release in releases for text in release_texts(release.model_dump())]
+    texts = clip_service.labelled_clip_texts(clip)
+    for release in releases:
+        # Each release under its own labels (by id: titles can repeat), so one release's text can't hide another's.
+        texts |= {f"{label} ({release.id})": text for label, text in release_texts(release.model_dump()).items()}
     try:
         await clip_service.screen_outgoing(clip, texts)
     except screening.ContentBlockedError:

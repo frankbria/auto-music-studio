@@ -26,6 +26,8 @@ export type QueueItem = {
   report_count: number
   categories: Partial<Record<ReportCategory, number>>
   moderation_flags: string[]
+  /** #605: which outgoing text raised an automated flag, e.g. "self-harm (release credits)". */
+  flag_sources?: string[]
   sources: QueueSource[]
   severity: number
   latest_at: string

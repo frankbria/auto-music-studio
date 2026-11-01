@@ -81,6 +81,8 @@ class QueueItem(BaseModel):
     report_count: int
     categories: dict[str, int]
     moderation_flags: list[str]
+    # #605: which outgoing text raised an automated flag, when it isn't on the clip itself.
+    flag_sources: list[str] = []
     sources: list[QueueSource]
     severity: int
     latest_at: datetime
@@ -275,6 +277,7 @@ def _queue_item(
         report_count=sum(categories.values()),
         categories=categories,
         moderation_flags=flags,
+        flag_sources=clip.moderation_flag_sources if flags else [],
         sources=sources,
         severity=severity,
         latest_at=report["latest"] if report else clip.created_at,
@@ -300,12 +303,14 @@ async def act_on_clip(actor_id: str, action: ClipAction, clip_id: str, reason: s
 
 
 async def _approve_clip(clip: Clip, now: datetime, _reason: str | None) -> tuple[int, dict]:
-    await clip.set({"moderation_reviewed_at": now})
+    await clip.set({"moderation_reviewed_at": now, "moderation_flag_sources": []})
     return await _resolve_reports(clip.id, now), {}
 
 
 async def _flag_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[int, dict]:
-    await clip.set({"moderation_reviewed_at": now, "content_warning": True, "flagged_at": now})
+    await clip.set(
+        {"moderation_reviewed_at": now, "moderation_flag_sources": [], "content_warning": True, "flagged_at": now}
+    )
     resolved = await _resolve_reports(clip.id, now)
     await _notify_clip_owner(clip, "moderation_clip_flagged", reason)
     return resolved, {}
@@ -322,6 +327,7 @@ async def _remove_clip(clip: Clip, now: datetime, reason: str | None) -> tuple[i
     await clip.set(
         {
             "moderation_reviewed_at": now,
+            "moderation_flag_sources": [],
             "visibility": VisibilityState.PRIVATE,
             "is_public": False,
             "removed_at": now,

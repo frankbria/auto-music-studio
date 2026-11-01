@@ -1044,6 +1044,17 @@ class TestReleaseMetadataScreening:
         assert resp.status_code == 201, resp.text
         await _assert_flagged(clip.id)
 
+    async def test_the_queue_shows_which_release_field_raised_the_flag(self, client, settings):
+        """#605: the flagged text sits in the release, not on the clip a moderator sees, so the queue names it."""
+        user, clip = await _user_with_clip("release-flag-source@example.com")
+        assert (await self._create(client, settings, user, clip, credits=BORDERLINE)).status_code == 201
+        admin = await make_user("release-flag-source-admin@example.com", is_admin=True)
+
+        queue = await client.get(f"{API_V1_PREFIX}/admin/moderation/queue", headers=_auth(admin, settings))
+
+        [item] = [i for i in queue.json()["items"] if i["clip_id"] == str(clip.id)]
+        assert item["flag_sources"] == ["self-harm (release credits)"]
+
     async def test_ordinary_text_creates_unflagged(self, client, settings):
         user, clip = await _user_with_clip("release-pass@example.com")
         resp = await self._create(client, settings, user, clip)
