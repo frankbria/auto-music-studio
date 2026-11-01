@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { FeedView } from "@/components/feed/FeedView"
 import { PlayerProvider } from "@/contexts/player-context"
 import { makeClip } from "@/test/clip-factory"
-import { clipRequests, discoverPage } from "@/test/discover-api"
+import {
+  clipRequests,
+  discoverPage,
+  stubViewerAwareDiscover,
+} from "@/test/discover-api"
+import { SignedIn } from "@/test/signed-in"
 
 // --- IntersectionObserver mock ---------------------------------------------
 // Records every observer instance so tests can fire callbacks for a given target.
@@ -199,5 +204,29 @@ describe("FeedView", () => {
       "c2",
       "c2",
     ])
+  })
+})
+
+describe("FeedView viewer ownership (#653)", () => {
+  it("sends the viewer's token and offers Report only on someone else's clip", async () => {
+    const fetchMock = stubViewerAwareDiscover(
+      [
+        makeClip({ id: "mine", title: "Mine" }),
+        makeClip({ id: "theirs", title: "Theirs" }),
+      ],
+      "mine"
+    )
+    render(
+      <SignedIn>
+        <PlayerProvider>
+          <FeedView />
+        </PlayerProvider>
+      </SignedIn>
+    )
+
+    expect(await screen.findAllByTestId("feed-item")).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: /report/i })).toHaveLength(1)
+    const [, init] = fetchMock.mock.calls[0]
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok")
   })
 })

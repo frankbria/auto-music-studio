@@ -406,7 +406,9 @@ Package manager: `uv` with `hatchling` build backend
   `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
   `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
 - **Public discovery (#651)**: Feed, Explore and Search read `GET /api/v1/discover/clips` (keyset-paged, `newest` |
-  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they are anonymous. Every public listing
+  `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they need no sign-in. A signed-in
+  viewer's token is forwarded so `/discover/clips` marks their own clips `is_owner` (#653); the web reads it through
+  `useDiscoveryAuth`, which waits for the session and doesn't refetch when the token rotates. Every public listing
   filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
   uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
   `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them

@@ -22,10 +22,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from ..auth.dependencies import CurrentUser, require_admin
+from ..auth.dependencies import CurrentUser, get_settings, require_admin
 from ..models import ReportCategory
 from ..models.screening import ScreeningRules
 from ..services import appeals as appeal_service, moderation, reports as report_service, screening
+from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
 
@@ -268,8 +269,11 @@ class AppealDecisionRequest(BaseModel):
 
 @router.post("/moderation/appeals/{appeal_id}", response_model=appeal_service.AppealView)
 async def decide_appeal(
-    appeal_id: str, body: AppealDecisionRequest, current: CurrentUser = Depends(require_admin)
+    appeal_id: str,
+    body: AppealDecisionRequest,
+    current: CurrentUser = Depends(require_admin),
+    settings: ApiSettings = Depends(get_settings),
 ) -> appeal_service.AppealView:
     return appeal_service.AppealView.of(
-        await appeal_service.decide(current.user_id, appeal_id, body.decision, body.note)
+        await appeal_service.decide(current.user_id, appeal_id, body.decision, body.note, settings)
     )
