@@ -645,3 +645,18 @@ class TestReversalRestoresReleases:
         # Only a release still private (as the removal left it) is put back.
         assert await _visibilities((public, unlisted, private)) == ["unlisted", "unlisted", "private"]
         assert soundcloud_stand_in.puts == []
+
+    async def test_an_unexpected_reshare_error_is_recorded_not_raised(self, client, settings, monkeypatch):
+        clip, releases, appeal = await _removed_with_releases(client, settings)
+
+        async def broken(*_args):
+            raise RuntimeError("connection pool exhausted")
+
+        # The appeal is marked reversed before the re-share, so an error escaping here could never be retried.
+        monkeypatch.setattr(soundcloud, "get_valid_connection", broken)
+
+        assert (await _decide(client, settings, appeal["id"], "reverse")).status_code == 200
+
+        assert await _visibilities(releases) == ["public", "unlisted", "private"]
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "appeal_reversed")
+        assert entry.details["soundcloud_reshare_failed"] == ["t-public"]

@@ -337,7 +337,8 @@ async def _reshare_failure(release: Release, settings: ApiSettings) -> str | Non
     try:
         connection = await sc.get_valid_connection(str(release.user_id), settings)
         await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, "public")
-    except sc.SoundCloudError:
+    except Exception:  # best-effort: the appeal is already decided, so nothing may stop the rest of the reversal
+        logger.warning("Re-sharing SoundCloud track %s of release %s failed", release.soundcloud_track_id, release.id)
         return release.soundcloud_track_id
     return None
 
