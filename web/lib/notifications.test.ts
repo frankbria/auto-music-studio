@@ -71,6 +71,21 @@ describe("toAppNotification (#537)", () => {
     })
   })
 
+  it("tells the owner a clip got a content warning, linking to the song (#589)", () => {
+    const row = toAppNotification(
+      event({
+        event_type: "moderation_clip_flagged",
+        clip_id: "c1",
+        payload: { clip_id: "c1", title: "Edgy", reason: "Graphic lyrics" },
+      })
+    )
+    expect(row.type).toBe("moderation")
+    expect(row.href).toBe("/song/c1")
+    expect(row.message).toBe(
+      'Moderation added a content warning to "Edgy". You can appeal it from your Library. Reason: Graphic lyrics'
+    )
+  })
+
   it("shows a warning's reason", () => {
     const row = toAppNotification(
       event({
