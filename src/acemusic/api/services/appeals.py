@@ -127,19 +127,18 @@ async def _in_force_actions(clips: list[Clip]) -> dict[PydanticObjectId, Pydanti
     """Each clip's in-force decision id (see ``_appealable_action``), in one read; clips with none are absent."""
     kinds = {str(c.id): _in_force_kind(c) for c in clips}
     ids = [clip_id for clip_id, kind in kinds.items() if kind]
-    entries = (
-        await ModerationLogEntry.find(
-            {"target_type": "clip", "target_id": {"$in": ids}, "action": {"$in": ["remove", "flag"]}}
-        )
-        .sort(-ModerationLogEntry.created_at, -ModerationLogEntry.id)
-        .to_list()
-    )
-    latest: dict[PydanticObjectId, PydanticObjectId] = {}
-    for entry in entries:
-        clip_id = PydanticObjectId(entry.target_id)
-        if entry.action == kinds[entry.target_id] and clip_id not in latest:
-            latest[clip_id] = entry.id
-    return latest
+    rows = await ModerationLogEntry.aggregate(
+        [
+            {"$match": {"target_type": "clip", "target_id": {"$in": ids}, "action": {"$in": ["remove", "flag"]}}},
+            {"$sort": {"created_at": -1, "_id": -1}},
+            {"$group": {"_id": {"target_id": "$target_id", "action": "$action"}, "entry_id": {"$first": "$_id"}}},
+        ]
+    ).to_list()
+    return {
+        PydanticObjectId(row["_id"]["target_id"]): row["entry_id"]
+        for row in rows
+        if row["_id"]["action"] == kinds[row["_id"]["target_id"]]
+    }
 
 
 def _is_superseded(clip: Clip | None, appeal: ClipAppeal, in_force_id: PydanticObjectId | None) -> bool:
