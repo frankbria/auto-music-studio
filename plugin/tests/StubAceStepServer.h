@@ -95,7 +95,25 @@ public:
     void releaseResponse()
     {
         holding = false;
+        holdingRefreshes = false;
         releaseEvent.signal();
+    }
+
+    /** Single-use refresh tokens like the platform's (#516): only the live token refreshes, and each refresh
+        rotates it ("refresh-2", "refresh-3", ...) and answers with `access`. Anything else is a 401. */
+    void rotateRefreshTokens (const juce::String& live, const juce::String& access)
+    {
+        const juce::ScopedLock sl (lock);
+        liveRefreshToken = live;
+        rotatedAccessToken = access;
+    }
+
+    /** Like holdResponse(), but only for `/auth/refresh`, so a test can start a second refresh while the first is
+        still in flight. releaseResponse() lets them go. */
+    void holdRefreshes()
+    {
+        releaseEvent.reset();
+        holdingRefreshes = true;
     }
 
     /** The request line + headers of the most recent request. */
@@ -206,6 +224,7 @@ private:
             const auto bytesRead = (int) whole.getNumBytesAsUTF8();
 
             juce::String body, status;
+            bool isRefresh = false;
             {
                 const juce::ScopedLock sl (lock);
 
@@ -257,6 +276,24 @@ private:
                     }
                 }
 
+                isRefresh = lastPath.contains ("/auth/refresh");
+
+                if (isRefresh && liveRefreshToken.isNotEmpty())
+                {
+                    if (lastBody.contains ("\"" + liveRefreshToken + "\""))
+                    {
+                        liveRefreshToken = "refresh-" + juce::String (++rotations + 1);
+                        status = "HTTP/1.1 200 OK";
+                        body = R"({"access_token":")" + rotatedAccessToken + R"(","refresh_token":")"
+                             + liveRefreshToken + R"(","token_type":"bearer","expires_in":900})";
+                    }
+                    else
+                    {
+                        status = "HTTP/1.1 401 Unauthorized";
+                        body = R"({"detail":"Invalid or expired refresh token."})";
+                    }
+                }
+
                 if (requiredBearer.isNotEmpty() && ! lastPath.contains ("/auth/")
                     && ! juce::StringArray::fromLines (lastRequest).contains ("Authorization: Bearer " + requiredBearer))
                 {
@@ -269,7 +306,7 @@ private:
 
             // Sliced wait so stopping the server never blocks on a test that forgot
             // to release.
-            while (holding.load() && ! threadShouldExit())
+            while ((holding.load() || (isRefresh && holdingRefreshes.load())) && ! threadShouldExit())
                 releaseEvent.wait (50);
 
             const auto overstated = overstatedLength.load();
@@ -299,6 +336,9 @@ private:
     int port = 0;
     std::atomic<int> requestCount { 0 };
     std::atomic<bool> holding { false };
+    std::atomic<bool> holdingRefreshes { false };
+    int rotations = 0;
+    juce::String liveRefreshToken, rotatedAccessToken;
     std::atomic<int> overstatedLength { 0 };
     juce::WaitableEvent releaseEvent { true };   // manual reset
 
