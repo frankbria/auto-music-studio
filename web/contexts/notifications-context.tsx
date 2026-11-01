@@ -26,7 +26,8 @@ import {
 // badge renders in the Sidebar while the list + mutations live on /notifications,
 // and both must read one reactive source so "mark all as read" clears the badge.
 //
-// Server rows load when a user signs in; reads are applied optimistically and sent
+// Server rows load when a user signs in, and new ones arrive mid-session by polling the
+// first page on focus and every POLL_MS (#566); reads are applied optimistically and sent
 // to the API. `notify()` rows (e.g. a mastering job completing) are session-only:
 // they have no server id, so marking them read stays local.
 //
@@ -54,6 +55,9 @@ const NotificationsContext = createContext<NotificationsContextValue | null>(
 )
 
 const LIVE_PREFIX = "n-live-"
+
+/** How often an open session checks for new server notices, besides on focus (#566). */
+const POLL_MS = 60_000
 const isLive = (n: AppNotification) => n.id.startsWith(LIVE_PREFIX)
 
 type Store = {
@@ -117,6 +121,41 @@ export function NotificationsProvider({
       cancelled = true
     }
   }, [userId, attempt])
+
+  // New notices reach an open session (#566). Only rows not already held are added, so a
+  // poll never drops pages revealed by "Show older" or live notify() rows; a poll from a
+  // previous session is dropped like a stale "Show older" page.
+  const refresh = useCallback(() => {
+    const token = tokenRef.current
+    if (!token) return
+    const requestedIn = session.current
+    void fetchNotifications(token)
+      .then((page) => {
+        if (session.current !== requestedIn) return
+        setStore((s) => {
+          const seen = new Set(s.items.map((n) => n.id))
+          const fresh = page.notifications.filter((n) => !seen.has(n.id))
+          const liveUnread = s.items.filter((n) => isLive(n) && !n.read).length
+          return {
+            items: [...fresh, ...s.items],
+            unread: page.unreadCount + liveUnread,
+            hasMore: s.loadFailed ? page.hasMore : s.hasMore,
+            loadFailed: false,
+          }
+        })
+      })
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    if (!userId) return
+    const timer = setInterval(refresh, POLL_MS)
+    window.addEventListener("focus", refresh)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener("focus", refresh)
+    }
+  }, [userId, refresh])
 
   const serverCount = store.items.filter((n) => !isLive(n)).length
   const loadMore = useCallback(() => {
