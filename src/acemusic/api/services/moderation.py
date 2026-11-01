@@ -497,6 +497,10 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
         {"$set": {"published": False, "removed_at": stamp}}
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
+    if (await User.get(user.id)).banned_at != stamp:
+        # An unban landed mid-sweep and restored nothing yet to restore: put back what this sweep took down.
+        await clip_service.restore_ban_sweep(user.id, stamp)
+        await Video.find({"user_id": user.id, "removed_at": stamp}).update({"$set": {"removed_at": None}})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 

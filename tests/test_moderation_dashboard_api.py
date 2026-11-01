@@ -927,6 +927,23 @@ class TestUnban:
         stored = await Clip.get(clip.id)
         assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
 
+    async def test_an_unban_landing_mid_ban_sweep_does_not_leave_clips_removed(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        real_revoke = moderation.revoke_all_user_tokens
+
+        async def revoke_then_unbanned(user_id):
+            await real_revoke(user_id)
+            # Another admin's unban completes here: nothing is swept yet, so it restores nothing.
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", revoke_then_unbanned)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        assert (await User.get(user.id)).banned_at is None
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
+
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
         stale = await User.get(user.id)
