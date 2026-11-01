@@ -366,24 +366,9 @@ async def act_on_content(
     doc = await _CONTENT_DOCS[target_type].get(oid)
     if doc is None:
         return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
-    now = utcnow()
-    details: dict = {}
-    notice: tuple[str, dict] | None = None
-    if action == "drop":
-        details = await _drop_artwork(doc)
-        if details is None:  # a concurrent drop got there first and has logged and notified (#624)
-            return ActionResult(ok=False, detail=f"{noun.capitalize()} not found.")
-        notice = ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
-    elif action == "restore":
-        if refused := await _restore_video(doc):
-            return ActionResult(ok=False, detail=refused)
-        notice = ("moderation_video_restored", {"video_id": str(oid)})
-    elif action == "unpublish":
-        details["was_published"] = doc.published
-        if await _take_down_video(doc, now):
-            notice = ("moderation_video_unpublished", {"video_id": str(oid)})
-    else:
-        await doc.set({"moderation_reviewed_at": now})
+    refused, details, notice = await _CONTENT_HANDLERS.get(action, _approve_content)(doc, utcnow())
+    if refused:
+        return ActionResult(ok=False, detail=refused)
     await log_action(actor_id, action, target_type, str(oid), reason, details)
     # After the log, and best-effort: the action has applied, and a retry can't resend it (the takedown is
     # already stamped, lifted or deleted), so a failed insert must not report the action as failed.
@@ -393,6 +378,38 @@ async def act_on_content(
         except Exception:
             logger.exception("Failed to notify the owner of %s %s (%s)", target_type, oid, notice[0])
     return ActionResult(ok=True)
+
+
+# Each content action: (refusal, log details, owner notice). A refusal means nothing was written or logged.
+_ContentOutcome = tuple[str | None, dict, tuple[str, dict] | None]
+
+
+async def _approve_content(doc: Video | ArtworkOption | VoiceModel, now: datetime) -> _ContentOutcome:
+    await doc.set({"moderation_reviewed_at": now})
+    return None, {}, None
+
+
+async def _unpublish_content(video: Video, now: datetime) -> _ContentOutcome:
+    details = {"was_published": video.published}
+    if not await _take_down_video(video, now):  # already down, or a concurrent unpublish notified (#624)
+        return None, details, None
+    return None, details, ("moderation_video_unpublished", {"video_id": str(video.id)})
+
+
+async def _restore_content(video: Video, _now: datetime) -> _ContentOutcome:
+    if refused := await _restore_video(video):
+        return refused, {}, None
+    return None, {}, ("moderation_video_restored", {"video_id": str(video.id)})
+
+
+async def _drop_content(option: ArtworkOption, _now: datetime) -> _ContentOutcome:
+    details = await _drop_artwork(option)
+    if details is None:  # a concurrent drop got there first and has logged and notified (#624)
+        return "Artwork option not found.", {}, None
+    return None, details, ("moderation_artwork_dropped", {"was_cover": details["was_cover"]})
+
+
+_CONTENT_HANDLERS = {"unpublish": _unpublish_content, "restore": _restore_content, "drop": _drop_content}
 
 
 async def _take_down_video(video: Video, now: datetime) -> bool:
@@ -474,14 +491,18 @@ async def _drop_artwork(option: ArtworkOption) -> dict | None:
         # And again once cleared: an upload that recorded its track in between still saw the cover. Anything
         # recorded from here on sees the cover gone and queues itself (routers/distribution.soundcloud_upload).
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
-    try:
-        await asyncio.to_thread(get_storage_backend().delete, option.storage_path)
-    except Exception:  # best-effort: the option can no longer be selected or served either way
-        logger.warning("Failed to delete dropped artwork object %s", option.storage_path)
+    await _delete_artwork_object(option.storage_path)
     details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
     if queued:
         details["soundcloud_unshare_queued"] = queued
     return details
+
+
+async def _delete_artwork_object(path: str) -> None:
+    try:
+        await asyncio.to_thread(get_storage_backend().delete, path)
+    except Exception:  # best-effort: the option can no longer be selected or served either way
+        logger.warning("Failed to delete dropped artwork object %s", path)
 
 
 async def _resolve_reports(clip_id: PydanticObjectId, now: datetime) -> int:
@@ -619,10 +640,18 @@ async def list_log(limit: int, cursor: str | None = None) -> tuple[list[LogItem]
     return items, encode_cursor("log", (page[-1].created_at, str(page[-1].id))) if more else None
 
 
+def _is_video_unpublish(entry: ModerationLogEntry) -> bool:
+    return entry.action == "unpublish" and entry.target_type == "video"
+
+
+def _unpublished_video_ids(entries: list[ModerationLogEntry]) -> list[PydanticObjectId]:
+    ids = {e.target_id for e in entries if _is_video_unpublish(e)}
+    return [oid for oid in map(coerce_object_id, ids) if oid is not None]
+
+
 async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
     """The page's video unpublish entries in force: each still-down video's latest unpublish."""
-    video_ids = {e.target_id for e in entries if e.action == "unpublish" and e.target_type == "video"}
-    oids = [oid for oid in map(coerce_object_id, video_ids) if oid is not None]
+    oids = _unpublished_video_ids(entries)
     if not oids:
         return set()
     down = {str(v.id) for v in await Video.find({"_id": {"$in": oids}, "removed_at": {"$ne": None}}).to_list()}
