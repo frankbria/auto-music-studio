@@ -801,6 +801,52 @@ class TestUnban:
         stored = await Clip.get(clip.id)
         assert (stored.visibility, stored.is_public, stored.removed_at) == (VisibilityState.PUBLIC, True, None)
 
+    async def test_a_second_ban_and_unban_round_trip_on_their_own_stamp(self, client, settings):
+        admin, user = await _admin(), await _user()
+        first, second = await _clip(user), await _clip(user, VisibilityState.UNLISTED)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        [result] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert result["ok"] is True
+        assert [(await Clip.get(c.id)).visibility for c in (first, second)] == [
+            VisibilityState.PUBLIC,
+            VisibilityState.UNLISTED,
+        ]
+
+    async def test_concurrent_bans_share_one_stamp(self, client, settings):
+        user = await _user()
+        clip = await _clip(user)
+        stale = await User.get(user.id)  # both admins read the account before either ban landed
+
+        await moderation._ban(str(PydanticObjectId()), stale, None)
+        await moderation._ban(str(PydanticObjectId()), stale, None)
+
+        assert (await Clip.get(clip.id)).removed_at == (await User.get(user.id)).banned_at
+
+    async def test_an_unban_that_fails_part_way_leaves_the_account_banned_and_retryable(
+        self, client, settings, monkeypatch
+    ):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        real_restore = moderation.clip_service.restore_ban_sweep
+
+        async def broken(*_args):
+            raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", broken)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is not None
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", real_restore)
+        [retried] = await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert retried["ok"] is True
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
+
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
         stale = await User.get(user.id)

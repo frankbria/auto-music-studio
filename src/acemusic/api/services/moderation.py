@@ -448,10 +448,10 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
     """The log entry's details, or why the ban was refused."""
     if str(user.id) == actor_id:
         return "You cannot ban yourself."
-    if user.banned_at is None:
-        await user.set({"banned_at": utcnow()})
-    # The ban's own stamp marks what it took down, so an unban lifts exactly that (#581).
-    stamp = user.banned_at
+    # Claimed conditionally and read back, so concurrent bans share one stamp: it marks what the ban took down,
+    # and an unban lifts exactly that (#581).
+    await User.find({"_id": user.id, "banned_at": None}).update({"$set": {"banned_at": utcnow()}})
+    stamp = (await User.get(user.id)).banned_at
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
@@ -468,13 +468,18 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
     Videos stay unpublished for the owner to republish, as a moderator's restore leaves them (#571). Releases the ban
     made private stay private: the owner re-publishes them. Refused when the account isn't banned, including when a
     concurrent unban got there first.
+
+    Restores while the account is still banned, then lifts the ban, so a failure part-way leaves it banned and the
+    unban retryable.
     """
     banned_at = user.banned_at
-    lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
-    if banned_at is None or not lifted.modified_count:
+    if banned_at is None:
         return "This account is not banned."
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
     videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
+    lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
+    if not lifted.modified_count:
+        return "This account is not banned."
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
 
 
