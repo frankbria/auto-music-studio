@@ -290,7 +290,7 @@ Conventions across every workflow (#425), enforced by `tests/test_workflow_pins.
   and stems changes pay for a torch install. Not a required check, since a path-filtered job is absent
   from most PRs and a required check would block them
 - Installs the locked versions with torch from the CPU wheel index, filtering out the lock's CUDA
-  wheels (`nvidia-*`, `triton`), then smoke-imports torch and demucs and runs `test_stems_client.py`,
+  wheels (`nvidia-*`, `cuda-*`, `triton`), then smoke-imports torch and demucs and runs `test_stems_client.py`,
   which every other job skips
 
 `.github/workflows/plugin.yml` — VST3 plugin (C++):

@@ -52,12 +52,12 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       # The locked versions, with torch from the CPU wheel index. The lock lists the CUDA
-      # wheels (nvidia-*, triton) explicitly, so they are filtered out rather than pulled:
+      # wheels (nvidia-*, cuda-*, triton) explicitly, so they are filtered out rather than pulled:
       # ~3 GB the CPU build never loads. The CPU index's 2.x.y+cpu satisfies the lock's ==2.x.y.
       - name: Install the audio-ml extra (CPU torch)
         run: |
           uv export --frozen --extra dev --extra audio-ml --no-hashes --no-emit-project \
-            | grep -vE '^(nvidia-|triton)' > requirements-cpu.txt
+            | grep -vE '^(nvidia-|triton|cuda-)' > requirements-cpu.txt
           uv venv --python 3.12
           uv pip install -r requirements-cpu.txt \
             --index-url https://download.pytorch.org/whl/cpu \
