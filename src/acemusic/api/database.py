@@ -60,6 +60,9 @@ async def init_db(settings: ApiSettings) -> AsyncMongoClient:
         minPoolSize=settings.mongodb_min_pool_size,
         maxPoolSize=settings.mongodb_max_pool_size,
         serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+        # Datetimes come back UTC-aware, so every response carries its offset and a browser can't read it as
+        # local time (#541).
+        tz_aware=True,
     )
 
     safe_url = redact_mongodb_url(settings.mongodb_url)
