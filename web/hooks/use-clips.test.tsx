@@ -1,8 +1,12 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
 
 import { AuthContext } from "@/contexts/auth-context"
+import {
+  NotificationsProvider,
+  useNotify,
+} from "@/contexts/notifications-context"
 import { useClips } from "@/hooks/use-clips"
 
 const authValue = {
@@ -134,5 +138,44 @@ describe("useClips", () => {
     rerender({ search: "b" })
     await waitFor(() => expect(result.current.loading).toBe(true))
     await waitFor(() => expect(result.current.data?.clips).toHaveLength(1))
+  })
+
+  it("refetches when a moderation notice arrives, not on other notices (#589)", async () => {
+    const fetchMock = vi.fn(async () => listRes())
+    vi.stubGlobal("fetch", fetchMock)
+    function withNotices({ children }: { children: ReactNode }) {
+      return wrapper({
+        children: <NotificationsProvider>{children}</NotificationsProvider>,
+      })
+    }
+    const { result } = renderHook(
+      () => ({ clips: useClips({}), notify: useNotify() }),
+      { wrapper: withNotices }
+    )
+    const clipFetches = () =>
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/clips")
+      ).length
+    await waitFor(() => expect(clipFetches()).toBe(1))
+    const before = clipFetches()
+
+    act(() =>
+      result.current.notify({
+        type: "mastering_complete",
+        message: "m",
+        href: "/",
+      })
+    )
+    act(() =>
+      result.current.notify({
+        type: "moderation",
+        message: "Moderation added a content warning",
+        href: "/",
+      })
+    )
+
+    await waitFor(() => expect(clipFetches()).toBe(before + 1))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(clipFetches()).toBe(before + 1)
   })
 })
