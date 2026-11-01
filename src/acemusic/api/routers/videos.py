@@ -34,6 +34,7 @@ from ..services import (
     appeals as appeal_service,
     clips as clip_service,
     credits as credits_service,
+    moderation as moderation_service,
     screening as screening_service,
     users as user_service,
     video as video_service,
@@ -273,8 +274,8 @@ class VideoDetailResponse(BaseModel):
     aspect_ratio: str
     published: bool
     created_at: datetime
-    # When moderation last acted on it while it is taken down, so the owner's appeal UI can tell an appeal of an
-    # earlier takedown from one of this one (#623). None while it is up.
+    # When the unpublish in force was made, so the owner's appeal UI can tell an appeal of an earlier takedown
+    # from one of this one (#623, #690). None while it is up. Filled by get_video only.
     taken_down_at: datetime | None = None
 
     @classmethod
@@ -287,7 +288,6 @@ class VideoDetailResponse(BaseModel):
             aspect_ratio=video.aspect_ratio,
             published=video.published,
             created_at=video.created_at,
-            taken_down_at=video.moderation_reviewed_at if video.removed_at else None,
         )
 
 
@@ -363,7 +363,10 @@ async def get_video(
 ) -> VideoDetailResponse:
     """Return a rendered video's metadata (owner always; others once published)."""
     video = await _resolve_viewable_video(video_id, current.user_id if current else None)
-    return VideoDetailResponse.from_video(video)
+    detail = VideoDetailResponse.from_video(video)
+    if video.removed_at is not None:
+        detail.taken_down_at = await moderation_service.unpublish_in_force_at(video.id)
+    return detail
 
 
 # ---------------------------------------------------------------------------
