@@ -24,6 +24,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
+from pymongo import ReturnDocument
+
 from ..models.common import utcnow
 from ..models.distribution import SOUNDCLOUD_CHANNEL, DistributionStatus
 from ..models.moderation_log import ModerationLogEntry
@@ -39,6 +41,10 @@ _NON_TERMINAL = (DistributionStatus.SUBMITTED.value, DistributionStatus.IN_REVIE
 
 #: The longest a failing un-share waits between attempts.
 MAX_UNSHARE_BACKOFF = timedelta(hours=1)
+# Long enough to outlast one SoundCloud call; a drainer that dies mid-attempt frees its row when it expires.
+UNSHARE_LEASE = timedelta(minutes=10)
+# About a day of retries at the backoff cap: a track still failing then is reported again for an admin (#620).
+UNSHARE_STUCK_AFTER = 24
 
 ConnectionGetter = Callable[[str, ApiSettings], Awaitable[object]]
 StatusFetcher = Callable[[str, str], Awaitable[dict]]
@@ -169,14 +175,11 @@ class SoundCloudStatusPoller:
 
         A failure on one track is logged and skipped so the rest of the batch still makes progress.
         """
-        due = (
-            await SoundCloudUnshare.find(SoundCloudUnshare.next_attempt_at <= utcnow())
-            .sort(("next_attempt_at", 1))
-            .limit(self._batch_size)
-            .to_list()
-        )
         done = 0
-        for row in due:
+        for _ in range(self._batch_size):
+            row = await _claim_due()
+            if row is None:
+                break
             try:
                 done += await self._unshare(row)
             except asyncio.CancelledError:
@@ -228,13 +231,24 @@ class SoundCloudStatusPoller:
                 "$inc": {"attempts": 1},
             },
         )
-        if row.attempts == 0:
-            # Logged once, so an admin learns a track is stuck without a log entry per retry.
-            await _log(
-                row,
-                "soundcloud_unshare_failed",
-                {"soundcloud_unshare_failed": [{"track_id": row.track_id, "error": error}]},
-            )
+        # Logged on the first failure and once more when it looks stuck, never per retry.
+        if row.attempts in (0, UNSHARE_STUCK_AFTER - 1):
+            details: dict = {"soundcloud_unshare_failed": [{"track_id": row.track_id, "error": error}]}
+            if row.attempts:
+                details["stuck_after_attempts"] = UNSHARE_STUCK_AFTER
+            await _log(row, "soundcloud_unshare_failed", details)
+
+
+async def _claim_due() -> SoundCloudUnshare | None:
+    """The most overdue row, leased so another API instance's drainer skips it while this one works (#620)."""
+    now = utcnow()
+    claimed = await SoundCloudUnshare.get_pymongo_collection().find_one_and_update(
+        {"next_attempt_at": {"$lte": now}},
+        {"$set": {"next_attempt_at": now + UNSHARE_LEASE}},
+        sort=[("next_attempt_at", 1)],
+        return_document=ReturnDocument.AFTER,
+    )
+    return SoundCloudUnshare.model_validate(claimed) if claimed else None
 
 
 async def _log(row: SoundCloudUnshare, action: str, details: dict) -> None:
