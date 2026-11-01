@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { RelatedSongs } from "@/components/song/RelatedSongs"
@@ -107,5 +108,21 @@ describe("RelatedSongs owner-only controls (#564)", () => {
         within(legacy).queryByRole("button", { name })
       ).not.toBeInTheDocument()
     }
+  })
+})
+
+describe("RelatedSongs Get Full Song (#616)", () => {
+  it("opens the full-song wizard for your own short clip", async () => {
+    renderRail([
+      makeClip({ id: "mine", title: "Mine", is_owner: true, duration: 30 }),
+    ])
+    const item = await itemFor("Mine")
+
+    await userEvent.click(
+      within(item).getByRole("button", { name: /get full song/i })
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Get Full Song")
   })
 })
