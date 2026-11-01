@@ -27,7 +27,7 @@ export function GenreChannels() {
       {genres.map((genre, i) => (
         <Link
           key={genre.id}
-          href={`/search?style=${genre.slug}`}
+          href={`/search?style=${encodeURIComponent(genre.slug)}`}
           data-testid="genre-tile"
           className={`flex aspect-video w-48 shrink-0 items-end rounded-lg bg-gradient-to-br p-3 text-lg font-bold text-white shadow-sm outline-none transition-transform hover:scale-[1.02] focus-visible:ring-3 focus-visible:ring-ring/50 ${GRADIENTS[i % GRADIENTS.length]}`}
         >
