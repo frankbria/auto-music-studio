@@ -30,10 +30,10 @@ export function getGenreChannels(): Genre[] {
 export const NEW_RELEASES_LIMIT = 12
 
 /** Newest public clips. */
-export async function getNewReleases(): Promise<Clip[]> {
-  const page = await fetchPublicClips({
-    sort: "newest",
-    limit: NEW_RELEASES_LIMIT,
-  })
+export async function getNewReleases(token?: string | null): Promise<Clip[]> {
+  const page = await fetchPublicClips(
+    { sort: "newest", limit: NEW_RELEASES_LIMIT },
+    token
+  )
   return page.clips
 }

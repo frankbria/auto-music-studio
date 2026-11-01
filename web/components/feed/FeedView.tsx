@@ -6,6 +6,7 @@ import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { FeedItemCard } from "@/components/feed/FeedItemCard"
 import { Button } from "@/components/ui/button"
+import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
 import { getFeedPage, type FeedItem } from "@/lib/feed"
 
 // Short-form feed (US-20.4). A snap-scroll column of full-height items. Two
@@ -36,25 +37,32 @@ export function FeedView() {
   const activeObserver = useRef<IntersectionObserver | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  const loadPage = useCallback((cursor: string | null) => {
-    const requestKey = cursor ?? ""
-    if (requestedCursors.current.has(requestKey)) return
-    requestedCursors.current.add(requestKey)
-    getFeedPage(cursor).then(
-      (page) =>
-        setFeed((current) => ({
-          items: [...current.items, ...page.items],
-          nextCursor: page.nextCursor,
-          status: "ready",
-        })),
-      () => {
-        requestedCursors.current.delete(requestKey)
-        setFeed((current) => ({ ...current, status: "error" }))
-      }
-    )
-  }, [])
+  const viewer = useDiscoveryAuth()
+  const { token } = viewer
+  const loadPage = useCallback(
+    (cursor: string | null) => {
+      const requestKey = cursor ?? ""
+      if (requestedCursors.current.has(requestKey)) return
+      requestedCursors.current.add(requestKey)
+      getFeedPage(cursor, token()).then(
+        (page) =>
+          setFeed((current) => ({
+            items: [...current.items, ...page.items],
+            nextCursor: page.nextCursor,
+            status: "ready",
+          })),
+        () => {
+          requestedCursors.current.delete(requestKey)
+          setFeed((current) => ({ ...current, status: "error" }))
+        }
+      )
+    },
+    [token]
+  )
 
-  useEffect(() => loadPage(null), [loadPage])
+  useEffect(() => {
+    if (viewer.ready) loadPage(null)
+  }, [loadPage, viewer.ready])
 
   // A failed first page leaves nextCursor null, so this retries the first page;
   // a failed later page left nextCursor on the cursor that failed.
