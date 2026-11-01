@@ -316,31 +316,37 @@ async def restore_releases(clip_id: PydanticObjectId, previous: dict[str, str], 
     await SoundCloudUnshare.find({"clip_id": clip_id}).delete()
     restored, failed = 0, []
     for release_id, visibility in previous.items():
-        release = await Release.find_one(
-            {"_id": PydanticObjectId(release_id), "visibility": VisibilityState.PRIVATE.value}
-        ).update(
-            {"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT
-        )
+        release = await _put_back(release_id, visibility)
         if release is None:
             continue
         restored += 1
-        if track_id := await _reshare_failure(release, settings):
-            failed.append(track_id)
-    outcome = {"releases_restored": restored, "soundcloud_reshare_failed": failed}
-    return {key: value for key, value in outcome.items() if value}
+        failed += await _reshare_failures(release, settings)
+    return _present(releases_restored=restored, soundcloud_reshare_failed=failed)
 
 
-async def _reshare_failure(release: Release, settings: ApiSettings) -> str | None:
-    """Share a public release's SoundCloud track again; return its id if SoundCloud refused."""
+async def _put_back(release_id: str, visibility: str) -> Release | None:
+    """Set a release the removal made private back to ``visibility``; None if it is no longer private."""
+    return await Release.find_one(
+        {"_id": PydanticObjectId(release_id), "visibility": VisibilityState.PRIVATE.value}
+    ).update({"$set": {"visibility": visibility, "updated_at": utcnow()}}, response_type=UpdateResponse.NEW_DOCUMENT)
+
+
+async def _reshare_failures(release: Release, settings: ApiSettings) -> list[str]:
+    """Share a public release's SoundCloud track again; the track id, if SoundCloud refused."""
     if release.visibility != VisibilityState.PUBLIC or not release.soundcloud_track_id:
-        return None
+        return []
     try:
         connection = await sc.get_valid_connection(str(release.user_id), settings)
         await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, "public")
     except Exception:  # best-effort: the appeal is already decided, so nothing may stop the rest of the reversal
         logger.warning("Re-sharing SoundCloud track %s of release %s failed", release.soundcloud_track_id, release.id)
-        return release.soundcloud_track_id
-    return None
+        return [release.soundcloud_track_id]
+    return []
+
+
+def _present(**fields: int | list[str]) -> dict:
+    """The fields worth a log entry: a zero count or an empty list says nothing."""
+    return {key: value for key, value in fields.items() if value}
 
 
 async def unshare_releases(release_query: dict, clip_query: dict) -> dict:
