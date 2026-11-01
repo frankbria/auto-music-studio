@@ -5,7 +5,7 @@ events newest first and marks them read. "Read" is ``delivered_at``: the in-app 
 delivery channel.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from beanie import PydanticObjectId
 from pydantic import BaseModel
@@ -38,8 +38,7 @@ class NotificationView(BaseModel):
             voice_model_id=_str(event.voice_model_id),
             payload=event.payload,
             read=event.delivered_at is not None,
-            # Mongo hands datetimes back naive; the web parses a naive ISO string as local time.
-            created_at=event.created_at.replace(tzinfo=timezone.utc),
+            created_at=event.created_at,
         )
 
 

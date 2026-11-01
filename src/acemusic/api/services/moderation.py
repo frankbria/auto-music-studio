@@ -18,7 +18,7 @@ from typing import Literal
 from beanie import PydanticObjectId
 from beanie.operators import In
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, NaiveDatetime, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
 
 from acemusic.storage import get_storage_backend
 
@@ -92,22 +92,22 @@ class QueueItem(BaseModel):
 # on (the queue shrinks) or logged (the log grows at the head) between requests. Each cursor
 # leads with its kind: a reports key and a severity key have the same shape, and replaying
 # one under the other sort would silently skip or repeat rows instead of failing. Times are
-# NaiveDatetime because pymongo hands back naive UTC, and the keys are built from what it read.
+# AwareDatetime because the client reads UTC-aware datetimes (#541), and the keys are built from what it read.
 def _cursor(kind: str, *key: type) -> TypeAdapter:
     return TypeAdapter(tuple[(Literal[kind], *key)], config=ConfigDict(strict=True))
 
 
 _CURSORS: dict[str, TypeAdapter] = {
-    "reports": _cursor("reports", int, int, NaiveDatetime, str, str),
-    "severity": _cursor("severity", int, int, NaiveDatetime, str, str),
-    "newest": _cursor("newest", NaiveDatetime, str, str),
-    "log": _cursor("log", NaiveDatetime, str),
+    "reports": _cursor("reports", int, int, AwareDatetime, str, str),
+    "severity": _cursor("severity", int, int, AwareDatetime, str, str),
+    "newest": _cursor("newest", AwareDatetime, str, str),
+    "log": _cursor("log", AwareDatetime, str),
     # #543: the appeals lists, keyed on (created_at, id) like the log.
-    "appeals_oldest": _cursor("appeals_oldest", NaiveDatetime, str),
-    "appeals_newest": _cursor("appeals_newest", NaiveDatetime, str),
+    "appeals_oldest": _cursor("appeals_oldest", AwareDatetime, str),
+    "appeals_newest": _cursor("appeals_newest", AwareDatetime, str),
     # #651: public discovery, newest first and by search relevance.
-    "discover_newest": _cursor("discover_newest", NaiveDatetime, str),
-    "discover_relevance": _cursor("discover_relevance", int, NaiveDatetime, str),
+    "discover_newest": _cursor("discover_newest", AwareDatetime, str),
+    "discover_relevance": _cursor("discover_relevance", int, AwareDatetime, str),
 }
 
 

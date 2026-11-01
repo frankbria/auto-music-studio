@@ -33,7 +33,6 @@ import {
   type SourceFilter,
   type TargetAction,
   type UserAction,
-  parseApiTime,
 } from "@/lib/moderation"
 import { REPORT_CATEGORIES } from "@/lib/reports"
 import { videoStreamUrl } from "@/lib/video"
@@ -149,7 +148,7 @@ function refOf(item: QueueItem): QueueTargetRef {
 }
 
 function formatTime(iso: string) {
-  const date = parseApiTime(iso)
+  const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
 }
 

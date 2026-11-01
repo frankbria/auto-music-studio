@@ -20,7 +20,6 @@ import {
   submitClipAppeal,
   type AppealView,
 } from "@/lib/appeals"
-import { parseApiTime } from "@/lib/moderation"
 import type { Clip } from "@/lib/workspace-clips"
 
 // Moderation status + appeal entry point for a single clip card (US-27.4).
@@ -75,8 +74,7 @@ export function ClipAppealStatus({
     current.action === (removed ? "remove" : "flag") &&
     !(
       decidedAt != null &&
-      parseApiTime(decidedAt).getTime() >
-        parseApiTime(current.created_at).getTime()
+      new Date(decidedAt).getTime() > new Date(current.created_at).getTime()
     )
   // A resolved appeal's outcome only describes the clip while no newer decision
   // is in force; a reversal is still shown after the clip has been cleared.

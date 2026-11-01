@@ -19,7 +19,6 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   decideAppeal,
   fetchAppeals,
-  parseApiTime,
   type AppealDecision,
   type AppealQueueItem,
   type AppealStatusFilter,
@@ -85,7 +84,7 @@ function clipLabel(item: AppealQueueItem) {
 }
 
 function formatTime(iso: string) {
-  const date = parseApiTime(iso)
+  const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
 }
 

@@ -332,8 +332,3 @@ export function formatLogAction(action: string, targetType = "clip"): string {
   if (verb && target) return `${verb} ${target.toLowerCase()}`
   return LOG_ACTION_LABELS[action] ?? action.replaceAll("_", " ")
 }
-
-// The API serializes naive UTC datetimes (no offset); `new Date` would read those as local time.
-export function parseApiTime(iso: string): Date {
-  return new Date(/(Z|[+-]\d\d:?\d\d)$/i.test(iso) ? iso : `${iso}Z`)
-}
