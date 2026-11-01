@@ -39,3 +39,29 @@ export function stubDiscoverFetch(
   vi.stubGlobal("fetch", fetchMock)
   return fetchMock
 }
+
+/**
+ * Stub fetch for #653: `/api/discover/clips` marks `ownedId` as the viewer's (`is_owner`) only when the
+ * request carries the signed-in test token, the way the API decides it.
+ */
+export function stubViewerAwareDiscover(clips: Clip[], ownedId: string) {
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/discover/facets")) {
+        return new Response(JSON.stringify({ keys: [], models: [] }), {
+          status: 200,
+        })
+      }
+      const signedIn =
+        new Headers(init?.headers).get("authorization") === "Bearer tok"
+      return discoverPage(
+        clips.map((clip) => ({
+          ...clip,
+          is_owner: signedIn && clip.id === ownedId,
+        }))
+      )
+    }
+  )
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}

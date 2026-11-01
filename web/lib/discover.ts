@@ -27,14 +27,21 @@ export type DiscoverPage = {
 
 export type DiscoverFacets = { keys: string[]; models: string[] }
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: "application/json" } })
+async function getJson<T>(url: string, token?: string | null): Promise<T> {
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      // Lets the API mark the viewer's own clips (#653); discovery is otherwise the same for everyone.
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+  })
   if (!res.ok) throw new Error(`Discovery request failed (${res.status})`)
   return (await res.json()) as T
 }
 
 export async function fetchPublicClips(
-  query: DiscoverQuery
+  query: DiscoverQuery,
+  token?: string | null
 ): Promise<DiscoverPage> {
   const search = new URLSearchParams()
   for (const [name, value] of Object.entries(query)) {
@@ -45,7 +52,7 @@ export async function fetchPublicClips(
     clips: Clip[]
     next_cursor: string | null
     total: number
-  }>(`/api/discover/clips${qs ? `?${qs}` : ""}`)
+  }>(`/api/discover/clips${qs ? `?${qs}` : ""}`, token)
   return { clips: body.clips, nextCursor: body.next_cursor, total: body.total }
 }
 

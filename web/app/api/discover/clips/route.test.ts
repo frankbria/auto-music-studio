@@ -50,7 +50,7 @@ describe("GET /api/discover/clips", () => {
     expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/v1\/discover\/clips$/)
   })
 
-  it("never forwards Authorization, but does forward the client IP", async () => {
+  it("forwards the viewer's Authorization and the client IP (#653)", async () => {
     const fetchMock = ok()
     vi.stubGlobal("fetch", fetchMock)
 
@@ -64,8 +64,18 @@ describe("GET /api/discover/clips", () => {
     )
 
     const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
-    expect(headers.authorization).toBeUndefined()
+    expect(headers.authorization).toBe("Bearer tok")
     expect(headers["x-forwarded-for"]).toBe("198.51.100.7")
+  })
+
+  it("sends no Authorization for an anonymous visitor", async () => {
+    const fetchMock = ok()
+    vi.stubGlobal("fetch", fetchMock)
+
+    await GET(req("http://localhost/api/discover/clips"))
+
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
+    expect(headers.authorization).toBeUndefined()
   })
 
   it("passes the backend status and body through", async () => {
