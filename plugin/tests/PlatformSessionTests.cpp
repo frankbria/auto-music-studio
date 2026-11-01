@@ -135,6 +135,53 @@ public:
                     "unexpected message: " + result.errorMessage);
             expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 1);
             expectEquals (server.getRequestCountFor ("/api/v1/workspaces"), 1, "the call was retried anyway");
+
+            // #516: the refusal is remembered, so later actions don't spend a request on the same dead token...
+            const auto again = listWorkspaces (session, server.getBaseUrl());
+            expect (again.errorMessage.containsIgnoreCase ("plugin token"), "unexpected message: " + again.errorMessage);
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 1, "the rejected token was refreshed again");
+
+            // ...unless the musician corrects the server URL: another server hasn't refused it.
+            test::StubAceStepServer corrected;
+            expect (corrected.start() != 0);
+            corrected.setStatusFor ("/api/v1/auth/refresh", "HTTP/1.1 401 Unauthorized");
+            corrected.requireBearer ("access-never-issued");
+            listWorkspaces (session, corrected.getBaseUrl());
+            expectEquals (corrected.getRequestCountFor ("/api/v1/auth/refresh"), 1, "the corrected server was never asked");
+
+            // ...or a new token is pasted.
+            session.setRefreshToken ("pasted-later");
+            listWorkspaces (session, server.getBaseUrl());
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 2);
+        }
+
+        beginTest ("AC: two processes refreshing at once both end up with a working session");
+        {
+            ScopedTokenFile tokens;
+            tokens.file().replaceWithText ("refresh-1");
+            test::StubAceStepServer server;
+            expect (server.start() != 0);
+            server.rotateRefreshTokens ("refresh-1", "access-live");
+            // Every refresh is answered only once both processes have reached theirs, so without a lock across
+            // processes the second sends the token the first is about to spend.
+            server.holdRefreshes();
+
+            const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+            const juce::StringArray command { self, "--refresh-session", tokens.file().getFullPathName(),
+                                              server.getBaseUrl() };
+            juce::ChildProcess first, second;
+            expect (first.start (command) && second.start (command));
+
+            for (int waited = 0; server.getRequestCountFor ("/api/v1/auth/refresh") == 0 && waited < 10000; waited += 20)
+                juce::Thread::sleep (20);
+
+            juce::Thread::sleep (750);   // the other process reaches its own refresh (or the lock) meanwhile
+            server.releaseResponse();
+
+            expect (first.waitForProcessToFinish (20000) && second.waitForProcessToFinish (20000));
+            expectEquals ((int) first.getExitCode(), 0, "first: " + first.readAllProcessOutput());
+            expectEquals ((int) second.getExitCode(), 0, "second: " + second.readAllProcessOutput());
+            expectEquals (server.getRequestCountFor ("/api/v1/auth/refresh"), 2);
         }
 
         beginTest ("a fresh token that is still refused is not refreshed again");

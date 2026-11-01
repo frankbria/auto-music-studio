@@ -30,6 +30,9 @@ class Clip(Document):
     lyrics: str | None = None
     #: US-27.1: screening categories this clip's request was flagged for (borderline, allowed).
     moderation_flags: list[str] = Field(default_factory=list)
+    #: #605: where an outgoing flag came from, e.g. "self-harm (release credits)", text a moderator's clip view
+    #: never shows. Cleared when the clip is reviewed.
+    moderation_flag_sources: list[str] = Field(default_factory=list)
     #: US-27.3: when an admin last cleared this clip from the queue; flags before it are reviewed.
     moderation_reviewed_at: datetime | None = None
     #: US-27.3: an admin kept the clip up but labelled it for listeners.
@@ -38,6 +41,8 @@ class Clip(Document):
     flagged_at: datetime | None = None
     #: US-27.3: taken down by moderation. Forced private, and the owner cannot make it public again.
     removed_at: datetime | None = None
+    #: #581: what a ban's sweep took this clip down from, so lifting the ban restores it.
+    visibility_before_ban: VisibilityState | None = None
     vocal_language: str | None = None
     model: str | None = None
     seed: int | None = None

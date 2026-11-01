@@ -61,6 +61,25 @@ class TestCreateAccessToken:
                 decode_access_token(token, settings)
 
 
+class TestClockSkew:
+    """#613: a clock stepped backwards (WSL2 resyncs under load; skewed API instances) must not reject a fresh token."""
+
+    def test_a_token_stamped_a_few_seconds_ahead_still_decodes(self):
+        settings = _settings()
+        with freeze_time("2026-01-01 12:00:05"):
+            token = create_access_token(user_id="u", email="e@x.com", subscription_tier="free", settings=settings)
+        with freeze_time("2026-01-01 12:00:00"):
+            assert decode_access_token(token, settings)["sub"] == "u"
+
+    def test_a_token_stamped_well_into_the_future_is_still_invalid(self):
+        settings = _settings()
+        with freeze_time("2026-01-01 12:05:00"):
+            token = create_access_token(user_id="u", email="e@x.com", subscription_tier="free", settings=settings)
+        with freeze_time("2026-01-01 12:00:00"):
+            with pytest.raises(TokenInvalidError):
+                decode_access_token(token, settings)
+
+
 class TestDecodeAccessToken:
     def test_invalid_signature_rejected(self):
         token = create_access_token(user_id="u", email="e@x.com", subscription_tier="free", settings=_settings())

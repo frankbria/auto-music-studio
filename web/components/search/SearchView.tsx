@@ -183,9 +183,12 @@ export function SearchView({
 
   const loadMore = (page: Results) => {
     if (page.loadingMore || !page.nextCursor) return
-    setResults({ ...page, loadingMore: true, loadMoreFailed: false })
+    const loading = { ...page, loadingMore: true, loadMoreFailed: false }
+    setResults(loading)
+    // The very results this request extends: a search switched away and back refetched page 1, and its
+    // cursor no longer lines up with this answer (#657).
     const sameSearch = (latest: Results | null): latest is Results =>
-      latest?.forKey === page.forKey
+      latest === loading
     searchClips(params, page.nextCursor, token()).then(
       (next) =>
         setResults((latest) =>

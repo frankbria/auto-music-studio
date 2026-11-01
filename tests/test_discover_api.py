@@ -227,6 +227,12 @@ class TestFiltersAndSorts:
         for blank in (None, "   ", "-"):  # no style, or one with no words, filters nothing
             assert await _ids(client, **({"style": blank} if blank is not None else {})) == everything
 
+    async def test_the_r_and_b_genre_finds_clips_tagged_r_and_b(self, client) -> None:
+        """#657: the R&B tile searches style "r&b"."""
+        tagged = await _clip(style_tags=["smooth r&b groove"])
+        await _clip(style_tags=["rock"], minutes=1)
+        assert await _ids(client, style="r&b") == [str(tagged.id)]
+
     async def test_a_style_ending_in_a_symbol_still_matches_as_a_whole_word(self, client) -> None:
         coded = await _clip(style_tags=["chiptune c++ demo"])
         await _clip(style_tags=["c++x"])

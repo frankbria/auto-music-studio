@@ -478,6 +478,55 @@ describe("ModerationDashboard", () => {
     ])
   })
 
+  it("unbans a user from the ban's activity log row (#581)", async () => {
+    const fetchMock = stubBackend({
+      queue: [],
+      log: [
+        logEntry({
+          id: "l1",
+          action: "ban",
+          target_type: "user",
+          target_id: "u9",
+          target_label: "Banned Bea",
+        }),
+        logEntry({
+          id: "l2",
+          action: "warn",
+          target_type: "user",
+          target_id: "u8",
+          target_label: "Warned Wes",
+        }),
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+    await screen.findByText("Nothing to review.")
+    await userEvent.click(screen.getByRole("tab", { name: "Activity log" }))
+
+    const warnRow = (await screen.findByText("Warned Wes")).closest("tr")!
+    expect(
+      within(warnRow).queryByRole("button", { name: "Unban" })
+    ).not.toBeInTheDocument()
+    const banRow = screen.getByText("Banned Bea").closest("tr")!
+    await userEvent.click(within(banRow).getByRole("button", { name: "Unban" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Unban 1 creator?")
+    await userEvent.type(
+      within(dialog).getByLabelText(/Reason/),
+      "appeal upheld"
+    )
+    await userEvent.click(within(dialog).getByRole("button", { name: "Unban" }))
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Unbanned 1 creator."
+    )
+    expect(actionCalls(fetchMock)).toEqual([
+      {
+        url: "/api/admin/moderation/users",
+        body: { action: "unban", user_ids: ["u9"], reason: "appeal upheld" },
+      },
+    ])
+  })
+
   it("names a failed restore by its song (#571)", async () => {
     stubBackend({
       queue: [],
@@ -505,6 +554,24 @@ describe("ModerationDashboard", () => {
     expect(
       await screen.findByText("Song V: This video is not taken down.")
     ).toBeInTheDocument()
+  })
+
+  it("names the outgoing text that raised an automated flag (#605)", async () => {
+    stubBackend({
+      queue: [
+        item({
+          clip_id: "c9",
+          title: "Released Song",
+          sources: ["automated"],
+          moderation_flags: ["self-harm"],
+          flag_sources: ["self-harm (release credits)"],
+        }),
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+
+    const row = (await screen.findByText("Released Song")).closest("tr")!
+    expect(row).toHaveTextContent("from self-harm (release credits)")
   })
 
   it("shows an empty state when nothing is waiting", async () => {
