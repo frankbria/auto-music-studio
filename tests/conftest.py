@@ -238,29 +238,67 @@ async def _mongo_available(url: str) -> bool:
         return False
 
 
+@pytest.fixture(scope="session")
+def _test_db_name():
+    """One database per session (#599): Beanie builds its collections and indexes once, not per test.
+
+    Dropped at session end; ``mongo_settings`` empties it between tests.
+    """
+    import uuid
+
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+
+    name = f"acemusic_test_{uuid.uuid4().hex[:8]}"
+    yield name
+    url = _mongo_test_url()
+    _assert_local(url)
+    client = MongoClient(url, serverSelectionTimeoutMS=2000)
+    try:
+        client.drop_database(name)
+    except PyMongoError:
+        pass
+    finally:
+        client.close()
+
+
 @pytest.fixture
-async def mongo_settings():
-    """ApiSettings pointed at an isolated local test database.
+async def mongo_settings(_test_db_name):
+    """ApiSettings pointed at the session's isolated local test database.
 
     ``_env_file=None`` ensures a real ``.env`` (which may hold an Atlas URL) is
     never read here, so tests cannot touch the production cluster.
+
+    Teardown deletes every document, so no test sees another's rows. It lives here rather
+    than in ``mongo_db`` because some tests reach the database only through the app's own
+    lifespan.
     """
-    import uuid
+    from pymongo import AsyncMongoClient
+    from pymongo.errors import ServerSelectionTimeoutError
 
     from acemusic.api.settings import ApiSettings
 
     url = _mongo_test_url()
     _assert_local(url)
-    db_name = f"acemusic_test_{uuid.uuid4().hex[:8]}"
-    return ApiSettings(_env_file=None, mongodb_url=url, mongodb_db_name=db_name)
+    yield ApiSettings(_env_file=None, mongodb_url=url, mongodb_db_name=_test_db_name)
+    client = AsyncMongoClient(url, serverSelectionTimeoutMS=2000)
+    try:
+        db = client[_test_db_name]
+        for collection in await db.list_collection_names():
+            if not collection.startswith("system."):
+                await db[collection].delete_many({})
+    except ServerSelectionTimeoutError:
+        pass  # no server, so nothing was written; any other failure must not leave rows for the next test
+    finally:
+        await client.close()
 
 
 @pytest.fixture
 async def mongo_db(mongo_settings):
     """Initialize the DB/Beanie against the isolated test database.
 
-    Yields the ``acemusic.api.database`` module. Drops the test database and
-    closes the client on teardown. Skips if no local MongoDB is reachable.
+    Yields the ``acemusic.api.database`` module and closes the client on teardown.
+    Skips if no local MongoDB is reachable.
     """
     from acemusic.api import database
 
@@ -271,11 +309,7 @@ async def mongo_db(mongo_settings):
     try:
         yield database
     finally:
-        # Always close the client, even if dropping the test DB fails.
-        try:
-            await client.drop_database(mongo_settings.mongodb_db_name)
-        finally:
-            await database.close_db(client)
+        await database.close_db(client)
 
 
 # ---------------------------------------------------------------------------

@@ -97,6 +97,11 @@ jobs:
       - name: Test with coverage (unit)
         run: uv run pytest --cov
 
+      - name: Quiet mongod's log
+        # A service container takes no command-line flags, so this is set at runtime (#599).
+        run: |
+          uv run python -c "from pymongo import MongoClient; MongoClient('mongodb://localhost:27017').admin.command({'setParameter': 1, 'quiet': True})"
+
       - name: Integration tests (MongoDB)
         # Runs against the mongo service above. ACE-Step integration tests skip
         # gracefully when their server is absent (see tests/conftest.py).
