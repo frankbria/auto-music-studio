@@ -749,6 +749,65 @@ class TestHeartbeat:
         assert refreshed.status == JobStatus.QUEUED
         assert refreshed.started_at is None and refreshed.heartbeat_at is None
 
+    def _sweeping_processor(self, tmp_path) -> JobProcessor:
+        # concurrency=0: the worker never claims, so a re-queued job stays visible as queued.
+        return JobProcessor(
+            concurrency=0,
+            poll_interval=0.01,
+            stale_after=60.0,
+            sweep_interval=0.05,
+            client_factory=lambda: _FakeAceClient(),
+            storage_factory=lambda: LocalStorage(root_dir=tmp_path),
+        )
+
+    async def test_a_job_orphaned_while_running_is_requeued_without_a_restart(self, mongo_db, tmp_path) -> None:
+        proc = self._sweeping_processor(tmp_path)
+        await proc.start()
+        try:
+            # Orphaned after start, so only a periodic sweep can find it (#502).
+            job = await self._video_job(started_ago_s=7200, heartbeat_ago_s=120)
+
+            async def requeued_yet() -> bool:
+                return (await Job.get(job.id)).status == JobStatus.QUEUED
+
+            requeued = await _wait_until(requeued_yet, timeout=2.0)
+        finally:
+            await proc.stop()
+        assert requeued, "the periodic sweep never re-queued the orphaned job"
+
+    async def test_a_failed_sweep_does_not_stop_the_next_one(self, mongo_db, tmp_path, monkeypatch) -> None:
+        proc = self._sweeping_processor(tmp_path)
+        await proc.start()
+        real_sweep, failures = proc._requeue_stale_jobs, []
+
+        async def flaky_sweep() -> None:
+            if not failures:
+                failures.append(True)
+                raise RuntimeError("Mongo went away")
+            await real_sweep()
+
+        monkeypatch.setattr(proc, "_requeue_stale_jobs", flaky_sweep)
+        try:
+            job = await self._video_job(started_ago_s=7200, heartbeat_ago_s=120)
+
+            async def requeued_yet() -> bool:
+                return (await Job.get(job.id)).status == JobStatus.QUEUED
+
+            requeued = await _wait_until(requeued_yet, timeout=2.0)
+        finally:
+            await proc.stop()
+        assert failures and requeued
+
+    async def test_a_job_with_a_live_heartbeat_survives_periodic_sweeps(self, mongo_db, tmp_path) -> None:
+        proc = self._sweeping_processor(tmp_path)
+        await proc.start()
+        try:
+            job = await self._video_job(started_ago_s=7200, heartbeat_ago_s=1)
+            await asyncio.sleep(0.3)  # several sweep intervals
+        finally:
+            await proc.stop()
+        assert (await Job.get(job.id)).status == JobStatus.PROCESSING
+
     async def test_heartbeat_advances_while_handler_runs(self, mongo_db, tmp_path) -> None:
         release = asyncio.Event()
 
