@@ -194,6 +194,13 @@ def _is_superseded(subject: Clip | Video | None, appeal: ClipAppeal, in_force_id
     return subject is not None and in_force_id != appeal.action_id
 
 
+async def _appealed_videos(appeals: list[ClipAppeal]) -> tuple[dict[PydanticObjectId, Video], set[str]]:
+    """The page's appealed videos still around, and the unpublish entries in force on them."""
+    ids = [a.video_id for a in appeals if a.video_id]
+    videos = {v.id: v for v in await Video.find(In(Video.id, ids)).to_list()}
+    return videos, await moderation.unpublishes_in_force(list(videos))
+
+
 def _queue_superseded(
     appeal: ClipAppeal,
     clip: Clip | None,
@@ -270,8 +277,7 @@ async def list_queue(which: QueueFilter, limit: int, cursor: str | None) -> tupl
         for e in await ModerationLogEntry.find(In(ModerationLogEntry.id, [a.action_id for a in appeals])).to_list()
     }
     in_force = await _in_force_actions(list(clips.values()))
-    videos = {v.id: v for v in await Video.find(In(Video.id, [a.video_id for a in appeals if a.video_id])).to_list()}
-    videos_in_force = await moderation.unpublishes_in_force(list(videos))
+    videos, videos_in_force = await _appealed_videos(appeals)
     items = []
     for appeal in appeals:
         clip, creator, action = clips.get(appeal.clip_id), users.get(appeal.user_id), actions.get(appeal.action_id)
