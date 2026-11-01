@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 
+import { useLatestNoticeId } from "@/contexts/notifications-context"
 import { useAuth } from "@/hooks/use-auth"
 import {
   buildClipQuery,
@@ -34,6 +35,8 @@ export function useClips(
   // The query a fetch error belongs to; a later query change makes it stale so
   // the skeleton shows again on the next attempt (instead of being suppressed).
   const [errorQuery, setErrorQuery] = useState<string | null>(null)
+  // A moderation notice (a flag, removal or appeal outcome) changes a clip's state, so the list refetches (#589).
+  const latestModerationNotice = useLatestNoticeId("moderation")
 
   // `refreshKey` forces a refetch without changing the query — bumped by the
   // Create page when a generation completes so new clips appear (US-16.7).
@@ -59,7 +62,14 @@ export function useClips(
     return () => {
       active = false
     }
-  }, [query, enabled, accessToken, authLoading, refreshKey])
+  }, [
+    query,
+    enabled,
+    accessToken,
+    authLoading,
+    refreshKey,
+    latestModerationNotice,
+  ])
 
   const error = errorQuery === query
   // Deferred (not yet enabled), first load (no data), and changed-query states
