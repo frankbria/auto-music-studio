@@ -944,6 +944,29 @@ class TestUnban:
         stored = await Clip.get(clip.id)
         assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
 
+    async def test_a_newer_ban_landing_mid_sweep_keeps_the_clips_down_until_its_unban(
+        self, client, settings, monkeypatch
+    ):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        real_revoke = moderation.revoke_all_user_tokens
+        newer = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+        async def revoke_then_rebanned(user_id):
+            await real_revoke(user_id)
+            # An unban, then a newer ban, both land before this ban's sweep runs.
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": newer}})
+
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", revoke_then_rebanned)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState.PRIVATE
+        assert stored.removed_at.replace(tzinfo=timezone.utc) == newer
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", real_revoke)
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
+
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
         stale = await User.get(user.id)

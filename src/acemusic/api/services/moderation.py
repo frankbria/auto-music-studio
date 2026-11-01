@@ -497,11 +497,22 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
         {"$set": {"published": False, "removed_at": stamp}}
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
-    if (await User.get(user.id)).banned_at != stamp:
-        # An unban landed mid-sweep and restored nothing yet to restore: put back what this sweep took down.
-        await clip_service.restore_ban_sweep(user.id, stamp)
-        await Video.find({"user_id": user.id, "removed_at": stamp}).update({"$set": {"removed_at": None}})
+    if (current := (await User.get(user.id)).banned_at) != stamp:
+        await _hand_over_sweep(user.id, stamp, current)
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
+
+
+async def _hand_over_sweep(user_id: PydanticObjectId, swept_with: datetime, in_force: datetime | None) -> None:
+    """The ban that swept with ``swept_with`` was lifted mid-sweep (#581). Unbanned: put back what it took down,
+    which the unban, running first, found nothing of. Banned again: restamp it with the ban now in force, whose
+    unban then restores it."""
+    if in_force is None:
+        await clip_service.restore_ban_sweep(user_id, swept_with)
+        await Video.find({"user_id": user_id, "removed_at": swept_with}).update({"$set": {"removed_at": None}})
+        return
+    swept = {"user_id": user_id, "removed_at": swept_with}
+    await Clip.find({**swept, "visibility_before_ban": {"$ne": None}}).update({"$set": {"removed_at": in_force}})
+    await Video.find(swept).update({"$set": {"removed_at": in_force}})
 
 
 async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
