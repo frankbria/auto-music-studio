@@ -69,15 +69,22 @@ def _event(event_type: str, obj: dict, event_id: str = "evt_test_1", created: in
     ).encode()
 
 
-def _subscription(status: str = "active", **overrides) -> dict:
+def _subscription(status: str = "active", current_period_end: int | None = 1_800_000_000, **overrides) -> dict:
+    """A subscription as webhooks render it since Stripe API 2025-03-31.basil: the period lives on its items."""
     return {
         "id": "sub_test_1",
+        "object": "subscription",
         "customer": CUSTOMER,
         "status": status,
         "cancel_at_period_end": False,
-        "current_period_end": 1_800_000_000,
+        "items": {"object": "list", "data": [{"id": "si_1", "current_period_end": current_period_end}]},
         **overrides,
     }
+
+
+def _billed_to(subscription_id: str) -> dict:
+    """Where an invoice names its subscription since Stripe API 2025-03-31.basil (no top-level ``subscription``)."""
+    return {"parent": {"type": "subscription_details", "subscription_details": {"subscription": subscription_id}}}
 
 
 class TestWebhookAuthentication:
@@ -275,7 +282,7 @@ class TestFailedPayment:
             "invoice.payment_failed",
             {
                 "customer": CUSTOMER,
-                "subscription": "sub_test_1",
+                **_billed_to("sub_test_1"),
                 "amount_due": 1000,
                 "currency": "usd",
                 "status": "open",
@@ -293,7 +300,7 @@ class TestFailedPayment:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1000, "currency": "usd"},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_due": 1000, "currency": "usd"},
             event_id="evt_failed_2",
         )
         # Retries exhausted: Stripe moves the subscription itself to unpaid.
@@ -308,7 +315,7 @@ class TestFailedPayment:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1")},
             event_id="evt_f3",
         )
         await _post_event(
@@ -316,7 +323,7 @@ class TestFailedPayment:
             "invoice.paid",
             {
                 "customer": CUSTOMER,
-                "subscription": "sub_test_1",
+                **_billed_to("sub_test_1"),
                 "amount_paid": 1000,
                 "currency": "usd",
                 "status": "paid",
@@ -675,7 +682,7 @@ class TestSupersededSubscriptionInvoices:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_old", "amount_due": 1200, "currency": "usd"},
+            {"customer": CUSTOMER, **_billed_to("sub_old"), "amount_due": 1200, "currency": "usd"},
             event_id="evt_super_fail",
         )
 
@@ -690,7 +697,7 @@ class TestSupersededSubscriptionInvoices:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_new", "amount_due": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_new"), "amount_due": 1200},
             event_id="evt_super_real_fail",
         )
         assert (await User.get(user.id)).subscription_status == "past_due"
@@ -698,7 +705,7 @@ class TestSupersededSubscriptionInvoices:
         await _post_event(
             client,
             "invoice.paid",
-            {"customer": CUSTOMER, "subscription": "sub_old", "amount_paid": 1200, "currency": "usd"},
+            {"customer": CUSTOMER, **_billed_to("sub_old"), "amount_paid": 1200, "currency": "usd"},
             event_id="evt_super_stale_paid",
         )
 
@@ -720,7 +727,7 @@ class TestSupersededSubscriptionInvoices:
         await _post_event(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_due": 1200},
             event_id="evt_topup_fail",
         )
         assert (await User.get(user.id)).subscription_status == "past_due"
@@ -873,7 +880,7 @@ class TestInvoiceOrdering:
         await _post_event_at(
             client,
             "invoice.paid",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200, "currency": "usd"},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_paid": 1200, "currency": "usd"},
             "evt_invord_paid",
             now,
         )
@@ -881,7 +888,7 @@ class TestInvoiceOrdering:
         await _post_event_at(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_due": 1200},
             "evt_invord_failed",
             now - 300,
         )
@@ -896,14 +903,14 @@ class TestInvoiceOrdering:
         await _post_event_at(
             client,
             "invoice.paid",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_paid": 1200},
             "evt_invord2_paid",
             now - 300,
         )
         await _post_event_at(
             client,
             "invoice.payment_failed",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_due": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_due": 1200},
             "evt_invord2_failed",
             now,
         )
@@ -918,7 +925,7 @@ class TestInvoiceOrdering:
         await _post_event_at(
             client,
             "invoice.paid",
-            {"customer": CUSTOMER, "subscription": "sub_test_1", "amount_paid": 1200},
+            {"customer": CUSTOMER, **_billed_to("sub_test_1"), "amount_paid": 1200},
             "evt_invord3_paid",
             now,
         )

@@ -16,13 +16,14 @@ import pytest
 from acemusic.api.services import billing, tiers
 
 
-def _subscription(status: str, **overrides) -> dict:
-    """A Stripe subscription object, trimmed to the fields the mapping reads."""
+def _subscription(status: str, current_period_end: int | None = 1_800_000_000, **overrides) -> dict:
+    """A Stripe subscription object as webhooks render it since API 2025-03-31.basil, trimmed to the fields the
+    mapping reads: the period lives on the items, not the subscription."""
     return {
         "id": "sub_123",
         "status": status,
         "cancel_at_period_end": False,
-        "current_period_end": 1_800_000_000,
+        "items": {"object": "list", "data": [{"id": "si_1", "current_period_end": current_period_end}]},
         **overrides,
     }
 
@@ -81,6 +82,18 @@ class TestSubscriptionFields:
         # Not every subscription payload carries one (an incomplete checkout, say).
         # A KeyError here would 500 the webhook and make Stripe redeliver forever.
         fields = billing.subscription_fields(_subscription("incomplete", current_period_end=None))
+        assert fields["subscription_current_period_end"] is None
+
+    def test_items_ending_apart_take_the_latest_period_end(self) -> None:
+        items = {
+            "object": "list",
+            "data": [{"current_period_end": 1_900_000_000}, {"current_period_end": 1_800_000_000}],
+        }
+        fields = billing.subscription_fields(_subscription("active", items=items))
+        assert fields["subscription_current_period_end"].timestamp() == 1_900_000_000
+
+    def test_a_subscription_with_no_items_has_no_period_end(self) -> None:
+        fields = billing.subscription_fields(_subscription("active", items={"object": "list", "data": []}))
         assert fields["subscription_current_period_end"] is None
 
     def test_a_deleted_subscription_downgrades(self) -> None:
