@@ -122,9 +122,22 @@ def subscription_fields(subscription: dict[str, Any]) -> dict[str, Any]:
         "stripe_subscription_id": subscription.get("id"),
         "subscription_status": status,
         "subscription_tier": tier_for_status(status),
-        "subscription_current_period_end": _timestamp(subscription.get("current_period_end")),
+        "subscription_current_period_end": _timestamp(_current_period_end(subscription)),
         "subscription_cancel_at_period_end": bool(subscription.get("cancel_at_period_end")),
     }
+
+
+def _current_period_end(subscription: dict[str, Any]) -> int | None:
+    """Since Stripe API 2025-03-31.basil the period lives on the subscription's items (#646); a single-price
+    subscription has one item, so its period is the subscription's."""
+    items = (subscription.get("items") or {}).get("data") or []
+    return items[0].get("current_period_end") if items else None
+
+
+def invoice_subscription_id(invoice: dict[str, Any]) -> str | None:
+    """Since Stripe API 2025-03-31.basil an invoice names its subscription under ``parent`` (#646)."""
+    details = (invoice.get("parent") or {}).get("subscription_details") or {}
+    return details.get("subscription")
 
 
 def _client(settings: ApiSettings) -> stripe.StripeClient:
@@ -645,7 +658,7 @@ async def _handle_invoice(
             return "duplicate"
         return "stale"
 
-    invoice_subscription = invoice.get("subscription")
+    invoice_subscription = invoice_subscription_id(invoice)
 
     # A one-off charge says nothing about the subscription. Credit top-ups (US-26.4, the
     # next issue) are exactly this, and without the guard a paid top-up would clear a
