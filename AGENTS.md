@@ -416,6 +416,7 @@ Package manager: `uv` with `hatchling` build backend
   filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
   uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
   `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them
-  (no play, like or share counters, no staff-pick flag). Profiles and Playlists still read the mock pool in
-  `web/lib/mock-clips.ts`
+  (no play, like or share counters, no staff-pick flag). Profiles read `GET /api/v1/discover/profiles/{handle}`
+  (the owner's public clips through `public_clip_filter`, #654), and the playlist add-songs picker searches
+  `/api/discover/clips`; the mock clip pool is gone
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)
