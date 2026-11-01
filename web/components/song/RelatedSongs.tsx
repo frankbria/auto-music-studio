@@ -1,8 +1,12 @@
 "use client"
 
+import { useState } from "react"
+
+import { FullSongWizardModal } from "@/components/song/full-song/FullSongWizardModal"
 import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { ClipCard } from "@/components/workspace/ClipCard"
 import { useSimilarClips } from "@/hooks/use-similar-clips"
+import type { Clip } from "@/lib/workspace-clips"
 
 // Song-detail "Related songs" panel (US-17.1). Pulls similar clips from the
 // /similar endpoint and renders them with the shared ClipCard. Loading shows
@@ -21,6 +25,7 @@ export function RelatedSongs({
   isFreeTier?: boolean
 }) {
   const { clips, loading } = useSimilarClips(clipId)
+  const [fullSongClip, setFullSongClip] = useState<Clip | null>(null)
 
   if (loading) {
     return (
@@ -45,6 +50,7 @@ export function RelatedSongs({
                 clip={clip}
                 isFreeTier={isFreeTier}
                 isOwner={clip.is_owner === true}
+                onGetFullSong={() => setFullSongClip(clip)}
               />
             </div>
             {/* Fixed gutter keeps cards the same width whether or not Report shows. */}
@@ -57,6 +63,13 @@ export function RelatedSongs({
           </li>
         ))}
       </ul>
+      {fullSongClip && (
+        <FullSongWizardModal
+          clip={fullSongClip}
+          open
+          onClose={() => setFullSongClip(null)}
+        />
+      )}
     </section>
   )
 }
