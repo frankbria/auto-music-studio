@@ -234,6 +234,14 @@ class TestMatch:
         # The trade-off, pinned: an all-digit spelling ("1337" for "leet") is let through with "70".
         assert screening.match(rules, ["840"]).flags == []
 
+    def test_an_allow_term_with_letters_never_erases_bare_digits(self):
+        """#614: allow terms follow the rule terms' letter rule, so "to" can't erase "70" and hide a hit on it."""
+        rules = screening.ScreeningRules(
+            rules=[screening.Rule(term="70", category="x", action="block")], allow_terms=["to"], fold_leetspeak=True
+        )
+        assert screening.match(rules, ["chant 70"]).blocked is True
+        assert screening.match(rules, ["chant t0 there"]).blocked is False
+
     def test_a_digit_term_still_matches_digits_under_leet(self):
         rules = screening.ScreeningRules(
             rules=[screening.Rule(term="1488", category="hate speech", action="block")], fold_leetspeak=True
@@ -704,6 +712,25 @@ class TestAdminRules:
         stored = (await client.get(RULES_URL, headers=_auth(admin, settings))).json()
         assert stored["allow_terms"] == ["suicide squad"]
         assert stored["fold_leetspeak"] is True
+
+    async def test_the_audit_before_is_what_the_write_replaced(self, client, settings, monkeypatch):
+        """#614: a save landing between the PATCH's read and its write is the real 'before', so the log shows it."""
+        admin = await make_user("screen-admin-audit-before@example.com", is_admin=True)
+        other = screening.DEFAULT_RULES.model_copy(update={"allow_terms": ["suicide squad"]})
+        real_get_rules = screening.get_rules
+
+        async def read_then_race():
+            before = await real_get_rules()
+            await screening.save_rules(other)
+            return before
+
+        monkeypatch.setattr(screening, "get_rules", read_then_race)
+        await client.patch(RULES_URL, json={"fold_leetspeak": True}, headers=_auth(admin, settings))
+
+        entry = await ModerationLogEntry.find_one(ModerationLogEntry.action == "update_screening_rules")
+        assert entry.details["before"]["allow_terms"] == ["suicide squad"]
+        assert entry.details["before"]["fold_leetspeak"] is False
+        assert entry.details["after"]["fold_leetspeak"] is True
 
     async def test_an_empty_patch_changes_nothing(self, client, settings):
         admin = await make_user("screen-admin-patch-empty@example.com", is_admin=True)

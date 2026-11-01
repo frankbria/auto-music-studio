@@ -38,9 +38,7 @@ async def get_screening_rules() -> ScreeningRules:
     return await screening.get_rules()
 
 
-async def _save_rules(
-    rules: ScreeningRules, before: ScreeningRules, current: CurrentUser, fields: set[str] | None = None
-) -> ScreeningRules:
+async def _save_rules(rules: ScreeningRules, current: CurrentUser, fields: set[str] | None = None) -> ScreeningRules:
     # Checked here, not in the model, so a term stored before this check can never fail every read (#561).
     # Only the fields being written: a stored term a PATCH leaves alone must not block it.
     sent = ScreeningRules.model_fields.keys() if fields is None else fields
@@ -51,14 +49,14 @@ async def _save_rules(
                 status_code=422,
                 detail=f"The term {term!r} contains an invisible character, which would join the words around it.",
             )
-    saved = await screening.save_rules(rules, fields)
+    before, saved = await screening.swap_rules(rules, fields)
     await moderation.log_screening_rules_update(current.user_id, before.model_dump(), saved.model_dump())
     return saved
 
 
 @router.put("/screening-rules", response_model=ScreeningRules)
 async def put_screening_rules(rules: ScreeningRules, current: CurrentUser = Depends(require_admin)) -> ScreeningRules:
-    return await _save_rules(rules, await screening.get_rules(), current)
+    return await _save_rules(rules, current)
 
 
 @router.patch("/screening-rules", response_model=ScreeningRules)
@@ -76,7 +74,7 @@ async def patch_screening_rules(
     except ValidationError as exc:
         errors = exc.errors(include_context=False)
         raise RequestValidationError([{**e, "loc": ("body", *e["loc"])} for e in errors]) from exc
-    return await _save_rules(rules, before, current, set(changes))
+    return await _save_rules(rules, current, set(changes))
 
 
 class ReportEntry(BaseModel):
