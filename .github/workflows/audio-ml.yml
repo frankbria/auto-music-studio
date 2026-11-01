@@ -1,0 +1,73 @@
+name: Audio ML
+
+# The audio-ml extra (demucs, torch, torchaudio) is not installed by CI or the production
+# image, so the stems client skipped in every run and dependency bumps that only reach the
+# project through torch went untested (#640). Path-filtered: a torch install is too heavy
+# to pay on every PR, and lockfile bumps are exactly the PRs that need it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/acemusic/stems_client.py"
+      - "tests/test_stems_client.py"
+      - ".github/workflows/audio-ml.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/acemusic/stems_client.py"
+      - "tests/test_stems_client.py"
+      - ".github/workflows/audio-ml.yml"
+  workflow_dispatch:
+
+# Same scheme as ci.yml (#481): PR runs supersede each other, main runs never do.
+concurrency:
+  group: audio-ml-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Read-only: nothing pushes, comments, tags, or publishes (#425).
+permissions:
+  contents: read
+
+jobs:
+  stems:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # The locked versions, with torch from the CPU wheel index. The lock lists the CUDA
+      # wheels (nvidia-*, cuda-*, triton) explicitly, so they are filtered out rather than pulled:
+      # ~3 GB the CPU build never loads. The CPU index's 2.x.y+cpu satisfies the lock's ==2.x.y.
+      - name: Install the audio-ml extra (CPU torch)
+        run: |
+          uv export --frozen --extra dev --extra audio-ml --no-hashes --no-emit-project \
+            | grep -vE '^(nvidia-|triton|cuda-)' > requirements-cpu.txt
+          uv venv --python 3.12
+          uv pip install -r requirements-cpu.txt \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple \
+            --index-strategy unsafe-best-match
+          uv pip install --no-deps -e .
+
+      - name: Smoke import
+        run: |
+          .venv/bin/python -c "import torch, torch.utils._filelock, torch.utils.cpp_extension, demucs; print(torch.__version__); assert torch.__version__.endswith('+cpu'), torch.__version__"
+
+      - name: Stems client tests
+        run: .venv/bin/python -m pytest tests/test_stems_client.py --no-cov -rs
