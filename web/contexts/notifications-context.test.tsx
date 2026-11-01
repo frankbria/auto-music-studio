@@ -12,6 +12,8 @@ import {
   stubNotificationsApi,
 } from "@/test/notifications-api"
 import { SIGNED_IN, SignedIn, type AuthValue } from "@/test/signed-in"
+import { useMyAppeals } from "@/hooks/use-my-appeals"
+import type { NotificationEventView } from "@/lib/notifications"
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -231,5 +233,173 @@ describe("useNotify", () => {
     expect(() =>
       result.current({ type: "system", message: "x", href: "/" })
     ).not.toThrow()
+  })
+})
+
+/** An inbox whose first page can change between requests, as the server's would. */
+function liveInbox(
+  first: NotificationEventView[],
+  older: NotificationEventView[] = []
+) {
+  const inbox = { first, older, unread: first.filter((e) => !e.read).length }
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost")
+      if (init?.method === "POST")
+        return new Response(JSON.stringify({ updated: 0 }))
+      if (url.pathname.startsWith("/api/users/me/appeals")) {
+        return new Response(JSON.stringify({ appeals: [], next_cursor: null }))
+      }
+      const offset = Number(url.searchParams.get("offset") ?? 0)
+      const page = offset === 0 ? inbox.first : inbox.older
+      return new Response(
+        JSON.stringify({
+          notifications: page,
+          unread_count: inbox.unread,
+          has_more: offset === 0 && inbox.older.length > 0,
+        })
+      )
+    }
+  )
+  vi.stubGlobal("fetch", fetchMock)
+  return { inbox, fetchMock }
+}
+
+describe("NotificationsProvider live inbox (#566)", () => {
+  it("a notice inserted after the first load appears and bumps the badge when the tab regains focus", async () => {
+    const { inbox } = liveInbox([notificationEvent("a")])
+    const { result } = renderStore()
+    await waitFor(() => expect(result.current.unreadCount).toBe(1))
+
+    inbox.first = [notificationEvent("new"), notificationEvent("a")]
+    inbox.unread = 2
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    await waitFor(() => expect(result.current.unreadCount).toBe(2))
+    expect(result.current.notifications.map((n) => n.id)).toEqual(["new", "a"])
+  })
+
+  it("a refresh keeps older pages and live notices already in the store", async () => {
+    const { inbox } = liveInbox(
+      [notificationEvent("a"), notificationEvent("b")],
+      [notificationEvent("c")]
+    )
+    const { result } = renderStore()
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+    act(() => result.current.loadMore())
+    await waitFor(() => expect(result.current.notifications).toHaveLength(3))
+    act(() =>
+      result.current.notify({
+        type: "mastering_complete",
+        message: "m",
+        href: "/",
+      })
+    )
+
+    inbox.first = [notificationEvent("new"), notificationEvent("a")]
+    inbox.unread = 4
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    await waitFor(() => expect(result.current.notifications).toHaveLength(5))
+    expect(result.current.notifications.map((n) => n.id)).toEqual([
+      "new",
+      "n-live-1",
+      "a",
+      "b",
+      "c",
+    ])
+    expect(result.current.unreadCount).toBe(5) // four on the server, plus the live one
+  })
+
+  it("polls on an interval while signed in", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { inbox, fetchMock } = liveInbox([notificationEvent("a")])
+      const { result } = renderStore()
+      await waitFor(() => expect(result.current.unreadCount).toBe(1))
+      const before = fetchMock.mock.calls.length
+
+      inbox.first = [notificationEvent("new"), notificationEvent("a")]
+      inbox.unread = 2
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(before)
+      await waitFor(() => expect(result.current.unreadCount).toBe(2))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an appeal outcome arriving mid-session refetches the Library's appeal status (#543)", async () => {
+    const { inbox, fetchMock } = liveInbox([notificationEvent("a")])
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SignedIn>
+        <NotificationsProvider>{children}</NotificationsProvider>
+      </SignedIn>
+    )
+    const { result } = renderHook(
+      () => ({ appeals: useMyAppeals("tok"), inbox: useNotifications() }),
+      { wrapper }
+    )
+    const appealFetches = () =>
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/users/me/appeals")
+      ).length
+    await waitFor(() => expect(result.current.inbox.unreadCount).toBe(1))
+    const before = appealFetches()
+
+    inbox.first = [
+      notificationEvent("outcome", {
+        event_type: "moderation_appeal_reversed",
+      }),
+      notificationEvent("a"),
+    ]
+    inbox.unread = 2
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    await waitFor(() => expect(appealFetches()).toBe(before + 1))
+  })
+
+  it("a poll that left before Mark all read doesn't restore the old badge", async () => {
+    const { inbox, fetchMock } = liveInbox([
+      notificationEvent("a"),
+      notificationEvent("b"),
+    ])
+    const { result } = renderStore()
+    await waitFor(() => expect(result.current.unreadCount).toBe(2))
+
+    let answer: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (answer = resolve))
+    )
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    act(() => result.current.markAllRead())
+    await act(async () => {
+      answer(
+        new Response(
+          JSON.stringify({
+            notifications: [notificationEvent("arrived"), ...inbox.first],
+            unread_count: 3,
+            has_more: false,
+          })
+        )
+      )
+    })
+
+    expect(result.current.unreadCount).toBe(0)
+    // Mark all read on the server covered the notice this poll brought in, too.
+    expect(
+      result.current.notifications.find((n) => n.id === "arrived")?.read
+    ).toBe(true)
   })
 })
