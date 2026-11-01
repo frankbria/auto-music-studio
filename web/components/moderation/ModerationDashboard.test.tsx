@@ -507,6 +507,24 @@ describe("ModerationDashboard", () => {
     ).toBeInTheDocument()
   })
 
+  it("names the outgoing text that raised an automated flag (#605)", async () => {
+    stubBackend({
+      queue: [
+        item({
+          clip_id: "c9",
+          title: "Released Song",
+          sources: ["automated"],
+          moderation_flags: ["self-harm"],
+          flag_sources: ["self-harm (release credits)"],
+        }),
+      ],
+    })
+    render(<ModerationDashboard accessToken="tok" />)
+
+    const row = (await screen.findByText("Released Song")).closest("tr")!
+    expect(row).toHaveTextContent("from self-harm (release credits)")
+  })
+
   it("shows an empty state when nothing is waiting", async () => {
     stubBackend({ queue: [] })
     render(<ModerationDashboard accessToken="tok" />)

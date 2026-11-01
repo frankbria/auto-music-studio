@@ -38,8 +38,9 @@ _MAX_MINT_ATTEMPTS = 5
 _TEXT_FIELDS = ("title", "artist", "genre", "album_name", "description", "copyright", "language", "credits")
 
 
-def release_texts(fields: dict) -> list[str | None]:
-    return [fields.get(field) for field in _TEXT_FIELDS]
+def release_texts(fields: dict) -> dict[str, str | None]:
+    """A release's free text, labelled for the moderation queue (#605)."""
+    return {f"release {field.replace('_', ' ')}": fields.get(field) for field in _TEXT_FIELDS}
 
 
 def _duplicate_field(exc: DuplicateKeyError) -> str:
@@ -236,7 +237,7 @@ async def ensure_distributable(release: Release) -> None:
     clip = await clip_service.find_owned_clip(str(release.clip_id), str(release.user_id))
     if clip is not None:
         clip_service.ensure_not_removed(clip)
-    texts = release_texts(release.model_dump()) + (screening.clip_texts(clip) if clip is not None else [])
+    texts = release_texts(release.model_dump()) | (clip_service.labelled_clip_texts(clip) if clip is not None else {})
     await clip_service.screen_outgoing(clip, texts)
 
 

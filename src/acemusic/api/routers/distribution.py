@@ -31,7 +31,6 @@ from ..services import (
     clips as clip_service,
     distribution_status as status_service,
     releases as release_service,
-    screening,
     soundcloud as sc,
 )
 from ..services.tiers import Capability
@@ -258,7 +257,9 @@ async def soundcloud_upload(
     # Everything SoundCloud will receive, and the clip's own text, is screened before anything leaves (#555).
     metadata = _merge_metadata(clip, body.metadata_overrides)
     await clip_service.screen_outgoing(
-        clip, [*screening.clip_texts(clip), *(value for value in metadata.values() if isinstance(value, str))]
+        clip,
+        clip_service.labelled_clip_texts(clip)
+        | {f"SoundCloud {key}": value for key, value in metadata.items() if isinstance(value, str)},
     )
 
     # Validate the SoundCloud link first so the common "not connected" / revoked
