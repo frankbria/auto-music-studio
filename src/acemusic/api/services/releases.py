@@ -296,6 +296,8 @@ async def unshare_if_source_removed(clip_id: PydanticObjectId, user_id: Pydantic
     oid = PydanticObjectId(str(clip_id))
     if banned:
         await clip_service.take_down_visible({"_id": oid}, owner.banned_at)
+        # An unban, or a newer ban, can land between the read above and this sweep (#581).
+        await clip_service.hand_over_ban_sweep(owner.id, owner.banned_at)
     await unshare_releases({"clip_id": oid}, {"_id": oid})
     if banned:
         user_service.reject_banned(owner)

@@ -294,6 +294,22 @@ async def take_down_visible(query: dict, banned_at: datetime) -> int:
     return result.modified_count
 
 
+async def hand_over_ban_sweep(user_id: PydanticObjectId, swept_with: datetime) -> datetime | None:
+    """Settle clips a ban's sweep took down after the ban stopped being the one in force (#581); returns the
+    stamp now in force. Unbanned: put them back, which the unban, running first, found nothing of. Banned
+    again: restamp them with that ban, whose unban then restores them."""
+    in_force = (await User.get(user_id)).banned_at
+    if in_force == swept_with:
+        return in_force
+    if in_force is None:
+        await restore_ban_sweep(user_id, swept_with)
+    else:
+        await Clip.find({"user_id": user_id, "removed_at": swept_with, "visibility_before_ban": {"$ne": None}}).update(
+            {"$set": {"removed_at": in_force}}
+        )
+    return in_force
+
+
 async def restore_ban_sweep(user_id: PydanticObjectId, banned_at: datetime) -> int:
     """Put back what the ban stamped ``banned_at`` took down; returns how many. A removal since restamped is kept."""
     result = await Clip.get_pymongo_collection().update_many(

@@ -15,6 +15,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth import services as auth_services
 from acemusic.api.auth.tokens import create_access_token, create_refresh_token
+from acemusic.api.exceptions import AccountSuspendedError
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import (
     Clip,
@@ -966,6 +967,24 @@ class TestUnban:
         monkeypatch.setattr(moderation, "revoke_all_user_tokens", real_revoke)
         await _act_on_users(client, admin, settings, "unban", [user.id])
         assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
+
+    async def test_an_upload_sweep_racing_an_unban_leaves_the_clip_up(self, client, settings, monkeypatch):
+        """The upload path's own sweep (releases.unshare_if_source_removed) settles the same race as _ban."""
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        clip = await _clip(user)
+        real_take_down = moderation.clip_service.take_down_visible
+
+        async def take_down_then_unbanned(query, banned_at):
+            swept = await real_take_down(query, banned_at)
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+            return swept
+
+        monkeypatch.setattr(moderation.clip_service, "take_down_visible", take_down_then_unbanned)
+        with pytest.raises(AccountSuspendedError):  # the owner read as banned, so the upload is still refused
+            await release_service.unshare_if_source_removed(clip.id, user.id)
+
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
 
     async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
         user = await _user(banned_at=datetime.now(timezone.utc))
