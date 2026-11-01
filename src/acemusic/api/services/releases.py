@@ -349,8 +349,8 @@ async def _blocked_text(clip: Clip, previous: dict[str, str]) -> str | None:
     releases = await Release.find({"_id": {"$in": [PydanticObjectId(rid) for rid in previous]}}).to_list()
     texts = clip_service.labelled_clip_texts(clip)
     for release in releases:
-        # Each release under its own labels, so two releases' credits don't overwrite one another.
-        texts |= {f'{label} "{release.title}"': text for label, text in release_texts(release.model_dump()).items()}
+        # Each release under its own labels (by id: titles can repeat), so one release's text can't hide another's.
+        texts |= {f"{label} ({release.id})": text for label, text in release_texts(release.model_dump()).items()}
     try:
         await clip_service.screen_outgoing(clip, texts)
     except screening.ContentBlockedError:
