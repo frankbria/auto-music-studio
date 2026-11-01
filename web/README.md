@@ -71,8 +71,8 @@ A persistent bottom player that keeps playing across client-side navigation.
 - `hooks/use-player-shortcuts.ts` — space / arrows / `m`, ignored while typing.
 - `components/player/` — `Playbar` and its controls (transport, scrubber,
   volume, mini-waveform, song info, queue panel, mode toggles, like).
-- `lib/clips.ts` builds the backend media URLs; `lib/demo-tracks.ts` +
-  `public/demo/sample.wav` seed a demo queue until a clip-browsing UI exists.
+- `lib/clips.ts` builds the backend media URLs. The queue starts empty; clip
+  cards and the song page load tracks into it.
 
 ## Song Detail Page (US-17.1)
 

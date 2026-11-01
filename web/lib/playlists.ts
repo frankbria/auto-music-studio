@@ -1,17 +1,15 @@
 // Playlist data seam (US-20.3).
 //
-// Playlists have no backend yet (the coding plan's Beanie API is a later stage):
-// the UI runs on a local, typed mock layer whose shapes mirror the eventual
-// `/playlists` API. Songs are drawn from the mock clip pool (lib/mock-clips).
-// Mutations here are PURE — each returns a new Playlist — so the client store
-// (contexts/playlists-context) can hold them in React state; swap these bodies
-// for fetch()es when the API lands and callers won't change.
+// Playlists have no backend yet: the UI runs on a local, typed client store whose
+// shapes mirror the eventual `/playlists` API. Songs are public clips picked from
+// discovery (#654). Mutations here are PURE — each returns a new Playlist — so the
+// client store (contexts/playlists-context) can hold them in React state; swap
+// these bodies for fetch()es when the API lands and callers won't change.
 //
 // ponytail: in-memory only, session-scoped — no localStorage/persistence (YAGNI until
 // there's a real backend to sync with). Custom covers are object URLs, so they also
 // live only for the session.
 
-import { getAllClips } from "@/lib/mock-clips"
 import type { Clip } from "@/lib/workspace-clips"
 
 export type PlaylistVisibility = "private" | "public"
@@ -36,46 +34,9 @@ function now(): string {
   return new Date().toISOString()
 }
 
-/**
- * Seed playlists for the mock store. Reference real Explore clip ids so the detail
- * page renders actual songs and mosaics. Replace with `GET /playlists` when it lands.
- */
+/** The session starts with no playlists; replace with `GET /playlists` when it lands. */
 export function initialPlaylists(): Playlist[] {
-  return [
-    {
-      id: "pl-latenight",
-      name: "Late Night Drive",
-      description: "Synthwave and lofi for the empty highway.",
-      visibility: "public",
-      clipIds: [
-        "clip-neon",
-        "clip-velvet",
-        "clip-pulse",
-        "clip-paper",
-        "clip-mono",
-      ],
-      coverDataUrl: null,
-      createdAt: "2026-07-18T12:00:00Z",
-    },
-    {
-      id: "pl-focus",
-      name: "Deep Focus",
-      description: "Ambient beds to disappear into.",
-      visibility: "private",
-      clipIds: ["clip-glass", "clip-paper", "clip-brass"],
-      coverDataUrl: null,
-      createdAt: "2026-07-16T09:30:00Z",
-    },
-    {
-      id: "pl-anthems",
-      name: "Summer Anthems",
-      description: null,
-      visibility: "public",
-      clipIds: ["clip-tide", "clip-gold"],
-      coverDataUrl: null,
-      createdAt: "2026-07-14T18:45:00Z",
-    },
-  ]
+  return []
 }
 
 /** A fresh, empty, private playlist. */
@@ -135,14 +96,13 @@ export function setCover(pl: Playlist, coverDataUrl: string | null): Playlist {
   return { ...pl, coverDataUrl }
 }
 
-/** Resolve `clipIds` to Clips in playlist order, dropping ids not in the pool. */
+/** Resolve `clipIds` to Clips in playlist order, dropping ids not in `known`. */
 export function playlistClips(
   pl: Playlist,
-  pool: Clip[] = getAllClips()
+  known: ReadonlyMap<string, Clip>
 ): Clip[] {
-  const byId = new Map(pool.map((c) => [c.id, c]))
   return pl.clipIds
-    .map((id) => byId.get(id))
+    .map((id) => known.get(id))
     .filter((c): c is Clip => c != null)
 }
 

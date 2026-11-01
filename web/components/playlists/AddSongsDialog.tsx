@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
+  Loading03Icon,
   MusicNote01Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons"
@@ -17,17 +18,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ClipSearchInput } from "@/components/workspace/ClipSearchInput"
-import { getAllClips } from "@/lib/mock-clips"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
+import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
+import { DEFAULT_SEARCH, searchClips } from "@/lib/search"
 import type { Clip } from "@/lib/workspace-clips"
 
-// Add-songs picker (US-20.3). Songs come from the same discovery pool as Explore.
-// Adds are immediate (the parent appends via the store); already-added songs show a
-// check instead of an add button, so the dialog can stay open to add several.
+// Add-songs picker (US-20.3). Searches public clips through discovery (#654);
+// with no query it lists the newest. Adds are immediate (the parent records the
+// clip in the store); already-added songs show a check instead of an add button,
+// so the dialog can stay open to add several.
 
-function matches(clip: Clip, needle: string): boolean {
-  if (!needle) return true
-  const hay = `${clip.title ?? ""} ${clip.style_tags.join(" ")}`.toLowerCase()
-  return hay.includes(needle)
+/** The result of one search; it is stale (still loading) unless `q` and `attempt` match the current ones. */
+type Result = {
+  q: string
+  attempt: number
+  clips: Clip[] | null
 }
 
 export function AddSongsDialog({
@@ -38,13 +43,33 @@ export function AddSongsDialog({
 }: {
   open: boolean
   existingIds: string[]
-  onAdd: (clipId: string) => void
+  onAdd: (clip: Clip) => void
   onOpenChange: (open: boolean) => void
 }) {
   const [query, setQuery] = useState("")
+  const q = useDebouncedValue(query.trim(), 300)
+  const [attempt, setAttempt] = useState(0)
+  const [result, setResult] = useState<Result | null>(null)
+  const { ready, token } = useDiscoveryAuth()
+
+  useEffect(() => {
+    if (!open || !ready) return
+    let live = true
+    searchClips(
+      { ...DEFAULT_SEARCH, q, sort: q ? "relevance" : "newest" },
+      null,
+      token()
+    ).then(
+      (page) => live && setResult({ q, attempt, clips: page.clips }),
+      () => live && setResult({ q, attempt, clips: null })
+    )
+    return () => {
+      live = false
+    }
+  }, [open, ready, q, attempt, token])
+
+  const loading = !result || result.q !== q || result.attempt !== attempt
   const inPlaylist = new Set(existingIds)
-  const needle = query.trim().toLowerCase()
-  const results = getAllClips().filter((c) => matches(c, needle))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -52,7 +77,7 @@ export function AddSongsDialog({
         <DialogHeader>
           <DialogTitle>Add songs</DialogTitle>
           <DialogDescription>
-            Search the catalog and add songs to this playlist.
+            Search public songs and add them to this playlist.
           </DialogDescription>
         </DialogHeader>
 
@@ -64,12 +89,37 @@ export function AddSongsDialog({
         />
 
         <ul className="flex max-h-80 flex-col gap-1 overflow-y-auto">
-          {results.length === 0 ? (
+          {loading ? (
+            <li className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+              <HugeiconsIcon
+                icon={Loading03Icon}
+                size={16}
+                className="animate-spin"
+              />
+              Loading songs…
+            </li>
+          ) : result.clips === null ? (
+            <li
+              role="alert"
+              className="flex items-center justify-center gap-3 py-6 text-sm"
+            >
+              <span className="text-muted-foreground">
+                Couldn&apos;t load songs.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAttempt((n) => n + 1)}
+              >
+                Retry
+              </Button>
+            </li>
+          ) : result.clips.length === 0 ? (
             <li className="py-6 text-center text-sm text-muted-foreground">
-              No songs match &ldquo;{query}&rdquo;.
+              No public songs found.
             </li>
           ) : (
-            results.map((clip) => {
+            result.clips.map((clip) => {
               const added = inPlaylist.has(clip.id)
               return (
                 <li
@@ -96,7 +146,7 @@ export function AddSongsDialog({
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => onAdd(clip.id)}
+                      onClick={() => onAdd(clip)}
                       aria-label={`Add ${clip.title ?? "song"}`}
                     >
                       <HugeiconsIcon icon={Add01Icon} size={14} />
