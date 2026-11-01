@@ -32,6 +32,7 @@ import {
 const ACTION_LABEL: Record<AppealQueueItem["action"], string> = {
   remove: "Removed",
   flag: "Flagged",
+  unpublish: "Video unpublished",
 }
 
 const STATUS_LABEL: Record<AppealQueueItem["status"], string> = {
@@ -59,7 +60,7 @@ const DECISION_COPY: Record<
   reverse: {
     verb: "Reverse",
     description:
-      "The clip's removal or flag is cleared. The creator is notified.",
+      "The clip's removal or flag, or the video's takedown, is lifted. The creator is notified.",
     noteRequired: false,
   },
   request_info: {
@@ -78,9 +79,11 @@ function errorMessage(error: unknown) {
 }
 
 function clipLabel(item: AppealQueueItem) {
-  return item.clip_deleted
+  const title = item.clip_deleted
     ? "Clip deleted"
     : (item.clip_title ?? "Untitled clip")
+  // A video appeal (#623) names the video's song.
+  return item.video_id ? `Video for ${title}` : title
 }
 
 function formatTime(iso: string) {

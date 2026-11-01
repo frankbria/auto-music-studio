@@ -1,6 +1,7 @@
 """Appeals of moderation decisions (US-27.4).
 
-A creator appeals the latest removal or content-warning flag on their own clip. Admins
+A creator appeals the latest removal or content-warning flag on their own clip, or the unpublish in force on one
+of their videos (#623). Admins
 uphold it, reverse it (restoring the clip) or ask for more information; each outcome records
 a notice for the creator and a moderation log entry. Status changes are conditional ``$set``s
 on an open appeal, so two admins deciding at once cannot both win.
@@ -24,15 +25,17 @@ from ..models import (
     ModerationLogEntry,
     NotificationEvent,
     User,
+    Video,
     VisibilityState,
 )
 from ..models.clip_appeal import AppealedAction
 from ..models.common import utcnow
 from ..settings import ApiSettings
-from . import releases as release_service
+from . import moderation, releases as release_service
 from .clips import get_owned_clip
 from .common import coerce_object_id
 from .moderation import after_cursor, encode_cursor, log_action
+from .video import get_owned_video
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,8 @@ _DECISION_STATUS: dict[AppealDecision, AppealStatus] = {
 class AppealView(BaseModel):
     id: str
     clip_id: str
+    # Set for an appeal of a video unpublish (#623); clip_id is then the video's song.
+    video_id: str | None = None
     action: AppealedAction
     reason: str
     context: str | None
@@ -64,6 +69,7 @@ class AppealView(BaseModel):
         return cls(
             id=str(appeal.id),
             clip_id=str(appeal.clip_id),
+            video_id=str(appeal.video_id) if appeal.video_id else None,
             action=appeal.action,
             reason=appeal.reason,
             context=appeal.context,
@@ -93,9 +99,46 @@ async def submit_appeal(clip_id: str, user_id: str, reason: str, context: str | 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="This clip has no moderation decision to appeal."
         )
-    appeal = ClipAppeal(
-        clip_id=clip.id, user_id=clip.user_id, action_id=action.id, action=action.action, reason=reason, context=context
+    return await _insert(
+        ClipAppeal(
+            clip_id=clip.id,
+            user_id=clip.user_id,
+            action_id=action.id,
+            action=action.action,
+            reason=reason,
+            context=context,
+        )
     )
+
+
+async def submit_video_appeal(video_id: str, user_id: str, reason: str, context: str | None) -> ClipAppeal:
+    """Appeal the unpublish in force on your own video (#623). 404 not yours, 400 nothing to appeal, 409 appealed.
+
+    A takedown stamped by the owner's ban is not appealable here: the ban is contested as a whole (#581).
+    """
+    video = await get_owned_video(video_id, user_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    action_id = await _video_in_force(video)
+    if action_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="This video has no moderation decision to appeal."
+        )
+    return await _insert(
+        ClipAppeal(
+            clip_id=video.clip_id,
+            video_id=video.id,
+            user_id=video.user_id,
+            action_id=action_id,
+            action="unpublish",
+            reason=reason,
+            context=context,
+        )
+    )
+
+
+async def _insert(appeal: ClipAppeal) -> ClipAppeal:
+    """The unique ``action_id`` index is the one-appeal-per-decision rule."""
     try:
         await appeal.insert()
     except DuplicateKeyError as exc:
@@ -103,6 +146,12 @@ async def submit_appeal(clip_id: str, user_id: str, reason: str, context: str | 
             status_code=status.HTTP_409_CONFLICT, detail="You have already appealed this decision."
         ) from exc
     return appeal
+
+
+async def _video_in_force(video: Video) -> PydanticObjectId | None:
+    """The unpublish entry in force on the video (moderation.unpublishes_in_force), if any."""
+    in_force = await moderation.unpublishes_in_force([video.id])
+    return PydanticObjectId(next(iter(in_force))) if in_force else None
 
 
 def _in_force_kind(clip: Clip) -> AppealedAction | None:
@@ -141,17 +190,47 @@ async def _in_force_actions(clips: list[Clip]) -> dict[PydanticObjectId, Pydanti
     }
 
 
-def _is_superseded(clip: Clip | None, appeal: ClipAppeal, in_force_id: PydanticObjectId | None) -> bool:
-    return clip is not None and in_force_id != appeal.action_id
+def _is_superseded(subject: Clip | Video | None, appeal: ClipAppeal, in_force_id: PydanticObjectId | None) -> bool:
+    return subject is not None and in_force_id != appeal.action_id
+
+
+async def _appealed_videos(appeals: list[ClipAppeal]) -> tuple[dict[PydanticObjectId, Video], set[str]]:
+    """The page's appealed videos still around, and the unpublish entries in force on them."""
+    ids = [a.video_id for a in appeals if a.video_id]
+    videos = {v.id: v for v in await Video.find(In(Video.id, ids)).to_list()}
+    return videos, await moderation.unpublishes_in_force(list(videos))
+
+
+def _queue_superseded(
+    appeal: ClipAppeal,
+    clip: Clip | None,
+    clips_in_force: dict[PydanticObjectId, PydanticObjectId],
+    videos: dict[PydanticObjectId, Video],
+    videos_in_force: set[str],
+) -> bool:
+    if appeal.video_id is None:
+        return _is_superseded(clip, appeal, clips_in_force.get(appeal.clip_id))
+    return appeal.video_id in videos and str(appeal.action_id) not in videos_in_force
 
 
 async def answer_info_request(clip_id: str, user_id: str, context: str) -> ClipAppeal:
     """Add the requested information and send the appeal back to the queue; 409 if none was requested."""
     clip = await get_owned_clip(clip_id, user_id)
+    # Not the clip's videos' appeals: those share its clip_id and are answered on the video (#623).
+    return await _answer({"clip_id": clip.id, "video_id": None}, context)
+
+
+async def answer_video_info_request(video_id: str, user_id: str, context: str) -> ClipAppeal:
+    """``answer_info_request`` for an appeal of a video unpublish (#623)."""
+    video = await get_owned_video(video_id, user_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    return await _answer({"video_id": video.id}, context)
+
+
+async def _answer(query: dict, context: str) -> ClipAppeal:
     requested = (
-        await ClipAppeal.find({"clip_id": clip.id, "status": "info_requested"})
-        .sort(-ClipAppeal.created_at)
-        .first_or_none()
+        await ClipAppeal.find({**query, "status": "info_requested"}).sort(-ClipAppeal.created_at).first_or_none()
     )
     appeal = None
     if requested is not None:
@@ -198,6 +277,7 @@ async def list_queue(which: QueueFilter, limit: int, cursor: str | None) -> tupl
         for e in await ModerationLogEntry.find(In(ModerationLogEntry.id, [a.action_id for a in appeals])).to_list()
     }
     in_force = await _in_force_actions(list(clips.values()))
+    videos, videos_in_force = await _appealed_videos(appeals)
     items = []
     for appeal in appeals:
         clip, creator, action = clips.get(appeal.clip_id), users.get(appeal.user_id), actions.get(appeal.action_id)
@@ -210,7 +290,7 @@ async def list_queue(which: QueueFilter, limit: int, cursor: str | None) -> tupl
                 creator_name=(creator.display_name or creator.name or creator.email) if creator else None,
                 action_reason=action.reason if action else None,
                 action_at=action.created_at if action else None,
-                superseded=_is_superseded(clip, appeal, in_force.get(appeal.clip_id)),
+                superseded=_queue_superseded(appeal, clip, in_force, videos, videos_in_force),
             )
         )
     return items, next_cursor
@@ -228,9 +308,8 @@ async def decide(
     existing = await ClipAppeal.get(oid) if oid is not None else None
     if existing is None:
         raise _appeal_not_found()
-    clip = await Clip.get(existing.clip_id)
-    in_force = await _appealable_action(clip) if clip is not None else None
-    if decision != "uphold" and _is_superseded(clip, existing, in_force.id if in_force else None):
+    clip, subject, in_force, in_force_id = await _load(existing)
+    if decision != "uphold" and _is_superseded(subject, existing, in_force_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
 
     new_status = _DECISION_STATUS[decision]
@@ -244,7 +323,7 @@ async def decide(
     if claimed_from is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
     appeal = claimed_from.model_copy(update=updates)
-    await _apply_unless_superseded(claimed_from, appeal, clip, in_force, decision)
+    await _apply_unless_superseded(claimed_from, appeal, subject, in_force, decision)
     restored = await _restore_releases(clip, appeal, in_force, decision, settings)
     await NotificationEvent(
         user_id=appeal.user_id,
@@ -254,6 +333,8 @@ async def decide(
         payload={
             "appeal_id": str(appeal.id),
             "clip_id": str(appeal.clip_id),
+            # A video appeal's outcome opens that video's appeal panel (#623).
+            "video_id": str(appeal.video_id) if appeal.video_id else None,
             "title": clip.title if clip else None,
             "note": note,
         },
@@ -261,29 +342,55 @@ async def decide(
     await log_action(
         actor_id,
         f"appeal_{new_status}",
-        "clip",
-        str(appeal.clip_id),
+        "video" if appeal.video_id else "clip",
+        str(appeal.video_id or appeal.clip_id),
         note,
         {"appeal_id": str(appeal.id), "appealed_action": appeal.action, **restored},
     )
     return appeal
 
 
+async def _load(
+    appeal: ClipAppeal,
+) -> tuple[Clip | None, Clip | Video | None, ModerationLogEntry | None, PydanticObjectId | None]:
+    """The appeal's song, what it appeals (that clip, or a video of it), and the decision in force on that: its log
+    entry for a clip, which a reversal reads, and its id for either."""
+    clip = await Clip.get(appeal.clip_id)
+    if appeal.video_id is not None:
+        video = await Video.get(appeal.video_id)
+        return clip, video, None, await _video_in_force(video) if video else None
+    in_force = await _appealable_action(clip) if clip is not None else None
+    return clip, clip, in_force, in_force.id if in_force else None
+
+
 async def _still_in_force(
-    clip: Clip, appeal: ClipAppeal, in_force: ModerationLogEntry, decision: AppealDecision
+    subject: Clip | Video, appeal: ClipAppeal, in_force: ModerationLogEntry | None, decision: AppealDecision
 ) -> bool:
-    """A reversal undoes the decision here, only if no moderation action landed since the clip was read."""
+    """A reversal undoes the decision here, only if no moderation action landed since it was read."""
+    if isinstance(subject, Video):
+        return await _video_still_in_force(subject, decision)
+    clip = subject
     if decision == "request_info":
         return await Clip.find_one({"_id": clip.id, "moderation_reviewed_at": clip.moderation_reviewed_at}).exists()
     fields = {"content_warning": False} if appeal.action == "flag" else _undo_removal(in_force)
     return await _set_unless_moderated_since(clip, fields)
 
 
+async def _video_still_in_force(video: Video, decision: AppealDecision) -> bool:
+    """Reversal runs the admin restore (#571), which lifts only the takedown read and its edits' copies of it."""
+    if decision == "request_info":
+        # Both stamps: a re-unpublish keeps removed_at and only refreshes moderation_reviewed_at.
+        return await Video.find_one(
+            {"_id": video.id, "removed_at": video.removed_at, "moderation_reviewed_at": video.moderation_reviewed_at}
+        ).exists()
+    return await moderation.restore_video(video) is None
+
+
 async def _apply_unless_superseded(
     claimed_from: ClipAppeal,
     appeal: ClipAppeal,
-    clip: Clip | None,
-    in_force: ModerationLogEntry,
+    subject: Clip | Video | None,
+    in_force: ModerationLogEntry | None,
     decision: AppealDecision,
 ) -> None:
     """Applies a reversal to the clip, or 409s if a moderation action landed since the read (#587).
@@ -292,7 +399,7 @@ async def _apply_unless_superseded(
     goes back to how it was. Owner edits that add a screening flag also reset the stamp checked here, so they
     earn the same 409; it is retryable and errs toward leaving the decision in force.
     """
-    if decision == "uphold" or clip is None or await _still_in_force(clip, appeal, in_force, decision):
+    if decision == "uphold" or subject is None or await _still_in_force(subject, appeal, in_force, decision):
         return
     await ClipAppeal.find_one({"_id": claimed_from.id, "status": appeal.status}).update(
         {

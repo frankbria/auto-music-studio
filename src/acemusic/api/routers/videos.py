@@ -31,6 +31,7 @@ from ..auth.dependencies import (
 )
 from ..models import JobStatus, Video
 from ..services import (
+    appeals as appeal_service,
     clips as clip_service,
     credits as credits_service,
     screening as screening_service,
@@ -42,6 +43,7 @@ from ..services.tiers import Capability
 from ..settings import ApiSettings
 from ..utils.range_requests import stream_stored_object
 from ..utils.rate_limit import enforce_stream_rate_limit
+from .clips import ClipAppealInfoRequest, ClipAppealRequest
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +273,9 @@ class VideoDetailResponse(BaseModel):
     aspect_ratio: str
     published: bool
     created_at: datetime
+    # When moderation last acted on it while it is taken down, so the owner's appeal UI can tell an appeal of an
+    # earlier takedown from one of this one (#623). None while it is up.
+    taken_down_at: datetime | None = None
 
     @classmethod
     def from_video(cls, video: Video) -> "VideoDetailResponse":
@@ -282,6 +287,7 @@ class VideoDetailResponse(BaseModel):
             aspect_ratio=video.aspect_ratio,
             published=video.published,
             created_at=video.created_at,
+            taken_down_at=video.moderation_reviewed_at if video.removed_at else None,
         )
 
 
@@ -450,6 +456,24 @@ class VideoVersionResponse(VideoDetailResponse):
             edit=video.edit,
             duration=video.duration,
         )
+
+
+@router.post("/{video_id}/appeal", response_model=appeal_service.AppealView, status_code=status.HTTP_201_CREATED)
+async def appeal_video(
+    video_id: str, body: ClipAppealRequest, current: CurrentUser = Depends(require_existing_user)
+) -> appeal_service.AppealView:
+    """Appeal the unpublish in force on your own video (#623). 409 if this decision was already appealed."""
+    appeal = await appeal_service.submit_video_appeal(video_id, current.user_id, body.reason, body.context)
+    return appeal_service.AppealView.of(appeal)
+
+
+@router.patch("/{video_id}/appeal", response_model=appeal_service.AppealView)
+async def answer_video_appeal_info_request(
+    video_id: str, body: ClipAppealInfoRequest, current: CurrentUser = Depends(require_existing_user)
+) -> appeal_service.AppealView:
+    """Send the information an admin asked for about a video appeal, back into the queue (#623)."""
+    appeal = await appeal_service.answer_video_info_request(video_id, current.user_id, body.context)
+    return appeal_service.AppealView.of(appeal)
 
 
 @router.post("/{video_id}/edit", response_model=VideoJobResponse, status_code=status.HTTP_202_ACCEPTED)

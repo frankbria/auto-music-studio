@@ -141,6 +141,17 @@ export type NotificationsPage = {
   hasMore: boolean
 }
 
+/** The takedown notice opens the video page with its appeal (#623). */
+function videoAppealHref(
+  clipId: string | null | undefined,
+  videoId: string | null
+): string {
+  if (!clipId) return "/notifications"
+  return videoId
+    ? `/video/${clipId}?appeal=${encodeURIComponent(videoId)}`
+    : `/video/${clipId}`
+}
+
 function text(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key]
   return typeof value === "string" && value.trim() ? value : null
@@ -158,6 +169,11 @@ export function toAppNotification(
   const title = text(p, "title")
   const song = title ? `"${title}"` : "your song"
   const songHref = event.clip_id ? `/song/${event.clip_id}` : "/notifications"
+  // A video appeal's outcome opens the video's appeal panel (#623).
+  const appealVideoId = text(p, "video_id")
+  const appealHref = appealVideoId
+    ? videoAppealHref(event.clip_id, appealVideoId)
+    : songHref
   const base = { id: event.id, createdAt: event.created_at, read: event.read }
   const row = (
     type: NotificationType,
@@ -193,7 +209,7 @@ export function toAppNotification(
       return row(
         "moderation",
         `Moderation unpublished your video for ${song}.${suffix("Reason", text(p, "reason"))}`,
-        event.clip_id ? `/video/${event.clip_id}` : "/notifications"
+        videoAppealHref(event.clip_id, text(p, "video_id"))
       )
     case "moderation_video_restored":
       return row(
@@ -211,19 +227,19 @@ export function toAppNotification(
       return row(
         "moderation",
         `Your appeal for ${song} was reviewed and the decision stands.${suffix("Note", text(p, "note"))}`,
-        songHref
+        appealHref
       )
     case "moderation_appeal_reversed":
       return row(
         "moderation",
         `Your appeal for ${song} was accepted and the decision reversed.${suffix("Note", text(p, "note"))}`,
-        songHref
+        appealHref
       )
     case "moderation_appeal_info_requested":
       return row(
         "moderation",
         `Moderation needs more information about your appeal for ${song}.${suffix("Note", text(p, "note"))}`,
-        songHref
+        appealHref
       )
     case "voice_training_complete":
       return row(

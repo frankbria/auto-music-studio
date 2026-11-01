@@ -1,14 +1,17 @@
-// Clip moderation appeals (US-27.4): submit an appeal against a removal/flag,
-// send more context when an admin asks for it, and read the caller's own
-// appeal history. Mirrors lib/reports.ts (same-origin fetch, never throws,
+// Moderation appeals (US-27.4): submit an appeal against a clip's removal/flag
+// or a video's unpublish (#623), send more context when an admin asks for it,
+// and read the caller's own appeal history. Mirrors lib/reports.ts (same-origin fetch, never throws,
 // discriminated result).
 
-export type AppealAction = "remove" | "flag"
+export type AppealAction = "remove" | "flag" | "unpublish"
 export type AppealStatus = "pending" | "info_requested" | "upheld" | "reversed"
 
 export type AppealView = {
   id: string
+  /** For a video appeal, the video's song. */
   clip_id: string
+  /** Set on an appeal of a video unpublish (#623). */
+  video_id?: string | null
   action: AppealAction
   reason: string
   context: string | null
@@ -29,29 +32,40 @@ function detailOf(body: unknown): string | null {
   return typeof detail === "string" ? detail : null
 }
 
+/** What an appeal is filed against: a clip, or one of its videos (#623). */
+export type AppealTarget = { kind: "clip" | "video"; id: string }
+
+const TARGET_PATH: Record<AppealTarget["kind"], string> = {
+  clip: "/api/clips",
+  video: "/api/videos",
+}
+
 async function send(
   method: "POST" | "PATCH",
-  clipId: string,
+  target: AppealTarget,
   body: unknown,
   accessToken: string,
   confirmation: string
 ): Promise<AppealResult> {
   let res: Response
   try {
-    res = await fetch(`/api/clips/${encodeURIComponent(clipId)}/appeal`, {
-      method,
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    })
+    res = await fetch(
+      `${TARGET_PATH[target.kind]}/${encodeURIComponent(target.id)}/appeal`,
+      {
+        method,
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }
+    )
   } catch {
     return { status: "error", detail: FALLBACK }
   }
   const responseBody = await res.json().catch(() => null)
   if (res.status === 401)
-    return { status: "error", detail: "Sign in to appeal clips." }
+    return { status: "error", detail: "Sign in to appeal." }
   if (!res.ok)
     return { status: "error", detail: detailOf(responseBody) ?? FALLBACK }
   return {
@@ -61,29 +75,43 @@ async function send(
   }
 }
 
-export async function submitClipAppeal(
-  clipId: string,
+export async function submitAppeal(
+  target: AppealTarget,
   reason: string,
   context: string,
   accessToken: string
 ): Promise<AppealResult> {
   return send(
     "POST",
-    clipId,
+    target,
     { reason: reason.trim(), context: context.trim() || null },
     accessToken,
     "Appeal submitted. Our team will review it."
   )
 }
 
-export async function addAppealContext(
+export async function submitClipAppeal(
   clipId: string,
+  reason: string,
+  context: string,
+  accessToken: string
+): Promise<AppealResult> {
+  return submitAppeal(
+    { kind: "clip", id: clipId },
+    reason,
+    context,
+    accessToken
+  )
+}
+
+export async function addContext(
+  target: AppealTarget,
   context: string,
   accessToken: string
 ): Promise<AppealResult> {
   return send(
     "PATCH",
-    clipId,
+    target,
     { context: context.trim() },
     accessToken,
     "Additional information sent."
@@ -116,12 +144,30 @@ export async function fetchMyAppeals(
   return appeals
 }
 
-/** Newest-first input -> each clip's appeals, still newest first. */
+export async function addAppealContext(
+  clipId: string,
+  context: string,
+  accessToken: string
+): Promise<AppealResult> {
+  return addContext({ kind: "clip", id: clipId }, context, accessToken)
+}
+
+/** The newest appeal against this video's unpublishes (#623); input is newest first. */
+export function appealForVideo(
+  appeals: readonly AppealView[],
+  videoId: string
+): AppealView | null {
+  return appeals.find((appeal) => appeal.video_id === videoId) ?? null
+}
+
+/** Newest-first input -> each clip's appeals, still newest first. Video
+ * appeals carry their song's clip_id, so they're left out (#623). */
 export function appealsByClip(
   appeals: readonly AppealView[]
 ): Map<string, AppealView[]> {
   const map = new Map<string, AppealView[]>()
   for (const appeal of appeals) {
+    if (appeal.video_id) continue
     const list = map.get(appeal.clip_id)
     if (list) list.push(appeal)
     else map.set(appeal.clip_id, [appeal])

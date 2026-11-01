@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   addAppealContext,
+  addContext,
   fetchMyAppeals,
   appealFor,
+  appealForVideo,
   appealsByClip,
+  submitAppeal,
   submitClipAppeal,
   type AppealView,
 } from "@/lib/appeals"
@@ -161,6 +164,36 @@ describe("fetchMyAppeals", () => {
   it("never throws — returns [] on a network error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")))
     expect(await fetchMyAppeals("tok")).toEqual([])
+  })
+})
+
+describe("video appeals (#623)", () => {
+  const videoAppeal: AppealView = {
+    ...appeal,
+    id: "va",
+    action: "unpublish",
+    video_id: "v1",
+  }
+
+  it("posts and patches the video's appeal", async () => {
+    const fetchMock = stubFetch(201, videoAppeal)
+    await submitAppeal({ kind: "video", id: "v1" }, "mine", "", "tok")
+    await addContext({ kind: "video", id: "v1" }, "raw files", "tok")
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => [url, init.method])
+    ).toEqual([
+      ["/api/videos/v1/appeal", "POST"],
+      ["/api/videos/v1/appeal", "PATCH"],
+    ])
+  })
+
+  it("keeps video appeals off their song's clip card", () => {
+    expect(appealsByClip([videoAppeal, appeal]).get("c1")).toEqual([appeal])
+  })
+
+  it("finds the newest appeal for a video", () => {
+    expect(appealForVideo([videoAppeal, appeal], "v1")).toBe(videoAppeal)
+    expect(appealForVideo([appeal], "v1")).toBeNull()
   })
 })
 
