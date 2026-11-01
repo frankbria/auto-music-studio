@@ -6,8 +6,9 @@ import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
 // Same-origin proxy for the anonymous GET /api/v1/discover/clips (#651), which
 // backs Feed, Explore and Search. Only the documented query params are relayed,
 // never the raw query string, so a client can't smuggle undocumented backend
-// params; the backend validates their values (422). No Authorization is
-// forwarded: discovery is the same for everyone. Status/body pass through.
+// params; the backend validates their values (422). A signed-in viewer's
+// Authorization is forwarded so the API can mark their own clips (#653);
+// the listing itself is the same for everyone. Status/body pass through.
 
 const FORWARDED_PARAMS = [
   "q",
@@ -20,6 +21,11 @@ const FORWARDED_PARAMS = [
   "limit",
   "cursor",
 ]
+
+function authorizationHeader(request: NextRequest): Record<string, string> {
+  const authorization = request.headers.get("authorization")
+  return authorization ? { authorization } : {}
+}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const incoming = new URL(request.url).searchParams
@@ -34,7 +40,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     res = await fetchWithTimeout(
       `${BACKEND_URL}/api/v1/discover/clips${query ? `?${query}` : ""}`,
-      { headers: { accept: "application/json", ...clientIpHeaders(request) } }
+      {
+        headers: {
+          accept: "application/json",
+          ...clientIpHeaders(request),
+          ...authorizationHeader(request),
+        },
+      }
     )
   } catch {
     return NextResponse.json(

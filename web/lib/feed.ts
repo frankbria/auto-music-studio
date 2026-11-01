@@ -15,12 +15,14 @@ export type FeedPage = {
   nextCursor: string | null
 }
 
-export async function getFeedPage(cursor?: string | null): Promise<FeedPage> {
-  const page = await fetchPublicClips({
-    sort: "newest",
-    limit: FEED_PAGE_SIZE,
-    cursor,
-  })
+export async function getFeedPage(
+  cursor?: string | null,
+  token?: string | null
+): Promise<FeedPage> {
+  const page = await fetchPublicClips(
+    { sort: "newest", limit: FEED_PAGE_SIZE, cursor },
+    token
+  )
   return {
     items: page.clips.map((clip) => ({
       ...clip,
