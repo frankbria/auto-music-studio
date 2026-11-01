@@ -52,7 +52,7 @@ export type ModerationLogEntry = {
 export type ClipAction = "approve" | "remove" | "flag"
 export type ContentAction = "approve" | "unpublish" | "restore" | "drop"
 export type TargetAction = ClipAction | ContentAction
-export type UserAction = "warn" | "ban"
+export type UserAction = "warn" | "ban" | "unban"
 export type QueueTargetRef = { type: QueueTarget; id: string }
 
 /** One target's outcome; a bulk action can partly fail. */
@@ -315,6 +315,7 @@ const TARGET_VERBS: Record<string, string> = {
 const LOG_ACTION_LABELS: Record<string, string> = {
   warn: "Warned user",
   ban: "Banned user",
+  unban: "Unbanned user",
   update_screening_rules: "Updated screening rules",
   appeal_upheld: "Upheld appeal",
   appeal_reversed: "Reversed appeal",

@@ -15,6 +15,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth import services as auth_services
 from acemusic.api.auth.tokens import create_access_token, create_refresh_token
+from acemusic.api.exceptions import AccountSuspendedError
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import (
     Clip,
@@ -48,7 +49,7 @@ RELEASES_URL = f"{API_V1_PREFIX}/releases"
 VIDEOS_URL = f"{API_V1_PREFIX}/videos"
 REMOVED = "This clip was removed by moderation."
 RELEASE_METADATA = {"title": "Tune", "artist": "DJ", "genre": "house", "release_date": "2026-07-01T00:00:00Z"}
-SUSPENDED = "This account has been suspended."
+SUSPENDED = "This account has been suspended. To contest it, contact the platform's support team."
 
 _SEQ = itertools.count(1)
 
@@ -715,6 +716,290 @@ class TestBan:
             {"user_id": str(unknown), "ok": False, "detail": "User not found."},
             {"user_id": str(user.id), "ok": True, "detail": None},
         ]
+
+
+@pytest.mark.integration
+class TestContestingABan:
+    async def test_the_suspended_response_names_the_configured_contact(self, settings):
+        configured = settings.model_copy(update={"suspension_contact": "appeals@example.com"})
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        transport = httpx.ASGITransport(app=create_app(configured))
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+            resp = await ac.get(CLIPS_URL, headers=_auth(user, configured))
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "This account has been suspended. To contest it, contact appeals@example.com."
+
+
+def _video(clip, **fields) -> Video:
+    return Video(
+        clip_id=clip.id,
+        user_id=clip.user_id,
+        job_id=PydanticObjectId(),
+        storage_path="v.mp4",
+        resolution="720p",
+        aspect_ratio="16:9",
+        **fields,
+    )
+
+
+@pytest.mark.integration
+class TestUnban:
+    async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
+        admin, user = await _admin(), await _user()
+        public, unlisted, private = (
+            await _clip(user, VisibilityState.PUBLIC),
+            await _clip(user, VisibilityState.UNLISTED),
+            await _clip(user, VisibilityState.PRIVATE),
+        )
+        video = await _video(public, published=True).insert()
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        [result] = await _act_on_users(client, admin, settings, "unban", [user.id], reason="Appeal upheld")
+
+        assert result == {"user_id": str(user.id), "ok": True, "detail": None}
+        assert (await User.get(user.id)).banned_at is None
+        assert (await client.get(CLIPS_URL, headers=_auth(user, settings))).status_code == 200
+        for clip, visibility in ((public, "public"), (unlisted, "unlisted"), (private, "private")):
+            stored = await Clip.get(clip.id)
+            assert (stored.visibility.value, stored.is_public, stored.removed_at) == (
+                visibility,
+                visibility == "public",
+                None,
+            )
+        assert (await client.get(f"{CLIPS_URL}/{public.id}/public")).status_code == 200
+        # Like a moderator's restore (#571): the takedown is lifted and the owner republishes.
+        stored_video = await Video.get(video.id)
+        assert (stored_video.published, stored_video.removed_at) == (False, None)
+        entry = await _latest_log("unban")
+        assert (entry.target_id, entry.reason) == (str(user.id), "Appeal upheld")
+        assert entry.details == {"clips_restored": 2, "videos_restored": 1}
+
+    async def test_a_video_unpublished_by_an_admin_during_the_ban_stays_down(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        swept, unpublished = await _video(clip, published=True).insert(), await _video(clip, published=True).insert()
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        resp = await client.post(
+            f"{ADMIN_URL}/moderation/content",
+            json={"target_type": "video", "action": "unpublish", "ids": [str(unpublished.id)]},
+            headers=_auth(admin, settings),
+        )
+        assert resp.status_code == 200 and resp.json()["results"][0]["ok"], resp.text
+
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert (await Video.get(swept.id)).removed_at is None
+        assert (await Video.get(unpublished.id)).removed_at is not None
+
+    async def test_a_restored_clip_can_be_republished(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user, VisibilityState.UNLISTED, style_tags=["house"])
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        resp = await client.patch(
+            f"{CLIPS_URL}/{clip.id}", json={"visibility": "public"}, headers=_auth(user, settings)
+        )
+
+        assert resp.status_code == 200, resp.text
+
+    async def test_a_removal_after_the_ban_is_not_undone(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        await _act_on_clips(client, admin, settings, "remove", [clip.id], reason="Its own violation")
+
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState.PRIVATE
+        assert stored.removed_at is not None
+
+    async def test_a_clip_removed_before_the_ban_stays_removed(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_clips(client, admin, settings, "remove", [clip.id])
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert (await Clip.get(clip.id)).removed_at is not None
+
+    async def test_a_legacy_clip_without_a_visibility_key_comes_back_as_it_was(self, client, settings):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await Clip.get_pymongo_collection().update_one({"_id": clip.id}, {"$unset": {"visibility": ""}})
+
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.is_public, stored.removed_at) == (VisibilityState.PUBLIC, True, None)
+
+    async def test_a_second_ban_and_unban_round_trip_on_their_own_stamp(self, client, settings):
+        admin, user = await _admin(), await _user()
+        first, second = await _clip(user), await _clip(user, VisibilityState.UNLISTED)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        [result] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert result["ok"] is True
+        assert [(await Clip.get(c.id)).visibility for c in (first, second)] == [
+            VisibilityState.PUBLIC,
+            VisibilityState.UNLISTED,
+        ]
+
+    async def test_concurrent_bans_share_one_stamp(self, client, settings):
+        user = await _user()
+        clip = await _clip(user)
+        stale = await User.get(user.id)  # both admins read the account before either ban landed
+
+        await moderation._ban(str(PydanticObjectId()), stale, None)
+        await moderation._ban(str(PydanticObjectId()), stale, None)
+
+        assert (await Clip.get(clip.id)).removed_at == (await User.get(user.id)).banned_at
+
+    async def test_an_unban_that_fails_part_way_leaves_the_account_banned_and_retryable(
+        self, client, settings, monkeypatch
+    ):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        real_restore = moderation.clip_service.restore_ban_sweep
+
+        async def broken(*_args):
+            raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", broken)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is not None
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", real_restore)
+        [retried] = await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert retried["ok"] is True
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
+
+    async def test_an_unban_failing_after_the_restore_takes_the_clips_back_down(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        class BrokenVideo:
+            @staticmethod
+            def find(*_args):
+                raise RuntimeError("Mongo went away")
+
+        monkeypatch.setattr(moderation, "Video", BrokenVideo)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is not None
+        # Restored by then, but the account is still banned: the clip must not stay streamable.
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at is not None) == (VisibilityState.PRIVATE, True)
+        assert (await client.get(f"{CLIPS_URL}/{clip.id}/public")).status_code == 404
+
+    async def test_a_failed_unban_does_not_take_down_clips_another_unban_restored(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+        real_restore = moderation.clip_service.restore_ban_sweep
+
+        async def restore_then_another_unban_completes(*args):
+            restored = await real_restore(*args)
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+            return restored
+
+        class VideoUpdateTimesOut:
+            @staticmethod
+            def find(*_args):
+                raise RuntimeError("timed out")
+
+        monkeypatch.setattr(moderation.clip_service, "restore_ban_sweep", restore_then_another_unban_completes)
+        monkeypatch.setattr(moderation, "Video", VideoUpdateTimesOut)
+        [failed] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert failed["ok"] is False
+        assert (await User.get(user.id)).banned_at is None
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
+
+    async def test_an_unban_landing_mid_ban_sweep_does_not_leave_clips_removed(self, client, settings, monkeypatch):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        real_revoke = moderation.revoke_all_user_tokens
+
+        async def revoke_then_unbanned(user_id):
+            await real_revoke(user_id)
+            # Another admin's unban completes here: nothing is swept yet, so it restores nothing.
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", revoke_then_unbanned)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        assert (await User.get(user.id)).banned_at is None
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
+
+    async def test_a_newer_ban_landing_mid_sweep_keeps_the_clips_down_until_its_unban(
+        self, client, settings, monkeypatch
+    ):
+        admin, user = await _admin(), await _user()
+        clip = await _clip(user)
+        real_revoke = moderation.revoke_all_user_tokens
+        newer = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+        async def revoke_then_rebanned(user_id):
+            await real_revoke(user_id)
+            # An unban, then a newer ban, both land before this ban's sweep runs.
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": newer}})
+
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", revoke_then_rebanned)
+        await _act_on_users(client, admin, settings, "ban", [user.id])
+
+        stored = await Clip.get(clip.id)
+        assert stored.visibility == VisibilityState.PRIVATE
+        assert stored.removed_at.replace(tzinfo=timezone.utc) == newer
+        monkeypatch.setattr(moderation, "revoke_all_user_tokens", real_revoke)
+        await _act_on_users(client, admin, settings, "unban", [user.id])
+        assert (await Clip.get(clip.id)).visibility == VisibilityState.PUBLIC
+
+    async def test_an_upload_sweep_racing_an_unban_leaves_the_clip_up(self, client, settings, monkeypatch):
+        """The upload path's own sweep (releases.unshare_if_source_removed) settles the same race as _ban."""
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        clip = await _clip(user)
+        real_take_down = moderation.clip_service.take_down_visible
+
+        async def take_down_then_unbanned(query, banned_at):
+            swept = await real_take_down(query, banned_at)
+            await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})
+            return swept
+
+        monkeypatch.setattr(moderation.clip_service, "take_down_visible", take_down_then_unbanned)
+        with pytest.raises(AccountSuspendedError):  # the owner read as banned, so the upload is still refused
+            await release_service.unshare_if_source_removed(clip.id, user.id)
+
+        stored = await Clip.get(clip.id)
+        assert (stored.visibility, stored.removed_at) == (VisibilityState.PUBLIC, None)
+
+    async def test_an_unban_that_lost_a_race_lifts_nothing(self, client):
+        user = await _user(banned_at=datetime.now(timezone.utc))
+        stale = await User.get(user.id)
+        await User.find_one(User.id == user.id).update({"$set": {"banned_at": None}})  # a concurrent unban won
+
+        assert await moderation._unban(str(PydanticObjectId()), stale, None) == "This account is not banned."
+
+    async def test_unbanning_an_account_that_is_not_banned_is_refused(self, client, settings):
+        admin, user = await _admin(), await _user()
+
+        [result] = await _act_on_users(client, admin, settings, "unban", [user.id])
+
+        assert result == {"user_id": str(user.id), "ok": False, "detail": "This account is not banned."}
+        assert await ModerationLogEntry.find(ModerationLogEntry.action == "unban").count() == 0
 
 
 @pytest.mark.integration

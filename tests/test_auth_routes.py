@@ -320,7 +320,10 @@ class TestCallback:
         state = _bind_state(client, "google", settings)
         resp = await client.post(f"{API_V1_PREFIX}/auth/callback/google", json={"code": "auth-code", "state": state})
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "This account has been suspended."
+        assert (
+            resp.json()["detail"]
+            == "This account has been suspended. To contest it, contact the platform's support team."
+        )
         assert "refresh_token" not in resp.json()
 
     async def test_existing_user_is_updated_not_duplicated(self, client, settings, monkeypatch):

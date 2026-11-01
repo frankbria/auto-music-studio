@@ -100,6 +100,9 @@ class ApiSettings(BaseSettings):
     soundcloud_poll_interval: float = Field(default=60.0, ge=5)
     soundcloud_poll_batch_size: int = Field(default=20, ge=1)
 
+    # #581: where a banned user contests the ban (an address or URL), named in every suspended response.
+    suspension_contact: str | None = None
+
     # Compute routing (US-11.1). ``compute_preference`` selects where a generation
     # runs when the request does not pin a ``compute_target``: ``*_first`` tries
     # the named target then falls back to the other; ``*_only`` never falls back

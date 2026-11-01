@@ -246,7 +246,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # US-27.3: every ban check (auth, tier reads, charge_and_create) answers the same way.
     @app.exception_handler(AccountSuspendedError)
     async def _account_suspended(_request: Request, _exc: AccountSuspendedError) -> JSONResponse:
-        return JSONResponse(status_code=403, content={"detail": "This account has been suspended."})
+        contact = settings.suspension_contact or "the platform's support team"
+        detail = f"This account has been suspended. To contest it, contact {contact}."
+        return JSONResponse(status_code=403, content={"detail": detail})
 
     # A release/clip identifier collision (US-13.4) surfaces from the service as a
     # domain exception; map it to 409 with the offending field named.
