@@ -1,7 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  bodyTooLarge,
+  clientIpHeaders,
+  fetchWithTimeout,
+  readTextCapped,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for POST/PATCH /api/v1/clips/{id}/appeal (US-27.4). Auth
 // required; status/body pass through verbatim (201 submitted, 200 info added,
@@ -18,6 +23,9 @@ async function proxy(
     return NextResponse.json({ detail: "Not authenticated." }, { status: 401 })
   }
 
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -30,7 +38,7 @@ async function proxy(
           "content-type": "application/json",
           ...clientIpHeaders(request),
         },
-        body: await request.text(),
+        body: payload,
       }
     )
   } catch {

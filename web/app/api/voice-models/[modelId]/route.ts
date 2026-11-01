@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { bodyTooLarge, readTextCapped } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for PATCH/DELETE /api/v1/voice-models/{id} (US-25.3).
 // Status passes through verbatim: 404 covers "not yours" as well as "missing",
@@ -21,15 +22,25 @@ export async function PATCH(
 
   const { modelId } = await params
 
+  const payload = await readTextCapped(request)
+  if (payload === null) return bodyTooLarge()
+
   let res: Response
   try {
     res = await fetch(target(modelId), {
       method: "PATCH",
-      headers: { authorization: auth, "content-type": "application/json", accept: "application/json" },
-      body: await request.text(),
+      headers: {
+        authorization: auth,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: payload,
     })
   } catch {
-    return NextResponse.json({ detail: "Voice model service is unavailable." }, { status: 502 })
+    return NextResponse.json(
+      { detail: "Voice model service is unavailable." },
+      { status: 502 }
+    )
   }
   const body = await res.json().catch(() => ({}))
   return NextResponse.json(body, { status: res.status })
@@ -53,7 +64,10 @@ export async function DELETE(
       headers: { authorization: auth, accept: "application/json" },
     })
   } catch {
-    return NextResponse.json({ detail: "Voice model service is unavailable." }, { status: 502 })
+    return NextResponse.json(
+      { detail: "Voice model service is unavailable." },
+      { status: 502 }
+    )
   }
 
   // 204 carries no body; forwarding it as JSON would turn a success into a parse error.

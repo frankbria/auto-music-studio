@@ -53,3 +53,18 @@ describe("callback route", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe("auth callback body cap (#567)", () => {
+  it("413s an over-limit body and never reaches the backend", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await POST(
+      request({ code: "x".repeat(1024 * 1024), state: "s" }),
+      ctx
+    )
+
+    expect(res.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
