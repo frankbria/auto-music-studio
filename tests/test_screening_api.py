@@ -256,6 +256,14 @@ ORDINARY_LYRICS = [
     # Icelandic and Turkish letters near the folded ones: "þ" stays, dotless "ı" folds like an accent.
     "Þú ert sólin mín, ég syng þér lag í kvöld við þorpið",
     "Kırmızı gülün alı var, ıssız gecede ışıklar yanar",
+    # English near-misses of the default terms (#559): words containing them, and the allow-terms.
+    "My therapist says the grapes of wrath are sour, drape the stage in rapeseed gold",
+    "Benefit night for the rape crisis centre and rape awareness week",
+    "Suicide doors on a Cadillac, she's a suicide blonde, call the suicide prevention hotline",
+    "Call 988, the suicide lifeline, or the suicide helpline if the night gets long",
+    "Spic and span kitchen, a scraped knee, the cutting room floor, I'm cutting my hair tonight",
+    "Kill the lights, killing time, we killed it, the hangman's song, hang my coat up",
+    "A shooting star over the school, end of my rope, so I cut myself some slack",
 ]
 
 
@@ -264,6 +272,40 @@ ORDINARY_LYRICS = [
 def test_folding_does_not_flag_ordinary_lyrics(lyrics, fold_leetspeak):
     rules = screening.DEFAULT_RULES.model_copy(update={"fold_leetspeak": fold_leetspeak})
     assert screening.match(rules, [lyrics]).categories == []
+
+
+@pytest.mark.parametrize("rule", screening.DEFAULT_RULES.rules, ids=lambda rule: f"{rule.category}-{rule.action}")
+def test_every_default_rule_catches_its_own_term(rule):
+    result = screening.match(screening.DEFAULT_RULES, [f"a song about {rule.term} tonight"])
+    assert result.categories == [rule.category]
+    assert result.blocked is (rule.action == "block")
+
+
+# The English list a fresh deployment ships with (#559): what it blocks, flags, and lets through.
+@pytest.mark.parametrize(
+    ("text", "blocked", "categories"),
+    [
+        ("kiddie porn", True, ["child sexual abuse"]),
+        ("lolicon art", True, ["child sexual abuse"]),
+        ("a jailbait anthem", False, ["child sexual abuse"]),
+        ("jews will not replace us", True, ["hate speech"]),
+        ("kill all the jews", True, ["hate speech"]),
+        ("blood and soil", False, ["hate speech"]),
+        ("i want to kill myself", False, ["self-harm"]),
+        ("slit my wrists", False, ["self-harm"]),
+        ("she was raped", False, ["sexual violence"]),
+        ("a race war is coming", False, ["violent extremism"]),
+        ("school shooters and terrorists", False, ["violent extremism", "graphic violence"]),
+        ("race wars and school shootings", False, ["violent extremism", "graphic violence"]),
+        ("a school shooting", False, ["graphic violence"]),
+        ("the king was beheaded", False, ["graphic violence"]),
+        ("a suicide squad remix", False, []),
+        ("a suicide squad remix where i kill myself", False, ["self-harm"]),
+    ],
+)
+def test_the_english_default_list(text, blocked, categories):
+    result = screening.match(screening.DEFAULT_RULES, [text])
+    assert (result.blocked, result.categories) == (blocked, categories)
 
 
 @pytest.fixture(autouse=True)
