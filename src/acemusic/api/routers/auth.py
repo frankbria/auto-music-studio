@@ -290,17 +290,22 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = await User.get(user_id)
-    if user is None:
-        # The token validated but the user is gone — treat as unauthorized.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user_service.reject_banned(user)
-
-    access = _mint_access_token(user, settings)
+    try:
+        user = await User.get(user_id)
+        if user is None:
+            # The token validated but the user is gone — treat as unauthorized.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user_service.reject_banned(user)
+        access = _mint_access_token(user, settings)
+    except Exception:
+        # The rotated token goes to nobody, so it can't stay live (#527). Rotating first keeps the swap the
+        # single-use gate and keeps replay detection (#525), which a validate-first order would bypass.
+        await services.revoke_refresh_token(new_refresh)
+        raise
 
     return TokenResponse(
         access_token=access,
