@@ -274,7 +274,7 @@ async def mongo_settings(_test_db_name):
     lifespan.
     """
     from pymongo import AsyncMongoClient
-    from pymongo.errors import PyMongoError
+    from pymongo.errors import ServerSelectionTimeoutError
 
     from acemusic.api.settings import ApiSettings
 
@@ -287,8 +287,8 @@ async def mongo_settings(_test_db_name):
         for collection in await db.list_collection_names():
             if not collection.startswith("system."):
                 await db[collection].delete_many({})
-    except PyMongoError:
-        pass
+    except ServerSelectionTimeoutError:
+        pass  # no server, so nothing was written; any other failure must not leave rows for the next test
     finally:
         await client.close()
 
