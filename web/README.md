@@ -42,6 +42,14 @@ npm run typecheck && npm run lint && npm test && npm run build
 pinned exactly) passes typecheck, lint, *and* `next build`, and fails only under vitest —
 that regression shipped once already, as PR #417.
 
+Coverage (#592): `npx vitest run --coverage` writes `coverage/lcov.info` (and prints a summary).
+To check only the lines a branch changed, the way the Python gate does:
+
+```bash
+npx vitest run --coverage
+uvx diff-cover coverage/lcov.info --compare-branch=origin/main --fail-under=85
+```
+
 ## Application shell (US-15.2)
 
 The four-zone shell lives in `components/layout/` and wraps every route via

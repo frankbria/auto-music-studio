@@ -13,5 +13,12 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
+    // `npx vitest run --coverage` writes coverage/lcov.info, which diff-cover reads to gate changed lines (#592).
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      include: ["app/**", "components/**", "contexts/**", "hooks/**", "lib/**"],
+      exclude: ["**/*.test.{ts,tsx}"],
+    },
   },
 })
