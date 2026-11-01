@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from pymongo import ReturnDocument
 
@@ -176,8 +176,10 @@ class SoundCloudStatusPoller:
         A failure on one track is logged and skipped so the rest of the batch still makes progress.
         """
         done = 0
+        # Due as of the drain's start: a row retried in this pass is rescheduled after it, so it waits for the next.
+        started = utcnow()
         for _ in range(self._batch_size):
-            row = await _claim_due()
+            row = await _claim_due(started)
             if row is None:
                 break
             try:
@@ -239,12 +241,14 @@ class SoundCloudStatusPoller:
             await _log(row, "soundcloud_unshare_failed", details)
 
 
-async def _claim_due() -> SoundCloudUnshare | None:
-    """The most overdue row, leased so another API instance's drainer skips it while this one works (#620)."""
-    now = utcnow()
+async def _claim_due(due_by: datetime) -> SoundCloudUnshare | None:
+    """The most overdue row, leased so another API instance's drainer skips it while this one works (#620).
+
+    An attempt that fails outside SoundCloud (say a database error) keeps the lease, which doubles as its backoff.
+    """
     claimed = await SoundCloudUnshare.get_pymongo_collection().find_one_and_update(
-        {"next_attempt_at": {"$lte": now}},
-        {"$set": {"next_attempt_at": now + UNSHARE_LEASE}},
+        {"next_attempt_at": {"$lte": due_by}},
+        {"$set": {"next_attempt_at": utcnow() + UNSHARE_LEASE}},
         sort=[("next_attempt_at", 1)],
         return_document=ReturnDocument.AFTER,
     )

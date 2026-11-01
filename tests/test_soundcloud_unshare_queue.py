@@ -240,6 +240,23 @@ class TestDraining:
         assert other_calls == []
         assert len(await _log("soundcloud_unshared")) == 1
 
+    async def test_a_failing_track_is_tried_once_per_drain_even_when_its_retry_is_already_due(
+        self, mongo_db, mongo_settings
+    ):
+        """#620 review: claiming in a loop must not re-claim a row this pass already retried and rescheduled."""
+
+        async def _down(_track_id):
+            raise sc.SoundCloudError("down")
+
+        user = await make_user("d-once-per-drain@example.com")
+        clip = await _clip(user, track_ids=["t1"])
+        await release_service.unshare_releases({"clip_id": clip.id}, {"_id": clip.id})
+        poller, calls = _poller(mongo_settings, sharing=_down, interval=0.0)
+
+        await poller.drain_unshares()
+
+        assert calls == [("t1", "private")]
+
     async def test_a_track_still_failing_after_a_day_of_retries_is_logged_again(self, mongo_db, mongo_settings):
         """#620: past UNSHARE_STUCK_AFTER attempts a stuck track is reported once more, so an admin acts on it."""
 
