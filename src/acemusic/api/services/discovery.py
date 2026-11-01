@@ -146,7 +146,8 @@ async def public_profile(handle: str) -> tuple[User, list[Clip]]:
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
     clips = (
-        await Clip.find({**await public_clip_filter(), "user_id": user.id})
+        # $and, not a merged dict: the filter's own user_id predicate is what keeps out a creator banned since.
+        await Clip.find({"$and": [await public_clip_filter(), {"user_id": user.id}]})
         .sort(-Clip.created_at, -Clip.id)
         .limit(PROFILE_CLIP_LIMIT)
         .to_list()

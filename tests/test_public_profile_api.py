@@ -9,7 +9,8 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, VisibilityState, Workspace
+from acemusic.api.models import Clip, User, VisibilityState, Workspace
+from acemusic.api.services import discovery
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -99,6 +100,21 @@ class TestPublicProfile:
     async def test_a_banned_creator_has_no_public_profile(self, client) -> None:
         await _creator(banned_at=datetime.now(timezone.utc))
         assert (await client.get(f"{PROFILES_URL}/nova")).status_code == 404
+
+    async def test_a_ban_landing_after_the_lookup_still_hides_the_clips(self, client, monkeypatch) -> None:
+        nova = await _creator()
+        await _clip(nova)
+        real_filter = discovery.public_clip_filter
+
+        async def banned_meanwhile():
+            await User.find_one(User.id == nova.id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+            return await real_filter()
+
+        monkeypatch.setattr(discovery, "public_clip_filter", banned_meanwhile)
+
+        resp = await client.get(f"{PROFILES_URL}/nova")
+
+        assert resp.json()["clips"] == []
 
     async def test_the_creator_sees_their_own_clips_marked(self, client, settings) -> None:
         nova = await _creator()
