@@ -118,6 +118,9 @@ function AccountMenuItems() {
       <DropdownMenuItem asChild>
         <Link href="/settings/billing">Subscription</Link>
       </DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link href="/help">Help</Link>
+      </DropdownMenuItem>
       {isAdmin && (
         <DropdownMenuItem asChild>
           <Link href="/admin/moderation">Moderation</Link>

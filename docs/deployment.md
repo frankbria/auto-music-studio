@@ -20,6 +20,76 @@ to change, not a file to edit.
 `npm run dev` commands in the README are development conveniences: they skip the image, so
 they also skip the guarantees the image makes (ffmpeg present, absolute data paths).
 
+## Deploy from scratch on a VPS (#342)
+
+What a new developer needs to stand the platform up on one Ubuntu server. Host names, users and addresses for this
+project's own servers are in the operator's runbook, not here. Replace `example.com` with your domain throughout.
+
+1. **Server.** Ubuntu 22.04 or later with Docker Engine and the Compose plugin **v2.24+** (`docker compose version`),
+   nginx and certbot (`apt install nginx certbot python3-certbot-nginx`). If other stacks share the box, pick free
+   ports (`ss -ltn`) for the API, web and Mongo.
+2. **DNS.** An `A` record for your domain pointing at the server's public address.
+3. **Stack directory.** On the server:
+   ```bash
+   install -d -m 750 /opt/acemusic && cd /opt/acemusic
+   # copy compose.yaml and scripts/deploy.sh from the repository into this directory
+   cp .env.docker.example .env.docker   # from the repository
+   chmod 600 .env.docker
+   ```
+   In `.env.docker` set at least: `ACEMUSIC_API_JWT_SECRET_KEY` (`openssl rand -hex 32`), `API_PORT`, `WEB_PORT` and
+   `MONGO_PORT` bound to loopback (`127.0.0.1:8030` and so on), `ACEMUSIC_API_CORS_ALLOW_ORIGINS=https://example.com`,
+   Google OAuth (`ACEMUSIC_API_GOOGLE_*`, redirect `https://example.com/api/auth/callback/google`), and the Stripe
+   keys and prices if billing is on (success/cancel URLs on your domain). Every `ACEMUSIC_API_*` setting in the file
+   reaches the API (#702).
+4. **First deploy.** Images are published to GHCR by CD on every green `main`; deploy one commit:
+   ```bash
+   API_IMAGE=ghcr.io/<owner>/<repo>-api WEB_IMAGE=ghcr.io/<owner>/<repo>-web DEPLOY_DIR=/opt/acemusic \
+     HEALTH_URL=http://127.0.0.1:8030/api/v1/health ./deploy.sh <commit sha>
+   ```
+   It pulls, starts the stack and waits until the API reports that SHA, rolling back if it doesn't.
+5. **nginx and TLS.** A site that sends `/api/v1/` to the API and everything else to the web app, replacing
+   `X-Forwarded-For` with the real client (the rate limiters trust it):
+   ```nginx
+   server {
+       server_name example.com;
+       listen 80;
+       client_max_body_size 200m;
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       location /api/v1/ { proxy_pass http://127.0.0.1:8030; proxy_read_timeout 300s; }
+       location / { proxy_pass http://127.0.0.1:3030; }
+   }
+   ```
+   Enable it, then `certbot --nginx -d example.com --redirect`. Set `ACEMUSIC_API_TRUSTED_PROXIES` to the Docker
+   network's gateway and the web container's address (`docker network inspect acemusic_default`) and recreate the
+   API, so rate limits key on real clients.
+6. **Check it.** `curl https://example.com/api/v1/health` reports the deployed `build_sha`; `/docs` shows the API
+   reference; signing in with Google reaches `/create`.
+7. **Keep it running.**
+   - *Automatic deploys:* see [Enabling it](#enabling-it) and [Staging](#staging-699).
+   - *Error tracking:* set `ACEMUSIC_API_SENTRY_DSN` in `.env.docker`.
+   - *Uptime:* `scripts/uptime-monitor.sh` checks the health URL and posts to a webhook after three failed checks
+     in a row (over two minutes down), and again on recovery. Run it every minute with a systemd timer:
+     ```ini
+     # /etc/systemd/system/acemusic-uptime.service
+     [Service]
+     Type=oneshot
+     Environment=HEALTH_URL=https://example.com/api/v1/health
+     Environment=ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+     ExecStart=/opt/acemusic/uptime-monitor.sh
+
+     # /etc/systemd/system/acemusic-uptime.timer
+     [Timer]
+     OnBootSec=1min
+     OnUnitActiveSec=1min
+     [Install]
+     WantedBy=timers.target
+     ```
+     then `systemctl enable --now acemusic-uptime.timer`. `ALERT_FORMAT=discord` or `ntfy` changes the payload.
+     Run it from a different machine than the one it watches, or a whole-server outage takes the monitor with it.
+
 ## What the images guarantee
 
 - **ffmpeg is installed.** Free-tier video watermarking (#401), flac/mp3 conversion, batch
