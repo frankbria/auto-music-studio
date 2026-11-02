@@ -454,4 +454,8 @@ Package manager: `uv` with `hatchling` build backend
   (no play, like or share counters, no staff-pick flag). Profiles read `GET /api/v1/discover/profiles/{handle}`
   (the owner's public clips through `public_clip_filter`, #654), and the playlist add-songs picker searches
   `/api/discover/clips`; the mock clip pool is gone
+- **Docs, help and uptime (#342)**: the web serves the API's Swagger UI and schema at `/docs` and `/openapi.json`
+  (`web/lib/api-docs-proxy.ts`); its "Try it out" calls `/api/v1/...` on the web origin, so it works only where
+  nginx routes `/api/v1/` to the API. `/help` is the in-app user guide. `scripts/uptime-monitor.sh` runs each minute
+  from a systemd timer and posts one alert after three failed health checks and one on recovery; setup is in `docs/deployment.md`
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)

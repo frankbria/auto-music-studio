@@ -44,7 +44,7 @@ function RailButton({
   href?: string
 }) {
   const className = cn(
-    "flex flex-col items-center gap-1 rounded-lg p-2 text-white/90 transition-colors outline-none hover:bg-white/10 focus-visible:ring-3 focus-visible:ring-white/40",
+    "flex flex-col items-center gap-1 rounded-lg p-2 pointer-coarse:min-w-11 text-white/90 transition-colors outline-none hover:bg-white/10 focus-visible:ring-3 focus-visible:ring-white/40",
     active && "text-primary"
   )
   const inner = (

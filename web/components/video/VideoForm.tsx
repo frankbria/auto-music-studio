@@ -179,7 +179,7 @@ export function VideoForm({
           type="file"
           accept="image/*"
           multiple
-          className="text-sm"
+          className="text-sm pointer-coarse:min-h-11"
           aria-invalid={imageError !== null}
           aria-describedby={imageError ? "video-reference-error" : undefined}
           onChange={(e) => handleImages(e.target.files)}
