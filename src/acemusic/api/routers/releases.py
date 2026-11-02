@@ -14,11 +14,14 @@ piece (computed live from the clip). Persistence lives in
 :mod:`acemusic.api.services.releases`.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import (
     CurrentUser,
@@ -27,7 +30,7 @@ from ..auth.dependencies import (
     require_existing_user,
     require_tier_capability,
 )
-from ..models import DistributionStatus, Release, ReleaseStatus, VisibilityState
+from ..models import Clip, DistributionStatus, Release, ReleaseStatus, VisibilityState
 from ..models.distribution import GUIDED_CHANNELS, SOUNDCLOUD_CHANNEL
 from ..services import (
     clips as clip_service,
@@ -385,6 +388,7 @@ async def update_visibility(
 ) -> ReleaseStatusResponse:
     """Change a release's visibility (US-13.6); sync SoundCloud sharing if it's uploaded there."""
     release = await release_service.get_owned_release(release_id, current.user_id)
+    await _refuse_reshare_without_a_new_cover(release, body.state)
     # Both before the SoundCloud sync, so a removed (US-27.3) or blocked (#531) clip's track is never
     # re-shared — including when a removal lands mid-request, which update_visibility refuses with a 403.
     clip_update = await release_service.source_clip_visibility_update(release, body.state)
@@ -397,6 +401,44 @@ async def update_visibility(
     return ReleaseStatusResponse.from_release(release)
 
 
+async def _refuse_reshare_without_a_new_cover(release: Release, state: VisibilityState) -> None:
+    """409 when sharing a track whose cover moderation dropped, before the owner has picked a new one (#619)."""
+    if state != VisibilityState.PUBLIC or not release.soundcloud_track_id:
+        return
+    clip = await Clip.get(release.clip_id)
+    if (
+        clip is not None
+        and release.soundcloud_track_id in clip.soundcloud_stale_artwork_track_ids
+        and not clip.artwork_path
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Moderation removed this song's cover. Pick a new cover before sharing it on SoundCloud again.",
+        )
+
+
+async def _replace_stale_artwork(release: Release, clip: Clip, access_token: str) -> bool:
+    """Put the song's current cover on a track that still shows a dropped one (#619); False if that failed.
+
+    The track leaves the stale list only if its cover is still the one sent, so a cover moderation dropped while the
+    upload was in flight keeps the track private and stale, and the next re-share tries again.
+    """
+    if release.soundcloud_track_id not in clip.soundcloud_stale_artwork_track_ids:
+        return True
+    if not clip.artwork_path:
+        return False
+    try:
+        artwork = await asyncio.to_thread(get_storage_backend().download, clip.artwork_path)
+    except Exception:  # best-effort like a SoundCloud failure: stay private and let the next share retry
+        logger.warning("Release %s: replacement cover %r cannot be read", release.id, clip.artwork_path)
+        return False
+    await sc.update_track_artwork(access_token, release.soundcloud_track_id, artwork)
+    replaced = await Clip.find({"_id": clip.id, "artwork_path": clip.artwork_path}).update(
+        {"$pull": {"soundcloud_stale_artwork_track_ids": release.soundcloud_track_id}}
+    )
+    return bool(replaced.modified_count)
+
+
 async def _sync_soundcloud_sharing(release: Release, state: VisibilityState, settings: ApiSettings) -> None:
     """Best-effort mirror of a release's visibility onto its SoundCloud track.
 
@@ -406,8 +448,16 @@ async def _sync_soundcloud_sharing(release: Release, state: VisibilityState, set
     whole request on an external dependency.
     """
     sharing = "public" if state == VisibilityState.PUBLIC else "private"
+    clip = await Clip.get(release.clip_id) if sharing == "public" else None
     try:
         connection = await sc.get_valid_connection(str(release.user_id), settings)
+        if clip is not None and not await _replace_stale_artwork(release, clip, connection.access_token):
+            logger.warning("Release %s stays private on SoundCloud: its dropped cover has no replacement", release.id)
+            return
         await sc.update_track_sharing(connection.access_token, release.soundcloud_track_id, sharing)
+        if clip is not None and clip.artwork_path:
+            # A cover dropped while this share was in flight queued its un-share before the track went public (#619).
+            if not await Clip.find_one({"_id": clip.id, "artwork_path": clip.artwork_path}):
+                await release_service.queue_track(release.user_id, clip.id, release.soundcloud_track_id)
     except sc.SoundCloudError as exc:
         logger.warning("SoundCloud sharing sync for release %s failed: %s", release.id, exc)

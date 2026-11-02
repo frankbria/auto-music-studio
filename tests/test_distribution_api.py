@@ -681,6 +681,7 @@ class TestRemovalMidUpload:
         assert resp.status_code == 200
         await _drain(settings)
         assert shared == [("1001", "private")]
+        assert (await Clip.get(clip.id)).soundcloud_stale_artwork_track_ids == ["1001"]
 
     async def test_an_upload_with_its_cover_intact_is_not_taken_down(
         self, client, settings, local_storage, monkeypatch

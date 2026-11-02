@@ -67,6 +67,9 @@ class Clip(Document):
     artwork_path: str | None = None
     #: Every SoundCloud track uploaded from this clip, with or without a release, so a takedown can un-share it (#569).
     soundcloud_track_ids: list[str] = Field(default_factory=list)
+    #: #619: tracks that went out with a cover moderation since dropped. They can't be shared again until the owner
+    #: has picked a new cover and the re-share has replaced the track's artwork.
+    soundcloud_stale_artwork_track_ids: list[str] = Field(default_factory=list)
     # International Standard Recording Code (US-13.4). Identifies this *recording*;
     # minted (or reused) when the clip is first packaged into a release and shared
     # with that release. Globally unique via the partial index below — a recording

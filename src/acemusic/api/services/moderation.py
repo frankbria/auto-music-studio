@@ -502,6 +502,9 @@ async def _drop_artwork(option: ArtworkOption) -> dict | None:
         # And again once cleared: an upload that recorded its track in between still saw the cover. Anything
         # recorded from here on sees the cover gone and queues itself (routers/distribution.soundcloud_upload).
         queued = await release_service.queue_unshares({"clip_id": option.clip_id}, {"_id": option.clip_id})
+        await Clip.find({"_id": option.clip_id}).update(
+            {"$addToSet": {"soundcloud_stale_artwork_track_ids": {"$each": queued}}}
+        )
     await _delete_artwork_object(option.storage_path)
     details: dict = {"clip_id": str(option.clip_id), "was_cover": bool(cleared.modified_count)}
     if queued:

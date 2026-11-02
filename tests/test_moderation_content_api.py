@@ -685,6 +685,7 @@ class TestArtworkActions:
         assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["sc-cover"]
         [entry] = await ModerationLogEntry.find(ModerationLogEntry.target_type == "artwork").to_list()
         assert entry.details["soundcloud_unshare_queued"] == ["sc-cover"]
+        assert (await Clip.get(clip.id)).soundcloud_stale_artwork_track_ids == ["sc-cover"]
 
     async def test_a_cover_drop_that_cannot_queue_can_be_retried(self, client, settings, local_storage, monkeypatch):
         # Queueing runs before the option is deleted, so a failure leaves the drop retryable.
@@ -738,6 +739,7 @@ class TestArtworkActions:
         await _act(client, await _admin(), settings, "artwork", "drop", [option.id])
 
         assert await SoundCloudUnshare.find_all().to_list() == []
+        assert (await Clip.get(clip.id)).soundcloud_stale_artwork_track_ids == []
 
     async def test_dropping_an_unselected_option_leaves_the_cover(self, client, settings, local_storage):
         option, clip = await _artwork(local_storage)
