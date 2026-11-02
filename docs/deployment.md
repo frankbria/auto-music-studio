@@ -72,14 +72,18 @@ project's own servers are in the operator's runbook, not here. Replace `example.
    - *Automatic deploys:* see [Enabling it](#enabling-it) and [Staging](#staging-699).
    - *Error tracking:* set `ACEMUSIC_API_SENTRY_DSN` in `.env.docker`.
    - *Uptime:* `scripts/uptime-monitor.sh` checks the health URL and posts to a webhook after three failed checks
-     in a row (over two minutes down), and again on recovery. Run it every minute with a systemd timer:
+     in a row (over two minutes down), and again on recovery. Copy it to `/usr/local/bin/acemusic-uptime-monitor`
+     on the machine that runs it, put `HEALTH_URL=https://example.com/api/v1/health` and the webhook
+     (`ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...`, or `https://ntfy.sh/<topic>` with `ALERT_FORMAT=ntfy`)
+     in `/etc/acemusic-uptime.env` with `chmod 600`, since the webhook URL is a secret, and run it every minute with
+     a systemd timer:
      ```ini
      # /etc/systemd/system/acemusic-uptime.service
      [Service]
      Type=oneshot
-     Environment=HEALTH_URL=https://example.com/api/v1/health
-     Environment=ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
-     ExecStart=/opt/acemusic/uptime-monitor.sh
+     EnvironmentFile=/etc/acemusic-uptime.env
+     StateDirectory=acemusic-uptime
+     ExecStart=/usr/local/bin/acemusic-uptime-monitor
 
      # /etc/systemd/system/acemusic-uptime.timer
      [Timer]
@@ -88,7 +92,7 @@ project's own servers are in the operator's runbook, not here. Replace `example.
      [Install]
      WantedBy=timers.target
      ```
-     then `systemctl enable --now acemusic-uptime.timer`. `ALERT_FORMAT=discord` or `ntfy` changes the payload.
+     then `systemctl enable --now acemusic-uptime.timer`. `ALERT_FORMAT=discord` changes the payload for a Discord webhook.
      Run it from a different machine than the one it watches, or a whole-server outage takes the monitor with it.
 
 ## What the images guarantee

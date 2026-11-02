@@ -20,9 +20,11 @@ def rig(tmp_path: Path):
     posts = tmp_path / "posts.log"
     bodies = tmp_path / "bodies.log"
     down = tmp_path / "down"
+    webhook_down = tmp_path / "webhook_down"
     (bin_dir / "curl").write_text(f"""#!/bin/sh
 case "$*" in
-  *"-X POST"*) echo "$*" >> {posts}
+  *"-X POST"*) [ -f {webhook_down} ] && exit 22
+    echo "$*" >> {posts}
     while [ $# -gt 0 ]; do [ "$1" = --data ] && printf '%s\\n' "$2" >> {bodies}; shift; done
     exit 0 ;;
 esac
@@ -50,6 +52,7 @@ exit 0
 
     run.bodies = bodies
     run.state = tmp_path / "state" / "uptime"
+    run.webhook_down = webhook_down
     return run, alerts, down
 
 
@@ -136,3 +139,21 @@ def test_a_damaged_state_file_starts_the_count_again(rig) -> None:
     assert run().returncode == 0
     assert run.state.read_text() == "1 0\n"
     assert alerts() == []
+
+
+def test_an_alert_that_fails_to_send_is_retried_on_the_next_run(rig) -> None:
+    run, alerts, down = rig
+    down.touch()
+    run()
+    run()
+    run.webhook_down.touch()
+
+    assert run().returncode != 0
+    assert run.state.read_text().split() == ["2", "0"]
+
+    run.webhook_down.unlink()
+    run()
+
+    [alert] = alerts()
+    assert "has failed 3 checks in a row." in alert
+    assert run.state.read_text().split() == ["3", "1"]
