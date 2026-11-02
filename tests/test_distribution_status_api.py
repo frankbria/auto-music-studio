@@ -14,7 +14,15 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, NotificationEvent, Release, SoundCloudConnection, VisibilityState, Workspace
+from acemusic.api.models import (
+    Clip,
+    NotificationEvent,
+    Release,
+    SoundCloudConnection,
+    SoundCloudUnshare,
+    VisibilityState,
+    Workspace,
+)
 from acemusic.api.services import soundcloud as sc
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
@@ -403,3 +411,60 @@ class TestReshareAfterDroppedCover:
         assert soundcloud_calls == []
         clip = await Clip.get(PydanticObjectId(created["clip_id"]))
         assert clip.soundcloud_stale_artwork_track_ids == ["789"]
+
+    async def test_an_unreadable_new_cover_keeps_the_track_private(
+        self, client, settings, soundcloud_calls, local_storage
+    ) -> None:
+        user, created = await self._stale_release(client, settings, "ds-619-gone@example.com", "art/missing.png")
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 200
+        assert soundcloud_calls == []
+        clip = await Clip.get(PydanticObjectId(created["clip_id"]))
+        assert clip.soundcloud_stale_artwork_track_ids == ["789"]
+
+    async def test_a_cover_dropped_during_the_artwork_upload_keeps_the_track_private(
+        self, client, settings, soundcloud_calls, local_storage, monkeypatch
+    ) -> None:
+        local_storage.upload("art/new-cover.png", b"new-cover")
+        user, created = await self._stale_release(client, settings, "ds-619-race@example.com", "art/new-cover.png")
+        clip_id = PydanticObjectId(created["clip_id"])
+
+        async def _dropped_mid_upload(access_token: str, track_id: str, artwork: bytes) -> dict:
+            await Clip.find_one(Clip.id == clip_id).update({"$set": {"artwork_path": None}})
+            return {}
+
+        monkeypatch.setattr(sc, "update_track_artwork", _dropped_mid_upload)
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 200
+        assert soundcloud_calls == []
+        assert (await Clip.get(clip_id)).soundcloud_stale_artwork_track_ids == ["789"]
+
+    async def test_a_cover_dropped_during_the_share_queues_the_track_down(
+        self, client, settings, local_storage, monkeypatch
+    ) -> None:
+        user = await make_user("ds-619-share-race@example.com")
+        created = await _create_release(client, user, settings)
+        await (await Release.get(PydanticObjectId(created["id"]))).set({"soundcloud_track_id": "789"})
+        await SoundCloudConnection(
+            user_id=user.id,
+            soundcloud_user_id="sc-1",
+            access_token="tok",
+            refresh_token="ref",
+            token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ).insert()
+        clip_id = PydanticObjectId(created["clip_id"])
+
+        async def _dropped_mid_share(access_token: str, track_id: str, sharing: str) -> dict:
+            await Clip.find_one(Clip.id == clip_id).update({"$set": {"artwork_path": None}})
+            return {}
+
+        monkeypatch.setattr(sc, "update_track_sharing", _dropped_mid_share)
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 200
+        assert [row.track_id for row in await SoundCloudUnshare.find_all().to_list()] == ["789"]
