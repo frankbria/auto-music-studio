@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 
-import { GET, POST } from "@/app/api/admin/[...path]/route"
+import { DELETE, GET, POST, PUT } from "@/app/api/admin/[...path]/route"
 
 const ctx = (path: string[]) => ({ params: Promise.resolve({ path }) })
 
@@ -22,6 +22,38 @@ afterEach(() => {
 })
 
 describe("/api/admin/[...path]", () => {
+  it.each([
+    ["PUT", PUT],
+    ["DELETE", DELETE],
+  ] as const)(
+    "forwards a staff-pick %s with the token (#656)",
+    async (method, handler) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ staff_picked_at: null }), {
+            status: 200,
+          })
+        )
+      vi.stubGlobal("fetch", fetchMock)
+
+      const res = await handler(
+        req("/api/admin/clips/c1/staff-pick", {
+          method,
+          headers: { authorization: "Bearer tok" },
+        }),
+        ctx(["clips", "c1", "staff-pick"])
+      )
+
+      expect(res.status).toBe(200)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toContain("/api/v1/admin/clips/c1/staff-pick")
+      expect(init.method).toBe(method)
+      expect(init.headers.authorization).toBe("Bearer tok")
+      expect(init.body).toBeUndefined()
+    }
+  )
+
   it("401s without an Authorization header (never reaches the backend)", async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal("fetch", fetchMock)

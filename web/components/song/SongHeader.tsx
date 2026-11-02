@@ -2,7 +2,11 @@
 
 import { useMemo, useState, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { FavouriteIcon, Share01Icon, ThumbsDownIcon } from "@hugeicons/core-free-icons"
+import {
+  FavouriteIcon,
+  Share01Icon,
+  ThumbsDownIcon,
+} from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,6 +15,7 @@ import { ShareModal } from "@/components/song/ShareModal"
 import { VisibilityBadge } from "@/components/song/VisibilityBadge"
 import { VisibilityToggle } from "@/components/song/VisibilityToggle"
 import { usePlayer } from "@/contexts/player-context"
+import { useLikeToggle } from "@/hooks/use-like-toggle"
 import { modeLabel, versionLabel } from "@/lib/clip-labels"
 import { cn } from "@/lib/utils"
 import { visibilityOf, type Clip, type Visibility } from "@/lib/workspace-clips"
@@ -56,15 +61,19 @@ export function SongHeader({
   actions,
 }: SongHeaderProps) {
   const { state, dispatch } = usePlayer()
+  const toggleLike = useLikeToggle()
   const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
-  const dislikedSet = useMemo(() => new Set(state.dislikedIds), [state.dislikedIds])
+  const dislikedSet = useMemo(
+    () => new Set(state.dislikedIds),
+    [state.dislikedIds]
+  )
   const liked = likedSet.has(clip.id)
   const disliked = dislikedSet.has(clip.id)
-  const [optimisticVisibility, setOptimisticVisibility] = useState<Visibility | null>(
-    null
-  )
+  const [optimisticVisibility, setOptimisticVisibility] =
+    useState<Visibility | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
-  const visibility = visibilityProp ?? optimisticVisibility ?? visibilityOf(clip)
+  const visibility =
+    visibilityProp ?? optimisticVisibility ?? visibilityOf(clip)
 
   const version = versionLabel(clip.model)
   const mode = modeLabel(clip.generation_mode)
@@ -118,7 +127,7 @@ export function SongHeader({
           size="icon-sm"
           aria-label={liked ? "Unlike" : "Like"}
           aria-pressed={liked}
-          onClick={() => dispatch({ type: "like/toggle", id: clip.id })}
+          onClick={() => toggleLike(clip.id)}
           className={cn(liked && "text-primary")}
         >
           <HugeiconsIcon

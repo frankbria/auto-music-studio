@@ -25,6 +25,34 @@ describe("shareUrlForClip", () => {
 })
 
 describe("ShareModal", () => {
+  it("counts a share when it opens, and not while closed (#656)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const { rerender } = render(
+      <ShareModal
+        open={false}
+        clipId="c1"
+        clipTitle="My Song"
+        onClose={() => {}}
+      />
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    rerender(
+      <ShareModal open clipId="c1" clipTitle="My Song" onClose={() => {}} />
+    )
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/clips/c1/share", {
+        method: "POST",
+        headers: {},
+      })
+    )
+    vi.unstubAllGlobals()
+  })
+
   it("shows the copyable share link", () => {
     render(
       <ShareModal open clipId="c1" clipTitle="My Song" onClose={() => {}} />
@@ -44,9 +72,7 @@ describe("ShareModal", () => {
 
     await user.click(screen.getByRole("button", { name: "Copy link" }))
     expect(writeText).toHaveBeenCalledWith(shareUrlForClip("c1"))
-    await waitFor(() =>
-      expect(screen.getByText("Copied!")).toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText("Copied!")).toBeInTheDocument())
   })
 
   it("offers X and Facebook share intents pointed at the link", () => {

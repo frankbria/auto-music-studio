@@ -34,7 +34,14 @@ function Stat({ icon, value }: { icon: typeof PlayIcon; value: number }) {
   )
 }
 
-export function ExploreClipCard({ clip }: { clip: Clip }) {
+export function ExploreClipCard({
+  clip,
+  rank,
+}: {
+  clip: Clip
+  /** Chart position, shown over the artwork (#656). */
+  rank?: number
+}) {
   const version = versionLabel(clip.model)
   const styleText = clip.style_tags.join(", ")
   const hasStats =
@@ -57,6 +64,14 @@ export function ExploreClipCard({ clip }: { clip: Clip }) {
             aria-hidden
             className="group-hover/card:opacity-0"
           />
+          {rank != null && (
+            <span
+              data-testid="clip-rank"
+              className="absolute top-1 left-1 flex size-6 items-center justify-center rounded-md bg-background/85 text-sm font-bold tabular-nums"
+            >
+              {rank}
+            </span>
+          )}
           <span
             aria-hidden
             className="absolute inset-0 flex items-center justify-center bg-background/30 opacity-0 transition-opacity group-hover/card:opacity-100"

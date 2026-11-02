@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -104,6 +104,53 @@ const sentinel = (c: HTMLElement) =>
   c.querySelector('[data-testid="feed-sentinel"]')!
 
 describe("FeedView", () => {
+  const renderSignedInFeed = () =>
+    render(
+      <SignedIn>
+        <PlayerProvider>
+          <FeedView />
+        </PlayerProvider>
+      </SignedIn>
+    )
+
+  const heart = (item: HTMLElement) =>
+    within(item).getByRole("button", { name: /^Liked?$/ })
+
+  it("shows the viewer's server-side likes, and clears a like removed elsewhere (#656)", async () => {
+    window.localStorage.setItem(
+      "ams.player.v1",
+      JSON.stringify({ likedIds: ["unliked-elsewhere"] })
+    )
+    stubPages({
+      "": () =>
+        discoverPage([
+          makeClip({ id: "liked", viewer_liked: true }),
+          makeClip({ id: "unliked-elsewhere", viewer_liked: false }),
+        ]),
+    })
+    renderSignedInFeed()
+    const [liked, unliked] = await screen.findAllByTestId("feed-item")
+    expect(heart(liked)).toHaveAttribute("aria-pressed", "true")
+    await waitFor(() =>
+      expect(heart(unliked)).toHaveAttribute("aria-pressed", "false")
+    )
+    window.localStorage.removeItem("ams.player.v1")
+  })
+
+  it("leaves a signed-out viewer's local likes alone (#656)", async () => {
+    window.localStorage.setItem(
+      "ams.player.v1",
+      JSON.stringify({ likedIds: ["mine"] })
+    )
+    stubPages({
+      "": () => discoverPage([makeClip({ id: "mine", viewer_liked: false })]),
+    })
+    renderFeed()
+    const [mine] = await screen.findAllByTestId("feed-item")
+    expect(heart(mine)).toHaveAttribute("aria-pressed", "true")
+    window.localStorage.removeItem("ams.player.v1")
+  })
+
   it("shows a loader, then the newest public clips (AC1)", async () => {
     const fetchMock = stubPages({ "": () => discoverPage(clips("a", 3), "c2") })
     renderFeed()

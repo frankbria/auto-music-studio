@@ -50,13 +50,14 @@ export type Clip = {
    */
   is_owner?: boolean
   /**
-   * Engagement counters for discovery ranking (trending/charts, US-20.1).
-   * Optional: the backend has no counters yet, so authed/owner reads omit them
-   * and only the Explore mock service populates them. Gate on presence.
+   * Plays and likes (#656), on the public reads only; owner-scoped reads omit them, so gate on presence. Shares are
+   * counted too but admin-only, so a public read never carries `share_count`.
    */
   play_count?: number
   like_count?: number
   share_count?: number
+  /** Whether the signed-in viewer liked this clip (#656); public reads only. */
+  viewer_liked?: boolean
   /**
    * Set by a moderator's "flag" action (US-27.3): the clip stays up with a
    * listener-visible label. Optional because mock/older reads omit it.
@@ -79,7 +80,9 @@ export type Clip = {
  * Single source of truth for a clip's visibility (US-20.7). Prefers the
  * `visibility` field; falls back to `is_public` for reads that predate it.
  */
-export function visibilityOf(clip: Pick<Clip, "visibility" | "is_public">): Visibility {
+export function visibilityOf(
+  clip: Pick<Clip, "visibility" | "is_public">
+): Visibility {
   return clip.visibility ?? (clip.is_public ? "public" : "private")
 }
 

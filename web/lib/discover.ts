@@ -3,7 +3,13 @@
 
 import type { Clip } from "@/lib/workspace-clips"
 
-export type DiscoverSort = "newest" | "relevance"
+export type DiscoverSort =
+  | "newest"
+  | "relevance"
+  | "popular"
+  | "trending_24h"
+  | "trending_7d"
+  | "staff_picks"
 
 /** Query for GET /api/v1/discover/clips; empty and null fields are left out. */
 export type DiscoverQuery = {

@@ -7,11 +7,16 @@ import {
   type DiscoverSort,
 } from "@/lib/discover"
 
-export type SearchSort = DiscoverSort
+/** Trending and staff picks are Explore rows; trending can't take a query at all. */
+export type SearchSort = Extract<
+  DiscoverSort,
+  "relevance" | "newest" | "popular"
+>
 
 export const SEARCH_SORTS: { value: SearchSort; label: string }[] = [
   { value: "relevance", label: "Relevance" },
   { value: "newest", label: "Newest" },
+  { value: "popular", label: "Most Popular" },
 ]
 
 const SORT_VALUES = new Set<SearchSort>(SEARCH_SORTS.map((s) => s.value))

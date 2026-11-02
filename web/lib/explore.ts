@@ -1,7 +1,7 @@
 // Explore page data (US-20.1): static genre channel tiles that link to Search,
 // and New Releases, the newest public clips from the discovery API (#651).
 
-import { fetchPublicClips } from "@/lib/discover"
+import { fetchPublicClips, type DiscoverSort } from "@/lib/discover"
 import type { Clip } from "@/lib/workspace-clips"
 
 /** A genre channel tile. Mirrors the eventual GET /genres shape. */
@@ -30,11 +30,19 @@ export function getGenreChannels(): Genre[] {
 
 export const NEW_RELEASES_LIMIT = 12
 
-/** Newest public clips. */
-export async function getNewReleases(token?: string | null): Promise<Clip[]> {
+/** One Explore row: the first public clips in `sort` order (#656). */
+export async function getSectionClips(
+  sort: DiscoverSort,
+  token?: string | null
+): Promise<Clip[]> {
   const page = await fetchPublicClips(
-    { sort: "newest", limit: NEW_RELEASES_LIMIT },
+    { sort, limit: NEW_RELEASES_LIMIT },
     token
   )
   return page.clips
+}
+
+/** Newest public clips. */
+export function getNewReleases(token?: string | null): Promise<Clip[]> {
+  return getSectionClips("newest", token)
 }

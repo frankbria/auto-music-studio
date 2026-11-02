@@ -88,10 +88,12 @@ describe("parseSearchParams / buildSearchQuery round-trip", () => {
     expect(parsed.sort).toBe(DEFAULT_SEARCH.sort)
   })
 
-  it("treats an old sort=popular link as the default sort", () => {
-    expect(parseSearchParams(new URLSearchParams("sort=popular")).sort).toBe(
-      "relevance"
-    )
+  it("reads sort=popular, and treats an Explore-only or unknown sort as the default (#656)", () => {
+    const sortOf = (qs: string) =>
+      parseSearchParams(new URLSearchParams(qs)).sort
+    expect(sortOf("sort=popular")).toBe("popular")
+    expect(sortOf("sort=trending_7d")).toBe("relevance")
+    expect(sortOf("sort=bogus")).toBe("relevance")
   })
 
   it("omits default/empty values from the built query for clean URLs", () => {

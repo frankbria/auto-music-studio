@@ -167,15 +167,49 @@ describe("ClipCard", () => {
     expect(screen.getByText("Midnight")).toBeInTheDocument()
   })
 
-  it("toggles like via the player store", async () => {
-    renderCard()
-    const like = screen.getByRole("button", { name: "Like" })
-    expect(like).toHaveAttribute("aria-pressed", "false")
-    await userEvent.click(like)
-    expect(screen.getByRole("button", { name: "Unlike" })).toHaveAttribute(
-      "aria-pressed",
-      "true"
+  it("likes on the server for a signed-in user (#656)", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ liked: true, like_count: 1 }), {
+          status: 200,
+        })
     )
+    vi.stubGlobal("fetch", fetchMock)
+    try {
+      renderCard()
+      const like = screen.getByRole("button", { name: "Like" })
+      expect(like).toHaveAttribute("aria-pressed", "false")
+      await userEvent.click(like)
+      expect(screen.getByRole("button", { name: "Unlike" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/clips/c1/like",
+        expect.objectContaining({ method: "PUT" })
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("puts the heart back when the like doesn't save (#656)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 503 }))
+    )
+    try {
+      renderCard()
+      await userEvent.click(screen.getByRole("button", { name: "Like" }))
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Like" })).toHaveAttribute(
+          "aria-pressed",
+          "false"
+        )
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("fires dislike and share callbacks", async () => {

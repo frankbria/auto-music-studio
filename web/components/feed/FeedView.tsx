@@ -1,11 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useContext, useEffect, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { FeedItemCard } from "@/components/feed/FeedItemCard"
 import { Button } from "@/components/ui/button"
+import { PlayerContext } from "@/contexts/player-context"
 import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
 import { getFeedPage, type FeedItem } from "@/lib/feed"
 
@@ -39,25 +40,41 @@ export function FeedView() {
 
   const viewer = useDiscoveryAuth()
   const { token } = viewer
+  // The viewer's server-side likes (#656); absent outside a PlayerProvider.
+  const syncLikes = useContext(PlayerContext)?.dispatch
   const loadPage = useCallback(
     (cursor: string | null) => {
       const requestKey = cursor ?? ""
       if (requestedCursors.current.has(requestKey)) return
       requestedCursors.current.add(requestKey)
-      getFeedPage(cursor, token()).then(
-        (page) =>
+      const viewerToken = token()
+      getFeedPage(cursor, viewerToken).then(
+        (page) => {
+          // Only a signed-in read knows the viewer's likes; an anonymous one says false for every clip.
+          if (viewerToken) {
+            syncLikes?.({
+              type: "likes/sync",
+              liked: page.items
+                .filter((item) => item.viewer_liked)
+                .map((item) => item.id),
+              unliked: page.items
+                .filter((item) => !item.viewer_liked)
+                .map((item) => item.id),
+            })
+          }
           setFeed((current) => ({
             items: [...current.items, ...page.items],
             nextCursor: page.nextCursor,
             status: "ready",
-          })),
+          }))
+        },
         () => {
           requestedCursors.current.delete(requestKey)
           setFeed((current) => ({ ...current, status: "error" }))
         }
       )
     },
-    [token]
+    [syncLikes, token]
   )
 
   useEffect(() => {
