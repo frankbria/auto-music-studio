@@ -549,9 +549,10 @@ async def _handle_checkout_completed(
     # since cancelled, then report "duplicate" as though nothing had happened.
     if _is_stale(user, occurred_at):
         logger.info("billing: dropping superseded checkout event for %s", user.id)
-        if not await _record_event(user, event_id, event_type):
-            return "duplicate"
-        return "stale"
+        recorded = await _record_event(user, event_id, event_type)
+        # The plan was still paid for: a newer subscription event moves the tier, but it grants no credits (#704).
+        await _grant_plan_credits(event_id, user, session)
+        return "stale" if recorded else "duplicate"
 
     user.stripe_subscription_id = session.get("subscription") or user.stripe_subscription_id
     user.subscription_tier = _checkout_plan(session)
@@ -570,9 +571,14 @@ async def _handle_checkout_completed(
 
     recorded = await _record_event(user, event_id, event_type)
     # Still attempted on a redelivery: a crash after recording must not cost the subscriber their credits.
-    tier = user.subscription_tier
-    await _grant_once(event_id, lambda: credits_service.grant_plan_allocation(user.id, tier))
+    await _grant_plan_credits(event_id, user, session)
     return "subscribed" if recorded else "duplicate"
+
+
+async def _grant_plan_credits(event_id: str, user: User, session: dict[str, Any]) -> None:
+    """Grant the monthly allocation of the plan this checkout paid for, once per event (#704)."""
+    plan = _checkout_plan(session)
+    await _grant_once(event_id, lambda: credits_service.grant_plan_allocation(user.id, plan))
 
 
 def _unknown_price_tier(user: User, subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str:
@@ -609,7 +615,10 @@ async def _grant_once(event_id: str, grant: Callable[[], Awaitable[object]]) -> 
     try:
         await grant()
     except Exception:
-        await collection.update_one({"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}})
+        try:
+            await collection.update_one({"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}})
+        except Exception:  # the grant's own error is the one to surface; this only costs the redelivery its retry
+            logger.exception("billing: could not release the grant claim on %s", event_id)
         raise
     return True
 

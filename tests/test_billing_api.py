@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -25,7 +26,7 @@ from fastapi.testclient import TestClient
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import BillingEvent, CreditTransaction, User
-from acemusic.api.services import billing as billing_service
+from acemusic.api.services import billing as billing_service, credits as credits_service
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -297,6 +298,36 @@ class TestPlanCreditsOnCheckout:
         resp = await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_1"})
 
         assert resp.status_code == 200
+        assert (await User.get(user.id)).credits_balance == 500.0
+
+    async def test_a_checkout_arriving_after_a_newer_subscription_event_still_grants(self, client) -> None:
+        # Stripe does not order deliveries: the subscription's own update can land first, which makes the checkout
+        # stale for the tier but must not cost the subscriber their credits.
+        user = await _subscriber("plan-credits-late@example.com")
+        await _post_event_at(client, "customer.subscription.updated", _subscription(), "evt_sub_first", 1_700_000_100)
+
+        resp = await _post_event_at(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1"},
+            "evt_checkout_late",
+            1_700_000_000,
+        )
+
+        assert resp.status_code == 200
+        assert (await User.get(user.id)).credits_balance == 500.0
+
+    async def test_a_monthly_reset_that_read_before_the_grant_adds_nothing(self, client) -> None:
+        user = await _subscriber("plan-credits-reset-race@example.com")
+        long_ago = datetime.now(timezone.utc) - timedelta(days=90)
+        await User.find_one(User.id == user.id).update(
+            {"$set": {"created_at": long_ago, "credits_reset_at": long_ago, "credits_balance": 10.0}}
+        )
+        overdue_free_read = await User.get(user.id)
+
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+        await credits_service.apply_monthly_reset(overdue_free_read)
+
         assert (await User.get(user.id)).credits_balance == 500.0
 
 

@@ -235,15 +235,28 @@ async def grant_purchased_credits(user_id: PydanticObjectId, amount: float) -> f
 async def grant_plan_allocation(user_id: PydanticObjectId, tier: str) -> float:
     """Raise the monthly bucket to ``tier``'s allocation when the plan is bought (#704); return what was added.
 
-    Never lowers it, like the monthly reset, so a balance already above the allocation keeps its surplus.
+    Never lowers it, like the monthly reset, so a balance already above the allocation keeps its surplus. The grant
+    covers the current period, so it stamps that period's reset anchor: a lazy reset that read the old anchor (and the
+    old tier) then matches nothing and re-reads, instead of adding its top-up on top of this one.
     """
     from . import tiers
 
+    user = await User.get(user_id)
+    if user is None:
+        return 0.0
+    created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
     allocation = tiers.monthly_allocation(tier)
     monthly = {"$ifNull": ["$credits_balance", DEFAULT_CREDITS_BALANCE]}
     before = await User.get_pymongo_collection().find_one_and_update(
         {"_id": user_id},
-        [{"$set": {"credits_balance": {"$max": [monthly, allocation]}}}],
+        [
+            {
+                "$set": {
+                    "credits_balance": {"$max": [monthly, allocation]},
+                    "credits_reset_at": _period_start(created, datetime.now(timezone.utc)),
+                }
+            }
+        ],
         return_document=ReturnDocument.BEFORE,
     )
     if before is None:
