@@ -13,9 +13,9 @@ from acemusic.api.services.tiers import Capability
 class TestNormalise:
     @pytest.mark.parametrize(
         "value",
-        [None, "", "free", "FREE", "Pro", "PRO", "premium", "pro ", " pro", "enterprise", "0"],
+        [None, "", "free", "FREE", "Pro", "PRO", "premium", "pro ", " pro", "Enterprise", "enterprise ", "0"],
     )
-    def test_anything_that_is_not_exactly_pro_is_free(self, value) -> None:
+    def test_anything_that_is_not_exactly_a_paid_tier_is_free(self, value) -> None:
         # A typo in a database field must not hand out Pro. Case and whitespace included:
         # the frontend applies the same exact-match rule, and the two must not disagree.
         assert tiers.normalise(value) == tiers.FREE
@@ -23,11 +23,26 @@ class TestNormalise:
     def test_pro_is_pro(self) -> None:
         assert tiers.normalise("pro") == tiers.PRO
 
+    def test_enterprise_is_enterprise(self) -> None:
+        """#695."""
+        assert tiers.normalise("enterprise") == tiers.ENTERPRISE
+        assert tiers.is_paid("enterprise") and tiers.is_paid("pro") and not tiers.is_paid("free")
+
 
 class TestAllows:
     @pytest.mark.parametrize("capability", list(Capability))
-    def test_pro_may_do_everything(self, capability) -> None:
+    def test_enterprise_may_do_everything(self, capability) -> None:
+        assert tiers.allows("enterprise", capability)
+
+    @pytest.mark.parametrize("capability", [c for c in Capability if c is not Capability.VIDEO_4K])
+    def test_pro_may_do_everything_but_the_enterprise_capabilities(self, capability) -> None:
         assert tiers.allows("pro", capability)
+
+    def test_4k_video_is_enterprise_only(self) -> None:
+        """#695: 4K costs about $0.43 per rendered second."""
+        assert not tiers.allows("pro", Capability.VIDEO_4K)
+        assert tiers.required_tier(Capability.VIDEO_4K) == tiers.ENTERPRISE
+        assert tiers.required_tier(Capability.STEMS) == tiers.PRO
 
     @pytest.mark.parametrize("capability", list(Capability))
     def test_free_may_do_none_of_the_gated_capabilities(self, capability) -> None:
@@ -44,6 +59,7 @@ class TestAllocations:
     def test_the_documented_monthly_allocations(self) -> None:
         assert tiers.monthly_allocation("free") == 50.0
         assert tiers.monthly_allocation("pro") == 500.0
+        assert tiers.monthly_allocation("enterprise") == 2500.0
 
     def test_an_unknown_tier_gets_the_free_allocation(self) -> None:
         # Not a KeyError, and not the Pro allowance.

@@ -171,6 +171,8 @@ def settings(mongo_db, mongo_settings) -> ApiSettings:
             "stripe_secret_key": "sk_test_x",
             "stripe_webhook_secret": WEBHOOK_SECRET,
             "stripe_price_id_pro": "price_x",
+            "stripe_price_id_pro_annual": "price_pro_year",
+            "stripe_price_id_enterprise_monthly": "price_ent_month",
         }
     )
 
@@ -477,7 +479,7 @@ class TestCheckoutSurface:
     async def test_it_returns_the_url_from_stripe(self, client, settings, monkeypatch) -> None:
         user = await _subscriber("sub-checkout@example.com")
 
-        async def _fake_session(user_arg, settings_arg):
+        async def _fake_session(user_arg, settings_arg, *_plan_and_interval):
             return "https://checkout.stripe.com/c/pay/test_session"
 
         monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
@@ -488,7 +490,7 @@ class TestCheckoutSurface:
     async def test_it_503s_when_stripe_is_not_configured(self, client, settings, monkeypatch) -> None:
         user = await _subscriber("sub-unconfigured@example.com")
 
-        async def _unconfigured(user_arg, settings_arg):
+        async def _unconfigured(user_arg, settings_arg, *_plan_and_interval):
             raise billing_service.BillingNotConfigured("Stripe is not configured.")
 
         monkeypatch.setattr(billing_service, "create_checkout_session", _unconfigured)
@@ -525,7 +527,7 @@ class TestCheckoutSurface:
             event_id="evt_lapsed",
         )
 
-        async def _fake_session(user_arg, settings_arg):
+        async def _fake_session(user_arg, settings_arg, *_plan_and_interval):
             return "https://checkout.stripe.com/c/pay/again"
 
         monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
@@ -634,7 +636,7 @@ class TestChurnedSubscribers:
         await _post_event(client, "customer.subscription.deleted", _subscription("canceled"), event_id="evt_ret_2")
         await _post_event(client, "invoice.payment_failed", {"customer": CUSTOMER}, event_id="evt_ret_3")
 
-        async def _fake_session(user_arg, settings_arg):
+        async def _fake_session(user_arg, settings_arg, *_plan_and_interval):
             return "https://checkout.stripe.com/c/pay/welcome_back"
 
         monkeypatch.setattr(billing_service, "create_checkout_session", _fake_session)
@@ -1179,3 +1181,117 @@ class TestTopUpConcurrency:
 
         assert (await User.get(user.id)).purchased_credits == 100.0, "one purchase, one grant"
         assert await BillingEvent.find(BillingEvent.user_id == user.id).count() == 1
+
+
+class _CapturedSession:
+    url = "https://checkout.stripe.test/session"
+
+
+class _CapturingStripe:
+    """Records the Checkout params instead of calling Stripe (the session body is what #695 changes)."""
+
+    def __init__(self) -> None:
+        self.params: dict = {}
+        self.checkout = self
+        self.sessions = self
+
+    def create(self, params: dict) -> _CapturedSession:
+        self.params = params
+        return _CapturedSession()
+
+
+@pytest.mark.integration
+class TestPlans:
+    """#695: Pro and Enterprise, each billed monthly or annually."""
+
+    async def _checkout(self, client, settings, monkeypatch, body: dict | None, **setting_overrides):
+        stripe = _CapturingStripe()
+        monkeypatch.setattr(billing_service, "_client", lambda _settings: stripe)
+        if setting_overrides:
+            app_settings = settings.model_copy(update=setting_overrides)
+            async with _async_client(create_app(app_settings)) as other:
+                user = await _subscriber(f"plans-{len(str(body))}-{next(iter(setting_overrides))}@example.com")
+                resp = await other.post(CHECKOUT_URL, json=body, headers=_auth_headers(user, app_settings))
+            return resp, stripe
+        user = await _subscriber(f"plans-{body and body.get('plan')}-{body and body.get('interval')}@example.com")
+        resp = await client.post(CHECKOUT_URL, json=body, headers=_auth_headers(user, settings))
+        return resp, stripe
+
+    async def test_checkout_uses_the_price_for_the_plan_and_interval(self, client, settings, monkeypatch) -> None:
+        resp, stripe = await self._checkout(client, settings, monkeypatch, {"plan": "enterprise", "interval": "month"})
+        assert resp.status_code == 200, resp.text
+        assert stripe.params["line_items"] == [{"price": "price_ent_month", "quantity": 1}]
+        assert stripe.params["metadata"] == {"acemusic_plan": "enterprise"}
+        assert "managed_payments" not in stripe.params
+
+    async def test_no_body_is_pro_monthly_as_before(self, client, settings, monkeypatch) -> None:
+        resp, stripe = await self._checkout(client, settings, monkeypatch, None)
+        assert resp.status_code == 200, resp.text
+        assert stripe.params["line_items"] == [{"price": "price_x", "quantity": 1}]
+
+    async def test_an_unconfigured_interval_is_503(self, client, settings, monkeypatch) -> None:
+        resp, _stripe = await self._checkout(client, settings, monkeypatch, {"plan": "enterprise", "interval": "year"})
+        assert resp.status_code == 503
+
+    async def test_managed_payments_is_switched_on_when_configured(self, client, settings, monkeypatch) -> None:
+        resp, stripe = await self._checkout(
+            client, settings, monkeypatch, {"plan": "pro", "interval": "year"}, stripe_managed_payments=True
+        )
+        assert resp.status_code == 200, resp.text
+        assert stripe.params["managed_payments"] == {"enabled": True}
+        assert stripe.params["line_items"] == [{"price": "price_pro_year", "quantity": 1}]
+
+    async def test_a_completed_enterprise_checkout_grants_enterprise(self, client) -> None:
+        user = await _subscriber("plans-ent-granted@example.com")
+        resp = await _post_event(
+            client,
+            "checkout.session.completed",
+            {"customer": CUSTOMER, "subscription": "sub_test_1", "metadata": {"acemusic_plan": "enterprise"}},
+        )
+        assert resp.status_code == 200
+        assert (await User.get(user.id)).subscription_tier == "enterprise"
+
+    async def test_the_tier_follows_the_subscriptions_price_through_a_plan_change(self, client) -> None:
+        user = await _subscriber("plans-change@example.com")
+        on_enterprise = _subscription(
+            items={
+                "object": "list",
+                "data": [{"id": "si_1", "current_period_end": 1_800_000_000, "price": {"id": "price_ent_month"}}],
+            }
+        )
+        await _post_event_at(client, "customer.subscription.updated", on_enterprise, "evt_plan_1", 1_700_000_000)
+        assert (await User.get(user.id)).subscription_tier == "enterprise"
+
+        back_to_pro = _subscription(
+            items={
+                "object": "list",
+                "data": [{"id": "si_1", "current_period_end": 1_800_000_000, "price": {"id": "price_pro_year"}}],
+            }
+        )
+        await _post_event_at(client, "customer.subscription.updated", back_to_pro, "evt_plan_2", 1_700_000_100)
+        assert (await User.get(user.id)).subscription_tier == "pro"
+
+    async def test_plans_lists_prices_credits_and_availability(self, client, settings) -> None:
+        user = await _subscriber("plans-list@example.com")
+        resp = await client.get(f"{API_V1_PREFIX}/billing/plans", headers=_auth_headers(user, settings))
+        assert resp.status_code == 200
+        plans = {p["plan"]: p for p in resp.json()["plans"]}
+        assert plans["pro"]["prices"] == {"month": 24.0, "year": 228.0}
+        assert plans["pro"]["monthly_credits"] == 500.0
+        assert plans["enterprise"]["prices"] == {"month": 99.0, "year": 998.0}
+        assert plans["enterprise"]["monthly_credits"] == 2500.0
+        assert plans["enterprise"]["available"] == {"month": True, "year": False}
+
+    async def test_a_top_up_under_managed_payments_carries_a_tax_code(self, settings, monkeypatch) -> None:
+        stripe = _CapturingStripe()
+        monkeypatch.setattr(billing_service, "_client", lambda _settings: stripe)
+        app_settings = settings.model_copy(update={"stripe_managed_payments": True})
+        user = await _subscriber("plans-topup-managed@example.com")
+        async with _async_client(create_app(app_settings)) as other:
+            resp = await other.post(
+                f"{API_V1_PREFIX}/billing/topup", json={"pack_id": "50"}, headers=_auth_headers(user, app_settings)
+            )
+        assert resp.status_code == 200, resp.text
+        assert stripe.params["managed_payments"] == {"enabled": True}
+        product = stripe.params["line_items"][0]["price_data"]["product_data"]
+        assert product["tax_code"] == billing_service.TOPUP_TAX_CODE

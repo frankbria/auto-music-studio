@@ -139,7 +139,7 @@ async def _is_free_tier(job: Job) -> bool:
     matching :func:`tiers.normalise`'s rule that anything not exactly Pro is free.
     """
     user = await user_service.get_user_by_id(str(job.user_id))
-    return tiers.normalise(user.subscription_tier if user is not None else None) != tiers.PRO
+    return not tiers.is_paid(user.subscription_tier if user is not None else None)
 
 
 async def _recorded_by_sibling(job: Job) -> dict[str, Any] | None:

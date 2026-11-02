@@ -9,11 +9,13 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from beanie import Document, PydanticObjectId
+from beanie import Document, Insert, PydanticObjectId, before_event
 from pydantic import Field
-from pymongo import ASCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
+from ..services.tiers import ENTERPRISE, normalise
 from .common import utcnow
+from .user import User
 
 
 class JobStatus(str, Enum):
@@ -48,6 +50,8 @@ class Job(Document):
     # status endpoint maps this onto its richer vocabulary.
     progress_detail: dict | None = None
     created_at: datetime = Field(default_factory=utcnow)
+    #: #695: Enterprise accounts' jobs are claimed first; set from the owner's tier when the job is created.
+    priority: int = 0
     started_at: datetime | None = None
     # Stamped on claim and re-stamped periodically by the worker running the job
     # (#427). The startup stale sweep keys on this, not ``started_at``, so a job
@@ -65,4 +69,14 @@ class Job(Document):
             # oldest queued job from the index rather than scanning the
             # collection. The (status) prefix also covers plain status lookups.
             IndexModel([("status", ASCENDING), ("job_type", ASCENDING), ("created_at", ASCENDING)]),
+            # The claim's order since #695: Enterprise first, then oldest first.
+            IndexModel(
+                [("status", ASCENDING), ("job_type", ASCENDING), ("priority", DESCENDING), ("created_at", ASCENDING)]
+            ),
         ]
+
+    @before_event(Insert)
+    async def _prioritise(self) -> None:
+        """Every job, however it is created, takes its priority from its owner's tier at queue time."""
+        owner = await User.get(self.user_id)
+        self.priority = 1 if owner is not None and normalise(owner.subscription_tier) == ENTERPRISE else 0

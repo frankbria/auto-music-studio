@@ -25,7 +25,7 @@ from functools import partial
 from typing import Any
 
 from beanie import PydanticObjectId
-from pymongo import ASCENDING, ReturnDocument
+from pymongo import ASCENDING, DESCENDING, ReturnDocument
 
 from acemusic.client import AceStepClient
 from acemusic.config import load_config
@@ -292,7 +292,10 @@ class JobProcessor:
     # -- job discovery -----------------------------------------------------
 
     async def _claim_next_job(self) -> Job | None:
-        """Atomically claim the oldest queued job, or return None if there are none.
+        """Atomically claim the next queued job, or return None if there are none.
+
+        Enterprise accounts' jobs go first (#695), then the oldest. A job queued before #695 has no ``priority``,
+        which sorts after both.
 
         ``find_one_and_update`` is atomic at the document level, so two workers
         racing for the same job are serialised by MongoDB — exactly one wins.
@@ -302,7 +305,7 @@ class JobProcessor:
         doc = await collection.find_one_and_update(
             {"status": JobStatus.QUEUED.value, "job_type": {"$in": list(self._handlers)}},
             {"$set": {"status": JobStatus.PROCESSING.value, "started_at": now, "heartbeat_at": now}},
-            sort=[("created_at", ASCENDING)],
+            sort=[("priority", DESCENDING), ("created_at", ASCENDING)],
             return_document=ReturnDocument.AFTER,
         )
         if doc is None:

@@ -15,12 +15,16 @@ from enum import Enum
 
 FREE = "free"
 PRO = "pro"
+#: #695: every Pro capability plus the Enterprise-only ones, more credits, and a priority job queue.
+ENTERPRISE = "enterprise"
+PAID_TIERS = frozenset({PRO, ENTERPRISE})
 
 #: Monthly credit allocation per tier (US-26.2). This is what a reset tops the balance
 #: back up to on the subscription anniversary.
 MONTHLY_CREDITS = {
     FREE: 50.0,
     PRO: 500.0,
+    ENTERPRISE: 2500.0,
 }
 
 
@@ -39,6 +43,7 @@ class Capability(str, Enum):
     VOICE_MODELS = "voice_models"
     STUDIO_EDITING = "studio_editing"
     HIGH_RES_VIDEO = "high_res_video"
+    VIDEO_4K = "video_4k"
     LOSSLESS_EXPORT = "lossless_export"
 
 
@@ -59,29 +64,45 @@ _DESCRIPTIONS = {
     Capability.DISTRIBUTION: ("Distribution", "publish your releases to streaming platforms"),
     Capability.VOICE_MODELS: ("Custom voice models", "train a voice and sing your songs in it"),
     Capability.STUDIO_EDITING: ("Studio editing", "arrange and mix in the multi-track Studio"),
-    Capability.HIGH_RES_VIDEO: ("1080p and 4K video", "render videos above 720p, without a watermark"),
+    Capability.HIGH_RES_VIDEO: ("1080p video", "render videos above 720p, without a watermark"),
+    Capability.VIDEO_4K: ("4K video", "render videos in 4K"),
     Capability.LOSSLESS_EXPORT: ("Lossless export", "download WAV and FLAC as well as MP3"),
 }
 
 #: Everything in :class:`Capability` is Pro-only — the free tier is deliberately defined
 #: by what it *lacks*, so adding a capability locks it by default rather than leaking it.
 #: A future middle tier would turn this into a per-tier set.
-_PRO_ONLY = frozenset(Capability)
+_ENTERPRISE_ONLY = frozenset({Capability.VIDEO_4K})
+_PRO_ONLY = frozenset(Capability) - _ENTERPRISE_ONLY
 
 
 def normalise(tier: str | None) -> str:
     """The tier to actually apply.
 
-    Anything that is not exactly ``"pro"`` is free — the same rule the frontend uses. An
+    Anything that is not exactly ``"pro"`` or ``"enterprise"`` is free — the same rule the frontend uses. An
     unknown, missing or malformed tier must fail *closed*: a typo in a database field
-    should not hand out Pro.
+    should not hand out a paid plan.
     """
-    return PRO if tier == PRO else FREE
+    return tier if tier in PAID_TIERS else FREE
+
+
+def is_paid(tier: str | None) -> bool:
+    """Whether ``tier`` is a paid plan (Pro or Enterprise); unknown values are not."""
+    return normalise(tier) in PAID_TIERS
+
+
+def required_tier(capability: Capability) -> str:
+    """The cheapest tier that may use ``capability``."""
+    if capability in _ENTERPRISE_ONLY:
+        return ENTERPRISE
+    return PRO if capability in _PRO_ONLY else FREE
 
 
 def allows(tier: str | None, capability: Capability) -> bool:
     """Whether ``tier`` may use ``capability``."""
-    return normalise(tier) == PRO or capability not in _PRO_ONLY
+    needed = required_tier(capability)
+    effective = normalise(tier)
+    return needed == FREE or effective == ENTERPRISE or (needed == PRO and effective == PRO)
 
 
 def monthly_allocation(tier: str | None) -> float:
