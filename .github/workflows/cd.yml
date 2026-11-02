@@ -9,9 +9,10 @@
 # because its credentials were never set, and a pipeline that needs no new secrets cannot
 # fail that way. Docker Hub stays correct for the ACE-Step image, which RunPod pulls.
 #
-# To enable the rollout, set the repository variable DEPLOY_ENABLED=true and populate the
-# `production` environment with DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY. Until then the
-# deploy job is *skipped* — visibly inert, rather than green having done nothing.
+# To enable the production rollout, set the repository variable DEPLOY_ENABLED=true and populate the
+# `production` environment with DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY. Staging (#699) is the same with
+# STAGING_DEPLOY_ENABLED=true and the `staging` environment, plus TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET to reach its
+# host over Tailscale. Until then each deploy job is *skipped*: visibly inert, rather than green having done nothing.
 
 name: CD
 
@@ -114,44 +115,16 @@ jobs:
 
       - name: Ship the stack definition and roll forward
         env:
+          ENVIRONMENT: production
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/srv/acemusic' }}
+          DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
           IMAGE_TAG: ${{ needs.publish.outputs.sha }}
-        run: |
-          set -euo pipefail
-          for required in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
-            if [[ -z "${!required}" ]]; then
-              echo "::error title=Deploy misconfigured::DEPLOY_ENABLED is true but $required is not set on the production environment."
-              exit 1
-            fi
-          done
-
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-          scp -i ~/.ssh/deploy_key compose.yaml scripts/deploy.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
-
-          # Authenticate the host to GHCR. Packages published with GITHUB_TOKEN are
-          # private by default — independent of whether the repository is public — so
-          # without this the very first `docker compose pull` on the host 401s. The token
-          # is scoped to this job and expires with it, which is why this is a login step
-          # rather than another secret to provision and rotate.
-          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -i ~/.ssh/deploy_key \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
-
-          # deploy.sh owns the health gate, the rollback and the idempotence check; this
-          # step only hands it a SHA. Its exit code is the deploy's verdict, so a rolled
-          # back deploy reports failure here rather than green.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd $DEPLOY_PATH && chmod +x deploy.sh && \
-             API_IMAGE='${{ env.API_IMAGE }}' WEB_IMAGE='${{ env.WEB_IMAGE }}' \
-             DEPLOY_DIR='$DEPLOY_PATH' ./deploy.sh '$IMAGE_TAG'"
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/ci-deploy.sh
 
       - name: Confirm the deployed commit
         env:
@@ -160,6 +133,62 @@ jobs:
         # Independent of the host's own check: asks the public endpoint which commit it is
         # serving. The workflow reporting success is not evidence that it did.
         if: vars.PRODUCTION_HEALTH_URL != ''
+        run: |
+          set -euo pipefail
+          running="$(curl -fsS --max-time 10 "$HEALTH_URL" | sed -n 's/.*"build_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+          if [[ "$running" != "$IMAGE_TAG" ]]; then
+            echo "::error title=Deploy not live::$HEALTH_URL reports build_sha='$running', expected '$IMAGE_TAG'."
+            exit 1
+          fi
+          echo "$HEALTH_URL is serving $running"
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: publish
+    runs-on: ubuntu-latest
+    # #699: every green main goes to staging, no approval. Skipped until the repository variable
+    # STAGING_DEPLOY_ENABLED is true, like the production job.
+    if: vars.STAGING_DEPLOY_ENABLED == 'true'
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.publish.outputs.sha }}
+
+      # The staging box is reachable only over Tailscale. An OAuth client rather than an auth key, because auth keys
+      # expire; its node is ephemeral and tagged tag:ci, which the tailnet ACL lets reach tag:staging-server.
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Ship the stack definition and roll forward
+        env:
+          ENVIRONMENT: staging
+          # Tailscale SSH authorizes the runner, so no key is provisioned (#699).
+          DEPLOY_SSH_KEY_OPTIONAL: "true"
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/srv/acemusic' }}
+          DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+          IMAGE_TAG: ${{ needs.publish.outputs.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/ci-deploy.sh
+
+      - name: Confirm the deployed commit
+        env:
+          HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}
+          IMAGE_TAG: ${{ needs.publish.outputs.sha }}
+        if: vars.STAGING_HEALTH_URL != ''
         run: |
           set -euo pipefail
           running="$(curl -fsS --max-time 10 "$HEALTH_URL" | sed -n 's/.*"build_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"

@@ -88,6 +88,30 @@ different schema entirely — and compose would silently load that one.) The API
 you put there takes effect without being listed in `compose.yaml` (#702). The workflow ships
 `compose.yaml` and `deploy.sh` on every deploy, so those are never edited in place.
 
+### Staging (#699)
+
+Every green `main` also deploys to staging (`https://dev.automusicstudio.com`), with no approval, through the
+`deploy-staging` job. The host is on a shared box reachable only over Tailscale; its details are in the operator's
+local runbook. Both deploy jobs run `scripts/ci-deploy.sh`, so staging and production roll out the same way.
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Variable (repository) | `STAGING_DEPLOY_ENABLED` | `true` turns the staging job on; until then it is skipped |
+| Variable (`staging` env) | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` |
+| Variable (`staging` env) | `DEPLOY_HEALTH_URL` | Host-local health URL `deploy.sh` gates on (the stack's own API port, not the shared box's 8000) |
+| Variable (`staging` env) | `STAGING_HEALTH_URL` | Public health URL, checked after the rollout |
+| Secret (`staging` env) | `DEPLOY_HOST`, `DEPLOY_USER` | SSH target over Tailscale |
+| Secret (`staging` env) | `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET` | Tailscale OAuth client (scope `auth_keys`, tag `tag:ci`) the runner joins the tailnet with |
+
+`DEPLOY_SSH_KEY` is optional and unset for staging: the box runs Tailscale SSH, so the tailnet policy authorizes the
+runner, and no key with access to the host is provisioned. The policy therefore needs an `ssh` rule letting `tag:ci`
+reach the staging tag as the deploy user, alongside the network grant. The runner's node is ephemeral.
+
+The staging stack binds its ports to loopback, and nginx on the box terminates TLS and routes `/api/v1/` to the API
+and everything else to the web app. nginx replaces `X-Forwarded-For` with the client address, and
+`ACEMUSIC_API_TRUSTED_PROXIES` lists the Docker gateway and the web container, so the rate limiters key on real
+clients.
+
 Three things that are easy to get wrong the first time:
 
 - **GHCR packages are private by default**, independent of whether the repository is
