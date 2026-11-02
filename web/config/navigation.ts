@@ -14,16 +14,13 @@ import {
   UserCircleIcon,
 } from "@hugeicons/core-free-icons"
 
-/**
- * A sidebar destination. Most route via `href` (`link`); `Account` opens a
- * dialog (`dialog`) and so carries no route. The discriminated union keeps the
- * two kinds from borrowing each other's fields. Single source of truth for
- * routes + icons (US-15.3, spec section 1.2).
- */
-type NavItemBase = { id: string; label: string; icon: IconSvgElement }
-export type NavLinkItem = NavItemBase & { href: string; isDialog?: false }
-export type NavDialogItem = NavItemBase & { isDialog: true }
-export type NavItem = NavLinkItem | NavDialogItem
+/** A sidebar destination: single source of truth for routes + icons (US-15.3, spec section 1.2). */
+export type NavLinkItem = {
+  id: string
+  label: string
+  href: string
+  icon: IconSvgElement
+}
 
 export const mainNav: NavLinkItem[] = [
   { id: "home", label: "Home", href: "/", icon: HomeIcon },
@@ -31,7 +28,12 @@ export const mainNav: NavLinkItem[] = [
   { id: "create", label: "Create", href: "/create", icon: MusicNote01Icon },
   { id: "studio", label: "Studio", href: "/studio", icon: MixerIcon },
   { id: "library", label: "Library", href: "/me", icon: LibraryIcon },
-  { id: "playlists", label: "Playlists", href: "/playlists", icon: Playlist01Icon },
+  {
+    id: "playlists",
+    label: "Playlists",
+    href: "/playlists",
+    icon: Playlist01Icon,
+  },
   { id: "search", label: "Search", href: "/search", icon: Search01Icon },
   { id: "feed", label: "Feed", href: "/feed", icon: TradeUpIcon },
   {
@@ -48,7 +50,7 @@ export const mainNav: NavLinkItem[] = [
   },
 ]
 
-export const bottomNav: NavItem[] = [
+export const bottomNav: NavLinkItem[] = [
   { id: "labs", label: "Labs", href: "/labs", icon: TestTube01Icon },
-  { id: "account", label: "Account", icon: UserCircleIcon, isDialog: true },
+  { id: "account", label: "Account", href: "/settings", icon: UserCircleIcon },
 ]
