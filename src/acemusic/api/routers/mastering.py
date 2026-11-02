@@ -129,7 +129,7 @@ async def create_mastering_job(
         "service": request.service,
         "format": request.format,
         "target_lufs": mastering_service.resolve_target_lufs(request.profile, request.target_lufs),
-    } | ({"allowed_services": allowed} if allowed is not None else {})
+    } | mastering_service.pin_params(allowed)
     job = await credits_service.charge_and_create(
         user_id=user.id,
         cost=credits_service.get_mastering_cost(request.service),

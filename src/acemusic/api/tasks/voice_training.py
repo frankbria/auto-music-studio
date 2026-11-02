@@ -259,6 +259,11 @@ async def _materialise_references(model: VoiceModel, storage: StorageBackend, tr
     )
 
 
+def _training_method(job: Job) -> tuple[str, str, str]:
+    """The job's ``TRAINING_METHODS`` entry; jobs queued before #694 carry no method and trained LoRA."""
+    return TRAINING_METHODS[(job.input_params or {}).get("method", "lora")]
+
+
 async def _train(
     model: VoiceModel,
     job: Job,
@@ -270,7 +275,7 @@ async def _train(
     poll_timeout: float,
 ) -> dict[str, Any]:
     await model.set({"status": VoiceModelStatus.TRAINING})
-    start_route, output_field, weights_name = TRAINING_METHODS[(job.input_params or {}).get("method", "lora")]
+    start_route, output_field, weights_name = _training_method(job)
 
     # Server-side paths: ACE-Step preprocesses, trains and exports on its own
     # filesystem, so these name directories on that host rather than storage keys.
