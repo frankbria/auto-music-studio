@@ -490,13 +490,14 @@ class TestRenewalDate:
         user = await _subscriber("renewal-proration@example.com")
         await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
         switched = self._paid("sub_test_1", 1_700_000_000)
-        switched["lines"]["data"].append(
-            {
-                "amount": -20000,
-                "period": {"start": 1_690_000_000, "end": 1_720_000_000},
-                "parent": {"subscription_item_details": {"proration": True}},
-            }
-        )
+        for amount in (-20000, 300):
+            switched["lines"]["data"].append(
+                {
+                    "amount": amount,
+                    "period": {"start": 1_690_000_000, "end": 1_720_000_000},
+                    "parent": {"subscription_item_details": {"proration": True}},
+                }
+            )
 
         await _post_event(client, "invoice.paid", switched, event_id="evt_switch")
 
