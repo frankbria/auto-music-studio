@@ -41,6 +41,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   video: "Video",
   extraction: "Stems & MIDI",
   voice: "Voice training",
+  artwork: "Cover art",
   grant: "Monthly credits",
   other: "Other",
 }
