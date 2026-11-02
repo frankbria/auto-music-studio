@@ -55,9 +55,11 @@ _FAMILY_LABELS: dict[str, str] = {
 def _is_busy(exc: BaseException) -> bool:
     """Whether the failure, or anything that caused it, was capacity or reachability rather than the request."""
     seen: BaseException | None = exc
-    while seen is not None:
+    visited: set[int] = set()
+    while seen is not None and id(seen) not in visited:  # a re-raised ancestor makes the chain a cycle
         if isinstance(seen, (ComputeUnavailableError, httpx.TimeoutException, httpx.ConnectError, TimeoutError)):
             return True
+        visited.add(id(seen))
         seen = seen.__cause__ or seen.__context__
     return False
 

@@ -116,5 +116,11 @@ class TestFailureMessage:
 
         assert message.startswith("The music server is busy right now. Try again in 30 seconds.")
 
+    def test_a_cyclic_cause_chain_ends(self) -> None:
+        first, second = JobProcessingError("a"), JobProcessingError("b")
+        first.__cause__, second.__cause__ = second, first
+
+        assert failure_message("generation", first).startswith("This track didn't finish.")
+
     def test_an_unknown_family_still_gets_guidance(self) -> None:
         assert failure_message("", ValueError("boom")).startswith("This didn't finish.")
