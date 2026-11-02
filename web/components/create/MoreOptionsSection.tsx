@@ -93,18 +93,20 @@ export function MoreOptionsSection({
   const base = useId()
   const id = (name: string) => `${base}-${name}`
   const panelId = id("panel")
+  // An error inside opens the section, and the toggle says so (#339).
+  const expanded = open || !!errors.bpm || !!errors.duration
 
   return (
     <div className="flex flex-col gap-3 border-t pt-4">
       <button
         type="button"
-        aria-expanded={open}
+        aria-expanded={expanded}
         aria-controls={panelId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!expanded)}
         className="flex w-fit items-center gap-1.5 text-sm font-medium"
       >
         <HugeiconsIcon
-          icon={open ? ArrowDown01Icon : ArrowRight01Icon}
+          icon={expanded ? ArrowDown01Icon : ArrowRight01Icon}
           className="size-4"
         />
         More Options
@@ -113,7 +115,7 @@ export function MoreOptionsSection({
       {/* Always rendered (hidden when collapsed) so aria-controls always resolves. */}
       <div
         id={panelId}
-        hidden={!open && !errors.bpm && !errors.duration}
+        hidden={!expanded}
         className="grid grid-cols-1 gap-4 sm:grid-cols-2"
       >
         <Field label="BPM" htmlFor={id("bpm")}>

@@ -76,6 +76,14 @@ describe("AdvancedCreationForm", () => {
     expect(bpm).toHaveAttribute("aria-invalid", "true")
     expect(bpm).toHaveAccessibleDescription(/BPM must be between/)
     expect(submitAdvancedGeneration).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole("button", { name: "More Options" })
+    ).toHaveAttribute("aria-expanded", "true")
+
+    await user.clear(bpm)
+    await user.type(bpm, "120")
+    expect(bpm).toHaveAttribute("aria-invalid", "false")
+    expect(screen.queryByText(/BPM must be between/)).toBeNull()
   })
 
   it("says a style or lyrics is needed once Styles is left empty (#339)", async () => {

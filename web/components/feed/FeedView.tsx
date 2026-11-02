@@ -8,6 +8,7 @@ import { FeedItemCard } from "@/components/feed/FeedItemCard"
 import { Button } from "@/components/ui/button"
 import { PlayerContext } from "@/contexts/player-context"
 import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
+import { useOnReconnect } from "@/hooks/use-on-reconnect"
 import { getFeedPage, type FeedItem } from "@/lib/feed"
 
 // Short-form feed (US-20.4). A snap-scroll column of full-height items. Two
@@ -87,6 +88,10 @@ export function FeedView() {
     setFeed((current) => ({ ...current, status: "loading" }))
     loadPage(feed.nextCursor)
   }
+  // A page that failed while offline loads again once the connection is back (#339).
+  useOnReconnect(() => {
+    if (feed.status === "error") retry()
+  })
 
   // Active-item observer: track each item's visible ratio and make the most-
   // visible one active. Created once; items register via their ref callback.

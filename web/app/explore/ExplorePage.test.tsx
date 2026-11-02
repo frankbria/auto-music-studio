@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -141,6 +141,25 @@ describe("ExplorePage", () => {
     expect(clipRequests(fetchMock).map((query) => query.sort)).toContain(
       "trending_7d"
     )
+  })
+
+  it("retries a row that failed while offline when the connection is back (#339)", async () => {
+    stubBySort({
+      newest: [
+        () => new Response("{}", { status: 502 }),
+        () => discoverPage([makeClip({ id: "n1" })]),
+      ],
+    })
+    render(<ExplorePage />)
+    await within(section("New Releases")).findByRole("alert")
+
+    act(() => {
+      window.dispatchEvent(new Event("online"))
+    })
+
+    expect(
+      await within(section("New Releases")).findAllByTestId("explore-clip-card")
+    ).toHaveLength(1)
   })
 
   it("shows an error with a retry that refetches", async () => {

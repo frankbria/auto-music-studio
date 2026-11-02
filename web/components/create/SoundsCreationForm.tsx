@@ -65,12 +65,18 @@ export function SoundsCreationForm({
   // A type and a description are both required (the description is the prompt);
   // range validation runs on submit so a bad BPM surfaces a message.
   const canSubmit = soundType !== "" && description.trim().length > 0
+  // Editing the field a message is about retires the message (#339).
+  const clearProblem = (field: SoundsProblem["field"]) =>
+    setProblem((current) => (current?.field === field ? null : current))
   const messageFor = (field: SoundsProblem["field"]) =>
     problem?.field === field ? problem.message : undefined
   // After leaving the description, say what still keeps Create off, beside the field that needs it.
+  // The type is the next thing to do only once there is a description.
   const typeError =
     messageFor("type") ??
-    (leftDescription && !soundType ? SOUND_TYPE_MISSING : undefined)
+    (leftDescription && description.trim() && !soundType
+      ? SOUND_TYPE_MISSING
+      : undefined)
   const descriptionError =
     messageFor("description") ??
     (leftDescription && !description.trim()
@@ -126,7 +132,10 @@ export function SoundsCreationForm({
           maxLength={PROMPT_MAX_LENGTH}
           placeholder="Describe the sound you want to create..."
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value)
+            clearProblem("description")
+          }}
           onBlur={() => setLeftDescription(true)}
           aria-invalid={!!descriptionError}
           aria-describedby={
@@ -153,7 +162,10 @@ export function SoundsCreationForm({
               size="sm"
               variant={soundType === type.value ? "default" : "outline"}
               aria-pressed={soundType === type.value}
-              onClick={() => setSoundType(type.value)}
+              onClick={() => {
+                setSoundType(type.value)
+                clearProblem("type")
+              }}
             >
               {type.label}
             </Button>
@@ -175,7 +187,10 @@ export function SoundsCreationForm({
                 max={BPM_MAX}
                 disabled={bpmAuto}
                 value={bpm}
-                onChange={(e) => setBpm(e.target.value)}
+                onChange={(e) => {
+                  setBpm(e.target.value)
+                  clearProblem("bpm")
+                }}
                 aria-invalid={!!bpmError}
                 aria-describedby={bpmError ? "sound-bpm-error" : undefined}
               />

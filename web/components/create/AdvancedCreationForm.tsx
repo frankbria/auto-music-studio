@@ -96,8 +96,12 @@ export function AdvancedCreationForm({
   const [showEnhance, setShowEnhance] = useState(false)
   const [enhancePrompt, setEnhancePrompt] = useState("")
 
-  const updateOptions = (patch: Partial<MoreOptions>) =>
+  const updateOptions = (patch: Partial<MoreOptions>) => {
     setOptions((o) => ({ ...o, ...patch }))
+    setProblem((current) =>
+      current && current.field in patch ? null : current
+    )
+  }
 
   const effectiveStyle = combineStyles(stylesField.value, selectedTags)
   const effectiveLyrics = lyricsMode === "manual" ? lyricsField.value : ""
@@ -105,6 +109,9 @@ export function AdvancedCreationForm({
   // validation runs on submit so out-of-range values surface a message.
   const canSubmit =
     effectiveStyle.trim().length > 0 || effectiveLyrics.trim().length > 0
+  // Editing the field a message is about retires the message (#339).
+  const clearProblem = (field: AdvancedField) =>
+    setProblem((current) => (current?.field === field ? null : current))
   const messageFor = (field: AdvancedField) =>
     problem?.field === field ? problem.message : undefined
   const stylesError =
@@ -209,7 +216,10 @@ export function AdvancedCreationForm({
           placeholder={"[Verse 1]\nYour lyrics here...\n\n[Chorus]\n..."}
           disabled={lyricsMode === "auto"}
           value={lyricsField.value}
-          onChange={(e) => lyricsField.setValue(e.target.value)}
+          onChange={(e) => {
+            lyricsField.setValue(e.target.value)
+            clearProblem("lyrics")
+          }}
           aria-invalid={!!lyricsError}
           aria-describedby={lyricsError ? "adv-lyrics-error" : undefined}
         />
@@ -287,7 +297,10 @@ export function AdvancedCreationForm({
           rows={2}
           placeholder="Enter styles separated by commas (e.g., cinematic, epic, orchestral)"
           value={stylesField.value}
-          onChange={(e) => stylesField.setValue(e.target.value)}
+          onChange={(e) => {
+            stylesField.setValue(e.target.value)
+            clearProblem("styles")
+          }}
           onBlur={() => setStylesLeftEmpty(!canSubmit)}
           aria-invalid={!!stylesError}
           aria-describedby={stylesError ? "adv-styles-error" : undefined}

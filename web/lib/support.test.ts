@@ -17,7 +17,7 @@ describe("supportContact (#339)", () => {
     })
   })
 
-  it.each([undefined, "", "   ", "call us", "javascript:alert(1)"])(
+  it.each([undefined, "", "   ", "call us", "javascript:alert(1)", "https://"])(
     "offers no link for %j",
     (value) => {
       expect(supportContact(value)).toBeNull()

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react"
 
+import { useOnReconnect } from "@/hooks/use-on-reconnect"
+
 import { useLatestNoticeId } from "@/contexts/notifications-context"
 import { useAuth } from "@/hooks/use-auth"
 import {
@@ -37,6 +39,11 @@ export function useClips(
   const [errorQuery, setErrorQuery] = useState<string | null>(null)
   // A moderation notice (a flag, removal or appeal outcome) changes a clip's state, so the list refetches (#589).
   const latestModerationNotice = useLatestNoticeId("moderation")
+  // A list that failed while offline loads again once the connection is back (#339).
+  const [reconnects, setReconnects] = useState(0)
+  useOnReconnect(() => {
+    if (errorQuery === query) setReconnects((n) => n + 1)
+  })
 
   // `refreshKey` forces a refetch without changing the query — bumped by the
   // Create page when a generation completes so new clips appear (US-16.7).
@@ -69,6 +76,7 @@ export function useClips(
     authLoading,
     refreshKey,
     latestModerationNotice,
+    reconnects,
   ])
 
   const error = errorQuery === query

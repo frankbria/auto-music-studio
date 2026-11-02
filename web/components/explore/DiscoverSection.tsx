@@ -6,6 +6,7 @@ import { Loading03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { useDiscoveryAuth } from "@/hooks/use-discovery-auth"
+import { useOnReconnect } from "@/hooks/use-on-reconnect"
 import type { DiscoverSort } from "@/lib/discover"
 import { getSectionClips } from "@/lib/explore"
 import type { Clip } from "@/lib/workspace-clips"
@@ -53,6 +54,10 @@ export function DiscoverSection({
     setState({ status: "loading" })
     load()
   }
+  // A row that failed while offline loads again once the connection is back (#339).
+  useOnReconnect(() => {
+    if (state.status === "error") retry()
+  })
 
   return (
     <SectionRow title={title} action={action}>

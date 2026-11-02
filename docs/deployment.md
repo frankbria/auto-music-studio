@@ -88,6 +88,12 @@ different schema entirely — and compose would silently load that one.) The API
 you put there takes effect without being listed in `compose.yaml` (#702). The workflow ships
 `compose.yaml` and `deploy.sh` on every deploy, so those are never edited in place.
 
+### Support contact (#339)
+
+`SUPPORT_CONTACT` in `.env.docker` is what `/support` shows, and every error page links there: an email address
+becomes a `mailto:` link, an `https://` URL a link. The web container reads it per request, so changing it needs a
+restart, not a rebuild. Unset, the page still explains how to get help.
+
 ### Staging (#699)
 
 Every green `main` also deploys to staging (`https://dev.automusicstudio.com`), with no approval, through the

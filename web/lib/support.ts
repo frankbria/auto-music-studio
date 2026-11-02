@@ -11,6 +11,12 @@ export function supportContact(
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
     return { href: `mailto:${contact}`, label: contact }
   }
-  if (/^https?:\/\//.test(contact)) return { href: contact, label: contact }
+  if (
+    /^https?:\/\//.test(contact) &&
+    URL.canParse(contact) &&
+    new URL(contact).hostname
+  ) {
+    return { href: contact, label: contact }
+  }
   return null
 }

@@ -191,6 +191,7 @@ Environment variables (see `.env.example`):
 | `SECRET_KEY` | App secret for sessions/CSRF |
 | `DATABASE_URL` | DB connection (SQLite for dev, PostgreSQL for prod) |
 | `ACEMUSIC_POLL_TIMEOUT` | Generation poll timeout in seconds (default 600) |
+| `SUPPORT_CONTACT` | Web: email or URL shown on `/support`, which every error page links to (#339) |
 
 ## Code Style
 

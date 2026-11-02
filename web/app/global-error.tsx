@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect } from "react"
+
 import { ErrorRecovery } from "@/components/errors/ErrorRecovery"
 
 import "./globals.css"
@@ -13,6 +15,10 @@ export default function GlobalError({
   error: Error & { digest?: string }
   reset: () => void
 }) {
+  useEffect(() => {
+    console.error(error)
+  }, [error])
+  // Outside every provider, theme included: a plain document is the safe last resort.
   return (
     <html lang="en">
       <body>
