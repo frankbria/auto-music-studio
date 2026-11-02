@@ -73,4 +73,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # No console script exists for the server (pyproject only ships the `acemusic` CLI), so
 # the ASGI target is named directly. No --reload: that is a development flag.
-CMD ["uvicorn", "acemusic.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log: the app writes its own JSON access line, carrying the request id uvicorn's can't see (#342).
+CMD ["uvicorn", "acemusic.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

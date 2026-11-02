@@ -24,6 +24,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..auth.tokens import decode_access_token
 from ..errors import error_response
+from ..observability import user_id_var
 from ..services import tiers
 from ..settings import ApiSettings
 from .rate_limit import FixedWindowRateLimiter
@@ -109,6 +110,7 @@ class UserRateLimitMiddleware:
             await self.app(scope, receive, send)
             return
         user_id, tier = identity
+        user_id_var.set(user_id)
         kind: LimitKind = "read" if scope["method"] in ("GET", "HEAD") else "write"
         try:
             self.limits.check(kind, user_id, tier)
