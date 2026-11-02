@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 
 import { useAuth } from "@/hooks/use-auth"
 import { fetchCurrentProfile } from "@/lib/profile-request"
+import { hasTier, toTier, type Tier } from "@/lib/tiers"
 
 // Reusable subscription-tier lookup (US-17.2). ModelSelectionProvider reads the
 // same profile but is mounted only on the Create page; pages that just need the
@@ -17,7 +18,7 @@ import { fetchCurrentProfile } from "@/lib/profile-request"
 
 export function useSubscriptionTier() {
   const { accessToken, isLoading: authLoading } = useAuth()
-  const [tier, setTier] = useState("free")
+  const [tier, setTier] = useState<Tier>("free")
   const [fetched, setFetched] = useState(false)
 
   useEffect(() => {
@@ -28,8 +29,7 @@ export function useSubscriptionTier() {
     // catch keeps the free default and finally resolves the loading state.
     fetchCurrentProfile(accessToken)
       .then((profile) => {
-        if (active && profile.subscription_tier)
-          setTier(profile.subscription_tier)
+        if (active) setTier(toTier(profile.subscription_tier))
       })
       .catch(() => {
         // Keep the free default.
@@ -43,6 +43,10 @@ export function useSubscriptionTier() {
   }, [accessToken, authLoading])
 
   const isLoading = !!accessToken && !authLoading && !fetched
-  // Same rule as ModelSelector: anything that isn't exactly "pro" is free.
-  return { tier, isFreeTier: tier !== "pro", isLoading }
+  return {
+    tier,
+    isFreeTier: !hasTier(tier, "pro"),
+    isEnterprise: hasTier(tier, "enterprise"),
+    isLoading,
+  }
 }

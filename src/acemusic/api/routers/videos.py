@@ -145,6 +145,12 @@ class VideoStatusResponse(BaseModel):
     completed_at: datetime | None = None
 
 
+async def _require_4k_tier(user_id: str, resolution: str) -> None:
+    """4K is Enterprise-only (#695): about $0.43 per rendered second."""
+    if resolution == "4k":
+        await require_tier_capability(user_id, Capability.VIDEO_4K)
+
+
 @router.post("/generate", response_model=VideoJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_video_job(
     request: VideoGenerationRequest,
@@ -167,6 +173,7 @@ async def create_video_job(
     # Gated on the *argument*, so the free tier keeps a working 720p path.
     if request.resolution != FREE_TIER_RESOLUTION:
         await require_tier_capability(current.user_id, Capability.HIGH_RES_VIDEO)
+    await _require_4k_tier(current.user_id, request.resolution)
 
     # Gate BEFORE any charge: settings are process-static, so an unconfigured
     # deployment would otherwise take the credits and then have the worker fail
@@ -524,6 +531,8 @@ async def edit_video(
     # Bill at the source's resolution (the edit inherits it). Fall back to the base
     # tier if the source predates resolution tracking, so pricing never raises.
     resolution = source.resolution if source.resolution in _KNOWN_RESOLUTIONS else "720p"
+    # An edit re-renders at the source's resolution, so a 4K edit is Enterprise-only too (#695).
+    await _require_4k_tier(current.user_id, resolution)
     params = {
         "clip_id": str(source.clip_id),
         "source_video_id": str(source.id),

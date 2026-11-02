@@ -69,18 +69,45 @@ CREDIT_PACKS = {
     "250": {"credits": 250.0, "amount_cents": 2000},
 }
 
+#: #695: what each paid plan costs, in major units. Stripe holds the authoritative Price; these are what the
+#: billing page shows, and must match the Prices configured in each deployment.
+PLAN_PRICES: dict[str, dict[str, float]] = {
+    tiers.PRO: {"month": 24.0, "year": 228.0},
+    tiers.ENTERPRISE: {"month": 99.0, "year": 998.0},
+}
+#: Metadata key naming the plan on a subscription Checkout session, read back on the webhook.
+PLAN_METADATA_KEY = "acemusic_plan"
+
 #: Metadata key naming the pack on a one-off Checkout session, read back on the webhook.
 PACK_METADATA_KEY = "acemusic_credit_pack"
 
 
-def tier_for_status(status: str | None) -> str:
-    """The tier a subscription in ``status`` is worth.
+def tier_for_status(status: str | None, paid_tier: str = tiers.PRO) -> str:
+    """The tier a subscription in ``status`` is worth: ``paid_tier`` while it is paid, free otherwise.
 
     Fails closed, matching :func:`tiers.normalise`: a status this code has never heard
     of yields the free tier. Stripe can add statuses without asking us, and the safe
     reading of an unknown one is "not paid".
     """
-    return tiers.PRO if status in PAID_STATUSES else tiers.FREE
+    return paid_tier if status in PAID_STATUSES else tiers.FREE
+
+
+def subscription_plan(subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str | None:
+    """The plan a subscription's Price is for (#695), or None when its Price isn't one configured here.
+
+    Read from the Price, not from metadata: a plan change in the billing portal swaps the Price and leaves the
+    checkout's metadata behind.
+    """
+    known = price_tiers or {}
+    for price in _subscription_prices(subscription):
+        if price in known:
+            return known[price]
+    return None
+
+
+def _subscription_prices(subscription: dict[str, Any]) -> list[str | None]:
+    items = (subscription.get("items") or {}).get("data") or []
+    return [(item.get("price") or {}).get("id") for item in items]
 
 
 def _timestamp(value: Any) -> datetime | None:
@@ -110,7 +137,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def subscription_fields(subscription: dict[str, Any]) -> dict[str, Any]:
+def subscription_fields(
+    subscription: dict[str, Any], price_tiers: dict[str, str] | None = None, unknown_price_tier: str = tiers.PRO
+) -> dict[str, Any]:
     """Map a Stripe subscription object onto the user fields that mirror it.
 
     Returned as a plain dict rather than applied in place so the mapping stays pure and
@@ -121,7 +150,9 @@ def subscription_fields(subscription: dict[str, Any]) -> dict[str, Any]:
     return {
         "stripe_subscription_id": subscription.get("id"),
         "subscription_status": status,
-        "subscription_tier": tier_for_status(status),
+        "subscription_tier": tier_for_status(
+            status, subscription_plan(subscription, price_tiers) or unknown_price_tier
+        ),
         "subscription_current_period_end": _timestamp(_current_period_end(subscription)),
         "subscription_cancel_at_period_end": bool(subscription.get("cancel_at_period_end")),
     }
@@ -207,8 +238,8 @@ async def ensure_customer(user: User, settings: ApiSettings) -> str:
     return customer.id
 
 
-async def create_checkout_session(user: User, settings: ApiSettings) -> str:
-    """Start a Pro subscription; returns the URL to send the musician to.
+async def create_checkout_session(user: User, settings: ApiSettings, plan: str = "pro", interval: str = "month") -> str:
+    """Start a ``plan`` subscription billed every ``interval`` (#695); returns the URL to send the musician to.
 
     The tier is *not* granted here. It is granted when
     ``checkout.session.completed`` arrives, because a session that is created is not a
@@ -227,31 +258,57 @@ async def create_checkout_session(user: User, settings: ApiSettings) -> str:
     # churned musician checkout forever, waiting on a subscription event they will never
     # generate again. The tier is what they actually have, and it is what may not be
     # paid for twice.
-    if user.stripe_subscription_id and tiers.normalise(user.subscription_tier) == tiers.PRO:
+    if user.stripe_subscription_id and tiers.is_paid(user.subscription_tier):
         raise AlreadySubscribed(
             "This account already has an active subscription. Use the billing portal to change or cancel it."
         )
 
+    price = settings.stripe_price_id(plan, interval)
+    if not price:
+        raise BillingNotConfigured(f"The {plan} plan isn't available billed every {interval}.")
     customer_id = await ensure_customer(user, settings)
     client = _client(settings)
     session = await asyncio.to_thread(
         lambda: client.checkout.sessions.create(
-            params={
-                "mode": "subscription",
-                "customer": customer_id,
-                "line_items": [{"price": settings.stripe_price_id_pro, "quantity": 1}],
-                "success_url": settings.stripe_success_url,
-                "cancel_url": settings.stripe_cancel_url,
-                # Lets an operator trace a Stripe subscription back to a platform user.
-                # Proration on a *plan change* is the portal's job — this path only ever
-                # creates a first subscription, per the guard above.
-                "subscription_data": {"metadata": {"user_id": str(user.id)}},
-            }
+            params=_managed(
+                {
+                    "mode": "subscription",
+                    "customer": customer_id,
+                    "line_items": [{"price": price, "quantity": 1}],
+                    "success_url": settings.stripe_success_url,
+                    "cancel_url": settings.stripe_cancel_url,
+                    # Read back by checkout.session.completed to grant the plan paid for.
+                    "metadata": {PLAN_METADATA_KEY: plan},
+                    # Lets an operator trace a Stripe subscription back to a platform user.
+                    # Proration on a *plan change* is the portal's job — this path only ever
+                    # creates a first subscription, per the guard above.
+                    "subscription_data": {"metadata": {"user_id": str(user.id), PLAN_METADATA_KEY: plan}},
+                },
+                settings,
+            )
         )
     )
     if not session.url:
         raise BillingError("Stripe returned a checkout session with no URL.")
     return session.url
+
+
+def _managed(params: dict[str, Any], settings: ApiSettings) -> dict[str, Any]:
+    """``params`` with Stripe Managed Payments switched on when the deployment uses it.
+
+    Managed Payments refuses the tax, payment-method, customer-update and invoicing parameters it controls, so the
+    sessions built here must not send them.
+    """
+    return params | ({"managed_payments": {"enabled": True}} if settings.stripe_managed_payments else {})
+
+
+#: Stripe's tax code for general electronically supplied services. Managed Payments needs one on every product,
+#: and a top-up pack's product is built inline.
+TOPUP_TAX_CODE = "txcd_10000000"
+
+
+def _pack_tax_code(settings: ApiSettings) -> dict[str, str]:
+    return {"tax_code": TOPUP_TAX_CODE} if settings.stripe_managed_payments else {}
 
 
 async def create_topup_session(user: User, pack_id: str, settings: ApiSettings) -> str:
@@ -272,29 +329,33 @@ async def create_topup_session(user: User, pack_id: str, settings: ApiSettings) 
     client = _client(settings)
     session = await asyncio.to_thread(
         lambda: client.checkout.sessions.create(
-            params={
-                "mode": "payment",
-                "customer": customer_id,
-                "line_items": [
-                    {
-                        # Priced inline rather than by Price id, so the credits granted
-                        # and the money taken are defined in the same place and cannot
-                        # drift apart in a dashboard.
-                        "price_data": {
-                            "currency": "usd",
-                            "unit_amount": pack["amount_cents"],
-                            "product_data": {"name": f"{int(pack['credits'])} Auto Music Studio credits"},
-                        },
-                        "quantity": 1,
-                    }
-                ],
-                "success_url": settings.stripe_success_url,
-                "cancel_url": settings.stripe_cancel_url,
-                # Read back on checkout.session.completed. The webhook must not infer the
-                # pack from the amount — a coupon or a currency change would then grant
-                # the wrong number of credits.
-                "metadata": {PACK_METADATA_KEY: pack_id, "user_id": str(user.id)},
-            }
+            params=_managed(
+                {
+                    "mode": "payment",
+                    "customer": customer_id,
+                    "line_items": [
+                        {
+                            # Priced inline rather than by Price id, so the credits granted
+                            # and the money taken are defined in the same place and cannot
+                            # drift apart in a dashboard.
+                            "price_data": {
+                                "currency": "usd",
+                                "unit_amount": pack["amount_cents"],
+                                "product_data": {"name": f"{int(pack['credits'])} Auto Music Studio credits"}
+                                | _pack_tax_code(settings),
+                            },
+                            "quantity": 1,
+                        }
+                    ],
+                    "success_url": settings.stripe_success_url,
+                    "cancel_url": settings.stripe_cancel_url,
+                    # Read back on checkout.session.completed. The webhook must not infer the
+                    # pack from the amount — a coupon or a currency change would then grant
+                    # the wrong number of credits.
+                    "metadata": {PACK_METADATA_KEY: pack_id, "user_id": str(user.id)},
+                },
+                settings,
+            )
         )
     )
     if not session.url:
@@ -427,7 +488,7 @@ async def _record_event(
     return True
 
 
-async def handle_event(event: dict[str, Any]) -> str:
+async def handle_event(event: dict[str, Any], price_tiers: dict[str, str] | None = None) -> str:
     """Apply one verified Stripe event. Returns a short outcome for logging/tests.
 
     Unknown event types are *ignored*, not rejected: Stripe sends whatever the endpoint
@@ -443,7 +504,7 @@ async def handle_event(event: dict[str, Any]) -> str:
     if event_type == "checkout.session.completed":
         return await _handle_checkout_completed(event_id, event_type, obj, occurred_at)
     if event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
-        return await _handle_subscription_change(event_id, event_type, obj, occurred_at)
+        return await _handle_subscription_change(event_id, event_type, obj, occurred_at, price_tiers)
     if event_type in ("invoice.paid", "invoice.payment_failed"):
         return await _handle_invoice(event_id, event_type, obj, occurred_at)
 
@@ -492,7 +553,7 @@ async def _handle_checkout_completed(
         return "stale"
 
     user.stripe_subscription_id = session.get("subscription") or user.stripe_subscription_id
-    user.subscription_tier = tiers.PRO
+    user.subscription_tier = _checkout_plan(session)
     user.subscription_status = "active"
     user.subscription_cancel_at_period_end = False
     changed: dict[str, Any] = {
@@ -509,6 +570,23 @@ async def _handle_checkout_completed(
     if not await _record_event(user, event_id, event_type):
         return "duplicate"
     return "subscribed"
+
+
+def _unknown_price_tier(user: User, subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str:
+    """What a paid subscription on a Price not configured here is worth: the plan the user already has.
+
+    A rotated or unset Price id must not quietly move an Enterprise subscriber to Pro (or the reverse) while they
+    keep paying; it is logged so the configuration gets fixed.
+    """
+    if price_tiers and subscription_plan(subscription, price_tiers) is None:
+        logger.warning("billing: subscription %s is on a Price not configured here", subscription.get("id"))
+    return user.subscription_tier if tiers.is_paid(user.subscription_tier) else tiers.PRO
+
+
+def _checkout_plan(session: dict[str, Any]) -> str:
+    """The plan a subscription checkout was for (#695); Pro for a session created before #695."""
+    plan = (session.get("metadata") or {}).get(PLAN_METADATA_KEY)
+    return plan if tiers.is_paid(plan) else tiers.PRO
 
 
 async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str) -> str:
@@ -568,6 +646,7 @@ async def _handle_subscription_change(
     event_type: str,
     subscription: dict[str, Any],
     occurred_at: datetime | None = None,
+    price_tiers: dict[str, str] | None = None,
 ) -> str:
     """Mirror a subscription's current state, including its end (AC2) and downgrade.
 
@@ -599,7 +678,7 @@ async def _handle_subscription_change(
         )
         return "stale"
 
-    fields = subscription_fields(subscription)
+    fields = subscription_fields(subscription, price_tiers, _unknown_price_tier(user, subscription, price_tiers))
     if occurred_at:
         fields["subscription_synced_at"] = occurred_at
     if event_type == "customer.subscription.deleted":
@@ -686,7 +765,7 @@ async def _handle_invoice(
         # for a subscription that already ended must not resurrect a paid-looking status
         # on a free account — that is the state that used to lock them out of
         # resubscribing (see the guard in create_checkout_session).
-        if tiers.normalise(user.subscription_tier) != tiers.PRO:
+        if not tiers.is_paid(user.subscription_tier):
             logger.info("billing: ignoring payment failure for a non-subscriber %s", user.id)
             if not await _record_event(user, event_id, event_type, invoice=invoice):
                 return "duplicate"

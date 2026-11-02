@@ -73,6 +73,32 @@ describe("useSubscriptionTier", () => {
     expect(result.current.isFreeTier).toBe(true)
   })
 
+  it("treats enterprise as paid, with every Pro capability (#695)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(profileRes("enterprise")))
+
+    const { result } = renderHook(() => useSubscriptionTier(), {
+      wrapper: makeWrapper(),
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.tier).toBe("enterprise")
+    expect(result.current.isFreeTier).toBe(false)
+    expect(result.current.isEnterprise).toBe(true)
+  })
+
+  it("fails closed to free for a tier it does not know", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(profileRes("platinum")))
+
+    const { result } = renderHook(() => useSubscriptionTier(), {
+      wrapper: makeWrapper(),
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.tier).toBe("free")
+    expect(result.current.isFreeTier).toBe(true)
+    expect(result.current.isEnterprise).toBe(false)
+  })
+
   it("defaults to free when the profile fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")))
 

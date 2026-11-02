@@ -27,6 +27,7 @@ import {
   type VideoStylePreset,
   type VideoTransitions,
 } from "@/lib/video"
+import { TIER_LABELS, hasTier } from "@/lib/tiers"
 import type { Clip } from "@/lib/workspace-clips"
 
 /** One locally selected reference image and its preview object URL. */
@@ -39,8 +40,8 @@ type ReferenceImage = { file: File; url: string }
  * (the backend 422s otherwise). Pickers are inlined RadioGroups in fieldsets
  * (mastering-config idiom — the codebase has no Select/ToggleGroup primitive).
  *
- * Pro gating: 1080p/4K are badge-locked and disabled for free users
- * (SongActionsMenu idiom). Reference images are previewed locally but not sent —
+ * Tier gating: 1080p needs Pro and 4K needs Enterprise; a resolution above the
+ * user's tier is badge-locked and disabled (SongActionsMenu idiom). Reference images are previewed locally but not sent —
  * the backend accepts only hosted http(s) URLs and no image-hosting endpoint
  * exists yet (documented limitation; wiring lands with a Stage 22 follow-up).
  */
@@ -51,7 +52,7 @@ export function VideoForm({
   clip: Clip
   onGenerate: (config: VideoConfig) => void
 }) {
-  const { isFreeTier } = useSubscriptionTier()
+  const { tier } = useSubscriptionTier()
 
   const [prompt, setPrompt] = useState("")
   const [preset, setPreset] = useState<VideoStylePreset | null>(null)
@@ -130,7 +131,11 @@ export function VideoForm({
   return (
     <div className="flex flex-col gap-6">
       {/* Style presets — chips that seed the prompt below. */}
-      <div role="group" aria-label="Style preset" className="flex flex-col gap-2">
+      <div
+        role="group"
+        aria-label="Style preset"
+        className="flex flex-col gap-2"
+      >
         <span className="text-sm font-medium">Style preset</span>
         <div className="flex flex-wrap gap-2">
           {VIDEO_STYLE_PRESETS.map((p) => (
@@ -199,7 +204,7 @@ export function VideoForm({
                   type="button"
                   size="icon"
                   variant="secondary"
-                  className="absolute -right-2 -top-2 size-5"
+                  className="absolute -top-2 -right-2 size-5"
                   aria-label={`Remove ${img.file.name}`}
                   onClick={() => removeImage(img.url)}
                 >
@@ -244,7 +249,7 @@ export function VideoForm({
         </RadioGroup>
       </fieldset>
 
-      {/* Resolution — 1080p/4K are Pro-gated. */}
+      {/* Resolution — 1080p is Pro-gated, 4K Enterprise-gated. */}
       <fieldset className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Resolution</legend>
         <RadioGroup
@@ -254,7 +259,7 @@ export function VideoForm({
           className="flex flex-wrap gap-4"
         >
           {VIDEO_RESOLUTIONS.map((r) => {
-            const locked = r.proOnly && isFreeTier
+            const locked = !hasTier(tier, r.requiredTier)
             return (
               <div key={r.value} className="flex items-center gap-2">
                 <RadioGroupItem
@@ -267,12 +272,15 @@ export function VideoForm({
                   className="flex items-center gap-1 font-normal"
                 >
                   {r.label}
-                  {r.proOnly && (
+                  {r.requiredTier !== "free" && (
                     <Badge variant="outline" className="text-[10px]">
                       {locked && (
-                        <HugeiconsIcon icon={LockIcon} data-icon="inline-start" />
+                        <HugeiconsIcon
+                          icon={LockIcon}
+                          data-icon="inline-start"
+                        />
                       )}
-                      Pro
+                      {TIER_LABELS[r.requiredTier]}
                     </Badge>
                   )}
                 </Label>
@@ -280,10 +288,16 @@ export function VideoForm({
             )
           })}
         </RadioGroup>
-        {isFreeTier && (
+        {tier === "free" && (
           <p className="text-xs text-muted-foreground">
-            1080p and 4K rendering are Pro features. Upgrade to Pro to unlock
-            higher resolutions.
+            1080p rendering is a Pro feature and 4K is Enterprise. Upgrade to
+            Pro to unlock higher resolutions.
+          </p>
+        )}
+        {tier === "pro" && (
+          <p className="text-xs text-muted-foreground">
+            4K rendering is an Enterprise feature. Upgrade to Enterprise to
+            unlock it.
           </p>
         )}
       </fieldset>

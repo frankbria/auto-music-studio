@@ -17,6 +17,7 @@ from beanie import PydanticObjectId
 from acemusic.api.models import Clip, Job, JobStatus
 from acemusic.api.tasks.processor import JobProcessor
 from acemusic.storage import LocalStorage
+from tests.users import make_user
 
 # ---------------------------------------------------------------------------
 # In-process ACE-Step double + helpers
@@ -483,6 +484,28 @@ class TestClaim:
     async def test_claim_returns_none_when_empty(self, mongo_db, tmp_path) -> None:
         proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path))
         assert await proc._claim_next_job() is None
+
+    async def test_an_enterprise_job_is_claimed_before_older_ones(self, mongo_db, tmp_path) -> None:
+        """#695: Enterprise accounts get a priority queue; the priority is set from the owner's tier on insert."""
+        proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path))
+        free_owner = await make_user("queue-free@example.com")
+        enterprise_owner = await make_user("queue-enterprise@example.com", tier="enterprise")
+        older = Job(
+            user_id=free_owner.id, workspace_id=PydanticObjectId(), job_type="generate", input_params={"prompt": "a"}
+        )
+        await older.insert()
+        newer = Job(
+            user_id=enterprise_owner.id,
+            workspace_id=PydanticObjectId(),
+            job_type="generate",
+            input_params={"prompt": "b"},
+        )
+        await newer.insert()
+        assert (older.priority, newer.priority) == (0, 1)
+
+        claimed = await proc._claim_next_job()
+
+        assert str(claimed.id) == str(newer.id)
 
     async def test_claim_is_exclusive(self, mongo_db, tmp_path) -> None:
         proc = _make_processor(_FakeAceClient(), LocalStorage(root_dir=tmp_path))

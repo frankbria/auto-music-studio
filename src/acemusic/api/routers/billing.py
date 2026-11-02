@@ -13,6 +13,7 @@ which is the stronger check here since it also proves the body was not altered.
 """
 
 import logging
+from typing import Literal
 
 from beanie.operators import Eq
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -21,7 +22,7 @@ from pymongo import DESCENDING
 
 from ..auth.dependencies import CurrentUser, get_current_user, get_settings
 from ..models import BillingEvent
-from ..services import billing as billing_service, users as user_service
+from ..services import billing as billing_service, tiers, users as user_service
 from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -101,12 +102,56 @@ async def _current_user_doc(current: CurrentUser):
     return user
 
 
+class CheckoutRequest(BaseModel):
+    """Which plan to subscribe to, and how often to be billed (#695). Pro monthly when omitted."""
+
+    plan: Literal["pro", "enterprise"] = "pro"
+    interval: Literal["month", "year"] = "month"
+
+
+class PlanOffer(BaseModel):
+    """One paid plan and what it costs per billing interval, in major units."""
+
+    plan: str
+    monthly_credits: float
+    prices: dict[str, float]
+    currency: str = "usd"
+    #: Whether each interval has a Price configured here; an unavailable one can't be checked out.
+    available: dict[str, bool]
+
+
+class PlansResponse(BaseModel):
+    plans: list[PlanOffer]
+    billing_enabled: bool
+
+
+@router.get("/plans", response_model=PlansResponse)
+async def get_plans(
+    _: CurrentUser = Depends(get_current_user),
+    settings: ApiSettings = Depends(get_settings),
+) -> PlansResponse:
+    """The paid plans on offer (#695), served so the billing page shows what checkout charges."""
+    return PlansResponse(
+        plans=[
+            PlanOffer(
+                plan=plan,
+                monthly_credits=tiers.monthly_allocation(plan),
+                prices=prices,
+                available={interval: bool(settings.stripe_price_id(plan, interval)) for interval in prices},
+            )
+            for plan, prices in billing_service.PLAN_PRICES.items()
+        ],
+        billing_enabled=settings.stripe_enabled,
+    )
+
+
 @router.post("/checkout", response_model=CheckoutResponse)
 async def start_checkout(
+    body: CheckoutRequest | None = None,
     current: CurrentUser = Depends(get_current_user),
     settings: ApiSettings = Depends(get_settings),
 ) -> CheckoutResponse:
-    """Begin a Pro subscription.
+    """Begin a subscription to the requested plan and interval (Pro monthly by default).
 
     Returns a URL rather than redirecting: the caller is a fetch from the SPA, and a
     302 to a third-party host from an XHR is awkward for the client and invisible to
@@ -114,7 +159,8 @@ async def start_checkout(
     """
     user = await _current_user_doc(current)
     try:
-        url = await billing_service.create_checkout_session(user, settings)
+        choice = body or CheckoutRequest()
+        url = await billing_service.create_checkout_session(user, settings, choice.plan, choice.interval)
     except billing_service.BillingNotConfigured as exc:
         raise _unavailable(exc) from exc
     except billing_service.AlreadySubscribed as exc:
@@ -272,6 +318,6 @@ async def stripe_webhook(
         # retry 4xx — which is right, because retrying will not make the signature valid.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    outcome = await billing_service.handle_event(event)
+    outcome = await billing_service.handle_event(event, settings.stripe_price_tiers)
     logger.info("billing: handled %s -> %s", event.get("type"), outcome)
     return {"status": outcome}

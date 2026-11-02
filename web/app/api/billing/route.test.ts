@@ -78,8 +78,28 @@ describe("billing proxy", () => {
   })
 
   it("sends no body for a bodyless POST", async () => {
-    // `checkout` and `portal` take no payload; forwarding an empty string would set a
-    // content-type on a request that has nothing in it.
+    // `portal` takes no payload; forwarding an empty string would set a content-type
+    // on a request that has nothing in it.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ url: "https://x" }), { status: 200 })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await POST(
+      req("portal", {
+        method: "POST",
+        headers: { authorization: "Bearer t" },
+      }),
+      params(["portal"])
+    )
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.body).toBeUndefined()
+  })
+
+  it("forwards the chosen plan and interval to checkout (#695)", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -91,24 +111,46 @@ describe("billing proxy", () => {
       req("checkout", {
         method: "POST",
         headers: { authorization: "Bearer t" },
+        body: JSON.stringify({ plan: "enterprise", interval: "year" }),
       }),
       params(["checkout"])
     )
 
-    const [, init] = fetchMock.mock.calls[0]
-    expect(init.body).toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/api\/v1\/billing\/checkout$/)
+    expect(JSON.parse(String(init.body))).toEqual({
+      plan: "enterprise",
+      interval: "year",
+    })
+  })
+
+  it("proxies the plan catalogue (#695)", async () => {
+    const plans = { plans: [{ plan: "pro", monthly_credits: 500 }] }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(plans), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const res = await GET(
+      req("plans", { headers: { authorization: "Bearer t" } }),
+      params(["plans"])
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(plans)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(
+      /\/api\/v1\/billing\/plans$/
+    )
   })
 
   it("passes the backend status through", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ detail: "Unknown credit pack 'x'." }), {
-            status: 400,
-          })
-        )
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "Unknown credit pack 'x'." }), {
+          status: 400,
+        })
+      )
     )
 
     const res = await POST(

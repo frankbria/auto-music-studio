@@ -23,6 +23,7 @@ const ALLOWED = new Set([
   "portal",
   "packs",
   "topup",
+  "plans",
 ])
 
 async function proxy(

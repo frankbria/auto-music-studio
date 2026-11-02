@@ -135,11 +135,14 @@ async def require_tier_capability(user_id: str | None, capability: Capability) -
             "capability": capability.value,
             "feature": name,
             "tier": tiers.normalise(tier),
-            "required_tier": tiers.PRO,
-            "message": f"{name} is a Pro feature — upgrade to {benefit}.",
+            "required_tier": tiers.required_tier(capability),
+            "message": f"{name} is a{_PLAN_NAMES[tiers.required_tier(capability)]} feature — upgrade to {benefit}.",
             "upgrade_url": credits_service.UPGRADE_URL,
         },
     )
+
+
+_PLAN_NAMES = {tiers.PRO: " Pro", tiers.ENTERPRISE: "n Enterprise"}
 
 
 async def require_admin(current: CurrentUser = Depends(get_current_user)) -> CurrentUser:

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useModelSelection } from "@/contexts/model-selection-context"
 import { groupByCategory } from "@/lib/models"
+import { hasTier, toTier } from "@/lib/tiers"
 
 /**
  * Model/version selector (US-16.4). A badge-style dropdown showing the current
@@ -26,7 +27,7 @@ import { groupByCategory } from "@/lib/models"
 export function ModelSelector() {
   const { models, selectedModel, setSelectedModel, subscriptionTier } =
     useModelSelection()
-  const isFreeTier = subscriptionTier !== "pro"
+  const isFreeTier = !hasTier(toTier(subscriptionTier), "pro")
 
   const current = models.find((m) => m.key === selectedModel)
   const triggerLabel = current?.display_name ?? "Select model"

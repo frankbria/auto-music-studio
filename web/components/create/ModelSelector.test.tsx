@@ -60,9 +60,9 @@ describe("ModelSelector", () => {
   it("shows the selected model's display name on the trigger", () => {
     setCtx({ selectedModel: "xl-base" })
     render(<ModelSelector />)
-    expect(
-      screen.getByTestId("model-selector-trigger")
-    ).toHaveTextContent("Latest Model (XL)")
+    expect(screen.getByTestId("model-selector-trigger")).toHaveTextContent(
+      "Latest Model (XL)"
+    )
   })
 
   it("lists models with a Pro badge on pro-only options", async () => {
@@ -76,6 +76,23 @@ describe("ModelSelector", () => {
     expect(pro).toHaveTextContent("Pro")
     // Free-tier users still see (and can select) Pro models — display only.
     expect(pro).not.toBeDisabled()
+  })
+
+  it.each([
+    ["free", true],
+    ["pro", false],
+    ["enterprise", false],
+    ["platinum", true],
+  ])("locks Pro models for a %s tier: %s (#695)", async (tier, locked) => {
+    setCtx({ subscriptionTier: tier })
+    const user = userEvent.setup()
+    render(<ModelSelector />)
+
+    await user.click(screen.getByTestId("model-selector-trigger"))
+    const lockIcon = screen
+      .getByTestId("model-option-xl-base")
+      .querySelector('[data-icon="inline-start"]')
+    expect(lockIcon !== null).toBe(locked)
   })
 
   it("selecting a model calls setSelectedModel with its key", async () => {

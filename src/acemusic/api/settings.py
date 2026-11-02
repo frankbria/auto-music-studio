@@ -229,8 +229,16 @@ class ApiSettings(BaseSettings):
     # tiers must never accept an unverified caller. Better refused than open.
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
-    #: The Stripe Price the Pro subscription checks out against (``price_...``).
+    #: The Stripe Price the Pro subscription checks out against (``price_...``). Kept as the Pro monthly price
+    #: for deployments configured before #695; ``stripe_price_id_pro_monthly`` wins when both are set.
     stripe_price_id_pro: str | None = None
+    #: #695: one recurring Price per plan and billing interval.
+    stripe_price_id_pro_monthly: str | None = None
+    stripe_price_id_pro_annual: str | None = None
+    stripe_price_id_enterprise_monthly: str | None = None
+    stripe_price_id_enterprise_annual: str | None = None
+    #: Stripe Managed Payments (Stripe as merchant of record): checkout sessions set ``managed_payments[enabled]``.
+    stripe_managed_payments: bool = False
     #: Where Stripe returns the musician after checkout. Frontend routes, not API ones.
     stripe_success_url: str = "http://localhost:3000/settings/billing?checkout=success"
     stripe_cancel_url: str = "http://localhost:3000/settings/billing?checkout=cancelled"
@@ -243,7 +251,24 @@ class ApiSettings(BaseSettings):
         price is a 400 from Stripe at click time, which is a worse failure than an
         honest "billing is not configured" at the door.
         """
-        return bool(self.stripe_secret_key and self.stripe_webhook_secret and self.stripe_price_id_pro)
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret and self.stripe_price_tiers)
+
+    def stripe_price_id(self, plan: str, interval: str) -> str | None:
+        """The configured Price for ``plan`` billed every ``interval`` (``month`` or ``year``), if any."""
+        return {
+            ("pro", "month"): self.stripe_price_id_pro_monthly or self.stripe_price_id_pro,
+            ("pro", "year"): self.stripe_price_id_pro_annual,
+            ("enterprise", "month"): self.stripe_price_id_enterprise_monthly,
+            ("enterprise", "year"): self.stripe_price_id_enterprise_annual,
+        }.get((plan, interval))
+
+    @property
+    def stripe_price_tiers(self) -> dict[str, str]:
+        """Each configured Price id and the tier a paid subscription on it grants."""
+        pairs = [(plan, interval) for plan in ("pro", "enterprise") for interval in ("month", "year")]
+        configured = {price: plan for plan, interval in pairs if (price := self.stripe_price_id(plan, interval))}
+        # Subscribers who checked out on the pre-#695 Price stay Pro after PRICE_ID_PRO_MONTHLY replaces it.
+        return ({self.stripe_price_id_pro: "pro"} if self.stripe_price_id_pro else {}) | configured
 
     @property
     def runpod_enabled(self) -> bool:

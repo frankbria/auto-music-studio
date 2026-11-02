@@ -73,11 +73,12 @@ describe("option tables", () => {
     expect(MAX_REFERENCE_IMAGES).toBe(5)
   })
 
-  it("marks exactly 1080p and 4k as Pro-only", () => {
-    const proOnly = VIDEO_RESOLUTIONS.filter((r) => r.proOnly).map(
-      (r) => r.value
-    )
-    expect(proOnly).toEqual(["1080p", "4k"])
+  it("gates 1080p behind Pro and 4k behind Enterprise", () => {
+    expect(
+      Object.fromEntries(
+        VIDEO_RESOLUTIONS.map((r) => [r.value, r.requiredTier])
+      )
+    ).toEqual({ "720p": "free", "1080p": "pro", "4k": "enterprise" })
   })
 
   it("every preset carries non-empty prompt seed text", () => {
