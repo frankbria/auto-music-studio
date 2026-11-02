@@ -117,8 +117,8 @@ src/acemusic/
     main.py         # create_app() factory + ASGI app (uvicorn target); DB lifespan
     settings.py     # ApiSettings (pydantic-settings, ACEMUSIC_API_ prefix)
     database.py     # MongoDB connect/close (Beanie + pymongo async), fail-fast ping
-    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry, ClipAppeal
-    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, discover, editing, extraction, workspaces, presets, iterative, admin)
+    models/         # Beanie ODM documents: User, Workspace, Clip, Job, Preset, CreditTransaction, ScreeningRulesDocument, ClipReport, ModerationLogEntry, ClipAppeal, FeatureFlagSetting
+    routers/        # Versioned routers mounted under /api/v1 (health, auth, users, generation, jobs, clips, discover, editing, extraction, workspaces, presets, iterative, labs, admin)
   backends.py       # Backend selector: resolve_backend (auto|ace-step|elevenlabs) + capability map
   cli.py            # Typer CLI app (health, generate, compose, sounds, models, workspace commands)
   client.py         # AceStepClient — HTTP client for ACE-Step REST API
@@ -458,4 +458,10 @@ Package manager: `uv` with `hatchling` build backend
   (`web/lib/api-docs-proxy.ts`); its "Try it out" calls `/api/v1/...` on the web origin, so it works only where
   nginx routes `/api/v1/` to the API. `/help` is the in-app user guide. `scripts/uptime-monitor.sh` runs each minute
   from a systemd timer and posts one alert after three failed health checks and one on recovery; setup is in `docs/deployment.md`
+- **Labs feature flags (#342)**: `services/feature_flags.py`. `CATALOG` lists the experimental features. One is on for a user
+  only when an admin made it available (`FeatureFlagSetting.enabled_for_everyone`, or the user in `user_ids`) and the user
+  switched it on (`User.labs_opt_ins`). A revoke keeps the user's switch, so a re-grant turns the feature back on. Users use
+  `GET/PUT /api/v1/labs`, and admins use `/api/v1/admin/feature-flags` (web `/admin/feature-flags`, in the admin account
+  menu), which writes to the moderation log. Gate a new experimental feature on `feature_flags.is_enabled(user, key)`.
+  Nothing calls it yet, so today the switches only affect what `/labs` shows.
 - Story references in code comments map to user stories (e.g., `US-2.1`, `US-2.3`)
