@@ -13,7 +13,7 @@ import { chromium } from "playwright"
 import { AxeBuilder } from "@axe-core/playwright"
 
 const [tokensFile, base = "https://dev.automusicstudio.com"] = process.argv.slice(2)
-const tokens = readFileSync(tokensFile, "utf8").trim().split("\n")
+const tokens = readFileSync(tokensFile, "utf8").split(/\r?\n/).filter(Boolean)
 const extra = JSON.parse(readFileSync(new URL("./pages.json", import.meta.url), "utf8"))
 
 const PUBLIC = ["/", "/explore", "/search", "/search?q=harbor&sort=popular", "/feed", "/login", "/support", "/no/such/page", ...extra.public]

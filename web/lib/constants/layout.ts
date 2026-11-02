@@ -9,6 +9,7 @@
 export const LAYOUT = {
   sidebarWidth: 64,
   sidebarExpandedWidth: 240,
+  // Must match --playbar-height in app/globals.css, which raises it on touch screens (#341).
   playbarHeight: 72,
   rightPanelWidth: 320,
   z: {

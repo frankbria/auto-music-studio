@@ -45,7 +45,7 @@ export function SnapControls() {
             type="button"
             variant="outline"
             size="sm"
-            aria-label="Snap resolution"
+            aria-label={`Snap resolution: ${current?.label ?? ""}`}
           >
             {current?.label}
           </Button>

@@ -63,7 +63,7 @@ describe("AppShell", () => {
   it("reserves bottom space for the fixed playbar so content is not hidden", () => {
     render(<AppShell>x</AppShell>)
     expect(screen.getByTestId("app-shell")).toHaveStyle({
-      paddingBottom: `${LAYOUT.playbarHeight}px`,
+      paddingBottom: "var(--playbar-height)",
     })
   })
 
@@ -107,6 +107,6 @@ describe("BottomPlaybar", () => {
     expect(el.className).toContain("fixed")
     expect(el.className).toContain("bottom-0")
     expect(el.className).toContain(`z-${LAYOUT.z.playbar}`)
-    expect(el).toHaveStyle({ height: `${LAYOUT.playbarHeight}px` })
+    expect(el).toHaveStyle({ height: "var(--playbar-height)" })
   })
 })

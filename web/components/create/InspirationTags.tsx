@@ -89,7 +89,11 @@ export function InspirationTags({
       <div className="flex flex-wrap items-center gap-1.5">
         {visibleSuggestions.map((tag) => (
           <Badge key={tag} variant="outline" asChild>
-            <button type="button" onClick={() => toggle(tag)}>
+            <button
+              type="button"
+              onClick={() => toggle(tag)}
+              className="pointer-coarse:min-h-11 pointer-coarse:px-3"
+            >
               {tag}
             </button>
           </Badge>

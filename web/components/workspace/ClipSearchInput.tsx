@@ -40,7 +40,7 @@ export function ClipSearchInput({
           type="button"
           aria-label="Clear search"
           onClick={() => onChange("")}
-          className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground pointer-coarse:right-0 pointer-coarse:flex pointer-coarse:size-11 pointer-coarse:items-center pointer-coarse:justify-center transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={14} />
         </button>

@@ -11,7 +11,7 @@ Target: WCAG 2.1 AA. How it is checked, and where the app stood on 2026-11-02.
 
 Usage is in the script's header.
 
-axe only sees the states a page renders, so status colours were checked by hand too. On staging at `1958ff1`, axe found **no critical violations** on any page. The serious ones it found were fixed in
+axe only sees the states a page renders, so status colours were checked by hand too. On staging at `1958ff1` (and re-run at `59759fe`, which caught the last two below), axe found **no critical violations** on any page. The serious ones it found were fixed in
 the PR that added this file:
 
 | Rule | Where | Fix |
@@ -21,8 +21,9 @@ the PR that added this file:
 | `color-contrast` | Green status text (`emerald-500`, 2.47:1) on Release, mastering and SoundCloud | `emerald-700` (`emerald-400` in dark mode) |
 | `color-contrast` (by inspection) | The other status tones (`sky`, `amber`, `violet`-500), which staging had no releases or jobs to show | The same: 700 in light mode, 400 in dark |
 | `label-content-name-mismatch` | Model selector named "Select model" while showing the model | "Select model: <model>" |
-| `label-content-name-mismatch` | Workspace clip card: thumbnail "Play" showing a duration; title button "Edit title" showing the title | "Play <title>" with the duration hidden from assistive tech; "Edit title: <title>" |
+| `label-content-name-mismatch` | Workspace clip card: thumbnail "Play" showing a duration; title button "Edit title" showing the title | "Play <title>", with the duration overlay moved beside the button (axe counts `aria-hidden` text inside it); "Edit title: <title>" |
 | `label-content-name-mismatch` | Pagination: "Prev" named "Previous page" | Visible text "Previous" |
+| `label-content-name-mismatch` | Studio's snap menu named "Snap resolution" while showing "1 beat" | "Snap resolution: 1 beat" |
 
 ## Keyboard and screen readers
 
@@ -34,3 +35,19 @@ the PR that added this file:
   connection banner are `role="status"`; errors are `role="alert"`, and form errors are tied to their field with
   `aria-describedby` (#339).
 - **Modals** are Radix dialogs: focus is trapped inside while open and returns to the trigger on close.
+
+## Mobile (US-28.4, #341)
+
+Pages are checked at 360, 414 and 768 px wide with `scripts/mobile-audit.mjs`, which emulates a touch screen, so
+the `pointer: coarse` styles apply.
+
+- **Layout:** no page scrolls sideways at 360 px. Explore's rows scroll inside themselves, which is intended. The
+  icon rail is the navigation at every width; it scrolls when a short screen can't fit every item, so items are
+  never squashed.
+- **Touch targets:** on a touch screen every button, tab, text input, sidebar item, chip and the clear-search button
+  is at least 44x44 (`pointer-coarse:` styles on the shared `Button`, `Tabs`, `Input` and the few hand-rolled
+  controls). The seek and volume bars keep their thin track inside a 44 px tall touch area. Desktop is unchanged.
+  Left under 44 on purpose: "Skip to content", which is 1x1 until it has focus, and links inside a sentence
+  (WCAG 2.5.5 exempts both).
+- **Player:** the playbar's play, pause, previous, next and like buttons are 44x44 on touch, and seeking works by
+  tapping or dragging the 44 px seek area.

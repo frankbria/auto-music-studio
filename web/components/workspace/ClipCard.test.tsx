@@ -737,6 +737,16 @@ describe("ClipCard moderation appeal (US-27.4)", () => {
   })
 })
 
+describe("ClipCard accessible names (#340)", () => {
+  it("names the play button by the song alone, with the duration beside it", () => {
+    renderCard({ clip: clip({ duration: 95 }) })
+
+    const play = screen.getByRole("button", { name: "Play Midnight" })
+    expect(play).not.toHaveTextContent("1:35")
+    expect(screen.getByText("1:35")).toBeInTheDocument()
+  })
+})
+
 describe("ClipCard for a visitor (#564)", () => {
   // Every owner-only control: the API refuses all of them on someone else's clip.
   const OWNER_CONTROLS = [

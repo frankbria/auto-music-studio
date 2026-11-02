@@ -2,7 +2,6 @@
 
 import { useAudioEngine } from "@/hooks/use-audio-engine"
 import { usePlayerShortcuts } from "@/hooks/use-player-shortcuts"
-import { LAYOUT } from "@/lib/constants/layout"
 
 import { LikeButton } from "./LikeButton"
 import { MiniWaveform } from "./MiniWaveform"
@@ -28,7 +27,7 @@ export function Playbar() {
       <footer
         data-testid="app-playbar"
         aria-label="Player"
-        style={{ height: LAYOUT.playbarHeight }}
+        style={{ height: "var(--playbar-height)" }}
         // z-50 written literally (matching LAYOUT.z.playbar) so Tailwind emits it.
         className="fixed inset-x-0 bottom-0 z-50 flex items-center gap-4 border-t border-border bg-background/95 px-4 backdrop-blur"
       >

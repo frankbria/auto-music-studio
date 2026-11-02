@@ -272,37 +272,40 @@ export function ClipCard({
       }}
       className="flex gap-3 rounded-lg border border-border bg-card p-2"
     >
-      {/* Thumbnail with duration overlay + hover play. */}
-      <button
-        type="button"
-        aria-label={`Play ${title ?? "Untitled clip"}`}
-        onClick={() =>
-          dispatch({
-            type: "play/track",
-            // Use the resolved (optimistic) title so the now-playing bar matches
-            // what the card shows after an inline rename.
-            track: { ...trackFromClip(clip), title: title ?? "Untitled clip" },
-          })
-        }
-        className="group/thumb relative flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-      >
-        <HugeiconsIcon
-          icon={MusicNote01Icon}
-          size={20}
-          className="group-hover/thumb:opacity-0"
-        />
-        <span className="absolute inset-0 flex items-center justify-center bg-background/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
-          <HugeiconsIcon icon={PlayIcon} size={20} className="fill-current" />
-        </span>
+      {/* Thumbnail with hover play; the duration sits beside the button, not in it, so the button's name is
+          only "Play <title>" (#340). */}
+      <div className="relative size-14 shrink-0">
+        <button
+          type="button"
+          aria-label={`Play ${title ?? "Untitled clip"}`}
+          onClick={() =>
+            dispatch({
+              type: "play/track",
+              // Use the resolved (optimistic) title so the now-playing bar matches
+              // what the card shows after an inline rename.
+              track: {
+                ...trackFromClip(clip),
+                title: title ?? "Untitled clip",
+              },
+            })
+          }
+          className="group/thumb relative flex size-full items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <HugeiconsIcon
+            icon={MusicNote01Icon}
+            size={20}
+            className="group-hover/thumb:opacity-0"
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-background/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
+            <HugeiconsIcon icon={PlayIcon} size={20} className="fill-current" />
+          </span>
+        </button>
         {clip.duration != null && (
-          <span
-            aria-hidden
-            className="absolute right-0.5 bottom-0.5 rounded bg-background/80 px-1 text-[10px] tabular-nums"
-          >
+          <span className="pointer-events-none absolute right-0.5 bottom-0.5 rounded bg-background/80 px-1 text-[10px] tabular-nums">
             {formatTime(clip.duration)}
           </span>
         )}
-      </button>
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
         {/* Title (inline editable). */}

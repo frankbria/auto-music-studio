@@ -1,6 +1,5 @@
 import type { ReactNode } from "react"
 
-import { LAYOUT } from "@/lib/constants/layout"
 import { RightPanel } from "./RightPanel"
 import { Sidebar } from "./Sidebar"
 
@@ -21,7 +20,7 @@ export function AppShell({
   return (
     <div
       data-testid="app-shell"
-      style={{ paddingBottom: LAYOUT.playbarHeight }}
+      style={{ paddingBottom: "var(--playbar-height)" }}
       className="flex h-svh w-full overflow-hidden"
     >
       {/* #340: the first Tab stop on every page skips the sidebar's links. */}

@@ -43,7 +43,7 @@ export function VolumeControl() {
         onChange={(e) =>
           dispatch({ type: "volume/set", volume: Number(e.target.value) })
         }
-        className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-muted accent-primary"
+        className="h-1 pointer-coarse:h-11 pointer-coarse:py-5 pointer-coarse:bg-clip-content w-20 cursor-pointer appearance-none rounded-full bg-muted accent-primary"
       />
     </div>
   )

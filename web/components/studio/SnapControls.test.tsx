@@ -28,7 +28,7 @@ describe("SnapControls (US-19.3)", () => {
   it("offers all four grid resolutions and selects one", async () => {
     const user = userEvent.setup()
     render(<Harness />)
-    const trigger = screen.getByRole("button", { name: "Snap resolution" })
+    const trigger = screen.getByRole("button", { name: /^Snap resolution: / })
     expect(trigger).toHaveTextContent("1 beat")
 
     await user.click(trigger)

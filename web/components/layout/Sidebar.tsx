@@ -42,7 +42,7 @@ import {
 
 /** Shared base styling for every interactive sidebar item (links, triggers). */
 const sidebarItemBase =
-  "flex h-10 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+  "flex h-10 shrink-0 pointer-coarse:h-11 items-center gap-3 rounded-md px-3 text-sidebar-foreground/70 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
 
 /** Active when the path equals the route, or sits under it (root matches exactly). */
 function isActive(pathname: string, href: string): boolean {
@@ -239,7 +239,7 @@ export function Sidebar() {
       style={{
         width: expanded ? LAYOUT.sidebarExpandedWidth : LAYOUT.sidebarWidth,
       }}
-      className="z-40 flex h-full shrink-0 flex-col gap-2 overflow-hidden border-r border-border bg-sidebar px-2 py-4 transition-all duration-200"
+      className="z-40 flex h-full shrink-0 flex-col gap-2 overflow-x-hidden overflow-y-auto border-r border-border bg-sidebar px-2 py-4 transition-all duration-200"
     >
       <button
         type="button"
