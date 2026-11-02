@@ -304,7 +304,7 @@ function SettingsForm({
                 value={form.default_model}
                 onChange={(e) => update("default_model", e.target.value)}
                 disabled={models.length === 0}
-                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:h-11"
               >
                 <option value="">No preference</option>
                 {models.map((m) => (

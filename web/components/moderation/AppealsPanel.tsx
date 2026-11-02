@@ -72,7 +72,7 @@ const DECISION_COPY: Record<
 }
 
 const selectClass =
-  "h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+  "h-8 pointer-coarse:h-11 rounded-lg border border-input bg-transparent px-2 text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong."
