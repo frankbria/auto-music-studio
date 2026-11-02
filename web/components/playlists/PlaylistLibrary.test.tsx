@@ -31,6 +31,21 @@ describe("PlaylistLibrary", () => {
     expect(screen.getByTestId("playlists-empty")).toBeInTheDocument()
   })
 
+  it("says a name is needed once the name is left empty (#339)", async () => {
+    const user = userEvent.setup()
+    renderLibrary()
+    await user.click(screen.getAllByRole("button", { name: "New playlist" })[0])
+
+    await user.click(screen.getByLabelText("Name"))
+    await user.tab()
+
+    expect(screen.getByLabelText("Name")).toHaveAccessibleDescription(
+      "Give the playlist a name."
+    )
+    await user.type(screen.getByLabelText("Name"), "Roadtrip")
+    expect(screen.queryByText("Give the playlist a name.")).toBeNull()
+  })
+
   it("creates a playlist (AC1)", async () => {
     const user = userEvent.setup()
     renderLibrary()

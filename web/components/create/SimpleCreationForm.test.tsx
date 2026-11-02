@@ -52,6 +52,28 @@ afterEach(() => {
 })
 
 describe("SimpleCreationForm", () => {
+  it("says why Create is off once the description is left empty (#339)", async () => {
+    const user = userEvent.setup()
+    render(<SimpleCreationForm />)
+    const description = screen.getByLabelText("Song description")
+
+    await user.click(description)
+    await user.tab()
+
+    expect(description).toHaveAttribute("aria-invalid", "true")
+    expect(description).toHaveAccessibleDescription(
+      "Describe the song, or add lyrics, to create it."
+    )
+    expect(
+      screen.getByRole("button", { name: /^create$/i })
+    ).toHaveAccessibleDescription(
+      "Describe the song, or add lyrics, to create it."
+    )
+
+    await user.type(description, "dreamy synthpop")
+    expect(screen.queryByText(/Describe the song, or add lyrics/)).toBeNull()
+  })
+
   function createButton() {
     return screen.getByRole("button", { name: /^creat/i })
   }

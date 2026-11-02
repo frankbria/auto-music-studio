@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 
+import { FieldError } from "@/components/forms/FieldError"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -36,6 +37,8 @@ export function PlaylistFormDialog({
 }: PlaylistFormDialogProps) {
   const [name, setName] = useState(initial?.name ?? "")
   const [description, setDescription] = useState(initial?.description ?? "")
+  // #339: an empty name says so beside the field once it is left, rather than only greying Create.
+  const [nameLeftEmpty, setNameLeftEmpty] = useState(false)
 
   // Reset the fields whenever the dialog transitions to open, so a create form
   // starts blank and a rename form shows the current values. This is the "adjust
@@ -47,14 +50,20 @@ export function PlaylistFormDialog({
     if (open) {
       setName(initial?.name ?? "")
       setDescription(initial?.description ?? "")
+      setNameLeftEmpty(false)
     }
   }
 
   const canSubmit = name.trim().length > 0
   const isCreate = mode === "create"
+  const nameError =
+    nameLeftEmpty && !canSubmit ? "Give the playlist a name." : null
 
   const submit = () => {
-    if (!canSubmit) return
+    if (!canSubmit) {
+      setNameLeftEmpty(true)
+      return
+    }
     onSubmit(name, description)
     onOpenChange(false)
   }
@@ -63,7 +72,9 @@ export function PlaylistFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isCreate ? "New playlist" : "Rename playlist"}</DialogTitle>
+          <DialogTitle>
+            {isCreate ? "New playlist" : "Rename playlist"}
+          </DialogTitle>
           <DialogDescription>
             {isCreate
               ? "Name your playlist. You can add songs and a cover next."
@@ -84,9 +95,13 @@ export function PlaylistFormDialog({
               id="playlist-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onBlur={() => setNameLeftEmpty(!canSubmit)}
               placeholder="My playlist"
               autoFocus
+              aria-invalid={!!nameError}
+              aria-describedby={nameError ? "playlist-name-error" : undefined}
             />
+            <FieldError id="playlist-name-error" message={nameError} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="playlist-description">Description (optional)</Label>

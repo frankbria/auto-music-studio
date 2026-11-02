@@ -45,6 +45,53 @@ describe("SoundsCreationForm", () => {
   const oneShot = () => screen.getByRole("button", { name: "One-Shot" })
   const loop = () => screen.getByRole("button", { name: "Loop" })
 
+  it("says what's missing beside each field, in the order to fix it (#339)", async () => {
+    const user = userEvent.setup()
+    render(<SoundsCreationForm />)
+    const description = screen.getByLabelText("Sound description")
+    const typeGroup = () => screen.getByRole("group", { name: "Sound type" })
+
+    await user.click(description)
+    await user.tab()
+
+    expect(description).toHaveAttribute("aria-invalid", "true")
+    expect(description).toHaveAccessibleDescription(
+      "Add a description to create."
+    )
+    expect(screen.queryByText("Choose a sound type to create.")).toBeNull()
+
+    await user.type(description, "a punchy kick")
+    await user.tab()
+
+    expect(description).toHaveAttribute("aria-invalid", "false")
+    expect(typeGroup()).toHaveAccessibleDescription(
+      "Choose a sound type to create."
+    )
+
+    await user.click(oneShot())
+    expect(screen.queryByText("Choose a sound type to create.")).toBeNull()
+  })
+
+  it("puts an out-of-range loop BPM beside the BPM field (#339)", async () => {
+    const user = userEvent.setup()
+    render(<SoundsCreationForm />)
+    await user.type(screen.getByLabelText("Sound description"), "a drum loop")
+    await user.click(loop())
+    await user.click(screen.getByLabelText("Auto"))
+    await user.type(screen.getByLabelText("BPM"), "999")
+
+    await user.click(createButton())
+
+    const bpm = screen.getByLabelText("BPM")
+    expect(bpm).toHaveAttribute("aria-invalid", "true")
+    expect(bpm).toHaveAccessibleDescription(/BPM must be between/)
+    expect(submitSoundsGeneration).not.toHaveBeenCalled()
+    await user.clear(bpm)
+    await user.type(bpm, "120")
+    expect(bpm).toHaveAttribute("aria-invalid", "false")
+    expect(screen.queryByText(/BPM must be between/)).toBeNull()
+  })
+
   it("disables Create until both a description and a type are chosen", async () => {
     const user = userEvent.setup()
     render(<SoundsCreationForm />)

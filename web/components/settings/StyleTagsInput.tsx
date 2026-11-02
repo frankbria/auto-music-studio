@@ -6,7 +6,7 @@ import { Cancel01Icon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { FieldError } from "@/components/settings/FieldError"
+import { FieldError } from "@/components/forms/FieldError"
 import {
   STYLE_SUGGESTIONS,
   STYLE_TAGS_MAX_ITEMS,

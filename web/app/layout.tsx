@@ -3,6 +3,7 @@ import { Nunito_Sans } from "next/font/google"
 
 import "./globals.css"
 import { AppShell, BottomPlaybar } from "@/components/layout"
+import { ConnectionBanner } from "@/components/layout/ConnectionBanner"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/contexts/auth-context"
 import { CreditsProvider } from "@/contexts/credits-context"
@@ -31,6 +32,7 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
+          <ConnectionBanner />
           <AuthProvider>
             {/* The balance renders in the Sidebar on every page while the actions
                 that spend credits live all over the app (US-26.1), so it sits at the

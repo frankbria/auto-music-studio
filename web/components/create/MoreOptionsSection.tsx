@@ -4,6 +4,7 @@ import { useId, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
+import { FieldError } from "@/components/forms/FieldError"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -81,30 +82,42 @@ function Field({
 export function MoreOptionsSection({
   value,
   onChange,
+  errors = {},
 }: {
   value: MoreOptions
   onChange: (patch: Partial<MoreOptions>) => void
+  /** #339: messages shown beside their field; the section opens to show them. */
+  errors?: Partial<Record<"bpm" | "duration", string>>
 }) {
   const [open, setOpen] = useState(false)
   const base = useId()
   const id = (name: string) => `${base}-${name}`
   const panelId = id("panel")
+  // An error inside opens the section, and the toggle says so (#339).
+  const expanded = open || !!errors.bpm || !!errors.duration
 
   return (
     <div className="flex flex-col gap-3 border-t pt-4">
       <button
         type="button"
-        aria-expanded={open}
+        aria-expanded={expanded}
         aria-controls={panelId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!expanded)}
         className="flex w-fit items-center gap-1.5 text-sm font-medium"
       >
-        <HugeiconsIcon icon={open ? ArrowDown01Icon : ArrowRight01Icon} className="size-4" />
+        <HugeiconsIcon
+          icon={expanded ? ArrowDown01Icon : ArrowRight01Icon}
+          className="size-4"
+        />
         More Options
       </button>
 
       {/* Always rendered (hidden when collapsed) so aria-controls always resolves. */}
-      <div id={panelId} hidden={!open} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div
+        id={panelId}
+        hidden={!expanded}
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+      >
         <Field label="BPM" htmlFor={id("bpm")}>
           <div className="flex items-center gap-2">
             <Input
@@ -115,6 +128,8 @@ export function MoreOptionsSection({
               disabled={value.bpmAuto}
               value={value.bpm}
               onChange={(e) => onChange({ bpm: e.target.value })}
+              aria-invalid={!!errors.bpm}
+              aria-describedby={errors.bpm ? id("bpm-error") : undefined}
             />
             <div className="flex shrink-0 items-center gap-1.5">
               <Switch
@@ -125,6 +140,7 @@ export function MoreOptionsSection({
               <Label htmlFor={id("bpm-auto")}>Auto</Label>
             </div>
           </div>
+          <FieldError id={id("bpm-error")} message={errors.bpm} />
         </Field>
 
         <Field label="Duration (seconds)" htmlFor={id("duration")}>
@@ -137,6 +153,10 @@ export function MoreOptionsSection({
               placeholder="Auto"
               value={value.duration}
               onChange={(e) => onChange({ duration: e.target.value })}
+              aria-invalid={!!errors.duration}
+              aria-describedby={
+                errors.duration ? id("duration-error") : undefined
+              }
             />
             <div className="flex flex-wrap gap-1.5">
               {DURATION_PRESETS.map((preset) => (
@@ -152,6 +172,7 @@ export function MoreOptionsSection({
               ))}
             </div>
           </div>
+          <FieldError id={id("duration-error")} message={errors.duration} />
         </Field>
 
         <Field label={`Weirdness: ${value.weirdness}`}>
@@ -173,7 +194,9 @@ export function MoreOptionsSection({
             max={STYLE_INFLUENCE_MAX}
             aria-label={`Style influence: ${value.styleInfluence}`}
             value={value.styleInfluence}
-            onChange={(e) => onChange({ styleInfluence: Number(e.target.value) })}
+            onChange={(e) =>
+              onChange({ styleInfluence: Number(e.target.value) })
+            }
             className="w-full"
           />
         </Field>
@@ -269,7 +292,11 @@ export function MoreOptionsSection({
 
         {/* No frontend proxy for GET /api/v1/workspaces yet (US-16.2 stub). */}
         <Field label="Save to workspace" htmlFor={id("workspace")}>
-          <select id={id("workspace")} className={cn(SELECT_CLASS, "opacity-50")} disabled>
+          <select
+            id={id("workspace")}
+            className={cn(SELECT_CLASS, "opacity-50")}
+            disabled
+          >
             <option>Coming soon</option>
           </select>
         </Field>

@@ -77,6 +77,9 @@ services:
       # Server-side only (the app has no NEXT_PUBLIC_* vars), so this is a runtime value
       # and the image is portable across environments unchanged.
       API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+      # Shown on /support and linked from every error page (#339): an email address or a URL. Unset, the page
+      # still explains how to get help.
+      SUPPORT_CONTACT: ${SUPPORT_CONTACT:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

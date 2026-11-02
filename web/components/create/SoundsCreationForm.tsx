@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 
+import { FieldError } from "@/components/forms/FieldError"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -14,6 +15,9 @@ import { useModelSelection } from "@/contexts/model-selection-context"
 import {
   submitSoundsGeneration,
   validateSounds,
+  SOUND_DESCRIPTION_MISSING,
+  SOUND_TYPE_MISSING,
+  type SoundsProblem,
   type SoundsFormData,
 } from "@/lib/generate"
 import {
@@ -52,14 +56,33 @@ export function SoundsCreationForm({
   const [bpmAuto, setBpmAuto] = useState(true)
   const [bpm, setBpm] = useState("")
   const [key, setKey] = useState("")
-  // Pre-submit validation message, separate from the generation state machine.
-  const [formError, setFormError] = useState<string | null>(null)
+  // #339: a validation problem names its field, so its message shows beside it.
+  const [problem, setProblem] = useState<SoundsProblem | null>(null)
+  const [leftDescription, setLeftDescription] = useState(false)
 
   const isLoop = soundType === "loop"
 
   // A type and a description are both required (the description is the prompt);
   // range validation runs on submit so a bad BPM surfaces a message.
   const canSubmit = soundType !== "" && description.trim().length > 0
+  // Editing the field a message is about retires the message (#339).
+  const clearProblem = (field: SoundsProblem["field"]) =>
+    setProblem((current) => (current?.field === field ? null : current))
+  const messageFor = (field: SoundsProblem["field"]) =>
+    problem?.field === field ? problem.message : undefined
+  // After leaving the description, say what still keeps Create off, beside the field that needs it.
+  // The type is the next thing to do only once there is a description.
+  const typeError =
+    messageFor("type") ??
+    (leftDescription && description.trim() && !soundType
+      ? SOUND_TYPE_MISSING
+      : undefined)
+  const descriptionError =
+    messageFor("description") ??
+    (leftDescription && !description.trim()
+      ? SOUND_DESCRIPTION_MISSING
+      : undefined)
+  const bpmError = messageFor("bpm")
   const busy =
     generation.state.phase === "submitting" ||
     generation.state.phase === "polling"
@@ -76,12 +99,12 @@ export function SoundsCreationForm({
       return
     }
     const data = formData()
-    const error = validateSounds(data)
-    if (error) {
-      setFormError(error)
+    const found = validateSounds(data)
+    if (found) {
+      setProblem(found)
       return
     }
-    setFormError(null)
+    setProblem(null)
     await generation.submit(
       () => submitSoundsGeneration(data, accessToken, selectedModel),
       accessToken
@@ -94,7 +117,8 @@ export function SoundsCreationForm({
     setBpmAuto(true)
     setBpm("")
     setKey("")
-    setFormError(null)
+    setProblem(null)
+    setLeftDescription(false)
     generation.reset()
   }
 
@@ -108,15 +132,29 @@ export function SoundsCreationForm({
           maxLength={PROMPT_MAX_LENGTH}
           placeholder="Describe the sound you want to create..."
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value)
+            clearProblem("description")
+          }}
+          onBlur={() => setLeftDescription(true)}
+          aria-invalid={!!descriptionError}
+          aria-describedby={
+            descriptionError ? "sound-description-error" : undefined
+          }
         />
+        <FieldError id="sound-description-error" message={descriptionError} />
       </div>
 
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">
           Type <span className="text-destructive">*</span>
         </span>
-        <div className="flex gap-1.5" role="group" aria-label="Sound type">
+        <div
+          className="flex gap-1.5"
+          role="group"
+          aria-label="Sound type"
+          aria-describedby={typeError ? "sound-type-error" : undefined}
+        >
           {SOUND_TYPES.map((type) => (
             <Button
               key={type.value}
@@ -124,12 +162,16 @@ export function SoundsCreationForm({
               size="sm"
               variant={soundType === type.value ? "default" : "outline"}
               aria-pressed={soundType === type.value}
-              onClick={() => setSoundType(type.value)}
+              onClick={() => {
+                setSoundType(type.value)
+                clearProblem("type")
+              }}
             >
               {type.label}
             </Button>
           ))}
         </div>
+        <FieldError id="sound-type-error" message={typeError} />
       </div>
 
       {/* BPM and key are loop-only: a one-shot is a single hit with no tempo. */}
@@ -145,7 +187,12 @@ export function SoundsCreationForm({
                 max={BPM_MAX}
                 disabled={bpmAuto}
                 value={bpm}
-                onChange={(e) => setBpm(e.target.value)}
+                onChange={(e) => {
+                  setBpm(e.target.value)
+                  clearProblem("bpm")
+                }}
+                aria-invalid={!!bpmError}
+                aria-describedby={bpmError ? "sound-bpm-error" : undefined}
               />
               <div className="flex shrink-0 items-center gap-1.5">
                 <Switch
@@ -156,6 +203,7 @@ export function SoundsCreationForm({
                 <Label htmlFor="sound-bpm-auto">Auto</Label>
               </div>
             </div>
+            <FieldError id="sound-bpm-error" message={bpmError} />
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -177,11 +225,6 @@ export function SoundsCreationForm({
         </div>
       )}
 
-      {formError && (
-        <p role="alert" className="text-sm text-destructive">
-          {formError}
-        </p>
-      )}
       {generation.state.phase === "polling" && (
         <GenerationProgress
           estimatedSeconds={generation.state.estimatedSeconds}
@@ -207,6 +250,14 @@ export function SoundsCreationForm({
           type="button"
           className="w-fit"
           disabled={!canSubmit || busy || modelLoading}
+          aria-describedby={
+            [
+              typeError && "sound-type-error",
+              descriptionError && "sound-description-error",
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
           onClick={handleCreate}
         >
           {busy ? "Creating..." : "Create"}

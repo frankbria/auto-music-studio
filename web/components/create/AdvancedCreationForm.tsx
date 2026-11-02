@@ -9,6 +9,7 @@ import {
   SparklesIcon,
 } from "@hugeicons/core-free-icons"
 
+import { FieldError } from "@/components/forms/FieldError"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -34,6 +35,8 @@ import {
   combineStyles,
   submitAdvancedGeneration,
   validateAdvanced,
+  type AdvancedField,
+  type FieldProblem,
   type AdvancedFormData,
 } from "@/lib/generate"
 import {
@@ -87,12 +90,18 @@ export function AdvancedCreationForm({
   // Neutral notice (stub features) and pre-submit validation message, both kept
   // separate from the generation state machine.
   const [notice, setNotice] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
+  // #339: a validation problem names its field, so its message shows beside it.
+  const [problem, setProblem] = useState<FieldProblem | null>(null)
+  const [stylesLeftEmpty, setStylesLeftEmpty] = useState(false)
   const [showEnhance, setShowEnhance] = useState(false)
   const [enhancePrompt, setEnhancePrompt] = useState("")
 
-  const updateOptions = (patch: Partial<MoreOptions>) =>
+  const updateOptions = (patch: Partial<MoreOptions>) => {
     setOptions((o) => ({ ...o, ...patch }))
+    setProblem((current) =>
+      current && current.field in patch ? null : current
+    )
+  }
 
   const effectiveStyle = combineStyles(stylesField.value, selectedTags)
   const effectiveLyrics = lyricsMode === "manual" ? lyricsField.value : ""
@@ -100,6 +109,22 @@ export function AdvancedCreationForm({
   // validation runs on submit so out-of-range values surface a message.
   const canSubmit =
     effectiveStyle.trim().length > 0 || effectiveLyrics.trim().length > 0
+  // Editing the field a message is about retires the message (#339).
+  const clearProblem = (field: AdvancedField) =>
+    setProblem((current) => (current?.field === field ? null : current))
+  const messageFor = (field: AdvancedField) =>
+    problem?.field === field ? problem.message : undefined
+  const stylesError =
+    messageFor("styles") ??
+    (stylesLeftEmpty && !canSubmit
+      ? "Add a style or lyrics to create."
+      : undefined)
+  const lyricsError = messageFor("lyrics")
+  // Fields the controls can't push out of range (the sliders, the key list); kept for completeness.
+  const otherError =
+    problem && !["styles", "lyrics", "bpm", "duration"].includes(problem.field)
+      ? problem.message
+      : undefined
   const busy =
     generation.state.phase === "submitting" ||
     generation.state.phase === "polling"
@@ -133,12 +158,12 @@ export function AdvancedCreationForm({
       return
     }
     const data = formData()
-    const error = validateAdvanced(data)
-    if (error) {
-      setFormError(error)
+    const found = validateAdvanced(data)
+    if (found) {
+      setProblem(found)
       return
     }
-    setFormError(null)
+    setProblem(null)
     setNotice(null)
     await generation.submit(
       () => submitAdvancedGeneration(data, accessToken, selectedModel),
@@ -158,7 +183,8 @@ export function AdvancedCreationForm({
     setShowEnhance(false)
     setEnhancePrompt("")
     setNotice(null)
-    setFormError(null)
+    setProblem(null)
+    setStylesLeftEmpty(false)
     generation.reset()
   }
 
@@ -190,8 +216,14 @@ export function AdvancedCreationForm({
           placeholder={"[Verse 1]\nYour lyrics here...\n\n[Chorus]\n..."}
           disabled={lyricsMode === "auto"}
           value={lyricsField.value}
-          onChange={(e) => lyricsField.setValue(e.target.value)}
+          onChange={(e) => {
+            lyricsField.setValue(e.target.value)
+            clearProblem("lyrics")
+          }}
+          aria-invalid={!!lyricsError}
+          aria-describedby={lyricsError ? "adv-lyrics-error" : undefined}
         />
+        <FieldError id="adv-lyrics-error" message={lyricsError} />
         <div className="flex flex-wrap items-center gap-2">
           <select
             aria-label="Vocal language"
@@ -265,8 +297,15 @@ export function AdvancedCreationForm({
           rows={2}
           placeholder="Enter styles separated by commas (e.g., cinematic, epic, orchestral)"
           value={stylesField.value}
-          onChange={(e) => stylesField.setValue(e.target.value)}
+          onChange={(e) => {
+            stylesField.setValue(e.target.value)
+            clearProblem("styles")
+          }}
+          onBlur={() => setStylesLeftEmpty(!canSubmit)}
+          aria-invalid={!!stylesError}
+          aria-describedby={stylesError ? "adv-styles-error" : undefined}
         />
+        <FieldError id="adv-styles-error" message={stylesError} />
         <InspirationTags
           selectedTags={selectedTags}
           onChange={(next) => setSelectedTags(next)}
@@ -318,16 +357,20 @@ export function AdvancedCreationForm({
         </div>
       </section>
 
-      <MoreOptionsSection value={options} onChange={updateOptions} />
+      <MoreOptionsSection
+        value={options}
+        onChange={updateOptions}
+        errors={{ bpm: messageFor("bpm"), duration: messageFor("duration") }}
+      />
 
       {notice && (
         <p role="status" className="text-sm text-muted-foreground">
           {notice}
         </p>
       )}
-      {formError && (
+      {otherError && (
         <p role="alert" className="text-sm text-destructive">
-          {formError}
+          {otherError}
         </p>
       )}
       {generation.state.phase === "polling" && (
@@ -355,6 +398,7 @@ export function AdvancedCreationForm({
           type="button"
           className="w-fit"
           disabled={!canSubmit || busy || modelLoading}
+          aria-describedby={stylesError ? "adv-styles-error" : undefined}
           onClick={handleCreate}
         >
           {busy ? "Creating..." : "Create"}
