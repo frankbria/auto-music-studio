@@ -5,7 +5,8 @@
 # host needs that is not in here or in the Dockerfiles is a bug in one of them.
 #
 # Every setting arrives as an environment variable, so deploying to a different host is a
-# different .env, not a different file. Copy .env.docker.example to .env to start.
+# different .env.docker, not a different file. Copy .env.docker.example to .env.docker and run
+# `docker compose --env-file .env.docker up` (docs/deployment.md). Needs Compose v2.24+.
 
 name: acemusic
 
@@ -21,7 +22,7 @@ services:
     # Every setting in .env.docker reaches ApiSettings, so a new one never needs listing here (#702). The entries
     # below still win where they set a value: they pin what the image depends on.
     env_file:
-      - path: .env.docker
+      - path: ${ENV_FILE:-.env.docker}
         required: false
     environment:
       ACEMUSIC_API_MONGODB_URL: mongodb://mongo:27017
@@ -47,26 +48,9 @@ services:
       # Setting only the first accepts every generation and then fails every one of them
       # with "ACE-Step base URL is not configured" — which is how this was found.
       ACEMUSIC_BASE_URL: ${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-http://host.docker.internal:8001}}
-      ACEMUSIC_API_KEY: ${ACEMUSIC_API_KEY:-}
       # Reported by GET /api/v1/health, so "is the new commit actually running?" is a
       # question the deployment answers itself.
       ACEMUSIC_BUILD_SHA: ${IMAGE_TAG:-local}
-      # OAuth, Stripe and provider credentials pass straight through when set. Unset means
-      # the feature is off, which is the correct default for a local stack.
-      ACEMUSIC_API_GOOGLE_CLIENT_ID: ${ACEMUSIC_API_GOOGLE_CLIENT_ID:-}
-      ACEMUSIC_API_GOOGLE_CLIENT_SECRET: ${ACEMUSIC_API_GOOGLE_CLIENT_SECRET:-}
-      ACEMUSIC_API_GOOGLE_REDIRECT_URI: ${ACEMUSIC_API_GOOGLE_REDIRECT_URI:-}
-      ACEMUSIC_API_DISCORD_CLIENT_ID: ${ACEMUSIC_API_DISCORD_CLIENT_ID:-}
-      ACEMUSIC_API_DISCORD_CLIENT_SECRET: ${ACEMUSIC_API_DISCORD_CLIENT_SECRET:-}
-      ACEMUSIC_API_DISCORD_REDIRECT_URI: ${ACEMUSIC_API_DISCORD_REDIRECT_URI:-}
-      ACEMUSIC_API_STRIPE_SECRET_KEY: ${ACEMUSIC_API_STRIPE_SECRET_KEY:-}
-      ACEMUSIC_API_STRIPE_WEBHOOK_SECRET: ${ACEMUSIC_API_STRIPE_WEBHOOK_SECRET:-}
-      ACEMUSIC_API_STRIPE_PRICE_ID_PRO: ${ACEMUSIC_API_STRIPE_PRICE_ID_PRO:-}
-      ACEMUSIC_API_OPENAI_API_KEY: ${ACEMUSIC_API_OPENAI_API_KEY:-}
-      ACEMUSIC_API_VIDEO_API_URL: ${ACEMUSIC_API_VIDEO_API_URL:-}
-      ACEMUSIC_API_VIDEO_API_KEY: ${ACEMUSIC_API_VIDEO_API_KEY:-}
-      ACEMUSIC_API_RUNPOD_API_KEY: ${ACEMUSIC_API_RUNPOD_API_KEY:-}
-      ACEMUSIC_API_RUNPOD_ENDPOINT_ID: ${ACEMUSIC_API_RUNPOD_ENDPOINT_ID:-}
       ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED: ${ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED:-false}
     extra_hosts:
       # Linux does not resolve host.docker.internal on its own; this is what lets the

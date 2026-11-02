@@ -64,7 +64,7 @@ fi
 compose() {
   local env_args=()
   [[ -f "$ENV_FILE" ]] && env_args=(--env-file "$ENV_FILE")
-  IMAGE_TAG="$1" docker compose --project-directory "$DEPLOY_DIR" "${env_args[@]}" "${@:2}"
+  IMAGE_TAG="$1" ENV_FILE="$ENV_FILE" docker compose --project-directory "$DEPLOY_DIR" "${env_args[@]}" "${@:2}"
 }
 
 # The SHA the API says it is running, or empty if it is not answering.
