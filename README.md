@@ -10,7 +10,7 @@ sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl 
 docker compose --env-file .env.docker up --build
 ```
 
-Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at `/docs`.
+Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at <http://localhost:8000/docs>.
 This is the supported way to run the platform, and the same `compose.yaml` describes the
 production topology. Merging to `main` publishes SHA-tagged images and deploys them — see
 [docs/deployment.md](docs/deployment.md).

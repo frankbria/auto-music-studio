@@ -29,6 +29,11 @@ export default function SupportPage() {
         </p>
       )}
       <p className="text-sm text-muted-foreground">
+        Most questions are answered in{" "}
+        <Link href="/help" className="underline">
+          Help
+        </Link>
+        .{" "}
         <Link href="/" className="underline">
           Back to home
         </Link>
