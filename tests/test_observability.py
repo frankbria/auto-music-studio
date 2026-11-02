@@ -149,3 +149,13 @@ class TestErrorTracking:
         finally:
             observability.request_id_var.reset(token)
         assert event["tags"]["request_id"] == "req-123"
+
+
+def test_health_probes_log_at_debug_and_paths_are_quoted(client, caplog) -> None:
+    with caplog.at_level(logging.DEBUG, logger="acemusic.access"):
+        client.get(f"{API_V1_PREFIX}/health")
+        client.get("/nowhere%0aforged")
+
+    health, other = [r for r in caplog.records if r.name == "acemusic.access"]
+    assert health.levelno == logging.DEBUG
+    assert other.levelno == logging.INFO and "\n" not in other.getMessage()

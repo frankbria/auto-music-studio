@@ -87,6 +87,8 @@ def configure_error_tracking(settings: ApiSettings) -> None:
     if not settings.sentry_dsn:
         return
 
+    # For events captured inside a request; an unhandled error is captured after the contextvar is reset, and gets
+    # its tag from the `set_tag` in RequestIdMiddleware instead.
     def tag_request(event: dict, _hint: dict) -> dict:
         request_id = request_id_var.get()
         if request_id:
@@ -133,8 +135,10 @@ class RequestIdMiddleware:
         try:
             await self.app(scope, receive, send_with_id)
         finally:
-            _access.info(
-                "%s %s %s",
+            # Health probes come every 30 s from Docker and the uptime check; at INFO they would bury real traffic.
+            _access.log(
+                logging.DEBUG if scope["path"].endswith("/health") else logging.INFO,
+                "%s %r %s",
                 scope["method"],
                 scope["path"],
                 status,
