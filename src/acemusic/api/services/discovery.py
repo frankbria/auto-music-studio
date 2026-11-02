@@ -158,7 +158,14 @@ async def _trending_ranking(sort: str) -> list[tuple[int, PydanticObjectId]]:
         cached = _trending_cache.get(sort)
         if cached is not None and time.monotonic() - cached[0] < TRENDING_TTL_SECONDS:
             return cached[1]
-        return await _rank_trending(sort)
+        try:
+            return await _rank_trending(sort)
+        except ExecutionTimeout:
+            if cached is None:
+                raise
+            # An overloaded database must not make every waiter re-run a query that just timed out.
+            _trending_cache[sort] = (time.monotonic(), cached[1])
+            return cached[1]
 
 
 async def _rank_trending(sort: str) -> list[tuple[int, PydanticObjectId]]:
@@ -210,8 +217,9 @@ async def _by_trending(match: dict, sort: str, limit: int, cursor: str | None) -
 
 
 def clear_trending_cache() -> None:
-    """For tests, which record engagement between requests in one process."""
+    """For tests, which record engagement between requests in one process (each on its own event loop)."""
     _trending_cache.clear()
+    _trending_locks.clear()
 
 
 async def _page(

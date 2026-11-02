@@ -12,6 +12,7 @@ from datetime import timedelta
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from pymongo.errors import ExecutionTimeout
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
@@ -281,6 +282,19 @@ class TestTrending:
         await asyncio.gather(*(client.get(DISCOVER, params={"sort": "trending_7d"}) for _ in range(5)))
 
         assert rebuilds == 1
+
+    async def test_a_timed_out_rebuild_keeps_serving_the_last_ranking(self, client, monkeypatch) -> None:
+        ranked = await _clip()
+        await _engaged(ranked, "play")
+        assert await _ids(client, sort="trending_7d") == [str(ranked.id)]
+
+        async def timed_out(sort: str):
+            raise ExecutionTimeout("operation exceeded time limit")
+
+        monkeypatch.setattr(discovery, "_rank_trending", timed_out)
+        monkeypatch.setattr(discovery, "TRENDING_TTL_SECONDS", 0.0)
+
+        assert await _ids(client, sort="trending_7d") == [str(ranked.id)]
 
     async def test_a_ranked_clip_that_went_private_is_skipped(self, client) -> None:
         hidden, shown = await _clip(), await _clip()
