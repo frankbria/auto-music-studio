@@ -315,12 +315,21 @@ async def settle_owner_stamp(user_id: PydanticObjectId) -> datetime | None:
     Every path that bans, unbans or takes down for a ban ends with this, so whichever runs last leaves the stamps
     right; startup runs it too (``moderation.reconcile_owner_stamps``), which heals a process that died between.
     """
+    stamp = await _ban_state(user_id)
+    while True:
+        await Clip.find({"user_id": user_id, "owner_banned_at": {"$ne": stamp}}).update(
+            {"$set": {"owner_banned_at": stamp}}
+        )
+        # A ban or unban landing between the read and the write would be overwritten; read again and follow it.
+        now = await _ban_state(user_id)
+        if now == stamp:
+            return stamp
+        stamp = now
+
+
+async def _ban_state(user_id: PydanticObjectId) -> datetime | None:
     owner = await User.get(user_id)
-    stamp = owner.banned_at if owner else None
-    await Clip.find({"user_id": user_id, "owner_banned_at": {"$ne": stamp}}).update(
-        {"$set": {"owner_banned_at": stamp}}
-    )
-    return stamp
+    return owner.banned_at if owner else None
 
 
 async def restore_ban_sweep(user_id: PydanticObjectId, banned_at: datetime) -> int:

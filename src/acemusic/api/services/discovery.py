@@ -22,7 +22,7 @@ from .moderation import after_cursor, decode_cursor, encode_cursor
 DiscoverSort = Literal["newest", "relevance"]
 
 _NEWEST = [("created_at", -1), ("_id", -1)]
-_SEARCH_SYNTAX = re.compile(r'"|(?<!\S)-+')
+_LEADING_HYPHENS = re.compile(r"(?<!\S)-+")
 # A query past this answers 503 rather than holding a connection: the pool is public and unauthenticated.
 MAX_QUERY_MS = 3000
 FACETS_TTL_SECONDS = 45.0
@@ -33,7 +33,7 @@ def _text_criteria(q: str, style: str | None) -> dict:
     criteria: dict = {}
     if q:
         # Quotes and a leading "-" are $text syntax (phrase, negation); a user's search is plain words.
-        criteria["$text"] = {"$search": _SEARCH_SYNTAX.sub(" ", q)}
+        criteria["$text"] = {"$search": _LEADING_HYPHENS.sub(" ", q.replace('"', " "))}
     words = [word for word in re.split(r"[\s-]+", style or "") if word]
     if words:
         # Generated clips store their whole style prompt as one tag ("dark hip hop beat"), so a

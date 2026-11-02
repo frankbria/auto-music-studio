@@ -210,7 +210,7 @@ class TestFiltersAndSorts:
 
     async def test_free_text_symbols_are_not_operators(self, client) -> None:
         something = await _clip(title="Something")
-        for q in (".", "(", "[a-z]+", "$where", '"', '"night', "-anything"):
+        for q in (".", "(", "[a-z]+", "$where", '"', '"night', "-anything", '"-anything'):
             resp = await client.get(CLIPS_URL, params={"q": q})
             assert resp.status_code == 200, (q, resp.text)
             assert resp.json()["clips"] == []

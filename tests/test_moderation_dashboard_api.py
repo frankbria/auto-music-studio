@@ -34,7 +34,14 @@ from acemusic.api.models import (
     Workspace,
 )
 from acemusic.api.models.common import utcnow
-from acemusic.api.services import moderation, releases as release_service, routing, screening, soundcloud
+from acemusic.api.services import (
+    clips as clip_service,
+    moderation,
+    releases as release_service,
+    routing,
+    screening,
+    soundcloud,
+)
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
@@ -778,6 +785,27 @@ class TestUnban:
         assert (await Clip.get(unstamped.id)).owner_banned_at == (await User.get(banned.id)).banned_at
         assert (await Clip.get(stale.id)).owner_banned_at is None
         assert (await Clip.get(bystander.id)).owner_banned_at is None
+
+    async def test_settling_follows_an_unban_that_lands_between_its_read_and_write(self, client, settings, monkeypatch):
+        stamp = utcnow()
+        owner = await _user(banned_at=stamp)
+        clip = await _clip(owner)
+        real_state = clip_service._ban_state
+        reads = 0
+
+        async def unbanned_after_the_first_read(user_id):
+            nonlocal reads
+            reads += 1
+            state = await real_state(user_id)
+            if reads == 1:
+                await User.find_one(User.id == owner.id).update({"$set": {"banned_at": None}})
+            return state
+
+        monkeypatch.setattr(clip_service, "_ban_state", unbanned_after_the_first_read)
+
+        assert await clip_service.settle_owner_stamp(owner.id) is None
+
+        assert (await Clip.get(clip.id)).owner_banned_at is None
 
     async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
         admin, user = await _admin(), await _user()
