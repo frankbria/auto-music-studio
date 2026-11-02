@@ -166,6 +166,12 @@ def _current_period_end(subscription: dict[str, Any]) -> int | None:
     return max((item["current_period_end"] for item in items if item.get("current_period_end")), default=None)
 
 
+def _invoice_period_end(invoice: dict[str, Any]) -> int | None:
+    """The latest period end among an invoice's lines: the end of the period it paid for."""
+    lines = (invoice.get("lines") or {}).get("data") or []
+    return max((line["period"]["end"] for line in lines if (line.get("period") or {}).get("end")), default=None)
+
+
 def invoice_subscription_id(invoice: dict[str, Any]) -> str | None:
     """Since Stripe API 2025-03-31.basil an invoice names its subscription under ``parent`` (#646)."""
     details = (invoice.get("parent") or {}).get("subscription_details") or {}
@@ -790,6 +796,14 @@ async def _handle_invoice(
         if not await _record_event(user, event_id, event_type, invoice=invoice):
             return "duplicate"
         return "past_due"
+
+    # The paid period is the one a checkout started, and no subscription event carries it then (#705). $max, so an
+    # invoice for an earlier period never moves the renewal date back.
+    paid_until = _timestamp(_invoice_period_end(invoice))
+    if paid_until:
+        await User.get_pymongo_collection().update_one(
+            {"_id": user.id}, {"$max": {"subscription_current_period_end": paid_until}}
+        )
 
     # A successful charge clears a grace period that a previous failure set.
     if user.subscription_status == "past_due":

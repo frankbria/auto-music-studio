@@ -451,6 +451,51 @@ class TestFailedPayment:
 
 
 @pytest.mark.integration
+class TestRenewalDate:
+    """#705: the paid invoice dates the period a checkout started, which no subscription event carries yet."""
+
+    @staticmethod
+    def _paid(subscription_id: str, *period_ends: int) -> dict:
+        lines = [{"id": f"il_{end}", "period": {"start": end - 2_592_000, "end": end}} for end in period_ends]
+        return {"customer": CUSTOMER, **_billed_to(subscription_id), "status": "paid", "lines": {"data": lines}}
+
+    async def test_a_paid_first_invoice_sets_the_renewal_date(self, client) -> None:
+        user = await _subscriber("renewal-first@example.com")
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+
+        await _post_event(client, "invoice.paid", self._paid("sub_test_1", 1_800_000_000), event_id="evt_renew_1")
+
+        renews = (await User.get(user.id)).subscription_current_period_end
+        assert renews.replace(tzinfo=timezone.utc) == datetime.fromtimestamp(1_800_000_000, timezone.utc)
+
+    async def test_the_paid_invoice_may_arrive_before_the_checkout(self, client) -> None:
+        user = await _subscriber("renewal-early@example.com")
+
+        await _post_event(client, "invoice.paid", self._paid("sub_test_1", 1_800_000_000), event_id="evt_renew_e")
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+
+        assert (await User.get(user.id)).subscription_current_period_end is not None
+
+    async def test_an_older_invoice_never_moves_the_date_back(self, client) -> None:
+        user = await _subscriber("renewal-older@example.com")
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+        await _post_event(client, "invoice.paid", self._paid("sub_test_1", 1_800_000_000, 1_700_000_000), "evt_new")
+
+        await _post_event(client, "invoice.paid", self._paid("sub_test_1", 1_600_000_000), event_id="evt_old")
+
+        renews = (await User.get(user.id)).subscription_current_period_end
+        assert renews.replace(tzinfo=timezone.utc) == datetime.fromtimestamp(1_800_000_000, timezone.utc)
+
+    async def test_a_one_off_charge_leaves_the_date_alone(self, client) -> None:
+        user = await _subscriber("renewal-oneoff@example.com")
+        one_off = {"customer": CUSTOMER, "status": "paid", "lines": {"data": [{"period": {"end": 1_900_000_000}}]}}
+
+        await _post_event(client, "invoice.paid", one_off, event_id="evt_oneoff")
+
+        assert (await User.get(user.id)).subscription_current_period_end is None
+
+
+@pytest.mark.integration
 class TestBillingHistory:
     """AC4: billing history shows past charges with dates and amounts."""
 
