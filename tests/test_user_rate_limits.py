@@ -164,34 +164,61 @@ class TestGenerationIsLimitedBeforeCharging:
 
         assert await Job.count() == 4
 
-    async def test_a_batch_counts_every_job_it_queues_and_is_refused_before_charging(self, settings) -> None:
-        user = await make_user("batch-limited@example.com", tier=PRO, credits_balance=1_000.0)
+    async def _batch_user(self, email: str, clips: int):
+        user = await make_user(email, tier=PRO, credits_balance=1_000.0)
         workspace = await Workspace(name="WS", user_id=user.id).insert()
-        clips = [
+        owned = [
             await Clip(
                 user_id=user.id, workspace_id=workspace.id, file_path=f"c{i}.wav", format="wav", title="Song"
             ).insert()
-            for i in range(4)
+            for i in range(clips)
         ]
+        return user, [str(clip.id) for clip in owned]
+
+    @staticmethod
+    async def _master(user, clip_ids: list[str]):
+        return await mastering.create_mastering_batch(
+            user_id=str(user.id),
+            clip_ids=clip_ids,
+            profile="balanced",
+            service="bakuage",
+            format="wav",
+            target_lufs=-14.0,
+        )
+
+    async def test_a_refused_batch_charges_nothing_and_spends_none_of_the_allowance(self, settings) -> None:
+        user, clip_ids = await self._batch_user("batch-refused@example.com", 4)
         limits = UserRateLimits(settings)  # one generation a minute on Free, three on Pro
 
         token = user_rate_limit._current.set((limits, str(user.id), PRO))
         try:
+            limits.check("generation", str(user.id), PRO)  # one of three spent
             with pytest.raises(HTTPException) as refused:
-                await mastering.create_mastering_batch(
-                    user_id=str(user.id),
-                    clip_ids=[str(clip.id) for clip in clips],
-                    profile="balanced",
-                    service="bakuage",
-                    format="wav",
-                    target_lufs=-14.0,
-                )
+                await self._master(user, clip_ids)
+            limits.check("generation", str(user.id), PRO)
+            limits.check("generation", str(user.id), PRO)  # both remaining slots are still there
         finally:
             user_rate_limit._current.reset(token)
 
         assert refused.value.status_code == 429
         assert (await User.get(user.id)).credits_balance == 1_000.0
         assert await Job.count() == 0
+
+    async def test_a_batch_larger_than_the_limit_takes_the_whole_minute_rather_than_never_running(
+        self, settings
+    ) -> None:
+        user, clip_ids = await self._batch_user("batch-large@example.com", 4)
+        limits = UserRateLimits(settings)
+
+        token = user_rate_limit._current.set((limits, str(user.id), PRO))
+        try:
+            batch = await self._master(user, clip_ids)
+            with pytest.raises(HTTPException):
+                limits.check("generation", str(user.id), PRO)
+        finally:
+            user_rate_limit._current.reset(token)
+
+        assert len(batch.entries) == 4
 
     async def test_admins_see_the_limits_and_who_was_turned_away(self, settings) -> None:
         admin = await make_user("limits-admin@example.com", is_admin=True)

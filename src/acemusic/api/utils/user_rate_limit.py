@@ -69,11 +69,13 @@ class UserRateLimits:
         }
         self.rejections: deque[Rejection] = deque(maxlen=recent)
 
-    def check(self, kind: LimitKind, user_id: str, tier: str) -> None:
-        """Count one request; raise 429 with ``Retry-After`` once the user is over their plan's limit."""
+    def check(self, kind: LimitKind, user_id: str, tier: str, weight: int = 1) -> None:
+        """Count ``weight`` requests at once; raise 429 with ``Retry-After``, counting none, if that's over the plan's
+        limit. A weight is capped at the whole limit, so a large batch spends the minute's allowance but is never
+        impossible."""
         plan = tiers.normalise(tier)
         try:
-            self._limiters[(kind, plan)].check(user_id)
+            self._limiters[(kind, plan)].check(user_id, min(weight, self.limits[kind][plan]))
         except HTTPException:
             self.rejections.append(Rejection(time.time(), user_id, plan, kind))
             raise
@@ -90,8 +92,7 @@ def check_generation(jobs: int = 1) -> None:
     current = _current.get()
     if current is not None:
         limits, user_id, tier = current
-        for _ in range(jobs):
-            limits.check("generation", user_id, tier)
+        limits.check("generation", user_id, tier, jobs)
 
 
 class UserRateLimitMiddleware:
