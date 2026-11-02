@@ -232,6 +232,51 @@ async def grant_purchased_credits(user_id: PydanticObjectId, amount: float) -> f
     return _total(doc)
 
 
+async def grant_plan_allocation(user_id: PydanticObjectId, tier: str) -> float:
+    """Raise the monthly bucket to ``tier``'s allocation when the plan is bought (#704); return what was added.
+
+    Never lowers it, like the monthly reset, so a balance already above the allocation keeps its surplus. The grant
+    covers the current period, so it stamps that period's reset anchor: a lazy reset that read the old anchor (and the
+    old tier) then matches nothing and re-reads, instead of adding its top-up on top of this one.
+    """
+    from . import tiers
+
+    user = await User.get(user_id)
+    if user is None:
+        return 0.0
+    created = user.created_at if user.created_at.tzinfo else user.created_at.replace(tzinfo=timezone.utc)
+    allocation = tiers.monthly_allocation(tier)
+    monthly = {"$ifNull": ["$credits_balance", DEFAULT_CREDITS_BALANCE]}
+    before = await User.get_pymongo_collection().find_one_and_update(
+        {"_id": user_id},
+        [
+            {
+                "$set": {
+                    "credits_balance": {"$max": [monthly, allocation]},
+                    "credits_reset_at": _period_start(created, datetime.now(timezone.utc)),
+                }
+            }
+        ],
+        return_document=ReturnDocument.BEFORE,
+    )
+    if before is None:
+        return 0.0
+    monthly_before, purchased = _before_buckets(before)
+    granted = max(0.0, allocation - monthly_before)
+    if granted:
+        try:
+            await record_transaction(
+                user_id=user_id,
+                amount=granted,
+                action_type="plan_upgrade",
+                job_id="",
+                balance_after=monthly_before + granted + purchased,
+            )
+        except Exception:  # the grant landed: failing here would release its claim and let a redelivery grant again
+            logger.exception("Plan allocation granted to %s but its ledger row failed", user_id)
+    return granted
+
+
 def _before_buckets(doc: dict) -> tuple[float, float]:
     """The two buckets as the spend pipeline reads them, defaults for absent fields included."""
     monthly = doc.get("credits_balance")

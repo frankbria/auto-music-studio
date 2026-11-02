@@ -59,6 +59,7 @@ class TestCategoryFor:
             ("artwork", "artwork"),
             ("artwork_refund", "artwork"),
             ("monthly_reset", "grant"),
+            ("plan_upgrade", "grant"),
             ("something_new", "other"),
         ],
     )

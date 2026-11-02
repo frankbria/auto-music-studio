@@ -68,6 +68,7 @@ CATEGORIES: dict[str, str] = {
     "voice_training": "voice",
     "artwork": "artwork",
     "monthly_reset": "grant",
+    "plan_upgrade": "grant",
 }
 
 #: The one category that adds credit rather than consuming it, excluded from the charts.
