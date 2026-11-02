@@ -16,7 +16,7 @@ from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, ClipEngagement, ModerationLogEntry, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
-from acemusic.api.services import engagement
+from acemusic.api.services import discovery, engagement
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -33,6 +33,14 @@ def settings(mongo_db, mongo_settings) -> ApiSettings:
     return mongo_settings.model_copy(
         update={"jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx", "job_processor_enabled": False}
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_trending():
+    """The trending ranking is cached per process; each test records its own engagement."""
+    discovery.clear_trending_cache()
+    yield
+    discovery.clear_trending_cache()
 
 
 @pytest.fixture
@@ -243,6 +251,29 @@ class TestTrending:
 
         assert [clip["id"] for clip in resp.json()["clips"]] == [str(public.id)]
         assert resp.json()["total"] is None
+
+    async def test_the_ranking_is_reused_for_a_minute_then_recomputed(self, client, monkeypatch) -> None:
+        first, second = await _clip(), await _clip()
+        await _engaged(first, "play")
+        assert await _ids(client, sort="trending_7d") == [str(first.id)]
+
+        for _ in range(3):
+            await _engaged(second, "play")
+        assert await _ids(client, sort="trending_7d") == [str(first.id)], "inside the minute, the cached ranking"
+
+        monkeypatch.setattr(discovery, "TRENDING_TTL_SECONDS", 0.0)
+        assert await _ids(client, sort="trending_7d") == [str(second.id), str(first.id)]
+
+    async def test_a_ranked_clip_that_went_private_is_skipped(self, client) -> None:
+        hidden, shown = await _clip(), await _clip()
+        for _ in range(3):
+            await _engaged(hidden, "play")
+        await _engaged(shown, "play")
+        assert await _ids(client, sort="trending_7d") == [str(hidden.id), str(shown.id)]
+
+        await Clip.find_one(Clip.id == hidden.id).update({"$set": {"is_public": False, "visibility": "private"}})
+
+        assert await _ids(client, sort="trending_7d") == [str(shown.id)]
 
     async def test_trending_cannot_be_searched(self, client) -> None:
         resp = await client.get(DISCOVER, params={"sort": "trending_7d", "q": "song"})

@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+from beanie import PydanticObjectId
 from fastapi import HTTPException, status
 from pymongo.errors import ExecutionTimeout
 
@@ -31,6 +32,10 @@ _LEADING_HYPHENS = re.compile(r"(?<!\S)-+")
 MAX_QUERY_MS = 3000
 FACETS_TTL_SECONDS = 45.0
 _facets_cache: tuple[float, dict[str, list[str]]] | None = None
+# #338: a minute of staleness is invisible in a 24-hour or 7-day chart.
+TRENDING_TTL_SECONDS = 60.0
+_TRENDING_BATCH = 100
+_trending_cache: dict[str, tuple[float, list[tuple[int, PydanticObjectId]]]] = {}
 
 
 def _text_criteria(q: str, style: str | None) -> dict:
@@ -137,9 +142,15 @@ async def _by_field(
     return page, encode_cursor(kind, (getattr(page[-1], field), str(page[-1].id)))
 
 
-async def _by_trending(match: dict, sort: str, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
-    """Clips by weighted engagement inside the window, keyset-paged on (score, _id) over the public pool."""
-    kind = f"discover_{sort}"
+async def _trending_ranking(sort: str) -> list[tuple[int, PydanticObjectId]]:
+    """Every clip engaged with inside the window as (score, id), best first; cached per process (#338).
+
+    The aggregation reads every engagement row in the window, which costs hundreds of milliseconds at a few hundred
+    thousand rows a week, so it runs once per window per ``TRENDING_TTL_SECONDS`` rather than once per page.
+    """
+    cached = _trending_cache.get(sort)
+    if cached is not None and time.monotonic() - cached[0] < TRENDING_TTL_SECONDS:
+        return cached[1]
     weight = {
         "$switch": {"branches": [{"case": {"$eq": ["$kind", k]}, "then": w} for k, w in _TRENDING_WEIGHTS.items()]}
     }
@@ -147,28 +158,49 @@ async def _by_trending(match: dict, sort: str, limit: int, cursor: str | None) -
         [
             {"$match": {"created_at": {"$gte": datetime.now(timezone.utc) - _TRENDING_WINDOWS[sort]}}},
             {"$group": {"_id": "$clip_id", "score": {"$sum": weight}}},
-            {"$match": _after_key(kind, cursor, "score")},
             {"$sort": {"score": -1, "_id": -1}},
-            {
-                "$lookup": {
-                    "from": "clips",
-                    "localField": "_id",
-                    "foreignField": "_id",
-                    "pipeline": [{"$match": match}],
-                    "as": "clip",
-                }
-            },
-            {"$unwind": "$clip"},
-            {"$limit": limit + 1},
         ],
         allowDiskUse=True,
         maxTimeMS=MAX_QUERY_MS,
     ).to_list()
-    page = rows[:limit]
-    clips = [Clip.model_validate(row["clip"]) for row in page]
-    if len(rows) <= limit:
+    ranking = [(row["score"], row["_id"]) for row in rows]
+    _trending_cache[sort] = (time.monotonic(), ranking)
+    return ranking
+
+
+async def _by_trending(match: dict, sort: str, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
+    """Clips by weighted engagement inside the window, keyset-paged on (score, _id) over the public pool."""
+    kind = f"discover_{sort}"
+    ranking = await _trending_ranking(sort)
+    if cursor:
+        score, last_id = decode_cursor(kind, cursor)
+        oid = coerce_object_id(last_id)
+        if oid is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+        ranking = [entry for entry in ranking if entry < (score, oid)]
+    # The ranking holds clips that have since left the public pool, so fetch in batches until a page is full.
+    page: list[tuple[int, Clip]] = []
+    batch_size = max(limit + 1, _TRENDING_BATCH)
+    for start in range(0, len(ranking), batch_size):
+        batch = ranking[start : start + batch_size]
+        ids = [clip_id for _, clip_id in batch]
+        found = {
+            clip.id: clip
+            for clip in await Clip.find({**match, "_id": {"$in": ids}}, max_time_ms=MAX_QUERY_MS).to_list()
+        }
+        page += [(score, found[clip_id]) for score, clip_id in batch if clip_id in found]
+        if len(page) > limit:
+            break
+    clips = [clip for _, clip in page[:limit]]
+    if len(page) <= limit:
         return clips, None
-    return clips, encode_cursor(kind, (page[-1]["score"], str(page[-1]["_id"])))
+    last_score, last = page[limit - 1]
+    return clips, encode_cursor(kind, (last_score, str(last.id)))
+
+
+def clear_trending_cache() -> None:
+    """For tests, which record engagement between requests in one process."""
+    _trending_cache.clear()
 
 
 async def _page(
