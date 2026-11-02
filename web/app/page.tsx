@@ -13,7 +13,7 @@ const features = [
   {
     title: "Shape it in the studio",
     description:
-      "Extend, cover, repaint a section, add vocals, mash two songs together, or split a track into stems.",
+      "Extend, cover, repaint a section, add vocals or mash two songs together, then export stems for your DAW.",
   },
   {
     title: "Master it and release it",
@@ -24,8 +24,8 @@ const features = [
 
 export default function HomePage() {
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto p-6">
-      <div className="flex max-w-2xl flex-col gap-8">
+    <div className="flex min-h-full justify-center p-6">
+      <div className="my-auto flex max-w-2xl flex-col gap-8">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
             <span className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
