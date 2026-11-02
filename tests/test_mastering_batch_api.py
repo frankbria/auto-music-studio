@@ -138,20 +138,20 @@ class TestSubmission:
             assert job.input_params["target_lufs"] == -14.0
 
     async def test_charges_per_clip_with_ledger_rows(self, client, settings) -> None:
-        # dolby = 3 credits; 2 clips → 6 deducted, 2 ledger rows.
+        # bakuage = 2 credits; 2 clips → 4 deducted, 2 ledger rows.
         user, _ws, clips = await _user_with_clips("batch-charge@example.com", 2, balance=10.0)
         resp = await client.post(
             BATCH_URL,
-            json={"clip_ids": [str(c.id) for c in clips], "profile": "club", "service": "dolby"},
+            json={"clip_ids": [str(c.id) for c in clips], "profile": "club", "service": "bakuage"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 4.0
+        assert (await _reload(user)).credits_balance == 6.0
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
         assert len(txns) == 2
-        assert all(t.amount == -3.0 and t.action_type == "mastering" for t in txns)
-        # Each row carries its own running balance (10 → 7 → 4), not a flat figure.
-        assert {t.balance_after for t in txns} == {7.0, 4.0}
+        assert all(t.amount == -2.0 and t.action_type == "mastering" for t in txns)
+        # Each row carries its own running balance (10 → 8 → 6), not a flat figure.
+        assert {t.balance_after for t in txns} == {8.0, 6.0}
 
     async def test_custom_profile_persists_supplied_lufs(self, client, settings) -> None:
         user, _ws, clips = await _user_with_clips("batch-custom@example.com", 1, balance=100.0)
@@ -172,12 +172,37 @@ class TestSubmission:
 
 @pytest.mark.integration
 class TestPartialFailure:
+    async def test_a_non_admin_batch_on_an_admin_only_service_is_refused_before_any_charge(
+        self, client, settings
+    ) -> None:
+        """#694: LANDR and Dolby are admin-only in batches too."""
+        user, _ws, clips = await _user_with_clips("batch-nonadmin@example.com", 2, balance=500.0)
+        resp = await client.post(
+            BATCH_URL,
+            json={"clip_ids": [str(c.id) for c in clips], "profile": "streaming", "service": "landr"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 403
+        assert (await _reload(user)).credits_balance == 500.0
+        assert await Job.find(Job.user_id == user.id).to_list() == []
+
+    async def test_a_non_admin_batch_job_is_pinned_to_bakuage(self, client, settings) -> None:
+        user, _ws, clips = await _user_with_clips("batch-pinned@example.com", 1, balance=10.0)
+        resp = await client.post(
+            BATCH_URL,
+            json={"clip_ids": [str(clips[0].id)], "profile": "streaming"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        job = await Job.get(resp.json()["jobs"][0]["job_id"])
+        assert job.input_params["allowed_services"] == ["bakuage"]
+
     async def test_unknown_clip_becomes_failed_entry_and_is_not_charged(self, client, settings) -> None:
         user, _ws, clips = await _user_with_clips("batch-partial@example.com", 1, balance=100.0)
         unknown = str(PydanticObjectId())
         resp = await client.post(
             BATCH_URL,
-            json={"clip_ids": [str(clips[0].id), unknown], "profile": "streaming", "service": "landr"},
+            json={"clip_ids": [str(clips[0].id), unknown], "profile": "streaming", "service": "bakuage"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
@@ -185,7 +210,7 @@ class TestPartialFailure:
         assert jobs[str(clips[0].id)]["job_id"]
         assert jobs[unknown]["job_id"] is None
         assert jobs[unknown]["error"]
-        # Only the one owned clip was charged (landr = 2).
+        # Only the one owned clip was charged (bakuage = 2).
         assert (await _reload(user)).credits_balance == 98.0
 
 
@@ -216,17 +241,17 @@ class TestValidation:
         assert resp.status_code == 422
 
     async def test_insufficient_credits_returns_402_and_charges_nothing(self, client, settings) -> None:
-        # 3 clips * dolby(3) = 9 required, only 5 available.
+        # 3 clips * bakuage(2) = 6 required, only 5 available.
         user, _ws, clips = await _user_with_clips("batch-broke@example.com", 3, balance=5.0)
         resp = await client.post(
             BATCH_URL,
-            json={"clip_ids": [str(c.id) for c in clips], "profile": "streaming", "service": "dolby"},
+            json={"clip_ids": [str(c.id) for c in clips], "profile": "streaming", "service": "bakuage"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 402
         detail = resp.json()["detail"]
         assert detail["error"] == "insufficient_credits"
-        assert detail["required"] == 9.0
+        assert detail["required"] == 6.0
         assert detail["balance"] == 5.0
         # No jobs created, balance untouched.
         assert (await _reload(user)).credits_balance == 5.0

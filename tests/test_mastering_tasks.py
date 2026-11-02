@@ -134,8 +134,10 @@ async def _make_clip(
     bpm: int | None = 120,
     key: str | None = "C",
     service: str = "dolby",
+    allowed_services: list[str] | None = None,
 ) -> tuple[Job, Clip]:
-    user = await make_user(email)
+    # Enough for the dearest service (LANDR, 130) plus a fallback's difference.
+    user = await make_user(email, credits_balance=300.0)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip_id = PydanticObjectId()
@@ -163,7 +165,8 @@ async def _make_clip(
             "service": service,
             "format": "wav",
             "target_lufs": -14.0,
-        },
+        }
+        | ({"allowed_services": allowed_services} if allowed_services is not None else {}),
         status=JobStatus.QUEUED,
     )
     return job, clip
@@ -266,30 +269,12 @@ class TestFallback:
 
     async def test_fallback_reconciles_credits_to_actual_service(self, storage) -> None:
         # codex P1: a fallback that runs a differently-priced service must adjust
-        # the balance so the user pays for the work performed. Dolby (3.0) ->
-        # Bakuage (5.0): the user is topped up by the 2.0 difference.
+        # the balance so the user pays for the work performed. Bakuage (2) ->
+        # Dolby (11), an admin's unpinned job: the user pays the 9 difference.
         from acemusic.api.services import credits as credits_service
 
-        job, _ = await _make_clip(storage, email="master-reconcile@example.com", service="dolby")
+        job, _ = await _make_clip(storage, email="master-reconcile@example.com", service="bakuage")
         # Simulate the router's enqueue charge of the requested service.
-        charged = credits_service.get_mastering_cost("dolby")
-        balance_after_charge = await credits_service.deduct_credits(job.user_id, charged)
-        dolby = FakeService(service="dolby", output=_wav_bytes(3.0), fail=True)
-        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0))
-        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
-
-        await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
-
-        actual = credits_service.get_mastering_cost("bakuage")
-        user = await user_service.get_user_by_id(str(job.user_id))
-        # Final balance reflects the actual service's cost, not the requested one.
-        assert user.credits_balance == balance_after_charge - (actual - charged)
-
-    async def test_cheaper_fallback_refunds_the_difference(self, storage) -> None:
-        # Bakuage (5.0) -> Dolby (3.0): the 2.0 overcharge is refunded.
-        from acemusic.api.services import credits as credits_service
-
-        job, _ = await _make_clip(storage, email="master-refund@example.com", service="bakuage")
         charged = credits_service.get_mastering_cost("bakuage")
         balance_after_charge = await credits_service.deduct_credits(job.user_id, charged)
         bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0), fail=True)
@@ -300,8 +285,39 @@ class TestFallback:
 
         actual = credits_service.get_mastering_cost("dolby")
         user = await user_service.get_user_by_id(str(job.user_id))
+        # Final balance reflects the actual service's cost, not the requested one.
+        assert user.credits_balance == balance_after_charge - (actual - charged)
+
+    async def test_cheaper_fallback_refunds_the_difference(self, storage) -> None:
+        # Dolby (11) -> Bakuage (2): the 9 overcharge is refunded.
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(storage, email="master-refund@example.com", service="dolby")
+        charged = credits_service.get_mastering_cost("dolby")
+        balance_after_charge = await credits_service.deduct_credits(job.user_id, charged)
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0), fail=True)
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        actual = credits_service.get_mastering_cost("bakuage")
+        user = await user_service.get_user_by_id(str(job.user_id))
         # Cheaper fallback → the difference is refunded.
         assert user.credits_balance == balance_after_charge + (charged - actual)
+
+    async def test_a_pinned_job_never_falls_back_onto_an_admin_only_service(self, storage) -> None:
+        """#694: a non-admin's job carries allowed_services, so a Bakuage failure fails the job instead of running Dolby."""
+        job, _ = await _make_clip(
+            storage, email="master-pinned@example.com", service="bakuage", allowed_services=["bakuage"]
+        )
+        bakuage = FakeService(service="bakuage", output=_wav_bytes(3.0), fail=True)
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby, bakuage=bakuage)
+
+        with pytest.raises(tasks.JobProcessingError, match="Mastering failed"):
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+        assert dolby.master_calls == []
 
 
 class TestGracefulDegradation:

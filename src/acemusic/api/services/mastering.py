@@ -116,6 +116,7 @@ async def create_mastering_batch(
     service: str,
     format: str,
     target_lufs: float,
+    allowed_services: list[str] | None = None,
 ) -> BatchJob:
     """Queue one mastering job per owned clip under a single :class:`BatchJob`.
 
@@ -173,7 +174,7 @@ async def create_mastering_batch(
             "service": service,
             "format": format,
             "target_lufs": target_lufs,
-        }
+        } | ({"allowed_services": allowed_services} if allowed_services is not None else {})
         try:
             job = await create_mastering_job(
                 user_id=clip.user_id,

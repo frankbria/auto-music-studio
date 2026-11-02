@@ -9,6 +9,7 @@ import {
   VIDEO_TRANSITIONS,
   editOperationLabel,
   estimateVideoCost,
+  VIDEO_ASSUMED_DURATION_S,
   fetchPublishedVideoForClip,
   fetchVideoDetail,
   fetchVideoStatus,
@@ -88,22 +89,23 @@ describe("option tables", () => {
 })
 
 describe("estimateVideoCost", () => {
-  // Mirrors src/acemusic/api/services/credits.py get_video_cost.
-  it("bills the base rate per resolution", () => {
-    expect(estimateVideoCost("720p", 60)).toBe(5)
-    expect(estimateVideoCost("1080p", 60)).toBe(7)
-    expect(estimateVideoCost("4k", 60)).toBe(8)
+  // Mirrors src/acemusic/api/services/credits.py get_video_cost (#694).
+  it("bills per minute of song by resolution", () => {
+    expect(estimateVideoCost("720p", 60)).toBe(156)
+    expect(estimateVideoCost("1080p", 60)).toBe(375)
+    expect(estimateVideoCost("4k", 60)).toBe(1350)
   })
 
-  it("adds the long-duration surcharge past 180s, capped at 10", () => {
-    expect(estimateVideoCost("720p", 181)).toBe(7)
-    expect(estimateVideoCost("1080p", 300)).toBe(9)
-    expect(estimateVideoCost("4k", 300)).toBe(10) // 8 + 2 = 10, at the cap
+  it("scales with duration and rounds up to a whole credit", () => {
+    expect(estimateVideoCost("720p", 180)).toBe(468)
+    expect(estimateVideoCost("720p", 10)).toBe(26)
+    expect(estimateVideoCost("1080p", 61)).toBe(382)
   })
 
-  it("bills the base rate when duration is unknown or at the boundary", () => {
-    expect(estimateVideoCost("720p", null)).toBe(5)
-    expect(estimateVideoCost("720p", 180)).toBe(5)
+  it("estimates an unknown duration at the assumed length", () => {
+    expect(estimateVideoCost("720p", null)).toBe(
+      estimateVideoCost("720p", VIDEO_ASSUMED_DURATION_S)
+    )
   })
 })
 

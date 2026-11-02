@@ -6,11 +6,7 @@
 
 /** The five mastering profiles (loudness targets), mirroring the backend Literal. */
 export type MasteringProfile =
-  | "streaming"
-  | "soundcloud"
-  | "club"
-  | "vinyl"
-  | "custom"
+  "streaming" | "soundcloud" | "club" | "vinyl" | "custom"
 
 /** The mastering service backends, mirroring the backend Literal. */
 export type MasteringService = "dolby" | "landr" | "bakuage"
@@ -33,6 +29,8 @@ export type ServiceOption = {
   value: MasteringService
   label: string
   cost: number
+  /** Offered to admins only (#694): the API refuses it for anyone else. */
+  adminOnly?: boolean
 }
 
 // Fixed loudness targets per profile (src/acemusic/api/services/mastering.py
@@ -46,12 +44,12 @@ export const MASTERING_PROFILES: ProfileOption[] = [
   { value: "custom", label: "Custom", lufs: null },
 ]
 
-// Per-service credit cost (src/acemusic/api/services/credits.py). dolby is the
-// backend default.
+// Per-service credit cost (src/acemusic/api/services/credits.py, #694). Bakuage
+// is the default and the one service offered to everyone.
 export const MASTERING_SERVICES: ServiceOption[] = [
-  { value: "dolby", label: "Dolby.io", cost: 3 },
-  { value: "landr", label: "LANDR", cost: 2 },
-  { value: "bakuage", label: "Bakuage", cost: 5 },
+  { value: "bakuage", label: "Bakuage", cost: 2 },
+  { value: "landr", label: "LANDR", cost: 130, adminOnly: true },
+  { value: "dolby", label: "Dolby.io", cost: 11, adminOnly: true },
 ]
 
 // Custom LUFS bounds — the backend rejects anything outside this range (422).
@@ -60,12 +58,16 @@ export const CUSTOM_LUFS_MAX = -5
 
 /** Human label for a profile key, falling back to the raw value then a dash. */
 export function profileLabel(value?: string): string {
-  return MASTERING_PROFILES.find((p) => p.value === value)?.label ?? value ?? "—"
+  return (
+    MASTERING_PROFILES.find((p) => p.value === value)?.label ?? value ?? "—"
+  )
 }
 
 /** Human label for a service key, falling back to the raw value then a dash. */
 export function serviceLabel(value?: string): string {
-  return MASTERING_SERVICES.find((s) => s.value === value)?.label ?? value ?? "—"
+  return (
+    MASTERING_SERVICES.find((s) => s.value === value)?.label ?? value ?? "—"
+  )
 }
 
 /** The mastering configuration a submission carries (clip id is passed separately). */
@@ -182,7 +184,10 @@ export async function submitMasteringJob(
   if (res.status === 202) {
     const body = (await res.json().catch(() => ({}))) as { job_id?: string }
     if (!body.job_id) {
-      return { status: "error", detail: "Server returned an unexpected response." }
+      return {
+        status: "error",
+        detail: "Server returned an unexpected response.",
+      }
     }
     return { status: "accepted", jobId: body.job_id }
   }
@@ -191,8 +196,9 @@ export async function submitMasteringJob(
   const body = await res.json().catch(() => ({}))
   if (res.status === 402) {
     // The 402 detail is an object {error, balance, required}.
-    const detail = (body as { detail?: { balance?: number; required?: number } })
-      .detail
+    const detail = (
+      body as { detail?: { balance?: number; required?: number } }
+    ).detail
     return {
       status: "insufficient_credits",
       balance: detail?.balance ?? 0,
@@ -200,7 +206,10 @@ export async function submitMasteringJob(
     }
   }
   if (res.status === 422) {
-    return { status: "invalid", detail: extractDetail(body, "Please check your input.") }
+    return {
+      status: "invalid",
+      detail: extractDetail(body, "Please check your input."),
+    }
   }
   return {
     status: "error",
@@ -235,7 +244,10 @@ export async function fetchMasteringStatus(
     case "completed":
       return { kind: "completed", detail }
     case "failed":
-      return { kind: "failed", error: detail.error || "Mastering failed. Please try again." }
+      return {
+        kind: "failed",
+        error: detail.error || "Mastering failed. Please try again.",
+      }
     case "queued":
     case "processing":
       return { kind: "pending", detail }
@@ -252,9 +264,12 @@ export async function fetchMasteringPreviews(
 ): Promise<PreviewsResponse | null> {
   let res: Response
   try {
-    res = await fetch(`/api/mastering/jobs/${encodeURIComponent(jobId)}/previews`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-    })
+    res = await fetch(
+      `/api/mastering/jobs/${encodeURIComponent(jobId)}/previews`,
+      {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }
+    )
   } catch {
     return null
   }
@@ -270,28 +285,37 @@ export async function approveMasteringPreview(
 ): Promise<ApproveResult> {
   let res: Response
   try {
-    res = await fetch(`/api/mastering/jobs/${encodeURIComponent(jobId)}/approve`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ preview_id: previewId }),
-    })
+    res = await fetch(
+      `/api/mastering/jobs/${encodeURIComponent(jobId)}/approve`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ preview_id: previewId }),
+      }
+    )
   } catch {
     return { status: "error", detail: "Approval failed. Please try again." }
   }
   if (res.status === 401) return { status: "unauthorized" }
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
-    return { status: "error", detail: extractDetail(body, "Approval failed. Please try again.") }
+    return {
+      status: "error",
+      detail: extractDetail(body, "Approval failed. Please try again."),
+    }
   }
   const { clip_id: clipId, audio_url: audioUrl } = body as {
     clip_id?: string
     audio_url?: string
   }
   if (!clipId) {
-    return { status: "error", detail: "Server returned an unexpected response." }
+    return {
+      status: "error",
+      detail: "Server returned an unexpected response.",
+    }
   }
   return { status: "approved", clipId, audioUrl: audioUrl ?? "" }
 }

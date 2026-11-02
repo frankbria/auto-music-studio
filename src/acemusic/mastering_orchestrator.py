@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Collection
 
 from acemusic.mastering_protocol import MasteringError, MasteringOutput, MasteringService
 
@@ -86,11 +87,11 @@ class MasteringOrchestrator:
             )
         return self._clients[service]
 
-    def _fallback_chain(self, requested_service: str) -> list[str]:
-        """Build the try-order: requested service first, then configured others."""
+    def _fallback_chain(self, requested_service: str, allowed: Collection[str] | None = None) -> list[str]:
+        """Build the try-order: requested service first, then the configured others ``allowed`` (all if None)."""
         chain = [requested_service] if requested_service in self._clients else []
         for svc in DEFAULT_FALLBACK_ORDER:
-            if svc != requested_service and svc in self._clients:
+            if svc != requested_service and svc in self._clients and (allowed is None or svc in allowed):
                 chain.append(svc)
         return chain
 
@@ -104,6 +105,7 @@ class MasteringOrchestrator:
         *,
         requested_service: str,
         total_timeout: float = DEFAULT_TOTAL_TIMEOUT_S,
+        allowed_services: Collection[str] | None = None,
     ) -> MasteringOutput:
         """Master ``audio_bytes`` via the requested service, falling back on failure.
 
@@ -124,7 +126,7 @@ class MasteringOrchestrator:
                 f"Available: {', '.join(self.available_services) or 'none'}."
             )
 
-        chain = self._fallback_chain(requested_service)
+        chain = self._fallback_chain(requested_service, allowed_services)
         deadline = time.monotonic() + total_timeout
         last_error: MasteringError | None = None
         for index, svc in enumerate(chain):

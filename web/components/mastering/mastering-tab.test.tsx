@@ -71,7 +71,7 @@ const readyPreviews: UseMasteringPreviews = {
       original_audio_url: "orig",
       original_metrics: { loudness: -20 },
       previews: [
-        { preview_id: "m1", audio_url: "u1", profile: "streaming", service: "dolby", loudness_delta: 6, metrics: { loudness: -14 } },
+        { preview_id: "m1", audio_url: "u1", profile: "streaming", service: "bakuage", loudness_delta: 6, metrics: { loudness: -14 } },
       ],
     },
   },
@@ -97,7 +97,7 @@ describe("MasteringTab", () => {
     render(<MasteringTab selectedClip={clip("c1")} />)
 
     await user.click(screen.getByRole("button", { name: /start mastering/i }))
-    expect(submit).toHaveBeenCalledWith("c1", { profile: "streaming", service: "dolby", format: "wav" })
+    expect(submit).toHaveBeenCalledWith("c1", { profile: "streaming", service: "bakuage", format: "wav" })
   })
 
   it("shows progress while polling", () => {

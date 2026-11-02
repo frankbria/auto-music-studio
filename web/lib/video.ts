@@ -123,25 +123,22 @@ export function presetLabel(value?: string): string {
 // Client-side mirror of the server cost formula (src/acemusic/api/services/
 // credits.py get_video_cost) for the pre-submit estimate — the server remains
 // the billing authority. Same idiom as the MASTERING_SERVICES cost table.
-const VIDEO_COSTS: Record<VideoResolution, number> = {
-  "720p": 5,
-  "1080p": 7,
-  "4k": 8,
+// #694: providers bill per second of video, so the price is per minute of song.
+const VIDEO_COSTS_PER_MINUTE: Record<VideoResolution, number> = {
+  "720p": 156,
+  "1080p": 375,
+  "4k": 1350,
 }
-export const VIDEO_LONG_DURATION_S = 180
-const VIDEO_LONG_DURATION_SURCHARGE = 2
-const VIDEO_MAX_COST = 10
+/** A song with no known duration is estimated, and billed, as this long. */
+export const VIDEO_ASSUMED_DURATION_S = 240
 
-/** Estimated credit cost of one render (base by resolution, +2 past 3 min, cap 10). */
+/** Estimated credit cost of one render: per minute of song by resolution, rounded up. */
 export function estimateVideoCost(
   resolution: VideoResolution,
   durationS: number | null
 ): number {
-  let cost = VIDEO_COSTS[resolution]
-  if (durationS !== null && durationS > VIDEO_LONG_DURATION_S) {
-    cost += VIDEO_LONG_DURATION_SURCHARGE
-  }
-  return Math.min(cost, VIDEO_MAX_COST)
+  const seconds = durationS ?? VIDEO_ASSUMED_DURATION_S
+  return Math.ceil((VIDEO_COSTS_PER_MINUTE[resolution] * seconds) / 60)
 }
 
 /** The render configuration a submission carries (clip id is passed separately). */

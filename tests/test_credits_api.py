@@ -159,7 +159,8 @@ class TestGenerationDeductsCredits:
         assert resp.status_code == 202
         assert (await _reload(user)).credits_balance == 9.0
 
-    async def test_sound_deducts_half_credit(self, client, settings):
+    async def test_sound_deducts_a_whole_credit(self, client, settings):
+        """#694: a short sound takes the same GPU time as a song, so it costs the same."""
         user = await make_user("credits-sound@example.com", credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
@@ -167,7 +168,7 @@ class TestGenerationDeductsCredits:
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 9.5
+        assert (await _reload(user)).credits_balance == 9.0
 
     async def test_deduction_recorded_as_transaction(self, client, settings):
         user = await make_user("credits-txn@example.com", credits_balance=10.0)
@@ -214,8 +215,8 @@ class TestInsufficientCredits:
         assert await Job.find(Job.user_id == user.id).count() == 0
         assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
 
-    async def test_sound_allowed_when_song_is_not(self, client, settings):
-        # 0.5 ≤ balance < 1.0: enough for a sound, not for a song.
+    async def test_half_a_credit_buys_neither_a_song_nor_a_sound(self, client, settings):
+        # #694: a sound costs a whole credit, like a song.
         user = await make_user("credits-half@example.com", credits_balance=0.5)
         headers = _auth_headers(user, settings)
         song = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
@@ -225,8 +226,8 @@ class TestInsufficientCredits:
             json={"prompt": "kick", "mode": "sound", "sound_type": "one-shot"},
             headers=headers,
         )
-        assert sound.status_code == 202
-        assert (await _reload(user)).credits_balance == 0.0
+        assert sound.status_code == 402
+        assert (await _reload(user)).credits_balance == 0.5
 
 
 @pytest.mark.integration
@@ -316,13 +317,13 @@ class TestCreditsEndpoint:
         resp = await client.get(CREDITS_URL, headers=headers)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["balance"] == 8.5
+        assert body["balance"] == 8.0
         history = body["history"]
         assert len(history) == 2
         # Newest first: the sound came second.
         assert history[0]["action_type"] == "sound"
-        assert history[0]["amount"] == -0.5
-        assert history[0]["balance_after"] == 8.5
+        assert history[0]["amount"] == -1.0
+        assert history[0]["balance_after"] == 8.0
         assert history[0]["job_id"] == sound.json()["job_id"]
         assert history[1]["action_type"] == "song"
         assert history[1]["amount"] == -1.0
