@@ -275,7 +275,7 @@ export function ClipCard({
       {/* Thumbnail with duration overlay + hover play. */}
       <button
         type="button"
-        aria-label="Play"
+        aria-label={`Play ${title ?? "Untitled clip"}`}
         onClick={() =>
           dispatch({
             type: "play/track",
@@ -295,7 +295,10 @@ export function ClipCard({
           <HugeiconsIcon icon={PlayIcon} size={20} className="fill-current" />
         </span>
         {clip.duration != null && (
-          <span className="absolute right-0.5 bottom-0.5 rounded bg-background/80 px-1 text-[10px] tabular-nums">
+          <span
+            aria-hidden
+            className="absolute right-0.5 bottom-0.5 rounded bg-background/80 px-1 text-[10px] tabular-nums"
+          >
             {formatTime(clip.duration)}
           </span>
         )}
@@ -327,7 +330,7 @@ export function ClipCard({
         ) : (
           <button
             type="button"
-            aria-label="Edit title"
+            aria-label={`Edit title: ${title ?? "Untitled clip"}`}
             onClick={startEdit}
             className="flex min-w-0 items-center gap-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >

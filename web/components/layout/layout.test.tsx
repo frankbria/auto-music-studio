@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { LAYOUT } from "@/lib/constants/layout"
@@ -30,6 +31,23 @@ describe("AppShell", () => {
     )
     const main = screen.getByRole("main")
     expect(main).toHaveTextContent("route content")
+  })
+
+  it("offers Skip to content as the first stop, landing in the main region (#340)", async () => {
+    render(
+      <AppShell>
+        <p>route content</p>
+      </AppShell>
+    )
+
+    await userEvent.tab()
+
+    const skip = screen.getByRole("link", { name: "Skip to content" })
+    expect(skip).toHaveFocus()
+    expect(skip).toHaveAttribute("href", "#main-content")
+    const main = screen.getByRole("main")
+    expect(main).toHaveAttribute("id", "main-content")
+    expect(main).toHaveAttribute("tabindex", "-1")
   })
 
   it("always renders the sidebar", () => {

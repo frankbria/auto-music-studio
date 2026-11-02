@@ -75,7 +75,7 @@ describe("RelatedSongs Report control (#535)", () => {
 })
 
 describe("RelatedSongs owner-only controls (#564)", () => {
-  const OWNER_CONTROLS = ["Edit title", "More options", "Remix or edit clip"]
+  const OWNER_CONTROLS = [/^Edit title/, "More options", "Remix or edit clip"]
 
   it("hides owner controls on another user's clip and keeps them on your own", async () => {
     renderRail([

@@ -740,7 +740,7 @@ describe("ClipCard moderation appeal (US-27.4)", () => {
 describe("ClipCard for a visitor (#564)", () => {
   // Every owner-only control: the API refuses all of them on someone else's clip.
   const OWNER_CONTROLS = [
-    "Edit title",
+    /^Edit title/,
     /^Visibility:/,
     "Remix or edit clip",
     "More options",
@@ -762,10 +762,10 @@ describe("ClipCard for a visitor (#564)", () => {
 
   it("keeps play, like, dislike and share, which anyone may use", async () => {
     renderCard({ isOwner: false })
-    for (const name of ["Play", "Like", "Dislike", "Share"]) {
+    for (const name of [/^Play /, "Like", "Dislike", "Share"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument()
     }
-    await userEvent.click(screen.getByRole("button", { name: "Play" }))
+    await userEvent.click(screen.getByRole("button", { name: "Play Midnight" }))
     expect(screen.getByTestId("current-track")).toHaveTextContent("c1")
   })
 

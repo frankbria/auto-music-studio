@@ -28,7 +28,7 @@ export function PaginationControls({
         aria-label="Previous page"
       >
         <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
-        Prev
+        Previous
       </Button>
       <span className="text-sm text-muted-foreground" aria-live="polite">
         Page {page} of {clampedTotalPages}

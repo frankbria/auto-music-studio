@@ -121,13 +121,15 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                       size={16}
                       className={
                         c.passed
-                          ? "mt-0.5 shrink-0 text-emerald-500"
+                          ? "mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400"
                           : "mt-0.5 shrink-0 text-destructive"
                       }
                     />
                     <span>
                       <span className="font-medium">{c.item}</span>
-                      <span className="block text-xs text-muted-foreground">{c.message}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {c.message}
+                      </span>
                     </span>
                   </li>
                 ))}
@@ -140,14 +142,21 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                   </pre>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Button asChild variant="outline" size="sm">
-                      <a href={pkg.bundleUrl!} download={`${target}-release-package.json`}>
+                      <a
+                        href={pkg.bundleUrl!}
+                        download={`${target}-release-package.json`}
+                      >
                         <HugeiconsIcon icon={Download04Icon} size={16} />
                         Download package
                       </a>
                     </Button>
                     {info.portalUrl && (
                       <Button asChild size="sm">
-                        <a href={info.portalUrl} target="_blank" rel="noopener noreferrer">
+                        <a
+                          href={info.portalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
                           <HugeiconsIcon icon={LinkSquare02Icon} size={16} />
                           Open {info.label}
                         </a>
@@ -166,7 +175,7 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                         <HugeiconsIcon
                           icon={CheckmarkCircle01Icon}
                           size={16}
-                          className="text-emerald-500"
+                          className="text-emerald-700 dark:text-emerald-400"
                         />
                         Marked as submitted
                       </>

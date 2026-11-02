@@ -16,6 +16,7 @@ export function ProgressScrubber() {
       <input
         type="range"
         aria-label="Seek"
+        aria-valuetext={`${formatTime(state.currentTime)} of ${formatTime(state.duration)}`}
         min={0}
         max={max || 1}
         step={0.1}
