@@ -39,13 +39,18 @@ from ..auth.dependencies import (
     require_tier_capability,
 )
 from ..models import Clip, ReportCategory, VisibilityState
-from ..services import appeals as appeal_service, clips as clip_service, reports as report_service
+from ..services import (
+    appeals as appeal_service,
+    clips as clip_service,
+    engagement as engagement_service,
+    reports as report_service,
+)
 from ..services.audio_conversion import convert_audio_format
 from ..services.clips import get_clip_for_streaming
 from ..services.tiers import Capability
 from ..utils.media_types import get_audio_content_type
 from ..utils.range_requests import stream_stored_object
-from ..utils.rate_limit import enforce_stream_rate_limit
+from ..utils.rate_limit import client_key, enforce_discover_rate_limit, enforce_stream_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -240,14 +245,26 @@ class PublicClipResponse(ClipResponse):
     # Widened from ClipResponse's ``str``: null for a non-owner, set for the owner.
     workspace_id: str | None
     is_owner: bool
+    # #656: public counts. Shares are counted too, but only admins see them.
+    play_count: int = 0
+    like_count: int = 0
+    viewer_liked: bool = False
 
     @classmethod
-    def from_clip_for(cls, clip: Clip, current_user_id: str | None) -> "PublicClipResponse":
+    def from_clip_for(cls, clip: Clip, current_user_id: str | None, liked: bool = False) -> "PublicClipResponse":
         is_owner = current_user_id is not None and str(clip.user_id) == current_user_id
         fields = ClipResponse.from_clip(clip).model_dump()
         if not is_owner:
             fields.update(workspace_id=None, seed=None, inference_steps=None, parent_clip_ids=[])
-        return cls(**fields, is_owner=is_owner)
+        return cls(
+            **fields, is_owner=is_owner, play_count=clip.play_count, like_count=clip.like_count, viewer_liked=liked
+        )
+
+
+async def public_clip_responses(clips: list[Clip], current_user_id: str | None) -> list[PublicClipResponse]:
+    """A page of public cards for this viewer, each marked with whether they liked it (#656)."""
+    liked = await engagement_service.liked_clip_ids(current_user_id, [clip.id for clip in clips])
+    return [PublicClipResponse.from_clip_for(clip, current_user_id, str(clip.id) in liked) for clip in clips]
 
 
 class ClipListResponse(BaseModel):
@@ -436,7 +453,7 @@ async def get_similar_clips(
     """
     clips, total = await clip_service.find_similar_clips(clip_id, current.user_id, scope, limit)
     return SimilarClipsResponse(
-        clips=[PublicClipResponse.from_clip_for(clip, current.user_id) for clip in clips],
+        clips=await public_clip_responses(clips, current.user_id),
         total=total,
         limit=limit,
     )
@@ -621,7 +638,52 @@ async def get_clip_public(
     narrower path: see :class:`PublicClipResponse` for what a stranger may read.
     """
     clip = await get_clip_for_streaming(clip_id, current.user_id if current else None)
-    return PublicClipResponse.from_clip_for(clip, current.user_id if current else None)
+    [response] = await public_clip_responses([clip], current.user_id if current else None)
+    return response
+
+
+def _listener(request: Request, current: CurrentUser | None) -> str:
+    """Who a play or share is counted for: the user, or a signed-out listener's address (#656)."""
+    return current.user_id if current else f"ip:{client_key(request, request.app.state.settings.trusted_proxy_set)}"
+
+
+@stream_router.post(
+    "/{clip_id}/play", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(enforce_discover_rate_limit)]
+)
+async def record_play(
+    clip_id: str, request: Request, current: CurrentUser | None = Depends(get_current_user_optional)
+) -> Response:
+    """Count a play of a public clip; the player reports it after 30 s of listening. Once per listener per hour."""
+    await engagement_service.record_play(clip_id, _listener(request, current))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@stream_router.post(
+    "/{clip_id}/share", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(enforce_discover_rate_limit)]
+)
+async def record_share(
+    clip_id: str, request: Request, current: CurrentUser | None = Depends(get_current_user_optional)
+) -> Response:
+    """Count a Share click or link copy of a public clip. Once per user per day."""
+    await engagement_service.record_share(clip_id, _listener(request, current))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class LikeResponse(BaseModel):
+    liked: bool
+    like_count: int
+
+
+@router.put("/{clip_id}/like", response_model=LikeResponse)
+async def like_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> LikeResponse:
+    """Like a public clip (#656). Liking it again changes nothing."""
+    return LikeResponse(liked=True, like_count=await engagement_service.set_like(clip_id, current.user_id, True))
+
+
+@router.delete("/{clip_id}/like", response_model=LikeResponse)
+async def unlike_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> LikeResponse:
+    """Undo a like (#656). Undoing one that isn't there changes nothing."""
+    return LikeResponse(liked=False, like_count=await engagement_service.set_like(clip_id, current.user_id, False))
 
 
 @stream_router.get("/{clip_id}/stream", dependencies=[Depends(enforce_stream_rate_limit)])

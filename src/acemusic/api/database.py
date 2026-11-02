@@ -23,6 +23,7 @@ from pymongo.errors import PyMongoError
 
 from .auth import services as auth_services
 from .models import ALL_MODELS
+from .services import engagement
 from .settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,10 @@ async def init_db(settings: ApiSettings) -> AsyncMongoClient:
     retired = await auth_services.retire_untagged_refresh_tokens()
     if retired:
         logger.info("Retired %d refresh token(s) predating the 'kind' field; those clients sign in again", retired)
+
+    backfilled = await engagement.backfill_counters()
+    if backfilled:
+        logger.info("Zeroed engagement counters on %d clip(s) predating #656", backfilled)
 
     logger.info("Connected to MongoDB database %r at %s", settings.mongodb_db_name, safe_url)
     return client

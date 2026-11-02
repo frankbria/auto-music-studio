@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -142,6 +143,12 @@ class TestWebhookAuthentication:
 
 class TestBillingDisabled:
     """A deployment with no Stripe must still boot and serve everything else."""
+
+    @pytest.fixture(autouse=True)
+    def _no_stripe_in_the_environment(self, monkeypatch) -> None:
+        # The CLI config's load_dotenv copies a developer's .env into os.environ, which _env_file=None doesn't stop.
+        for name in [name for name in os.environ if name.startswith("ACEMUSIC_API_STRIPE_")]:
+            monkeypatch.delenv(name)
 
     def test_checkout_is_503_not_a_crash(self) -> None:
         # _env_file=None: a developer's .env with Stripe keys must not make this deployment look configured.

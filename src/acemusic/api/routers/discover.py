@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from ..auth.dependencies import CurrentUser, get_current_user_optional
 from ..services import discovery
 from ..utils.rate_limit import enforce_discover_rate_limit
-from .clips import PublicClipResponse
+from .clips import PublicClipResponse, public_clip_responses
 
 router = APIRouter(prefix="/discover", tags=["discover"], dependencies=[Depends(enforce_discover_rate_limit)])
 
@@ -43,7 +43,7 @@ async def list_public_clips(
         q=q, style=style, bpm_min=bpm_min, bpm_max=bpm_max, key=key, model=model, sort=sort, limit=limit, cursor=cursor
     )
     return DiscoverClipsResponse(
-        clips=[PublicClipResponse.from_clip_for(clip, current.user_id if current else None) for clip in clips],
+        clips=await public_clip_responses(clips, current.user_id if current else None),
         next_cursor=next_cursor,
         total=total,
     )
@@ -77,5 +77,5 @@ async def get_public_profile(
         bio=user.bio,
         style_tags=user.style_tags,
         joined_at=user.created_at,
-        clips=[PublicClipResponse.from_clip_for(clip, current.user_id if current else None) for clip in clips],
+        clips=await public_clip_responses(clips, current.user_id if current else None),
     )

@@ -111,6 +111,11 @@ _CURSORS: dict[str, TypeAdapter] = {
     # #651: public discovery, newest first and by search relevance.
     "discover_newest": _cursor("discover_newest", AwareDatetime, str),
     "discover_relevance": _cursor("discover_relevance", float, AwareDatetime, str),
+    # #656: Charts/Most Popular by all-time plays, Trending by weighted score per window, Staff Picks by pick date.
+    "discover_popular": _cursor("discover_popular", int, str),
+    "discover_trending_24h": _cursor("discover_trending_24h", int, str),
+    "discover_trending_7d": _cursor("discover_trending_7d", int, str),
+    "discover_staff_picks": _cursor("discover_staff_picks", AwareDatetime, str),
 }
 
 

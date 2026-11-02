@@ -32,7 +32,7 @@ _BASE_TIME = utcnow().replace(microsecond=0) - timedelta(days=1)
 
 class TestValidationWithoutDatabase:
     def test_unknown_sort_is_422(self) -> None:
-        assert TestClient(create_app()).get(CLIPS_URL, params={"sort": "popular"}).status_code == 422
+        assert TestClient(create_app()).get(CLIPS_URL, params={"sort": "bogus"}).status_code == 422
 
     def test_limit_over_the_cap_is_422(self) -> None:
         assert TestClient(create_app()).get(CLIPS_URL, params={"limit": 51}).status_code == 422

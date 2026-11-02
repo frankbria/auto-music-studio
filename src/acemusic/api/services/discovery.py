@@ -9,19 +9,23 @@ Relevance is the index's weighted score: title 5, style tags 2, lyrics 1.
 
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import HTTPException, status
 from pymongo.errors import ExecutionTimeout
 
-from ..models import Clip, User
+from ..models import Clip, ClipEngagement, User
 from .clips import public_clip_filter
 from .common import coerce_object_id
 from .moderation import after_cursor, decode_cursor, encode_cursor
 
-DiscoverSort = Literal["newest", "relevance"]
+DiscoverSort = Literal["newest", "relevance", "popular", "trending_24h", "trending_7d", "staff_picks"]
 
 _NEWEST = [("created_at", -1), ("_id", -1)]
+# #656 owner decision: trending is plays + 3 x likes + 5 x shares inside the window.
+_TRENDING_WINDOWS = {"trending_24h": timedelta(hours=24), "trending_7d": timedelta(days=7)}
+_TRENDING_WEIGHTS = {"play": 1, "like": 3, "share": 5}
 _LEADING_HYPHENS = re.compile(r"(?<!\S)-+")
 # A query past this answers 503 rather than holding a connection: the pool is public and unauthenticated.
 MAX_QUERY_MS = 3000
@@ -107,6 +111,80 @@ async def _by_newest(match: dict, limit: int, cursor: str | None) -> tuple[list[
     return page, encode_cursor("discover_newest", (page[-1].created_at, str(page[-1].id)))
 
 
+def _after_key(kind: str, cursor: str | None, field: str) -> dict:
+    """Rows past ``cursor`` in descending ``(field, _id)`` order; empty on the first page."""
+    if not cursor:
+        return {}
+    value, last_id = decode_cursor(kind, cursor)
+    oid = coerce_object_id(last_id)
+    if oid is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor.")
+    return {"$or": [{field: {"$lt": value}}, {field: value, "_id": {"$lt": oid}}]}
+
+
+async def _by_field(
+    match: dict, field: str, kind: str, limit: int, cursor: str | None
+) -> tuple[list[Clip], str | None]:
+    rows = await (
+        Clip.find(match, _after_key(kind, cursor, field), max_time_ms=MAX_QUERY_MS)
+        .sort([(field, -1), ("_id", -1)])
+        .limit(limit + 1)
+        .to_list()
+    )
+    page = rows[:limit]
+    if len(rows) <= limit:
+        return page, None
+    return page, encode_cursor(kind, (getattr(page[-1], field), str(page[-1].id)))
+
+
+async def _by_trending(match: dict, sort: str, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
+    """Clips by weighted engagement inside the window, keyset-paged on (score, _id) over the public pool."""
+    kind = f"discover_{sort}"
+    weight = {
+        "$switch": {"branches": [{"case": {"$eq": ["$kind", k]}, "then": w} for k, w in _TRENDING_WEIGHTS.items()]}
+    }
+    rows = await ClipEngagement.aggregate(
+        [
+            {"$match": {"created_at": {"$gte": datetime.now(timezone.utc) - _TRENDING_WINDOWS[sort]}}},
+            {"$group": {"_id": "$clip_id", "score": {"$sum": weight}}},
+            {"$match": _after_key(kind, cursor, "score")},
+            {"$sort": {"score": -1, "_id": -1}},
+            {
+                "$lookup": {
+                    "from": "clips",
+                    "localField": "_id",
+                    "foreignField": "_id",
+                    "pipeline": [{"$match": match}],
+                    "as": "clip",
+                }
+            },
+            {"$unwind": "$clip"},
+            {"$limit": limit + 1},
+        ],
+        allowDiskUse=True,
+        maxTimeMS=MAX_QUERY_MS,
+    ).to_list()
+    page = rows[:limit]
+    clips = [Clip.model_validate(row["clip"]) for row in page]
+    if len(rows) <= limit:
+        return clips, None
+    return clips, encode_cursor(kind, (page[-1]["score"], str(page[-1]["_id"])))
+
+
+async def _page(
+    sort: DiscoverSort, q: str, match: dict, limit: int, cursor: str | None
+) -> tuple[list[Clip], str | None]:
+    if sort == "relevance" and q:
+        return await _by_relevance(match, limit, cursor)
+    if sort == "popular":
+        return await _by_field(match, "play_count", "discover_popular", limit, cursor)
+    if sort == "staff_picks":
+        return await _by_field(match, "staff_picked_at", "discover_staff_picks", limit, cursor)
+    if sort in _TRENDING_WINDOWS:
+        return await _by_trending(match, sort, limit, cursor)
+    return await _by_newest(match, limit, cursor)
+
+
 async def list_public_clips(
     *,
     q: str = "",
@@ -123,15 +201,20 @@ async def list_public_clips(
 
     ``total`` is counted on the first page only (no cursor), and None after it: the caller keeps the first page's.
     ``relevance`` with no query ranks newest, as the client-side search did. A query past ``MAX_QUERY_MS`` is a 503.
+    ``trending_*`` has no total and refuses a text query (422).
     """
     q = q.strip()
+    if q and sort in _TRENDING_WINDOWS:
+        # $text can only lead a pipeline, and trending's leads with the engagement window.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Trending can't be searched.")
     match = {**await public_clip_filter(), **_text_criteria(q, style), **_exact_criteria(bpm_min, bpm_max, key, model)}
+    if sort == "staff_picks":
+        # $type, not $ne None: it is what the partial index is filtered on, so the planner can use it.
+        match["staff_picked_at"] = {"$type": "date"}
     try:
-        total = None if cursor else await _count(match)
-        if sort == "relevance" and q:
-            clips, next_cursor = await _by_relevance(match, limit, cursor)
-        else:
-            clips, next_cursor = await _by_newest(match, limit, cursor)
+        # Trending ranks only the clips engaged with in its window, so the pool's size is not its total.
+        total = None if cursor or sort in _TRENDING_WINDOWS else await _count(match)
+        clips, next_cursor = await _page(sort, q, match, limit, cursor)
     except ExecutionTimeout as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Search took too long. Try narrowing it."

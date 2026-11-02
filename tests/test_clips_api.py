@@ -29,7 +29,7 @@ from acemusic.api.utils.range_requests import (
     parse_range_header,
     parse_range_header_multi,
 )
-from acemusic.api.utils.rate_limit import FixedWindowRateLimiter, _client_key
+from acemusic.api.utils.rate_limit import FixedWindowRateLimiter, client_key
 from acemusic.storage import get_storage_backend
 from tests.users import make_user
 
@@ -203,44 +203,44 @@ class TestClientKey:
         # AC2/AC3: a direct/untrusted caller's X-Forwarded-For is not trusted;
         # the limiter keys on the real socket peer.
         req = self._request("203.0.113.9", xff="1.1.1.1")
-        assert _client_key(req, frozenset()) == "203.0.113.9"
+        assert client_key(req, frozenset()) == "203.0.113.9"
 
     def test_trusted_proxy_uses_leftmost_forwarded_client(self) -> None:
         # AC1: behind a trusted BFF, key on the forwarded real client IP so two
         # visitors don't collapse into the proxy's single egress IP.
         req = self._request("10.0.0.2", xff="198.51.100.7, 10.0.0.2")
-        assert _client_key(req, frozenset({"10.0.0.2"})) == "198.51.100.7"
+        assert client_key(req, frozenset({"10.0.0.2"})) == "198.51.100.7"
 
     def test_trusted_proxy_without_forwarded_header_falls_back_to_peer(self) -> None:
         # AC4: nothing forwarded -> behave exactly like today (peer IP).
         req = self._request("10.0.0.2", xff=None)
-        assert _client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
+        assert client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
 
     def test_trusted_proxy_with_blank_forwarded_header_falls_back_to_peer(self) -> None:
         req = self._request("10.0.0.2", xff="  ")
-        assert _client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
+        assert client_key(req, frozenset({"10.0.0.2"})) == "10.0.0.2"
 
     def test_missing_client_is_anonymous(self) -> None:
         req = self._request(None)
-        assert _client_key(req, frozenset()) == "anonymous"
+        assert client_key(req, frozenset()) == "anonymous"
 
     def test_ipv6_mapped_peer_matches_plain_trusted_ip(self) -> None:
         # A dual-stack socket may report ::ffff:127.0.0.1 for a proxy an operator
         # listed as 127.0.0.1; normalization must still recognize it as trusted.
         req = self._request("::ffff:127.0.0.1", xff="198.51.100.7")
-        assert _client_key(req, frozenset({"127.0.0.1"})) == "198.51.100.7"
+        assert client_key(req, frozenset({"127.0.0.1"})) == "198.51.100.7"
 
     def test_forwarded_client_is_normalized_to_one_bucket(self) -> None:
         # An IPv4-mapped and plain form of the same visitor key one bucket.
         trusted = frozenset({"10.0.0.2"})
-        mapped = _client_key(self._request("10.0.0.2", xff="::ffff:1.1.1.1"), trusted)
-        plain = _client_key(self._request("10.0.0.2", xff="1.1.1.1"), trusted)
+        mapped = client_key(self._request("10.0.0.2", xff="::ffff:1.1.1.1"), trusted)
+        plain = client_key(self._request("10.0.0.2", xff="1.1.1.1"), trusted)
         assert mapped == plain == "1.1.1.1"
 
 
 class TestEnforceStreamRateLimit:
     """issue #283: the dependency must key per forwarded client behind a trusted
-    proxy — exercises the real settings/limiter wiring, not just _client_key."""
+    proxy — exercises the real settings/limiter wiring, not just client_key."""
 
     @staticmethod
     def _request(app, xff: str):
