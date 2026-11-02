@@ -36,8 +36,13 @@ async function check(path, token, i) {
     for (const el of document.querySelectorAll("a[href], button, input, select, textarea, [role=button], [role=tab], [role=slider], [role=switch]")) {
       const r = el.getBoundingClientRect()
       if (!r.width || !r.height || getComputedStyle(el).visibility === "hidden") continue
-      if (r.width < 44 || r.height < 44) {
-        small.push(`${el.tagName.toLowerCase()}[${(el.getAttribute("aria-label") || el.textContent || el.getAttribute("type") || "").trim().slice(0, 24)}] ${Math.round(r.width)}x${Math.round(r.height)}`)
+      // A small control may carry a larger invisible touch area on an absolutely positioned ::after.
+      const after = getComputedStyle(el, "::after")
+      const enlarged = after.position === "absolute" && after.content !== "none"
+      const width = Math.max(r.width, enlarged ? parseFloat(after.width) || 0 : 0)
+      const height = Math.max(r.height, enlarged ? parseFloat(after.height) || 0 : 0)
+      if (width < 44 || height < 44) {
+        small.push(`${el.tagName.toLowerCase()}[${(el.getAttribute("aria-label") || el.textContent || el.getAttribute("type") || "").trim().slice(0, 24)}] ${Math.round(width)}x${Math.round(height)}`)
       }
     }
     const wide = [...document.querySelectorAll("body *")]
