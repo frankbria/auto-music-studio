@@ -12,7 +12,8 @@ sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl 
 docker compose --env-file .env.docker up --build
 ```
 
-Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at `/docs`.
+Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at <http://localhost:8000/docs>.
+The web's own `/docs` shows the same reference, but its "Try it out" needs the nginx `/api/v1/` route below.
 Ports come from `WEB_PORT` / `API_PORT` — the host is shared, so a conflict is a variable
 to change, not a file to edit.
 
@@ -38,7 +39,7 @@ project's own servers are in the operator's runbook, not here. Replace `example.
    ```
    In `.env.docker` set at least: `ACEMUSIC_API_JWT_SECRET_KEY` (`openssl rand -hex 32`), `API_PORT`, `WEB_PORT` and
    `MONGO_PORT` bound to loopback (`127.0.0.1:8030` and so on), `ACEMUSIC_API_CORS_ALLOW_ORIGINS=https://example.com`,
-   Google OAuth (`ACEMUSIC_API_GOOGLE_*`, redirect `https://example.com/api/auth/callback/google`), and the Stripe
+   Google OAuth (`ACEMUSIC_API_GOOGLE_*`, redirect `https://example.com/auth/callback/google`), and the Stripe
    keys and prices if billing is on (success/cancel URLs on your domain). Every `ACEMUSIC_API_*` setting in the file
    reaches the API (#702).
 4. **First deploy.** Images are published to GHCR by CD on every green `main`; deploy one commit:
@@ -64,7 +65,7 @@ project's own servers are in the operator's runbook, not here. Replace `example.
    ```
    Enable it, then `certbot --nginx -d example.com --redirect`. Set `ACEMUSIC_API_TRUSTED_PROXIES` to the Docker
    network's gateway and the web container's address (`docker network inspect acemusic_default`) and recreate the
-   API, so rate limits key on real clients.
+   API, so rate limits key on real clients. Left unset, every client shares the proxy's bucket.
 6. **Check it.** `curl https://example.com/api/v1/health` reports the deployed `build_sha`; `/docs` shows the API
    reference; signing in with Google reaches `/create`.
 7. **Keep it running.**
