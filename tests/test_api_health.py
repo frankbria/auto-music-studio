@@ -23,17 +23,33 @@ class TestAppFactory:
         """The OpenAPI/app version is sourced from the package version."""
         assert create_app().version == __version__
 
-    def test_app_logging_is_configured(self):
-        """create_app wires a handler on the 'acemusic' logger so connection
-        success/failure is visible under uvicorn (AC: 'logs success')."""
+    def test_app_logs_are_visible_under_uvicorn_as_json_by_default(self):
+        """Connection success/failure must reach stderr when served (AC: 'logs success'); since #342 it goes
+        through the root logger's JSON handler."""
         import logging
 
+        from acemusic.api.observability import JsonFormatter
         from acemusic.api.settings import ApiSettings
 
         create_app(settings=ApiSettings(_env_file=None))
         app_logger = logging.getLogger("acemusic")
-        assert app_logger.handlers
+        assert app_logger.propagate
+        assert any(isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers)
         assert app_logger.getEffectiveLevel() <= logging.INFO
+
+    def test_plain_text_logs_keep_their_own_handler(self):
+        import logging
+
+        from acemusic.api.settings import ApiSettings
+
+        app_logger = logging.getLogger("acemusic")
+        app_logger.handlers, app_logger.propagate = [], True
+        try:
+            create_app(settings=ApiSettings(_env_file=None, log_format="text"))
+            assert app_logger.handlers
+            assert app_logger.getEffectiveLevel() <= logging.INFO
+        finally:
+            app_logger.handlers, app_logger.propagate = [], True
 
 
 class TestHealthEndpoint:

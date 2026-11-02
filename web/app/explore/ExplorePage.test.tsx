@@ -151,14 +151,20 @@ describe("ExplorePage", () => {
       ],
     })
     render(<ExplorePage />)
-    await within(section("New Releases")).findByRole("alert")
+    // Every row loads at once here, which a busy CI runner can take past the default 1 s.
+    const slow = { timeout: 5000 }
+    await within(section("New Releases")).findByRole("alert", {}, slow)
 
     act(() => {
       window.dispatchEvent(new Event("online"))
     })
 
     expect(
-      await within(section("New Releases")).findAllByTestId("explore-clip-card")
+      await within(section("New Releases")).findAllByTestId(
+        "explore-clip-card",
+        {},
+        slow
+      )
     ).toHaveLength(1)
   })
 

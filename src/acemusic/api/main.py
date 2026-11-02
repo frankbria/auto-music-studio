@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from acemusic import __version__
 from acemusic.runpod_client import RunPodClient
 
-from . import database, errors
+from . import database, errors, observability
 from .errors import error_response
 from .exceptions import AccountSuspendedError, DuplicateIdentifierError, HandleConflictError
 from .routers import (
@@ -95,7 +95,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     instantiation does not, so HTTP-surface unit tests need no live database.
     """
     settings = settings or ApiSettings()
-    _ensure_app_logging()
+    if settings.log_format == "text":
+        _ensure_app_logging()
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI):
@@ -191,6 +192,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         settings.report_rate_limit_per_hour, 3600, detail="You have sent too many reports. Please try again later."
     )
 
+    # #342: JSON logs, error tracking, and a request id outermost, so every response (a 429 or a CORS reply too)
+    # carries one and every log line of the request can be found by it.
+    observability.configure_logging(settings)
+    observability.configure_error_tracking(settings)
+
     # #341: per-user, per-kind limits. Added before CORS so CORS wraps it, and a browser can read the 429.
     app.state.user_limits = UserRateLimits(settings)
     app.add_middleware(UserRateLimitMiddleware, limits=app.state.user_limits, settings=settings)
@@ -205,6 +211,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(observability.RequestIdMiddleware)
 
     # Public routers: health is a liveness probe and auth is the login surface,
     # so neither is gated. Every FUTURE router that exposes user data (workspaces,

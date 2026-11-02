@@ -55,11 +55,19 @@ def install(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, _exc: Exception) -> JSONResponse:
-        reference = secrets.token_hex(4)
-        logger.exception("Unhandled error %s on %s %s", reference, request.method, request.url.path)
+        # Starlette answers this outside every middleware, so the request id comes from the scope (#342).
+        reference = getattr(request.state, "request_id", None) or secrets.token_hex(4)
+        logger.exception(
+            "Unhandled error %s on %s %s",
+            reference,
+            request.method,
+            request.url.path,
+            extra={"fields": {"request_id": reference}},
+        )
         return error_response(
             500,
             f"Something went wrong on our side. Try again, and if it keeps happening, contact support "
             f"and quote reference {reference}.",
             "internal_error",
+            {"X-Request-ID": reference},
         )
