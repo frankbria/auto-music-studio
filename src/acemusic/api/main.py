@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse
 from acemusic import __version__
 from acemusic.runpod_client import RunPodClient
 
-from . import database
+from . import database, errors
+from .errors import error_response
 from .exceptions import AccountSuspendedError, DuplicateIdentifierError, HandleConflictError
 from .routers import (
     admin,
@@ -239,24 +240,26 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(discover.router, prefix=API_V1_PREFIX)
     app.include_router(admin.router, prefix=API_V1_PREFIX)
 
+    errors.install(app)
+
     # A handle collision surfaces from the service layer as a domain exception;
     # translate it to 409 Conflict here so the router stays free of HTTP plumbing.
     @app.exception_handler(HandleConflictError)
     async def _handle_conflict(_request: Request, _exc: HandleConflictError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": "Handle already taken"})
+        return error_response(409, "Handle already taken", "handle_taken")
 
     # US-27.3: every ban check (auth, tier reads, charge_and_create) answers the same way.
     @app.exception_handler(AccountSuspendedError)
     async def _account_suspended(_request: Request, _exc: AccountSuspendedError) -> JSONResponse:
         contact = settings.suspension_contact or "the platform's support team"
         detail = f"This account has been suspended. To contest it, contact {contact}."
-        return JSONResponse(status_code=403, content={"detail": detail})
+        return error_response(403, detail, "account_suspended")
 
     # A release/clip identifier collision (US-13.4) surfaces from the service as a
     # domain exception; map it to 409 with the offending field named.
     @app.exception_handler(DuplicateIdentifierError)
     async def _duplicate_identifier(_request: Request, exc: DuplicateIdentifierError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": f"{exc.field} already in use"})
+        return error_response(409, f"{exc.field} already in use", "duplicate_identifier")
 
     # US-26.1: one 402 shape for every billed action, so a client can handle
     # "out of credits" once. Keys match what the routers already hand-rolled;
@@ -266,6 +269,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=402,
             content={
+                "code": "insufficient_credits",
                 "detail": {
                     "error": "insufficient_credits",
                     "balance": exc.balance,
@@ -275,7 +279,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                         "Top up or upgrade your plan to continue."
                     ),
                     "upgrade_url": UPGRADE_URL,
-                }
+                },
             },
         )
 
@@ -283,7 +287,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # inline next to the form, so the musician sees why and can rephrase.
     @app.exception_handler(ContentBlockedError)
     async def _content_blocked(_request: Request, exc: ContentBlockedError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return error_response(422, str(exc), "content_blocked")
 
     return app
 

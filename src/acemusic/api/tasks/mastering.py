@@ -40,7 +40,7 @@ from ..models import Clip, Job
 from ..services import credits as credits_service
 from ..services.clips import native_format
 from ..services.mastering import MASTERING_JOB_TYPE
-from .common import JobProcessingError, download_clip, load_source_clip, store_clip
+from .common import JobProcessingError, UserFacingJobError, download_clip, load_source_clip, store_clip
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     from ..settings import ApiSettings
@@ -201,8 +201,11 @@ async def process_mastering_job(
         orchestrator.get_client(service)
     except ServiceNotConfiguredError as exc:
         await _refund_unperformed(job, service)
-        hint = _configuration_hint()
-        raise JobProcessingError(f"{exc} {hint}") from exc
+        logger.warning("Mastering job %s: %s %s", job.id, exc, _configuration_hint())
+        raise UserFacingJobError(
+            "Mastering with that service isn't available right now. Choose another service, or try again later. "
+            "Your credits were refunded."
+        ) from exc
 
     source = await load_source_clip(job)
     # target_lufs is resolved and stored by the submission endpoint (US-12.1); a

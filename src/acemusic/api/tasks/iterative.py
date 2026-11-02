@@ -63,7 +63,7 @@ from ..services.iterative import (
     SAMPLE_JOB_TYPE,
 )
 from ..services.screening import ContentBlockedError
-from .common import JobProcessingError, download_clip, load_clip, rollback_clips, store_clip
+from .common import JobProcessingError, UserFacingJobError, download_clip, load_clip, rollback_clips, store_clip
 from .voice_adapter import active_voice, resolve_weights
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ async def _rescreen(job: Job, *clips: Clip) -> None:
             *(params.get(key) for key in screening.ITERATIVE_TEXT_PARAMS), *screening.clip_texts(*clips)
         )
     except ContentBlockedError as exc:
-        raise JobProcessingError(str(exc)) from exc
+        raise UserFacingJobError(str(exc)) from exc
     existing = params.get("moderation_flags", [])
     merged = existing + [flag for flag in flags if flag not in existing]
     if merged:

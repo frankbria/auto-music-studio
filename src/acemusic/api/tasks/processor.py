@@ -40,7 +40,7 @@ from ..models import Clip, Job, JobStatus
 from ..models.common import utcnow
 from ..services import credits as credits_service
 from .artwork import ARTWORK_JOB_HANDLERS
-from .common import JobProcessingError
+from .common import JobProcessingError, failure_message
 from .daw_export import DAW_EXPORT_JOB_HANDLERS
 from .editing import EDIT_JOB_HANDLERS
 from .export import EXPORT_JOB_HANDLERS
@@ -168,6 +168,15 @@ class JobProcessor:
         # (and re-queued when stale), so jobs another deployment owns are left
         # alone. ``handlers`` lets callers add or override entries.
         self._handlers: dict[str, JobHandler] = {"generate": self._handle_generate}
+        # What each job type makes, so a failure tells the musician which thing didn't finish (#339).
+        self._families: dict[str, str] = {
+            "generate": "generation",
+            **dict.fromkeys(ITERATIVE_JOB_HANDLERS, "generation"),
+            **dict.fromkeys(MASTERING_JOB_HANDLERS, "mastering"),
+            **dict.fromkeys(VOICE_TRAINING_JOB_HANDLERS, "voice_training"),
+            **dict.fromkeys(ARTWORK_JOB_HANDLERS, "artwork"),
+            **dict.fromkeys(VIDEO_JOB_HANDLERS, "video"),
+        }
         # Editing, extraction, and export handlers share the same ``(job, storage)``
         # contract, so all are adapted onto the registry the same way.
         for job_type, storage_handler in {
@@ -365,7 +374,7 @@ class JobProcessor:
             raise
         except Exception as exc:  # noqa: BLE001 - any failure must land on the job record
             logger.exception("Job %s failed", job.id)
-            await self._mark_failed(job, str(exc))
+            await self._mark_failed(job, failure_message(self._families.get(job.job_type, ""), exc), str(exc))
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
@@ -599,12 +608,13 @@ class JobProcessor:
             }
         )
 
-    async def _mark_failed(self, job: Job, error: str) -> None:
+    async def _mark_failed(self, job: Job, error: str, detail: str | None = None) -> None:
         try:
             await job.set(
                 {
                     Job.status: JobStatus.FAILED,
                     Job.error: error,
+                    Job.error_detail: detail,
                     Job.completed_at: utcnow(),
                 }
             )

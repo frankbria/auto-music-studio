@@ -15,17 +15,62 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
 from beanie import PydanticObjectId
 
 from acemusic.storage import StorageBackend
 
 from ..models import Clip, Job
+from ..services.routing import ComputeUnavailableError
 
 logger = logging.getLogger(__name__)
 
 
 class JobProcessingError(Exception):
     """A job could not be processed (missing source, audio/ML/service failure)."""
+
+
+class UserFacingJobError(JobProcessingError):
+    """A failure whose message was written for the musician, shown as it is (#339).
+
+    Every other failure's text is for operators, naming internal ids, paths, settings and provider responses, so
+    :func:`failure_message` replaces it with guidance and the raw text stays in the log and ``Job.error_detail``.
+    """
+
+
+SUPPORT_HINT = "If it keeps happening, contact support."
+
+_BUSY_HINT = "The music server is busy right now. Try again in 30 seconds."
+
+# What each kind of job was making, for the musician's failure message (#339).
+_FAMILY_LABELS: dict[str, str] = {
+    "generation": "This track didn't finish",
+    "mastering": "Mastering didn't finish",
+    "voice_training": "Training your voice model didn't finish",
+    "artwork": "The cover art didn't finish",
+    "video": "The video didn't finish",
+}
+
+
+def _is_busy(exc: BaseException) -> bool:
+    """Whether the failure, or anything that caused it, was capacity or reachability rather than the request."""
+    seen: BaseException | None = exc
+    while seen is not None:
+        if isinstance(seen, (ComputeUnavailableError, httpx.TimeoutException, httpx.ConnectError, TimeoutError)):
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False
+
+
+def failure_message(family: str, exc: BaseException) -> str:
+    """What a musician is told when a job of this family fails (#339). Never the exception's own text, unless it
+    is a :class:`UserFacingJobError`."""
+    if isinstance(exc, UserFacingJobError):
+        return str(exc)
+    if _is_busy(exc):
+        return f"{_BUSY_HINT} Any credits it used were refunded."
+    label = _FAMILY_LABELS.get(family, "This didn't finish")
+    return f"{label}. Any credits it used were refunded. Try again in a few minutes. {SUPPORT_HINT}"
 
 
 async def load_clip(clip_id: object) -> Clip:
