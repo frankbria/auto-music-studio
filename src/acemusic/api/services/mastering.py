@@ -21,6 +21,7 @@ from beanie import PydanticObjectId
 from acemusic.storage import StorageBackend
 
 from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus, User
+from ..utils import user_rate_limit
 from . import clips as clip_service, credits as credits_service
 from .common import coerce_object_id
 from .jobs import create_job
@@ -152,6 +153,9 @@ async def create_mastering_batch(
     # alone — a flat post-deduction figure on every row would misreport the
     # trajectory. Refunds for failed-to-queue clips offset their upfront share, so
     # the running total over *recorded* rows lands on the true final balance.
+    # #341: every job the batch queues counts against the generation limit, before the batch is charged.
+    if total_cost > 0:
+        user_rate_limit.check_generation(len(owned))
     running_balance = 0.0
     # Spent monthly-first, so the first clips' rows are the ones the monthly bucket paid
     # for and the purchased share falls on the last ones (#422).

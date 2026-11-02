@@ -447,8 +447,10 @@ async def charge_and_create(
     A banned account is refused here, before any money moves (US-27.3): most job routes
     authenticate on the access token alone, which outlives a ban by up to its TTL.
     """
-    # #341: a billed job counts against the requester's generation limit, before anything is charged.
-    user_rate_limit.check_generation()
+    # #341: a billed job counts against the requester's generation limit, before anything is charged. A free action
+    # (a crop or speed edit costs 0) is an ordinary write.
+    if cost > 0:
+        user_rate_limit.check_generation()
     user = await User.get(user_id)
     if user is not None:
         users.reject_banned(user)

@@ -8,9 +8,11 @@ The middleware reads the user and plan from the access token, so a limit costs n
 passes through to the route, which answers 401. Generation is counted where the job is charged
 (``credits.charge_and_create``), which reaches this request's limits through a context variable.
 
-Like the other limiters this is per process (see :mod:`.rate_limit`).
+The plan is the one in the access token, so a plan change applies when the token is next refreshed (minutes). Like
+the other limiters this is per process (see :mod:`.rate_limit`).
 """
 
+import logging
 import time
 from collections import deque
 from contextvars import ContextVar
@@ -25,6 +27,8 @@ from ..errors import error_response
 from ..services import tiers
 from ..settings import ApiSettings
 from .rate_limit import FixedWindowRateLimiter
+
+logger = logging.getLogger(__name__)
 
 LimitKind = Literal["read", "write", "generation"]
 
@@ -78,12 +82,16 @@ class UserRateLimits:
 _current: ContextVar[tuple[UserRateLimits, str, str] | None] = ContextVar("user_rate_limits", default=None)
 
 
-def check_generation() -> None:
-    """Count a billed job against the requesting user's generation limit; nothing outside a signed-in request."""
+def check_generation(jobs: int = 1) -> None:
+    """Count ``jobs`` billed jobs against the requesting user's generation limit; nothing outside a signed-in request.
+
+    A path that queues billed jobs without ``credits.charge_and_create`` must call this itself before charging.
+    """
     current = _current.get()
     if current is not None:
         limits, user_id, tier = current
-        limits.check("generation", user_id, tier)
+        for _ in range(jobs):
+            limits.check("generation", user_id, tier)
 
 
 class UserRateLimitMiddleware:
@@ -122,6 +130,7 @@ class UserRateLimitMiddleware:
                 try:
                     claims = decode_access_token(token, self.settings)
                 except Exception:  # any token the route would refuse is the route's to refuse, with its own 401
+                    logger.debug("Rate limits skipped a request whose token didn't decode", exc_info=True)
                     return None
                 return str(claims["sub"]), str(claims.get("tier") or tiers.FREE)
         return None

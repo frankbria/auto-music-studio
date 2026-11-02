@@ -2,12 +2,13 @@
 
 import pytest
 from beanie import PydanticObjectId
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Job, User
-from acemusic.api.services import credits
+from acemusic.api.models import Clip, Job, User, Workspace
+from acemusic.api.services import credits, mastering
 from acemusic.api.services.tiers import ENTERPRISE, FREE, PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.utils import user_rate_limit
@@ -79,6 +80,15 @@ def test_reads_writes_and_users_are_counted_apart() -> None:
     assert _statuses(client, 1, first, "POST") == [429]
 
 
+def test_an_expired_token_is_not_counted() -> None:
+    settings = _settings(rate_limit_reads_per_minute=1)
+    client = _client(settings)
+    expired = settings.model_copy(update={"access_token_expire_minutes": -1})
+    headers = _auth("u1", FREE, expired)
+
+    assert _statuses(client, 3, headers) == [404, 404, 404]
+
+
 def test_requests_without_a_valid_token_are_left_to_the_route() -> None:
     settings = _settings(rate_limit_reads_per_minute=1)
     client = _client(settings)
@@ -126,7 +136,7 @@ class TestGenerationIsLimitedBeforeCharging:
         token = user_rate_limit._current.set((limits, str(user.id), FREE))
         try:
             await credits.charge_and_create(user_id=user.id, cost=1, action_type="song", create=create)
-            with pytest.raises(Exception) as refused:
+            with pytest.raises(HTTPException) as refused:
                 await credits.charge_and_create(user_id=user.id, cost=1, action_type="song", create=create)
         finally:
             user_rate_limit._current.reset(token)
@@ -134,6 +144,54 @@ class TestGenerationIsLimitedBeforeCharging:
         assert refused.value.status_code == 429
         assert created == 1
         assert (await User.get(user.id)).credits_balance == 9.0
+
+    async def test_a_free_action_is_not_a_billed_creation(self, settings) -> None:
+        user = await make_user("free-edits@example.com", credits_balance=10.0)
+        limits = UserRateLimits(settings)
+
+        async def create() -> Job:
+            return await Job(
+                user_id=user.id, workspace_id=PydanticObjectId(), job_type="crop", input_params={}
+            ).insert()
+
+        token = user_rate_limit._current.set((limits, str(user.id), FREE))
+        try:
+            for _ in range(3):
+                await credits.charge_and_create(user_id=user.id, cost=0, action_type="crop", create=create)
+            await credits.charge_and_create(user_id=user.id, cost=1, action_type="song", create=create)
+        finally:
+            user_rate_limit._current.reset(token)
+
+        assert await Job.count() == 4
+
+    async def test_a_batch_counts_every_job_it_queues_and_is_refused_before_charging(self, settings) -> None:
+        user = await make_user("batch-limited@example.com", tier=PRO, credits_balance=1_000.0)
+        workspace = await Workspace(name="WS", user_id=user.id).insert()
+        clips = [
+            await Clip(
+                user_id=user.id, workspace_id=workspace.id, file_path=f"c{i}.wav", format="wav", title="Song"
+            ).insert()
+            for i in range(4)
+        ]
+        limits = UserRateLimits(settings)  # one generation a minute on Free, three on Pro
+
+        token = user_rate_limit._current.set((limits, str(user.id), PRO))
+        try:
+            with pytest.raises(HTTPException) as refused:
+                await mastering.create_mastering_batch(
+                    user_id=str(user.id),
+                    clip_ids=[str(clip.id) for clip in clips],
+                    profile="balanced",
+                    service="bakuage",
+                    format="wav",
+                    target_lufs=-14.0,
+                )
+        finally:
+            user_rate_limit._current.reset(token)
+
+        assert refused.value.status_code == 429
+        assert (await User.get(user.id)).credits_balance == 1_000.0
+        assert await Job.count() == 0
 
     async def test_admins_see_the_limits_and_who_was_turned_away(self, settings) -> None:
         admin = await make_user("limits-admin@example.com", is_admin=True)

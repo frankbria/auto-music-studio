@@ -204,7 +204,8 @@ class ApiSettings(BaseSettings):
 
     # US-28.4 (#341): per-user limits per minute, for the Free plan; Pro gets 3x, Enterprise 10x
     # (``utils.user_rate_limit.TIER_FACTORS``). Reads are GET/HEAD, writes everything else, generations billed jobs.
-    rate_limit_reads_per_minute: int = Field(default=120, ge=1)
+    # Reads leave room for the web app's own polling (job status every 2-2.5 s, several at once) plus browsing.
+    rate_limit_reads_per_minute: int = Field(default=300, ge=1)
     rate_limit_writes_per_minute: int = Field(default=60, ge=1)
     rate_limit_generations_per_minute: int = Field(default=10, ge=1)
 
