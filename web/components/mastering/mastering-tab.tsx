@@ -21,6 +21,7 @@ import { MasteringStatus } from "@/components/mastering/mastering-status"
 import { PreviewList } from "@/components/mastering/preview-list"
 import { PreviewPlayer } from "@/components/mastering/preview-player"
 import { useAuth } from "@/hooks/use-auth"
+import { useIsAdmin } from "@/hooks/use-is-admin"
 import { useNotify } from "@/contexts/notifications-context"
 import { useMasteringJob } from "@/hooks/use-mastering-job"
 import { useMasteringPreviews } from "@/hooks/use-mastering-previews"
@@ -43,6 +44,7 @@ type ApproveState =
 export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
   const router = useRouter()
   const { accessToken } = useAuth()
+  const { isAdmin } = useIsAdmin()
   const notify = useNotify()
   // Raise a notification when the job completes (AC5) via the hook's fire-once
   // onComplete seam (kept in a ref there, so this closure sees the latest clip).
@@ -63,7 +65,11 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
     if (!jobId || !previews.selectedId) return
     const previewId = previews.selectedId
     setApprove({ phase: "approving" })
-    const result = await approveMasteringPreview(jobId, previewId, accessToken ?? "")
+    const result = await approveMasteringPreview(
+      jobId,
+      previewId,
+      accessToken ?? ""
+    )
     if (result.status === "approved") {
       setApprove({ phase: "approved", previewId })
     } else if (result.status === "unauthorized") {
@@ -105,6 +111,7 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
       return (
         <MasteringConfig
           onStart={(config) => void job.submit(selectedClip.id, config)}
+          isAdmin={isAdmin}
         />
       )
     }
@@ -144,7 +151,9 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
     if (previews.state.status === "error") {
       return (
         <div className="flex flex-col items-start gap-3">
-          <p className="text-sm text-destructive">Couldn&apos;t load previews.</p>
+          <p className="text-sm text-destructive">
+            Couldn&apos;t load previews.
+          </p>
           <Button variant="outline" size="sm" onClick={previews.reload}>
             Try again
           </Button>
@@ -153,7 +162,9 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
     }
 
     const data = previews.state.data
-    const selected = data.previews.find((p) => p.preview_id === previews.selectedId)
+    const selected = data.previews.find(
+      (p) => p.preview_id === previews.selectedId
+    )
     const originalClipId = data.source_clip_id ?? selectedClip?.id
 
     return (
@@ -164,7 +175,8 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
             different candidate falls back to "preview ready" (no contradiction). */}
         <MasteringStatus
           status={
-            approve.phase === "approved" && approve.previewId === previews.selectedId
+            approve.phase === "approved" &&
+            approve.previewId === previews.selectedId
               ? "approved"
               : "preview_ready"
           }

@@ -56,7 +56,7 @@ class TestGetCost:
         assert credits_service.get_cost("song") == 1.0
 
     def test_sound_costs_half_credit(self) -> None:
-        assert credits_service.get_cost("sound") == 0.5
+        assert credits_service.get_cost("sound") == 1.0
 
     def test_unknown_mode_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -64,28 +64,22 @@ class TestGetCost:
 
 
 class TestGetVideoCost:
-    """Runs in CI (no DB): the US-22.1 video cost table is pure logic.
+    """Runs in CI (no DB). #694: video is priced per minute of song, because providers bill per second of
+    rendered video, rounded up to a whole credit."""
 
-    The documented band is 5-10 credits by resolution and duration: base rate
-    per resolution, a surcharge for songs over the long-duration threshold, and
-    a hard cap at the top of the band.
-    """
+    def test_per_minute_rates_by_resolution(self) -> None:
+        assert credits_service.get_video_cost("720p", 60.0) == 156.0
+        assert credits_service.get_video_cost("1080p", 60.0) == 375.0
+        assert credits_service.get_video_cost("4k", 60.0) == 1350.0
 
-    def test_base_costs_by_resolution(self) -> None:
-        assert credits_service.get_video_cost("720p", 10.0) == 5.0
-        assert credits_service.get_video_cost("1080p", 10.0) == 7.0
-        assert credits_service.get_video_cost("4k", 10.0) == 8.0
+    def test_scales_with_duration_and_rounds_up(self) -> None:
+        assert credits_service.get_video_cost("720p", 180.0) == 468.0
+        assert credits_service.get_video_cost("720p", 10.0) == 26.0
+        assert credits_service.get_video_cost("1080p", 61.0) == 382.0
 
-    def test_long_duration_surcharge(self) -> None:
-        long = credits_service.VIDEO_LONG_DURATION_S + 1
-        assert credits_service.get_video_cost("720p", long) == 7.0
-        assert credits_service.get_video_cost("1080p", long) == 9.0
-
-    def test_cost_capped_at_band_maximum(self) -> None:
-        assert credits_service.get_video_cost("4k", credits_service.VIDEO_LONG_DURATION_S + 1) == 10.0
-
-    def test_unknown_duration_bills_base_rate(self) -> None:
-        assert credits_service.get_video_cost("720p", None) == 5.0
+    def test_unknown_duration_bills_the_assumed_length(self) -> None:
+        assumed = credits_service.VIDEO_ASSUMED_DURATION_S
+        assert credits_service.get_video_cost("720p", None) == credits_service.get_video_cost("720p", assumed)
 
     def test_unknown_resolution_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -165,7 +159,8 @@ class TestGenerationDeductsCredits:
         assert resp.status_code == 202
         assert (await _reload(user)).credits_balance == 9.0
 
-    async def test_sound_deducts_half_credit(self, client, settings):
+    async def test_sound_deducts_a_whole_credit(self, client, settings):
+        """#694: a short sound takes the same GPU time as a song, so it costs the same."""
         user = await make_user("credits-sound@example.com", credits_balance=10.0)
         resp = await client.post(
             GENERATE_URL,
@@ -173,7 +168,7 @@ class TestGenerationDeductsCredits:
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 9.5
+        assert (await _reload(user)).credits_balance == 9.0
 
     async def test_deduction_recorded_as_transaction(self, client, settings):
         user = await make_user("credits-txn@example.com", credits_balance=10.0)
@@ -220,8 +215,8 @@ class TestInsufficientCredits:
         assert await Job.find(Job.user_id == user.id).count() == 0
         assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
 
-    async def test_sound_allowed_when_song_is_not(self, client, settings):
-        # 0.5 ≤ balance < 1.0: enough for a sound, not for a song.
+    async def test_half_a_credit_buys_neither_a_song_nor_a_sound(self, client, settings):
+        # #694: a sound costs a whole credit, like a song.
         user = await make_user("credits-half@example.com", credits_balance=0.5)
         headers = _auth_headers(user, settings)
         song = await client.post(GENERATE_URL, json={"prompt": "ballad"}, headers=headers)
@@ -231,8 +226,8 @@ class TestInsufficientCredits:
             json={"prompt": "kick", "mode": "sound", "sound_type": "one-shot"},
             headers=headers,
         )
-        assert sound.status_code == 202
-        assert (await _reload(user)).credits_balance == 0.0
+        assert sound.status_code == 402
+        assert (await _reload(user)).credits_balance == 0.5
 
 
 @pytest.mark.integration
@@ -322,13 +317,13 @@ class TestCreditsEndpoint:
         resp = await client.get(CREDITS_URL, headers=headers)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["balance"] == 8.5
+        assert body["balance"] == 8.0
         history = body["history"]
         assert len(history) == 2
         # Newest first: the sound came second.
         assert history[0]["action_type"] == "sound"
-        assert history[0]["amount"] == -0.5
-        assert history[0]["balance_after"] == 8.5
+        assert history[0]["amount"] == -1.0
+        assert history[0]["balance_after"] == 8.0
         assert history[0]["job_id"] == sound.json()["job_id"]
         assert history[1]["action_type"] == "song"
         assert history[1]["amount"] == -1.0

@@ -53,14 +53,28 @@ describe("VideoForm", () => {
   it("renders every configuration control", () => {
     renderForm()
     expect(screen.getByLabelText(/style prompt/i)).toBeInTheDocument()
-    expect(screen.getByRole("group", { name: /style preset/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole("group", { name: /style preset/i })
+    ).toBeInTheDocument()
     expect(screen.getByLabelText(/reference images/i)).toBeInTheDocument()
-    expect(screen.getByRole("switch", { name: /lyrics sync/i })).toBeInTheDocument()
-    expect(screen.getByRole("radiogroup", { name: /aspect ratio/i })).toBeInTheDocument()
-    expect(screen.getByRole("radiogroup", { name: /resolution/i })).toBeInTheDocument()
-    expect(screen.getByRole("radiogroup", { name: /frame rate/i })).toBeInTheDocument()
-    expect(screen.getByRole("radiogroup", { name: /transitions/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /generate video/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole("switch", { name: /lyrics sync/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("radiogroup", { name: /aspect ratio/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("radiogroup", { name: /resolution/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("radiogroup", { name: /frame rate/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("radiogroup", { name: /transitions/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /generate video/i })
+    ).toBeInTheDocument()
   })
 
   it("keeps Generate disabled until a prompt or preset is chosen", () => {
@@ -106,9 +120,15 @@ describe("VideoForm", () => {
   it("shows a Pro badge and disables 1080p/4K for free users, with upgrade copy", () => {
     renderForm()
     const resolutions = screen.getByRole("radiogroup", { name: /resolution/i })
-    expect(within(resolutions).getByRole("radio", { name: /720p/i })).toBeEnabled()
-    expect(within(resolutions).getByRole("radio", { name: /1080p/i })).toBeDisabled()
-    expect(within(resolutions).getByRole("radio", { name: /4k/i })).toBeDisabled()
+    expect(
+      within(resolutions).getByRole("radio", { name: /720p/i })
+    ).toBeEnabled()
+    expect(
+      within(resolutions).getByRole("radio", { name: /1080p/i })
+    ).toBeDisabled()
+    expect(
+      within(resolutions).getByRole("radio", { name: /4k/i })
+    ).toBeDisabled()
     expect(within(resolutions).getAllByText("Pro")).toHaveLength(2)
     expect(screen.getByText(/upgrade to pro/i)).toBeInTheDocument()
   })
@@ -134,7 +154,11 @@ describe("VideoForm", () => {
         fireEvent.click(
           within(aspects).getByRole("radio", { name: aspectName[aspect] })
         )
-        fireEvent.click(within(resolutions).getByRole("radio", { name: new RegExp(`^${res}`, "i") }))
+        fireEvent.click(
+          within(resolutions).getByRole("radio", {
+            name: new RegExp(`^${res}`, "i"),
+          })
+        )
         fireEvent.click(screen.getByRole("button", { name: /generate video/i }))
         expect(onGenerate).toHaveBeenLastCalledWith(
           expect.objectContaining({
@@ -150,16 +174,17 @@ describe("VideoForm", () => {
   it("shows the credit estimate and updates it with resolution and duration", () => {
     tier = { tier: "pro", isFreeTier: false, isLoading: false }
     renderForm()
-    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("5 credits")
+    // #694: per minute of song. The fixture clip is 2 minutes.
+    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("312 credits")
 
     const resolutions = screen.getByRole("radiogroup", { name: /resolution/i })
     fireEvent.click(within(resolutions).getByRole("radio", { name: /1080p/i }))
-    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("7 credits")
+    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("750 credits")
   })
 
-  it("adds the long-song surcharge to the estimate", () => {
+  it("scales the estimate with the song's length", () => {
     renderForm(vi.fn(), { ...clip, duration: 200 })
-    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("7 credits")
+    expect(screen.getByText(/estimated cost/i)).toHaveTextContent("520 credits")
   })
 
   it("accepts up to five reference images with removable previews", () => {
@@ -190,7 +215,9 @@ describe("VideoForm", () => {
     // The input remounts (key bump) after every selection so the same files can
     // be re-picked — re-query rather than reusing the detached node.
     fireEvent.change(screen.getByLabelText(/reference images/i), {
-      target: { files: [new File(["x"], "doc.pdf", { type: "application/pdf" })] },
+      target: {
+        files: [new File(["x"], "doc.pdf", { type: "application/pdf" })],
+      },
     })
     expect(screen.getByText(/image files only/i)).toBeInTheDocument()
   })
@@ -212,5 +239,4 @@ describe("VideoForm", () => {
     const prompt = screen.getByLabelText(/style prompt/i)
     expect(prompt).toHaveAttribute("maxlength", "2000")
   })
-
 })

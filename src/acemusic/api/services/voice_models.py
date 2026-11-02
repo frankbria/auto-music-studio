@@ -200,8 +200,9 @@ async def create_training_job(
     files: list[tuple[str, bytes]],
     *,
     description: str | None = None,
+    method: str = "lora",
 ) -> tuple[VoiceModel, Job]:
-    """Validate, charge, store, and queue a voice-training run.
+    """Validate, charge, store, and queue a voice-training run with ``method`` (``lora`` or ``lokr``, #694).
 
     Nothing is charged or stored until validation passes, and if queueing fails
     after the charge the credits are refunded before the error propagates —
@@ -214,7 +215,7 @@ async def create_training_job(
     moderation_flags = await screening.enforce(name, description, saving=True)
 
     uid = PydanticObjectId(user_id)
-    cost = credits_service.VOICE_TRAINING_COST
+    cost = credits_service.get_voice_training_cost(method)
 
     model = VoiceModel(
         user_id=uid,
@@ -231,12 +232,14 @@ async def create_training_job(
         user_id=uid,
         cost=cost,
         action_type="voice_training",
-        create=lambda: _store_and_queue(storage, model, references),
+        create=lambda: _store_and_queue(storage, model, references, method),
     )
     return model, job
 
 
-async def _store_and_queue(storage: StorageBackend, model: VoiceModel, references: list[ReferenceAudio]) -> Job:
+async def _store_and_queue(
+    storage: StorageBackend, model: VoiceModel, references: list[ReferenceAudio], method: str
+) -> Job:
     """Persist the model and its references and queue the run — or leave none of it behind."""
     try:
         await model.insert()
@@ -252,6 +255,7 @@ async def _store_and_queue(storage: StorageBackend, model: VoiceModel, reference
             input_params={
                 "voice_model_id": str(model.id),
                 "reference_count": len(references),
+                "method": method,
             },
         )
         await job.insert()

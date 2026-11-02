@@ -88,12 +88,12 @@ def _pro_actions(clip_id: str) -> list[tuple[str, str, dict | None]]:
         (
             "mastering",
             f"{API_V1_PREFIX}/mastering/jobs",
-            {"clip_id": clip_id, "profile": "streaming", "service": "dolby", "format": "wav"},
+            {"clip_id": clip_id, "profile": "streaming", "service": "bakuage", "format": "wav"},
         ),
         (
             "mastering batch",
             f"{API_V1_PREFIX}/mastering/batch",
-            {"clip_ids": [clip_id], "profile": "streaming", "service": "dolby", "format": "wav"},
+            {"clip_ids": [clip_id], "profile": "streaming", "service": "bakuage", "format": "wav"},
         ),
         ("studio mixdown", f"{API_V1_PREFIX}/studio/mixdown", {"tracks": []}),
         ("studio daw export", f"{API_V1_PREFIX}/studio/export/daw", {"tracks": []}),

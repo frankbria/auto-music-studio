@@ -427,7 +427,7 @@ class TestGenerateScreening:
 
 
 async def _user_with_clip(email: str, **user_fields):
-    user = await make_user(email, credits_balance=10.0, **user_fields)
+    user = await make_user(email, credits_balance=200.0, **user_fields)
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip_id = PydanticObjectId()
@@ -452,7 +452,7 @@ class TestOtherEntryPoints:
         )
         assert resp.status_code == 422
         assert await Job.find(Job.user_id == user.id).to_list() == []
-        assert await _balance(user) == 10.0
+        assert await _balance(user) == 200.0
 
     async def test_iterative_borderline_is_flagged_on_the_job(self, client, settings):
         user, clip = await _user_with_clip("screen-remix-flag@example.com")
@@ -471,14 +471,14 @@ class TestOtherEntryPoints:
             f"{API_V1_PREFIX}/clips/{clip.id}/extend", json={"duration": "30s"}, headers=_auth(user, settings)
         )
         assert resp.status_code == 422
-        assert await _balance(user) == 10.0
+        assert await _balance(user) == 200.0
 
     async def test_full_song_screens_the_seed_lyrics_it_inherits(self, client, settings):
         user, clip = await _user_with_clip("screen-fullsong@example.com")
         await clip.set({Clip.lyrics: "[Chorus]\nwhite power"})
         resp = await client.post(f"{API_V1_PREFIX}/clips/{clip.id}/full-song", json={}, headers=_auth(user, settings))
         assert resp.status_code == 422, resp.text
-        assert await _balance(user) == 10.0
+        assert await _balance(user) == 200.0
 
     async def test_a_phrase_split_across_tags_is_screened_as_the_joined_prompt(self, client, settings):
         user, clip = await _user_with_clip("screen-split-tags@example.com")
@@ -487,7 +487,7 @@ class TestOtherEntryPoints:
             f"{API_V1_PREFIX}/clips/{clip.id}/extend", json={"duration": "30s"}, headers=_auth(user, settings)
         )
         assert resp.status_code == 422
-        assert await _balance(user) == 10.0
+        assert await _balance(user) == 200.0
 
     async def test_mashup_flags_a_borderline_tag_on_any_source(self, client, settings):
         user, first = await _user_with_clip("screen-mashup@example.com")
@@ -561,7 +561,7 @@ class TestOtherEntryPoints:
             )
         assert resp.status_code == status, resp.text
         if flags is None:
-            assert await _balance(user) == 10.0
+            assert await _balance(user) == 200.0
         else:
             job = await Job.get(PydanticObjectId(resp.json()["job_id"]))
             assert job.input_params["moderation_flags"] == flags
@@ -979,7 +979,7 @@ class TestVoiceModelScreening:
         )
 
     async def test_a_blocked_name_is_refused_before_charging(self, client, settings, local_storage):
-        user = await make_user("voice-block@example.com", tier=PRO)
+        user = await make_user("voice-block@example.com", tier=PRO, credits_balance=200.0)
         before = user.credits_balance
         resp = await self._train(client, settings, user, name="Heil Hitler voice")
         assert resp.status_code == 422
@@ -988,14 +988,14 @@ class TestVoiceModelScreening:
         assert await _balance(user) == before
 
     async def test_a_borderline_description_is_stored_with_the_flag(self, client, settings, local_storage):
-        user = await make_user("voice-flag@example.com", tier=PRO)
+        user = await make_user("voice-flag@example.com", tier=PRO, credits_balance=200.0)
         resp = await self._train(client, settings, user, name="Mine", description="for my genocide concept album")
         assert resp.status_code == 202, resp.text
         model = await VoiceModel.get(PydanticObjectId(resp.json()["voice_model"]["id"]))
         assert model.moderation_flags == ["violent extremism"]
 
     async def test_a_clean_voice_trains_unflagged(self, client, settings, local_storage):
-        user = await make_user("voice-clean@example.com", tier=PRO)
+        user = await make_user("voice-clean@example.com", tier=PRO, credits_balance=200.0)
         resp = await self._train(client, settings, user, name="Warm baritone")
         assert resp.status_code == 202, resp.text
         assert (await VoiceModel.get(PydanticObjectId(resp.json()["voice_model"]["id"]))).moderation_flags == []

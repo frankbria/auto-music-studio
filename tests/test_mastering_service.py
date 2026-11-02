@@ -19,16 +19,14 @@ from acemusic.api.services import credits as credits_service, mastering as maste
 class TestMasteringCost:
     @pytest.mark.parametrize(
         ("service", "expected"),
-        [("dolby", 3.0), ("landr", 2.0), ("bakuage", 5.0)],
+        [("dolby", 11.0), ("landr", 130.0), ("bakuage", 2.0)],
     )
     def test_known_services_map_to_costs(self, service: str, expected: float) -> None:
+        """#694: priced over each vendor's cost per master at the worst-case revenue per credit."""
         assert credits_service.get_mastering_cost(service) == expected
 
-    def test_costs_stay_within_documented_range(self) -> None:
-        # The issue specifies "2-5 credits"; guard the band so a future tweak
-        # cannot drift outside the contract silently.
-        for service in ("dolby", "landr", "bakuage"):
-            assert 2.0 <= credits_service.get_mastering_cost(service) <= 5.0
+    def test_only_bakuage_is_offered_to_everyone(self) -> None:
+        assert credits_service.PUBLIC_MASTERING_SERVICES == ("bakuage",)
 
     def test_unknown_service_raises_value_error(self) -> None:
         with pytest.raises(ValueError):

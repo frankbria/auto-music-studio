@@ -159,7 +159,7 @@ def _valid_body(clip, **overrides) -> dict:
 @pytest.mark.integration
 class TestSuccessfulSubmission:
     async def test_returns_202_with_job_id(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-ok@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-ok@example.com", balance=1000.0)
         resp = await client.post(GENERATE_URL, json=_valid_body(clip), headers=_auth_headers(user, settings))
         assert resp.status_code == 202
         body = resp.json()
@@ -168,7 +168,7 @@ class TestSuccessfulSubmission:
         assert job is not None and job.job_type == VIDEO_JOB_TYPE and job.status == JobStatus.QUEUED
 
     async def test_full_options_snapshot_persisted(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-params@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-params@example.com", balance=1000.0)
         body = _valid_body(
             clip,
             style_preset="cinematic",
@@ -193,25 +193,25 @@ class TestSuccessfulSubmission:
         assert params["transitions"] == "fade"
 
     async def test_charges_resolution_cost_and_records_ledger(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-charge@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-charge@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip, resolution="1080p"),
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 3.0  # 10 - 7 (1080p base)
+        assert (await _reload(user)).credits_balance == 937.0  # 1000 - 63 (#694: 375/min x 10 s, rounded up)
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
         assert len(txns) == 1
-        assert txns[0].amount == -7.0
+        assert txns[0].amount == -63.0
         assert txns[0].action_type == VIDEO_JOB_TYPE
         assert txns[0].job_id == resp.json()["job_id"]
 
-    async def test_long_song_pays_duration_surcharge(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-long@example.com", balance=10.0, duration=200.0)
+    async def test_a_longer_song_costs_more_per_minute(self, client, settings) -> None:
+        user, _ws, clip = await _user_with_clip("video-long@example.com", balance=1000.0, duration=200.0)
         resp = await client.post(GENERATE_URL, json=_valid_body(clip), headers=_auth_headers(user, settings))
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 3.0  # 10 - (5 + 2 surcharge)
+        assert (await _reload(user)).credits_balance == 480.0  # 1000 - 520 (156/min x 200 s, rounded up)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ class TestSuccessfulSubmission:
 @pytest.mark.integration
 class TestValidation:
     async def test_unknown_field_rejected(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-extra@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-extra@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip, codec="h265"),
@@ -231,7 +231,7 @@ class TestValidation:
         assert resp.status_code == 422
 
     async def test_prompt_or_preset_required(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-noprompt@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-noprompt@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json={"clip_id": str(clip.id)},
@@ -240,7 +240,7 @@ class TestValidation:
         assert resp.status_code == 422
 
     async def test_invalid_resolution_rejected(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-badres@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-badres@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip, resolution="8k"),
@@ -249,7 +249,7 @@ class TestValidation:
         assert resp.status_code == 422
 
     async def test_non_http_reference_url_rejected(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-ssrf@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-ssrf@example.com", balance=1000.0)
         for url in ("file:///etc/passwd", "ftp://x.test/a.png", "javascript:alert(1)"):
             resp = await client.post(
                 GENERATE_URL,
@@ -259,7 +259,7 @@ class TestValidation:
             assert resp.status_code == 422, url
 
     async def test_overlong_prompt_rejected(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-longprompt@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-longprompt@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip, prompt="x" * 2001),
@@ -268,7 +268,7 @@ class TestValidation:
         assert resp.status_code == 422
 
     async def test_too_many_reference_images_rejected(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-refs@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-refs@example.com", balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip, reference_image_urls=[f"https://img.test/{i}.png" for i in range(6)]),
@@ -288,13 +288,13 @@ class TestNotConfigured:
         """An unconfigured deployment must refuse up front: the worker would fail
         every claimed video job with "not configured", so charging first would be
         a guaranteed charge for nothing."""
-        user, _ws, clip = await _user_with_clip("video-nocfg@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-nocfg@example.com", balance=1000.0)
         bare = settings.model_copy(update={"video_api_url": None, "video_api_key": None})
         async with _async_client(create_app(bare)) as client:
             resp = await client.post(GENERATE_URL, json=_valid_body(clip), headers=_auth_headers(user, bare))
         assert resp.status_code == 503
         assert "not configured" in resp.json()["detail"]
-        assert (await _reload(user)).credits_balance == 10.0
+        assert (await _reload(user)).credits_balance == 1000.0
         assert await Job.find(Job.user_id == user.id).count() == 0
 
 
@@ -312,7 +312,7 @@ class TestInsufficientCredits:
         detail = resp.json()["detail"]
         assert detail["error"] == "insufficient_credits"
         assert detail["balance"] == 1.0
-        assert detail["required"] == 5.0
+        assert detail["required"] == 26.0
 
     async def test_no_job_or_charge_on_insufficient_credits(self, client, settings) -> None:
         user, _ws, clip = await _user_with_clip("video-poor-noop@example.com", balance=1.0)
@@ -331,25 +331,25 @@ class TestInsufficientCredits:
 @pytest.mark.integration
 class TestClipOwnership:
     async def test_unknown_clip_returns_404_and_no_charge(self, client, settings) -> None:
-        user = await make_user("video-noclip@example.com", tier=PRO, credits_balance=10.0)
+        user = await make_user("video-noclip@example.com", tier=PRO, credits_balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json={"clip_id": str(PydanticObjectId()), "prompt": "neon"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 404
-        assert (await _reload(user)).credits_balance == 10.0
+        assert (await _reload(user)).credits_balance == 1000.0
 
     async def test_other_users_clip_returns_404(self, client, settings) -> None:
-        _owner, _ws, clip = await _user_with_clip("video-owner@example.com", balance=10.0)
-        thief = await make_user("video-thief@example.com", tier=PRO, credits_balance=10.0)
+        _owner, _ws, clip = await _user_with_clip("video-owner@example.com", balance=1000.0)
+        thief = await make_user("video-thief@example.com", tier=PRO, credits_balance=1000.0)
         resp = await client.post(
             GENERATE_URL,
             json=_valid_body(clip),
             headers=_auth_headers(thief, settings),
         )
         assert resp.status_code == 404
-        assert (await _reload(thief)).credits_balance == 10.0
+        assert (await _reload(thief)).credits_balance == 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,7 @@ async def _submit(client, settings, user, clip) -> str:
 @pytest.mark.integration
 class TestStatusEndpoint:
     async def test_queued_job_reports_queued(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-q@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-q@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         resp = await client.get(_status_url(job_id), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
@@ -376,7 +376,7 @@ class TestStatusEndpoint:
         assert "video_id" not in body and "error" not in body
 
     async def test_processing_job_reports_provider_state(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-r@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-r@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         job = await Job.get(PydanticObjectId(job_id))
         await job.set(
@@ -391,7 +391,7 @@ class TestStatusEndpoint:
         assert body["eta_seconds"] == 30.0
 
     async def test_encoding_state_surfaces(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-e@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-e@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         job = await Job.get(PydanticObjectId(job_id))
         await job.set({Job.status: JobStatus.PROCESSING, Job.progress_detail: {"state": "encoding", "progress": 90}})
@@ -400,7 +400,7 @@ class TestStatusEndpoint:
         assert body["progress"] == 90
 
     async def test_processing_without_detail_defaults_to_rendering(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-d@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-d@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         job = await Job.get(PydanticObjectId(job_id))
         await job.set({Job.status: JobStatus.PROCESSING})
@@ -409,7 +409,7 @@ class TestStatusEndpoint:
         assert body["progress"] == 0
 
     async def test_completed_job_reports_complete_with_video_id(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-c@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-c@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         job = await Job.get(PydanticObjectId(job_id))
         await job.set(
@@ -424,7 +424,7 @@ class TestStatusEndpoint:
         assert body["video_id"] == "665f00000000000000000001"
 
     async def test_failed_job_reports_failed_with_error(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-f@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-f@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         job = await Job.get(PydanticObjectId(job_id))
         await job.set({Job.status: JobStatus.FAILED, Job.error: "Video rendering failed: provider says no"})
@@ -433,14 +433,14 @@ class TestStatusEndpoint:
         assert body["error"] == "Video rendering failed: provider says no"
 
     async def test_unowned_job_returns_404(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-own@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-own@example.com", balance=1000.0)
         job_id = await _submit(client, settings, user, clip)
         other = await make_user("video-st-other@example.com", tier=PRO)
         resp = await client.get(_status_url(job_id), headers=_auth_headers(other, settings))
         assert resp.status_code == 404
 
     async def test_non_video_job_returns_404(self, client, settings) -> None:
-        user, _ws, clip = await _user_with_clip("video-st-type@example.com", balance=10.0)
+        user, _ws, clip = await _user_with_clip("video-st-type@example.com", balance=1000.0)
         job = Job(user_id=user.id, workspace_id=clip.workspace_id, job_type="mastering")
         await job.insert()
         resp = await client.get(_status_url(str(job.id)), headers=_auth_headers(user, settings))
@@ -783,7 +783,7 @@ class TestVideoEdit:
         assert job.input_params["edit"] == {"operation": "transitions", "transition_markers": [1.5, 3.0]}
 
     async def test_charges_source_resolution_cost(self, client, settings, local_storage) -> None:
-        user, _ws, clip = await _user_with_clip("video-edit-cost@example.com", balance=100, duration=10.0)
+        user, _ws, clip = await _user_with_clip("video-edit-cost@example.com", balance=1000, duration=10.0)
         source = await _insert_video(user, clip, resolution="1080p")
         resp = await client.post(
             _edit_url(str(source.id)),
@@ -791,10 +791,24 @@ class TestVideoEdit:
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        # 1080p base cost is 7 credits (short song, no surcharge).
-        assert (await _reload(user)).credits_balance == pytest.approx(93.0)
+        # #694: 1080p at 375 credits/min for a 10 s source, rounded up to 63.
+        assert (await _reload(user)).credits_balance == pytest.approx(937.0)
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
-        assert any(t.amount == pytest.approx(-7.0) for t in txns)
+        assert any(t.amount == pytest.approx(-63.0) for t in txns)
+
+    async def test_an_edit_is_priced_on_the_video_it_renders_not_the_whole_song(
+        self, client, settings, local_storage
+    ) -> None:
+        """#694 review: the provider renders the (shorter) source video, so a 10 s cut of a 4 min song costs 26."""
+        user, _ws, clip = await _user_with_clip("video-edit-short@example.com", balance=1000, duration=240.0)
+        source = await _insert_video(user, clip, resolution="720p", duration=10.0)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202, resp.text
+        assert (await _reload(user)).credits_balance == pytest.approx(974.0)
 
     async def test_edit_range_past_song_returns_422_no_charge(self, client, settings, local_storage) -> None:
         user, _ws, clip = await _user_with_clip("video-edit-oob@example.com", balance=100, duration=10.0)
@@ -810,7 +824,7 @@ class TestVideoEdit:
     async def test_chained_edit_validated_against_edited_length_not_song(self, client, settings, local_storage) -> None:
         # An already-trimmed version is 8s even though the song is 30s: editing it
         # with a range past 8s must 422 (validated against the video, not the song).
-        user, _ws, clip = await _user_with_clip("video-edit-chain@example.com", balance=100, duration=30.0)
+        user, _ws, clip = await _user_with_clip("video-edit-chain@example.com", balance=1000, duration=30.0)
         trimmed = await _insert_video(
             user, clip, edit={"operation": "trim", "start_seconds": 0.0, "end_seconds": 8.0}, duration=8.0
         )
@@ -820,7 +834,7 @@ class TestVideoEdit:
             headers=_auth_headers(user, settings),
         )
         assert past.status_code == 422
-        assert (await _reload(user)).credits_balance == 100
+        assert (await _reload(user)).credits_balance == 1000
         # A range inside the trimmed length is still accepted.
         within = await client.post(
             _edit_url(str(trimmed.id)),

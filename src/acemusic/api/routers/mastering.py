@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from acemusic.storage import get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_capability
-from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus
+from ..models import BatchClipEntry, BatchJob, Clip, Job, JobStatus, User
 from ..services import (
     clips as clip_service,
     credits as credits_service,
@@ -53,7 +53,7 @@ class MasteringRequest(BaseModel):
 
     clip_id: str
     profile: Literal["streaming", "soundcloud", "club", "vinyl", "custom"]
-    service: Literal["dolby", "landr", "bakuage"] = "dolby"
+    service: Literal["dolby", "landr", "bakuage"] = "bakuage"
     format: Literal["wav", "mp3", "flac"] = "wav"
     target_lufs: float | None = None
 
@@ -74,6 +74,22 @@ class MasteringJobResponse(BaseModel):
 
     job_id: str
     status: Literal["queued"] = "queued"
+
+
+def _allowed_services_for(user: User, service: str) -> list[str] | None:
+    """The services ``user``'s job may run on, or None for any (#694). Raises 403 for a service they may not request.
+
+    Only Bakuage is offered to everyone: LANDR and Dolby cost far more per master and are for admins. A non-admin's
+    job is pinned to the public list so the fallback chain can't run it on one of them either.
+    """
+    if user.is_admin:
+        return None
+    if service not in credits_service.PUBLIC_MASTERING_SERVICES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{service.capitalize()} mastering is for admins only. Use Bakuage.",
+        )
+    return list(credits_service.PUBLIC_MASTERING_SERVICES)
 
 
 @router.post(
@@ -105,14 +121,15 @@ async def create_mastering_job(
     # 404 with no credit movement. The clip's workspace is where the master lands.
     clip = await clip_service.get_owned_clip(request.clip_id, current.user_id)
 
-    # Resolved before the charge, so a bad profile costs nothing.
+    # Resolved before the charge, so a bad profile or a service they may not use costs nothing.
+    allowed = _allowed_services_for(user, request.service)
     params = {
         "clip_id": str(clip.id),
         "profile": request.profile,
         "service": request.service,
         "format": request.format,
         "target_lufs": mastering_service.resolve_target_lufs(request.profile, request.target_lufs),
-    }
+    } | mastering_service.pin_params(allowed)
     job = await credits_service.charge_and_create(
         user_id=user.id,
         cost=credits_service.get_mastering_cost(request.service),
@@ -145,7 +162,7 @@ class BatchMasteringRequest(BaseModel):
 
     clip_ids: list[str] = Field(min_length=1, max_length=mastering_service.MAX_BATCH_SIZE)
     profile: Literal["streaming", "soundcloud", "club", "vinyl", "custom"]
-    service: Literal["dolby", "landr", "bakuage"] = "dolby"
+    service: Literal["dolby", "landr", "bakuage"] = "bakuage"
     format: Literal["wav", "mp3", "flac"] = "wav"
     target_lufs: float | None = None
 
@@ -222,6 +239,7 @@ async def create_mastering_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
     target_lufs = mastering_service.resolve_target_lufs(request.profile, request.target_lufs)
+    allowed = _allowed_services_for(user, request.service)
     batch = await mastering_service.create_mastering_batch(
         user_id=current.user_id,
         clip_ids=request.clip_ids,
@@ -229,6 +247,7 @@ async def create_mastering_batch(
         service=request.service,
         format=request.format,
         target_lufs=target_lufs,
+        allowed_services=allowed,
     )
     return BatchMasteringResponse(
         batch_id=str(batch.id),

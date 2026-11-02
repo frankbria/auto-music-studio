@@ -108,6 +108,11 @@ async def create_mastering_job(
 # ---------------------------------------------------------------------------
 
 
+def pin_params(allowed_services: list[str] | None) -> dict:
+    """The job params that pin a mastering job's fallback chain to ``allowed_services`` (#694); none for any."""
+    return {} if allowed_services is None else {"allowed_services": allowed_services}
+
+
 async def create_mastering_batch(
     *,
     user_id: str,
@@ -116,6 +121,7 @@ async def create_mastering_batch(
     service: str,
     format: str,
     target_lufs: float,
+    allowed_services: list[str] | None = None,
 ) -> BatchJob:
     """Queue one mastering job per owned clip under a single :class:`BatchJob`.
 
@@ -173,7 +179,7 @@ async def create_mastering_batch(
             "service": service,
             "format": format,
             "target_lufs": target_lufs,
-        }
+        } | pin_params(allowed_services)
         try:
             job = await create_mastering_job(
                 user_id=clip.user_id,

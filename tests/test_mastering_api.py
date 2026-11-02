@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, Workspace
+from acemusic.api.models import Clip, CreditTransaction, Job, JobStatus, User, Workspace
 from acemusic.api.services import mastering as mastering_service, users as user_service
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
@@ -130,7 +130,7 @@ class TestSuccessfulSubmission:
         user, ws, clip = await _user_with_clip("master-persist@example.com")
         resp = await client.post(
             MASTERING_URL,
-            json={"clip_id": str(clip.id), "profile": "soundcloud", "service": "landr", "format": "flac"},
+            json={"clip_id": str(clip.id), "profile": "soundcloud", "service": "bakuage", "format": "flac"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
@@ -141,7 +141,9 @@ class TestSuccessfulSubmission:
         assert job.workspace_id == ws.id
         assert job.input_params["clip_id"] == str(clip.id)
         assert job.input_params["profile"] == "soundcloud"
-        assert job.input_params["service"] == "landr"
+        assert job.input_params["service"] == "bakuage"
+        # #694: pinned, so the fallback chain can't run it on an admin-only service either.
+        assert job.input_params["allowed_services"] == ["bakuage"]
         assert job.input_params["format"] == "flac"
         assert job.input_params["target_lufs"] == -12.0
 
@@ -172,7 +174,7 @@ class TestSuccessfulSubmission:
         assert job.input_params["target_lufs"] == -9.0
 
     async def test_service_specific_credits_deducted(self, client, settings) -> None:
-        # bakuage costs 5; a 10-credit balance should drop to 5.
+        # bakuage costs 2; a 10-credit balance should drop to 8.
         user, _ws, clip = await _user_with_clip("master-charge@example.com", balance=10.0)
         resp = await client.post(
             MASTERING_URL,
@@ -180,11 +182,44 @@ class TestSuccessfulSubmission:
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 202
-        assert (await _reload(user)).credits_balance == 5.0
+        assert (await _reload(user)).credits_balance == 8.0
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
         assert len(txns) == 1
-        assert txns[0].amount == -5.0
+        assert txns[0].amount == -2.0
         assert txns[0].action_type == "mastering"
+
+    @pytest.mark.parametrize("service", ["landr", "dolby"])
+    async def test_admin_only_services_are_refused_before_any_charge(self, client, settings, service) -> None:
+        """#694: LANDR and Dolby cost far more per master; only admins may request them."""
+        user, _ws, clip = await _user_with_clip(f"master-nonadmin-{service}@example.com", balance=500.0)
+        resp = await client.post(
+            MASTERING_URL,
+            json={"clip_id": str(clip.id), "profile": "streaming", "service": service},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 403
+        assert (await _reload(user)).credits_balance == 500.0
+        assert await Job.find(Job.user_id == user.id).count() == 0
+
+    async def test_an_admin_may_use_landr_at_its_price(self, client, settings) -> None:
+        user, _ws, clip = await _user_with_clip("master-admin@example.com", balance=200.0)
+        await User.find_one(User.id == user.id).update({"$set": {"is_admin": True}})
+        resp = await client.post(
+            MASTERING_URL,
+            json={"clip_id": str(clip.id), "profile": "streaming", "service": "landr"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202, resp.text
+        assert (await _reload(user)).credits_balance == 70.0
+        assert "allowed_services" not in (await Job.get(resp.json()["job_id"])).input_params
+
+    async def test_the_default_service_is_bakuage(self, client, settings) -> None:
+        user, _ws, clip = await _user_with_clip("master-default@example.com")
+        resp = await client.post(
+            MASTERING_URL, json={"clip_id": str(clip.id), "profile": "streaming"}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 202
+        assert (await Job.get(resp.json()["job_id"])).input_params["service"] == "bakuage"
 
 
 # ---------------------------------------------------------------------------
@@ -251,14 +286,14 @@ class TestInsufficientCredits:
         user, _ws, clip = await _user_with_clip("master-poor@example.com", balance=1.0)
         resp = await client.post(
             MASTERING_URL,
-            json={"clip_id": str(clip.id), "profile": "streaming", "service": "dolby"},
+            json={"clip_id": str(clip.id), "profile": "streaming", "service": "bakuage"},
             headers=_auth_headers(user, settings),
         )
         assert resp.status_code == 402
         detail = resp.json()["detail"]
         assert detail["error"] == "insufficient_credits"
         assert detail["balance"] == 1.0
-        assert detail["required"] == 3.0
+        assert detail["required"] == 2.0
 
     async def test_no_job_or_charge_on_insufficient_credits(self, client, settings) -> None:
         user, _ws, clip = await _user_with_clip("master-poor-noop@example.com", balance=1.0)

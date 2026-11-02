@@ -227,6 +227,8 @@ async def process_mastering_job(
             target_lufs,
             fmt,
             requested_service=service,
+            # #694: a non-admin's job never falls back onto a service they couldn't request.
+            allowed_services=params.get("allowed_services"),
         )
     except Exception as exc:
         # The pre-flight get_client already handled the unconfigured-requested case

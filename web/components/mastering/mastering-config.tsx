@@ -28,13 +28,17 @@ import {
 export function MasteringConfig({
   onStart,
   disabled = false,
+  isAdmin = false,
 }: {
   onStart: (config: MasteringConfig) => void
   /** Disable the whole form (e.g. while a job is submitting). */
   disabled?: boolean
+  /** Shows the admin-only services too (#694). */
+  isAdmin?: boolean
 }) {
   const [profile, setProfile] = useState<MasteringProfile>("streaming")
-  const [service, setService] = useState<MasteringService>("dolby")
+  const [service, setService] = useState<MasteringService>("bakuage")
+  const services = MASTERING_SERVICES.filter((s) => isAdmin || !s.adminOnly)
   // Raw input string; parsed + range-checked only for the custom profile.
   const [customLufs, setCustomLufs] = useState("-14")
 
@@ -79,7 +83,10 @@ export function MasteringConfig({
 
         {profile === "custom" && (
           <div className="flex flex-col gap-1 pl-6">
-            <Label htmlFor="custom-lufs" className="text-xs text-muted-foreground">
+            <Label
+              htmlFor="custom-lufs"
+              className="text-xs text-muted-foreground"
+            >
               Target loudness (LUFS)
             </Label>
             <Input
@@ -110,7 +117,7 @@ export function MasteringConfig({
           onValueChange={(v) => setService(v as MasteringService)}
           aria-label="Mastering service"
         >
-          {MASTERING_SERVICES.map((s) => (
+          {services.map((s) => (
             <div key={s.value} className="flex items-center gap-2">
               <RadioGroupItem value={s.value} id={`service-${s.value}`} />
               <Label htmlFor={`service-${s.value}`} className="font-normal">
