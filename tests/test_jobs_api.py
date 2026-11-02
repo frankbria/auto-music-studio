@@ -148,12 +148,14 @@ class TestStatusLifecycle:
     async def test_failed_job_includes_error(self, client, settings) -> None:
         user = await make_user("jobs-failed@example.com")
         job = await _insert_job(user, status=JobStatus.FAILED, error="model overloaded")
+        await job.set({Job.error_detail: "KeyError: 'audio_path' at /srv/acemusic/tasks/processor.py:412"})
 
         resp = await client.get(_status_url(str(job.id)), headers=_auth_headers(user, settings))
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "failed"
         assert body["error"] == "model overloaded"
+        assert "error_detail" not in body and "processor.py" not in resp.text, "operator text never reaches the owner"
         assert "clip_ids" not in body
         assert "audio_urls" not in body
 
