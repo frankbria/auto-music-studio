@@ -56,6 +56,8 @@ class TestCategoryFor:
             ("stems", "extraction"),
             ("midi", "extraction"),
             ("voice_training", "voice"),
+            ("artwork", "artwork"),
+            ("artwork_refund", "artwork"),
             ("monthly_reset", "grant"),
             ("something_new", "other"),
         ],

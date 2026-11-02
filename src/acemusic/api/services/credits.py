@@ -87,6 +87,10 @@ STEMS_COST = 1.0
 MIDI_COST = 1.0
 REMASTER_COST = 0.5
 
+# #693: four cover-art options in one OpenAI image request (about $0.05 at gpt-image-2.5-flare medium), priced
+# with margin over the worst-case revenue per credit (Enterprise annual, about $0.032).
+ARTWORK_COST = 3.0
+
 #: Where a musician out of credits is sent. Relative so it works on any deployment;
 #: US-26.4 (credit top-up purchase) is what will make the page do something.
 UPGRADE_URL = "/settings/billing"

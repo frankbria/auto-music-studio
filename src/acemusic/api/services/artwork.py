@@ -57,8 +57,8 @@ def build_artwork_prompt(clip: Clip, style_prompt: str | None = None) -> str:
     return ", ".join(parts)[:ARTWORK_PROMPT_MAX_LENGTH]
 
 
-async def create_artwork_job(*, clip: Clip, style_prompt: str | None = None) -> Job:
-    """Persist a queued artwork-generation job for ``clip`` and dispatch it.
+async def artwork_job_params(*, clip: Clip, style_prompt: str | None = None) -> dict:
+    """The job's params, with the prompt resolved and screened; raises before any charge if it is blocked.
 
     The prompt is resolved here (not in the worker) so the job document carries
     everything generation needs, matching the other service modules.
@@ -70,6 +70,11 @@ async def create_artwork_job(*, clip: Clip, style_prompt: str | None = None) -> 
     params = {"clip_id": str(clip.id), "prompt": prompt}
     if moderation_flags:
         params["moderation_flags"] = moderation_flags
+    return params
+
+
+async def create_artwork_job(*, clip: Clip, params: dict) -> Job:
+    """Persist a queued artwork-generation job for ``clip`` and dispatch it."""
     return await create_job(
         user_id=clip.user_id, workspace_id=clip.workspace_id, job_type=ARTWORK_JOB_TYPE, params=params
     )

@@ -66,6 +66,7 @@ CATEGORIES: dict[str, str] = {
     "stems": "extraction",
     "midi": "extraction",
     "voice_training": "voice",
+    "artwork": "artwork",
     "monthly_reset": "grant",
 }
 

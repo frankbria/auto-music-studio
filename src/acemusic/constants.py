@@ -95,7 +95,7 @@ KEY_MAX_LENGTH = 50
 SEED_MIN = -(2**63)
 SEED_MAX = 2**63 - 1
 
-# Cover art generation (US-13.1). DALL-E 3 emits 1024x1024; we upscale to a
+# Cover art generation (US-13.1). The image model emits 1024x1024 (#693); we upscale to a
 # 3000x3000 distribution master (Spotify/Apple require >=3000). Uploads must meet
 # that same floor in one of the accepted raster formats and stay under the cap so
 # a single image can't exhaust worker memory or bloat storage.

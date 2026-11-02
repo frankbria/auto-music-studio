@@ -59,7 +59,7 @@ def ensure_min_resolution(data: bytes, min_size: int) -> None:
 def upscale_image(data: bytes, target_size: int) -> bytes:
     """Resize ``data`` to ``target_size`` x ``target_size`` and return PNG bytes.
 
-    Cover art is square (DALL-E emits 1024x1024); LANCZOS gives the best quality
+    Cover art is square (the image model emits 1024x1024); LANCZOS gives the best quality
     for the upscale. Output is always PNG so the stored distribution master is
     lossless regardless of the source format.
     """

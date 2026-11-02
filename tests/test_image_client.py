@@ -17,31 +17,42 @@ _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 _B64 = base64.b64encode(_PNG).decode()
 
 
-def _ok_response() -> MagicMock:
+def _ok_response(images: int = 1) -> MagicMock:
     resp = MagicMock(spec=httpx.Response)
     resp.status_code = 200
-    resp.json.return_value = {"data": [{"b64_json": _B64}]}
+    resp.json.return_value = {"data": [{"b64_json": _B64}] * images}
     resp.raise_for_status.return_value = None
     return resp
 
 
 class TestGenerateImages:
-    def test_returns_one_image_per_requested_option(self) -> None:
+    def test_returns_every_requested_option_from_one_request(self) -> None:
         client = ImageGenerationClient(api_key="sk-test")
-        with patch("acemusic.image_client.httpx.post", return_value=_ok_response()) as post:
+        with patch("acemusic.image_client.httpx.post", return_value=_ok_response(4)) as post:
             images = client.generate_images("ambient album cover", count=4)
         assert images == [_PNG] * 4
-        assert post.call_count == 4
+        assert post.call_count == 1
 
-    def test_sends_prompt_and_size_in_body(self) -> None:
+    def test_requests_a_current_gpt_image_model(self) -> None:
+        """#693: dall-e-3 was retired from the API, and GPT image models reject response_format with a 400."""
         client = ImageGenerationClient(api_key="sk-test")
-        with patch("acemusic.image_client.httpx.post", return_value=_ok_response()) as post:
-            client.generate_images("dreamy synthwave", count=1)
+        with patch("acemusic.image_client.httpx.post", return_value=_ok_response(4)) as post:
+            client.generate_images("dreamy synthwave", count=4)
         body = post.call_args.kwargs["json"]
-        assert body["prompt"] == "dreamy synthwave"
-        assert body["size"] == "1024x1024"
-        assert body["n"] == 1
+        assert body == {
+            "model": "gpt-image-2.5-flare",
+            "prompt": "dreamy synthwave",
+            "n": 4,
+            "size": "1024x1024",
+            "quality": "medium",
+        }
         assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-test"
+
+    def test_fewer_images_than_asked_is_an_error(self) -> None:
+        client = ImageGenerationClient(api_key="sk-test")
+        with patch("acemusic.image_client.httpx.post", return_value=_ok_response(2)):
+            with pytest.raises(ImageGenerationError):
+                client.generate_images("x", count=4)
 
     def test_http_error_becomes_domain_error(self) -> None:
         resp = MagicMock(spec=httpx.Response)
