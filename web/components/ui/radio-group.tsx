@@ -12,7 +12,8 @@ function RadioGroup({
   return (
     <RadioGroupPrimitive.Root
       data-slot="radio-group"
-      className={cn("grid gap-2", className)}
+      // On touch, rows sit 44px apart so one item's enlarged hit area never covers its neighbour.
+      className={cn("grid gap-2 pointer-coarse:gap-y-7", className)}
       {...props}
     />
   )
