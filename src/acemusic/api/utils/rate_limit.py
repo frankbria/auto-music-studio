@@ -40,8 +40,8 @@ class FixedWindowRateLimiter:
         self._last_prune = 0.0
         self._lock = Lock()
 
-    def check(self, key: str) -> None:
-        """Record one hit for ``key``; raise 429 once it exceeds the limit."""
+    def check(self, key: str, weight: int = 1) -> None:
+        """Record ``weight`` hits for ``key``; raise 429, recording none of them, if that would exceed the limit."""
         now = time.monotonic()
         with self._lock:
             # A public endpoint sees many one-off IPs; without pruning, _hits
@@ -53,15 +53,14 @@ class FixedWindowRateLimiter:
             window_start, count = self._hits.get(key, (now, 0))
             if now - window_start >= self._window:  # window elapsed — reset
                 window_start, count = now, 0
-            count += 1
-            self._hits[key] = (window_start, count)
-            if count > self._limit:
+            if count + weight > self._limit:
                 retry_after = max(1, int(self._window - (now - window_start)))
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=self._detail,
                     headers={"Retry-After": str(retry_after)},
                 )
+            self._hits[key] = (window_start, count + weight)
 
 
 def client_key(request: Request, trusted_proxies: Collection[str]) -> str:

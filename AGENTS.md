@@ -434,6 +434,13 @@ Package manager: `uv` with `hatchling` build backend
   voice training, distribution) shows up there, so a new `event_type` needs a case in the web
   `lib/notifications.toAppNotification`, or it renders as a generic *System* row. The web
   `NotificationsProvider` loads the inbox on sign-in. `notify()` rows are session-only
+- **Rate limits (#341)**: `utils/user_rate_limit.py`. A middleware counts each signed-in request against the user's
+  `read` (GET/HEAD) or `write` limit, from the access token, with no database read. Billed jobs count against
+  `generation` inside `credits.charge_and_create`, before charging; free actions (cost 0) don't. Free gets
+  `ACEMUSIC_API_RATE_LIMIT_{READS,WRITES,GENERATIONS}_PER_MINUTE` (300/60/10), Pro 3x, Enterprise 10x; over is a 429
+  with `Retry-After`. Batch mastering calls `check_generation(n)` itself: a new path that queues billed jobs without
+  `charge_and_create` must too. `GET /admin/rate-limits` shows the limits and recent rejections. Per process, like
+  the other limiters. Test settings (`mongo_settings`) raise them to 100k
 - **Public discovery (#651)**: Feed, Explore and Search read `GET /api/v1/discover/clips` (keyset-paged, `newest` |
   `relevance`) and `/discover/facets` through the web BFF at `/api/discover/*`; they need no sign-in. A signed-in
   viewer's token is forwarded so `/discover/clips` marks their own clips `is_owner` (#653); the web reads it through

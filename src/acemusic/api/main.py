@@ -61,6 +61,7 @@ from .tasks.processor import JobProcessor
 from .tasks.soundcloud_poller import SoundCloudStatusPoller
 from .tasks.video import get_video_client
 from .utils.rate_limit import FixedWindowRateLimiter as RateLimiter
+from .utils.user_rate_limit import UserRateLimitMiddleware, UserRateLimits
 
 API_V1_PREFIX = "/api/v1"
 
@@ -189,6 +190,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.state.report_limiter = RateLimiter(
         settings.report_rate_limit_per_hour, 3600, detail="You have sent too many reports. Please try again later."
     )
+
+    # #341: per-user, per-kind limits. Added before CORS so CORS wraps it, and a browser can read the 429.
+    app.state.user_limits = UserRateLimits(settings)
+    app.add_middleware(UserRateLimitMiddleware, limits=app.state.user_limits, settings=settings)
 
     # allow_credentials=True is incompatible with a wildcard allow_origins=["*"]
     # (browsers reject the combination). _split_origins in settings.py never

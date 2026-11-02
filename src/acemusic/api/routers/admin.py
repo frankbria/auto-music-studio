@@ -15,10 +15,10 @@ the log are paged by keyset cursor (#540); the queue sorts and filters on the se
 
 import logging
 from collections.abc import Awaitable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -316,4 +316,32 @@ async def clip_engagement(clip_id: str) -> ClipEngagementResponse:
         like_count=clip.like_count,
         share_count=clip.share_count,
         staff_picked_at=clip.staff_picked_at,
+    )
+
+
+class RateLimitRejection(BaseModel):
+    at: datetime
+    user_id: str
+    tier: str
+    kind: str
+
+
+class RateLimitsResponse(BaseModel):
+    """Per-minute limits by kind and plan, and the most recent requests turned away (#341), newest first."""
+
+    limits: dict[str, dict[str, int]]
+    recent_rejections: list[RateLimitRejection]
+
+
+@router.get("/rate-limits", response_model=RateLimitsResponse)
+async def rate_limits(request: Request) -> RateLimitsResponse:
+    limits = request.app.state.user_limits
+    return RateLimitsResponse(
+        limits=limits.limits,
+        recent_rejections=[
+            RateLimitRejection(
+                at=datetime.fromtimestamp(r.at, timezone.utc), user_id=r.user_id, tier=r.tier, kind=r.kind
+            )
+            for r in reversed(limits.rejections)
+        ],
     )

@@ -280,7 +280,15 @@ async def mongo_settings(_test_db_name):
 
     url = _mongo_test_url()
     _assert_local(url)
-    yield ApiSettings(_env_file=None, mongodb_url=url, mongodb_db_name=_test_db_name)
+    # #341: suites drive one user through many requests a minute; the limits have their own tests.
+    yield ApiSettings(
+        _env_file=None,
+        mongodb_url=url,
+        mongodb_db_name=_test_db_name,
+        rate_limit_reads_per_minute=100_000,
+        rate_limit_writes_per_minute=100_000,
+        rate_limit_generations_per_minute=100_000,
+    )
     client = AsyncMongoClient(url, serverSelectionTimeoutMS=2000)
     try:
         db = client[_test_db_name]
