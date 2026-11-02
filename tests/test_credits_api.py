@@ -56,7 +56,7 @@ class TestGetCost:
         assert credits_service.get_cost("song") == 1.0
 
     def test_sound_costs_half_credit(self) -> None:
-        assert credits_service.get_cost("sound") == 0.5
+        assert credits_service.get_cost("sound") == 1.0
 
     def test_unknown_mode_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -64,28 +64,22 @@ class TestGetCost:
 
 
 class TestGetVideoCost:
-    """Runs in CI (no DB): the US-22.1 video cost table is pure logic.
+    """Runs in CI (no DB). #694: video is priced per minute of song, because providers bill per second of
+    rendered video, rounded up to a whole credit."""
 
-    The documented band is 5-10 credits by resolution and duration: base rate
-    per resolution, a surcharge for songs over the long-duration threshold, and
-    a hard cap at the top of the band.
-    """
+    def test_per_minute_rates_by_resolution(self) -> None:
+        assert credits_service.get_video_cost("720p", 60.0) == 156.0
+        assert credits_service.get_video_cost("1080p", 60.0) == 375.0
+        assert credits_service.get_video_cost("4k", 60.0) == 1350.0
 
-    def test_base_costs_by_resolution(self) -> None:
-        assert credits_service.get_video_cost("720p", 10.0) == 5.0
-        assert credits_service.get_video_cost("1080p", 10.0) == 7.0
-        assert credits_service.get_video_cost("4k", 10.0) == 8.0
+    def test_scales_with_duration_and_rounds_up(self) -> None:
+        assert credits_service.get_video_cost("720p", 180.0) == 468.0
+        assert credits_service.get_video_cost("720p", 10.0) == 26.0
+        assert credits_service.get_video_cost("1080p", 61.0) == 382.0
 
-    def test_long_duration_surcharge(self) -> None:
-        long = credits_service.VIDEO_LONG_DURATION_S + 1
-        assert credits_service.get_video_cost("720p", long) == 7.0
-        assert credits_service.get_video_cost("1080p", long) == 9.0
-
-    def test_cost_capped_at_band_maximum(self) -> None:
-        assert credits_service.get_video_cost("4k", credits_service.VIDEO_LONG_DURATION_S + 1) == 10.0
-
-    def test_unknown_duration_bills_base_rate(self) -> None:
-        assert credits_service.get_video_cost("720p", None) == 5.0
+    def test_unknown_duration_bills_the_assumed_length(self) -> None:
+        assumed = credits_service.VIDEO_ASSUMED_DURATION_S
+        assert credits_service.get_video_cost("720p", None) == credits_service.get_video_cost("720p", assumed)
 
     def test_unknown_resolution_raises(self) -> None:
         with pytest.raises(ValueError):

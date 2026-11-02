@@ -69,6 +69,13 @@ TRAINING_ROOT = "./acemusic-voice-training"
 #: child of it. Handing /v1/lora/load the export root fails.
 ADAPTER_SUBDIR = "adapter"
 
+#: Per training method (#694): ACE-Step's start route, its output-directory field, and the path under the export
+#: that /v1/lora/load takes. A LoKr export is a single LyCORIS safetensors file rather than a PEFT directory.
+TRAINING_METHODS: dict[str, tuple[str, str, str]] = {
+    "lora": ("/v1/training/start", "lora_output_dir", ADAPTER_SUBDIR),
+    "lokr": ("/v1/training/start_lokr", "output_dir", "lokr_weights.safetensors"),
+}
+
 #: How often the training status is polled, and how long before it is abandoned.
 #: Training is minutes on a GPU; the timeout is generous because giving up on a
 #: run that is still going would refund a model the musician is about to get.
@@ -263,6 +270,7 @@ async def _train(
     poll_timeout: float,
 ) -> dict[str, Any]:
     await model.set({"status": VoiceModelStatus.TRAINING})
+    start_route, output_field, weights_name = TRAINING_METHODS[(job.input_params or {}).get("method", "lora")]
 
     # Server-side paths: ACE-Step preprocesses, trains and exports on its own
     # filesystem, so these name directories on that host rather than storage keys.
@@ -324,11 +332,7 @@ async def _train(
 
         # 2. Fine-tune.
         await record("training")
-        await _post(
-            client,
-            "/v1/training/start",
-            {"tensor_dir": tensor_dir, "lora_output_dir": lora_dir},
-        )
+        await _post(client, start_route, {"tensor_dir": tensor_dir, output_field: lora_dir})
 
         async def on_progress(data: dict[str, Any]) -> None:
             # Structured provider progress, in the field the platform already has
@@ -365,7 +369,7 @@ async def _train(
     # expected PEFT LoRA directory containing adapter_config.json". Verified end to
     # end against a real trained model, so what is stored here is the path that
     # actually loads.
-    weights = f"{exported_path}/{ADAPTER_SUBDIR}" if exported_path else None
+    weights = f"{exported_path}/{weights_name}" if exported_path else None
 
     if not weights:
         # A training run that produces no weights has produced no voice, whatever

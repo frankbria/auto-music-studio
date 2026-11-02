@@ -8,6 +8,7 @@ transport-agnostic.
 
 import calendar
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
@@ -20,8 +21,11 @@ from . import users
 
 logger = logging.getLogger(__name__)
 
+# #694: every price sits above its vendor or compute cost at the worst-case revenue per credit, Enterprise annual
+# ($998 for 2,500 credits a month), about $0.032 after Stripe's fees, so no paid plan runs at a loss.
 SONG_COST = 1.0
-SOUND_COST = 0.5
+# A short sound takes the same GPU wall clock as a song (about $0.006-0.023 on RunPod, cold start included).
+SOUND_COST = 1.0
 
 # US-10.3: each single-source iterative generation runs one ACE-Step (or
 # ElevenLabs) job, costing the same as a song generation. The ``sample`` endpoint
@@ -44,11 +48,13 @@ _COSTS = {
     **{mode: ITERATIVE_COST for mode in _SINGLE_SOURCE_ITERATIVE_MODES},
 }
 
-# US-12.1: mastering is billed per external service, tiered within the
-# documented 2-5 credit band by perceived service value (Dolby is the default).
-MASTERING_DOLBY_COST = 3.0
-MASTERING_LANDR_COST = 2.0
-MASTERING_BAKUAGE_COST = 5.0
+# US-12.1, repriced by #694 against each vendor's cost per master: Bakuage costs us nothing and is the one service
+# offered to everyone; LANDR (about $2.50 a master) and Dolby (unpublished; about $0.20 at its last public rate) are
+# for admins only, priced so even they don't run at a loss.
+MASTERING_DOLBY_COST = 11.0
+MASTERING_LANDR_COST = 130.0
+MASTERING_BAKUAGE_COST = 2.0
+PUBLIC_MASTERING_SERVICES: tuple[str, ...] = ("bakuage",)
 
 _MASTERING_COSTS = {
     "dolby": MASTERING_DOLBY_COST,
@@ -56,24 +62,21 @@ _MASTERING_COSTS = {
     "bakuage": MASTERING_BAKUAGE_COST,
 }
 
-# US-22.1: video rendering is billed within the documented 5-10 credit band by
-# resolution, with a surcharge for long songs (rendering cost scales with both).
-# Kept out of ``_COSTS`` — video is not a generation mode, and the cost is
-# two-dimensional (resolution x duration) where ``_COSTS`` is flat.
-_VIDEO_COSTS = {
-    "720p": 5.0,
-    "1080p": 7.0,
-    "4k": 8.0,
+# #694: video providers bill per second of rendered video (720p about $0.05-0.06/s, 1080p $0.12-0.24/s, 4K about
+# $0.43/s), so a render is priced per minute of the song, rounded up to a whole credit. Kept out of ``_COSTS``
+# because video is not a generation mode.
+_VIDEO_COSTS_PER_MINUTE = {
+    "720p": 156.0,
+    "1080p": 375.0,
+    "4k": 1350.0,
 }
-VIDEO_LONG_DURATION_S = 180.0
-VIDEO_LONG_DURATION_SURCHARGE = 2.0
-VIDEO_MAX_COST = 10.0
+#: A clip that predates duration tracking is billed as this long.
+#: shortcut: a guess rather than the clip's real length; probe the audio's duration when one is missing.
+VIDEO_ASSUMED_DURATION_S = 240.0
 
-# US-25.1: training a custom voice model is a premium action -- minutes of GPU
-# fine-tuning rather than one inference pass -- and is priced accordingly. Kept
-# out of ``_COSTS`` because it is not a generation mode; ``get_cost("voice_training")``
-# would wrongly suggest it is one.
-VOICE_TRAINING_COST = 10.0
+# US-25.1, repriced by #694: a full LoRA fine-tune is 1-2 GPU hours (about $0.70-1.40 on RunPod); LoKr is about
+# five minutes (about $0.10). Kept out of ``_COSTS`` because it is not a generation mode.
+_VOICE_TRAINING_COSTS = {"lora": 75.0, "lokr": 5.0}
 
 # US-26.1 prices three actions that shipped free. The editing and extraction routers
 # had documented them as "non-generative local CPU work, so no credits are deducted";
@@ -110,18 +113,23 @@ def get_cost(mode: str) -> float:
 def get_video_cost(resolution: str, duration_s: float | None = None) -> float:
     """Credit cost of one video render at ``resolution`` for a ``duration_s`` song.
 
-    Raises for unknown resolutions. A song longer than ``VIDEO_LONG_DURATION_S``
-    adds the long-duration surcharge; the total is capped at ``VIDEO_MAX_COST``
-    (the top of the documented 5-10 band). ``duration_s`` may be ``None`` — some
-    clips predate duration tracking — and then bills the base rate.
+    Raises for unknown resolutions. Per minute of song, rounded up to a whole credit (#694). ``duration_s`` may be
+    ``None`` (some clips predate duration tracking), and is then billed as ``VIDEO_ASSUMED_DURATION_S``.
     """
     try:
-        cost = _VIDEO_COSTS[resolution]
+        per_minute = _VIDEO_COSTS_PER_MINUTE[resolution]
     except KeyError:
         raise ValueError(f"Unknown video resolution: {resolution!r}") from None
-    if duration_s is not None and duration_s > VIDEO_LONG_DURATION_S:
-        cost += VIDEO_LONG_DURATION_SURCHARGE
-    return min(cost, VIDEO_MAX_COST)
+    seconds = duration_s if duration_s is not None else VIDEO_ASSUMED_DURATION_S
+    return float(math.ceil(per_minute * seconds / 60.0))
+
+
+def get_voice_training_cost(method: str) -> float:
+    """Credit cost of training one voice model with ``method`` (``lora`` or ``lokr``). Raises for unknown methods."""
+    try:
+        return _VOICE_TRAINING_COSTS[method]
+    except KeyError:
+        raise ValueError(f"Unknown voice training method: {method!r}") from None
 
 
 def get_mastering_cost(service: str) -> float:

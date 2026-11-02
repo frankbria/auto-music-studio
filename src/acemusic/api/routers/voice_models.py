@@ -16,7 +16,7 @@ else's model at all.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,7 +26,7 @@ from acemusic.storage import get_storage_backend
 from ..auth.dependencies import CurrentUser, require_capability, require_existing_user
 from ..models import VoiceModel, VoiceModelStatus
 from ..models.voice_model import MAX_REFERENCE_FILES, MIN_REFERENCE_FILES
-from ..services import credits as credits_service, voice_models as voice_service
+from ..services import voice_models as voice_service
 from ..services.tiers import Capability
 from ..utils.media_types import get_audio_content_type
 
@@ -79,6 +79,8 @@ async def train_voice_model(
     files: list[UploadFile] = File(...),
     name: str = Form(...),
     description: str | None = Form(default=None),
+    # #694: LoRA (a full fine-tune, 75 credits) or LoKr (about five minutes, 5 credits).
+    method: Literal["lora", "lokr"] = Form(default="lora"),
     current: CurrentUser = Depends(require_existing_user),
 ) -> TrainingAccepted:
     """Queue a LoRA fine-tune from the caller's reference recordings.
@@ -99,7 +101,9 @@ async def train_voice_model(
     payloads = [(f.filename or "reference", await f.read()) for f in files]
 
     try:
-        model, job = await voice_service.create_training_job(current.user_id, name, payloads, description=description)
+        model, job = await voice_service.create_training_job(
+            current.user_id, name, payloads, description=description, method=method
+        )
     except voice_service.VoiceModelError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -109,7 +113,7 @@ async def train_voice_model(
     return TrainingAccepted(
         job_id=str(job.id),
         voice_model=VoiceModelResponse.from_model(model),
-        credits_charged=credits_service.VOICE_TRAINING_COST,
+        credits_charged=model.credits_charged,
     )
 
 
