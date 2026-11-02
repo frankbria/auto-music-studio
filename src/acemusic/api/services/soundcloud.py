@@ -422,6 +422,23 @@ def _as_utc(value: datetime) -> datetime:
 _TRACK_FIELDS = ("title", "genre", "description", "bpm", "key_signature", "isrc", "sharing")
 
 
+async def update_track_artwork(access_token: str, track_id: str, artwork: bytes) -> dict:
+    """Replace a track's artwork (``PUT /tracks/{id}`` with ``track[artwork_data]``) (#619)."""
+    try:
+        async with httpx.AsyncClient(timeout=_UPLOAD_TIMEOUT) as client:
+            resp = await client.put(
+                _track_url(track_id),
+                headers={"Authorization": f"OAuth {access_token}"},
+                files={"track[artwork_data]": ("artwork", artwork, "application/octet-stream")},
+            )
+            if resp.status_code in (404, 410):
+                raise SoundCloudTrackGone("The SoundCloud track no longer exists.")
+            resp.raise_for_status()
+            return resp.json()
+    except (httpx.HTTPError, ValueError) as exc:  # ValueError: a 2xx with a non-JSON body
+        raise SoundCloudError("Replacing the SoundCloud track artwork failed.") from exc
+
+
 async def upload_track(
     access_token: str,
     audio: bytes,

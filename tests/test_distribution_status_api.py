@@ -14,10 +14,11 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, NotificationEvent, Release, SoundCloudConnection, Workspace
+from acemusic.api.models import Clip, NotificationEvent, Release, SoundCloudConnection, VisibilityState, Workspace
 from acemusic.api.services import soundcloud as sc
 from acemusic.api.services.mastering import APPROVED_GENERATION_MODE
 from acemusic.api.settings import ApiSettings
+from acemusic.storage import get_storage_backend
 from tests.users import make_user
 
 RELEASES_URL = f"{API_V1_PREFIX}/releases"
@@ -303,3 +304,102 @@ class TestVisibility:
             headers=_auth_headers(intruder, settings),
         )
         assert resp.status_code == 404
+
+
+@pytest.fixture
+def local_storage(monkeypatch, tmp_path):
+    monkeypatch.setenv("ACEMUSIC_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ACEMUSIC_STORAGE_LOCAL_ROOT", str(tmp_path))
+    return get_storage_backend()
+
+
+@pytest.mark.integration
+class TestReshareAfterDroppedCover:
+    """#619: a track whose cover moderation dropped is not shared again until the song has a new cover."""
+
+    @pytest.fixture
+    def soundcloud_calls(self, monkeypatch) -> list[tuple]:
+        calls: list[tuple] = []
+
+        async def _sharing(access_token: str, track_id: str, sharing: str) -> dict:
+            calls.append(("sharing", track_id, sharing))
+            return {}
+
+        async def _artwork(access_token: str, track_id: str, artwork: bytes) -> dict:
+            calls.append(("artwork", track_id, artwork))
+            return {}
+
+        monkeypatch.setattr(sc, "update_track_sharing", _sharing)
+        monkeypatch.setattr(sc, "update_track_artwork", _artwork)
+        return calls
+
+    async def _stale_release(self, client, settings, email: str, artwork_path: str | None) -> tuple:
+        user = await make_user(email)
+        created = await _create_release(client, user, settings)
+        release = await Release.get(PydanticObjectId(created["id"]))
+        await release.set({"soundcloud_track_id": "789"})
+        await Clip.find_one(Clip.id == release.clip_id).update(
+            {"$set": {"artwork_path": artwork_path, "soundcloud_stale_artwork_track_ids": ["789"]}}
+        )
+        await SoundCloudConnection(
+            user_id=user.id,
+            soundcloud_user_id="sc-1",
+            access_token="tok",
+            refresh_token="ref",
+            token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ).insert()
+        return user, created
+
+    async def _share(self, client, settings, user, created, state: str = "public") -> httpx.Response:
+        return await client.patch(
+            f"{RELEASES_URL}/{created['id']}/visibility", json={"state": state}, headers=_auth_headers(user, settings)
+        )
+
+    async def test_sharing_without_a_new_cover_is_refused(self, client, settings, soundcloud_calls) -> None:
+        user, created = await self._stale_release(client, settings, "ds-619-refuse@example.com", None)
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 409
+        assert "Pick a new cover" in resp.json()["detail"]
+        assert (await Release.get(PydanticObjectId(created["id"]))).visibility == VisibilityState.PRIVATE
+        assert soundcloud_calls == []
+
+    async def test_making_it_unlisted_is_not_refused(self, client, settings, soundcloud_calls) -> None:
+        user, created = await self._stale_release(client, settings, "ds-619-unlisted@example.com", None)
+
+        resp = await self._share(client, settings, user, created, "unlisted")
+
+        assert resp.status_code == 200
+        assert soundcloud_calls == [("sharing", "789", "private")]
+
+    async def test_a_new_cover_replaces_the_tracks_artwork_before_sharing(
+        self, client, settings, soundcloud_calls, local_storage
+    ) -> None:
+        local_storage.upload("art/new-cover.png", b"new-cover")
+        user, created = await self._stale_release(client, settings, "ds-619-replace@example.com", "art/new-cover.png")
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 200
+        assert soundcloud_calls == [("artwork", "789", b"new-cover"), ("sharing", "789", "public")]
+        clip = await Clip.get(PydanticObjectId(created["clip_id"]))
+        assert clip.soundcloud_stale_artwork_track_ids == []
+
+    async def test_a_failed_artwork_replacement_keeps_the_track_private(
+        self, client, settings, soundcloud_calls, local_storage, monkeypatch
+    ) -> None:
+        local_storage.upload("art/new-cover.png", b"new-cover")
+        user, created = await self._stale_release(client, settings, "ds-619-fail@example.com", "art/new-cover.png")
+
+        async def _broken(access_token: str, track_id: str, artwork: bytes) -> dict:
+            raise sc.SoundCloudError("down")
+
+        monkeypatch.setattr(sc, "update_track_artwork", _broken)
+
+        resp = await self._share(client, settings, user, created)
+
+        assert resp.status_code == 200
+        assert soundcloud_calls == []
+        clip = await Clip.get(PydanticObjectId(created["clip_id"]))
+        assert clip.soundcloud_stale_artwork_track_ids == ["789"]

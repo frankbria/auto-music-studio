@@ -314,6 +314,7 @@ async def soundcloud_upload(
         # The cover this upload carried was dropped mid-upload (#569), and the drop queued before this track existed.
         # ponytail: an owner replacing their own cover in that window also lands here; the cost is one re-upload.
         await release_service.queue_track(clip.user_id, clip.id, str(track_id))
+        await Clip.find({"_id": clip.id}).update({"$addToSet": {"soundcloud_stale_artwork_track_ids": str(track_id)}})
     # A removal landing mid-upload (#538) ran before the track id was recorded, so it is queued again here.
     await release_service.unshare_if_source_removed(clip.id, current.user_id)
 

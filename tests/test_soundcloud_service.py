@@ -257,3 +257,28 @@ async def test_update_track_sharing_keeps_other_failures_retryable() -> None:
     with pytest.raises(sc.SoundCloudError) as exc:
         await sc.update_track_sharing("at", "t1", "private")
     assert not isinstance(exc.value, sc.SoundCloudTrackGone)
+
+
+@respx.mock
+async def test_update_track_artwork_puts_the_image_as_artwork_data() -> None:
+    route = respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/555").mock(return_value=httpx.Response(200, json={"id": 555}))
+    await sc.update_track_artwork("tok", "555", b"png-bytes")
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "OAuth tok"
+    assert b'name="track[artwork_data]"' in request.content
+    assert b"png-bytes" in request.content
+
+
+@respx.mock
+@pytest.mark.parametrize("code", [404, 410])
+async def test_update_track_artwork_reports_a_gone_track(code: int) -> None:
+    respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/555").mock(return_value=httpx.Response(code))
+    with pytest.raises(sc.SoundCloudTrackGone):
+        await sc.update_track_artwork("tok", "555", b"png")
+
+
+@respx.mock
+async def test_update_track_artwork_wraps_a_malformed_body() -> None:
+    respx.put(f"{sc.SOUNDCLOUD_UPLOAD_URL}/555").mock(return_value=httpx.Response(200, text="<html>"))
+    with pytest.raises(sc.SoundCloudError):
+        await sc.update_track_artwork("tok", "555", b"png")
