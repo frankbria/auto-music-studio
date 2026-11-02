@@ -5,18 +5,20 @@ share once per user per clip per day. Trending is plays + 3 x likes + 5 x shares
 Most Popular are all-time plays; staff picks are newest first. Plays and likes are public, shares admin-only.
 """
 
+import asyncio
 import itertools
 from datetime import timedelta
 
 import httpx
 import pytest
 from beanie import PydanticObjectId
+from pymongo.errors import ExecutionTimeout
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
 from acemusic.api.models import Clip, ClipEngagement, ModerationLogEntry, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
-from acemusic.api.services import engagement
+from acemusic.api.services import discovery, engagement
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
 
@@ -33,6 +35,14 @@ def settings(mongo_db, mongo_settings) -> ApiSettings:
     return mongo_settings.model_copy(
         update={"jwt_secret_key": "test-secret-key-at-least-32-bytes-long-xx", "job_processor_enabled": False}
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_trending():
+    """The trending ranking is cached per process; each test records its own engagement."""
+    discovery.clear_trending_cache()
+    yield
+    discovery.clear_trending_cache()
 
 
 @pytest.fixture
@@ -243,6 +253,59 @@ class TestTrending:
 
         assert [clip["id"] for clip in resp.json()["clips"]] == [str(public.id)]
         assert resp.json()["total"] is None
+
+    async def test_the_ranking_is_reused_for_a_minute_then_recomputed(self, client, monkeypatch) -> None:
+        first, second = await _clip(), await _clip()
+        await _engaged(first, "play")
+        assert await _ids(client, sort="trending_7d") == [str(first.id)]
+
+        for _ in range(3):
+            await _engaged(second, "play")
+        assert await _ids(client, sort="trending_7d") == [str(first.id)], "inside the minute, the cached ranking"
+
+        monkeypatch.setattr(discovery, "TRENDING_TTL_SECONDS", 0.0)
+        assert await _ids(client, sort="trending_7d") == [str(second.id), str(first.id)]
+
+    async def test_concurrent_requests_share_one_rebuild(self, client, monkeypatch) -> None:
+        await _engaged(await _clip(), "play")
+        real = discovery._rank_trending
+        rebuilds = 0
+
+        async def counted(sort: str):
+            nonlocal rebuilds
+            rebuilds += 1
+            await asyncio.sleep(0.05)
+            return await real(sort)
+
+        monkeypatch.setattr(discovery, "_rank_trending", counted)
+
+        await asyncio.gather(*(client.get(DISCOVER, params={"sort": "trending_7d"}) for _ in range(5)))
+
+        assert rebuilds == 1
+
+    async def test_a_timed_out_rebuild_keeps_serving_the_last_ranking(self, client, monkeypatch) -> None:
+        ranked = await _clip()
+        await _engaged(ranked, "play")
+        assert await _ids(client, sort="trending_7d") == [str(ranked.id)]
+
+        async def timed_out(sort: str):
+            raise ExecutionTimeout("operation exceeded time limit")
+
+        monkeypatch.setattr(discovery, "_rank_trending", timed_out)
+        monkeypatch.setattr(discovery, "TRENDING_TTL_SECONDS", 0.0)
+
+        assert await _ids(client, sort="trending_7d") == [str(ranked.id)]
+
+    async def test_a_ranked_clip_that_went_private_is_skipped(self, client) -> None:
+        hidden, shown = await _clip(), await _clip()
+        for _ in range(3):
+            await _engaged(hidden, "play")
+        await _engaged(shown, "play")
+        assert await _ids(client, sort="trending_7d") == [str(hidden.id), str(shown.id)]
+
+        await Clip.find_one(Clip.id == hidden.id).update({"$set": {"is_public": False, "visibility": "private"}})
+
+        assert await _ids(client, sort="trending_7d") == [str(shown.id)]
 
     async def test_trending_cannot_be_searched(self, client) -> None:
         resp = await client.get(DISCOVER, params={"sort": "trending_7d", "q": "song"})
