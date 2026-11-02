@@ -83,7 +83,8 @@ async def _make_clip(*, email: str = "art@example.com") -> Clip:
 class TestCreateArtworkJob:
     async def test_persists_queued_job_with_resolved_prompt(self, storage) -> None:
         clip = await _make_clip()
-        job = await artwork_service.create_artwork_job(clip=clip, style_prompt="custom prompt")
+        params = await artwork_service.artwork_job_params(clip=clip, style_prompt="custom prompt")
+        job = await artwork_service.create_artwork_job(clip=clip, params=params)
         assert job.job_type == ARTWORK_JOB_TYPE
         assert job.input_params["clip_id"] == str(clip.id)
         assert job.input_params["prompt"] == "custom prompt"

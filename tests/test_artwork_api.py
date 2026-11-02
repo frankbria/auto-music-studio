@@ -17,7 +17,7 @@ from PIL import Image
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import ArtworkOption, Clip, Job, JobStatus, Workspace
+from acemusic.api.models import ArtworkOption, Clip, Job, JobStatus, User, Workspace
 from acemusic.api.services.artwork import ARTWORK_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -118,6 +118,44 @@ class TestGenerate:
         job_id = resp.json()["job_id"]
         job = await Job.get(PydanticObjectId(job_id))
         assert job.job_type == ARTWORK_JOB_TYPE
+
+    async def test_generating_costs_three_credits(self, client, settings, local_storage) -> None:
+        """#693: four image calls per request, so it is charged like every other generative action."""
+        user = await make_user("art-charge@example.com")
+        clip = await _make_clip(user)
+        before = (await User.get(user.id)).credits_balance
+
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/artwork/generate", json={}, headers=_auth_headers(user, settings)
+        )
+
+        assert resp.status_code == 202, resp.text
+        assert (await User.get(user.id)).credits_balance == before - 3
+
+    async def test_too_few_credits_is_402_and_queues_nothing(self, client, settings, local_storage) -> None:
+        user = await make_user("art-broke@example.com", credits_balance=2.0, purchased_credits=0.0)
+        clip = await _make_clip(user)
+
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/artwork/generate", json={}, headers=_auth_headers(user, settings)
+        )
+
+        assert resp.status_code == 402
+        assert await Job.find({"job_type": ARTWORK_JOB_TYPE, "user_id": user.id}).count() == 0
+
+    async def test_a_blocked_prompt_charges_nothing(self, client, settings, local_storage) -> None:
+        user = await make_user("art-blocked@example.com")
+        clip = await _make_clip(user)
+        before = (await User.get(user.id)).credits_balance
+
+        resp = await client.post(
+            f"{CLIPS_URL}/{clip.id}/artwork/generate",
+            json={"style_prompt": "child porn"},
+            headers=_auth_headers(user, settings),
+        )
+
+        assert resp.status_code == 422
+        assert (await User.get(user.id)).credits_balance == before
 
     async def test_other_users_clip_returns_404(self, client, settings, local_storage) -> None:
         owner = await make_user("owner@example.com")
