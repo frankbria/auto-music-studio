@@ -209,11 +209,12 @@ class TestFiltersAndSorts:
         assert await _ids(client, q="lov") == []
 
     async def test_free_text_symbols_are_not_operators(self, client) -> None:
-        await _clip(title="Something")
+        something = await _clip(title="Something")
         for q in (".", "(", "[a-z]+", "$where", '"', '"night', "-anything"):
             resp = await client.get(CLIPS_URL, params={"q": q})
             assert resp.status_code == 200, (q, resp.text)
             assert resp.json()["clips"] == []
+        assert await _ids(client, q="--something") == [str(something.id)]
 
     async def test_relevance_ranks_title_then_tag_then_lyrics(self, client) -> None:
         lyrics = await _clip(title="Zzz", lyrics="glow", minutes=3)

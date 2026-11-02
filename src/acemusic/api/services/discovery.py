@@ -22,7 +22,7 @@ from .moderation import after_cursor, decode_cursor, encode_cursor
 DiscoverSort = Literal["newest", "relevance"]
 
 _NEWEST = [("created_at", -1), ("_id", -1)]
-_SEARCH_SYNTAX = re.compile(r'"|(?<!\S)-')
+_SEARCH_SYNTAX = re.compile(r'"|(?<!\S)-+')
 # A query past this answers 503 rather than holding a connection: the pool is public and unauthenticated.
 MAX_QUERY_MS = 3000
 FACETS_TTL_SECONDS = 45.0

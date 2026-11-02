@@ -297,7 +297,7 @@ async def hand_over_ban_sweep(user_id: PydanticObjectId, swept_with: datetime) -
     """Settle clips a ban's sweep took down after the ban stopped being the one in force (#581); returns the
     stamp now in force. Unbanned: put them back, which the unban, running first, found nothing of. Banned
     again: restamp them with that ban, whose unban then restores them."""
-    in_force = (await User.get(user_id)).banned_at
+    in_force = await settle_owner_stamp(user_id)
     if in_force == swept_with:
         return in_force
     if in_force is None:
@@ -307,6 +307,20 @@ async def hand_over_ban_sweep(user_id: PydanticObjectId, swept_with: datetime) -
             {"$set": {"removed_at": in_force}}
         )
     return in_force
+
+
+async def settle_owner_stamp(user_id: PydanticObjectId) -> datetime | None:
+    """Set ``owner_banned_at`` on every clip of theirs to their ban state now, and return that state (#655).
+
+    Every path that bans, unbans or takes down for a ban ends with this, so whichever runs last leaves the stamps
+    right; startup runs it too (``moderation.reconcile_owner_stamps``), which heals a process that died between.
+    """
+    owner = await User.get(user_id)
+    stamp = owner.banned_at if owner else None
+    await Clip.find({"user_id": user_id, "owner_banned_at": {"$ne": stamp}}).update(
+        {"$set": {"owner_banned_at": stamp}}
+    )
+    return stamp
 
 
 async def restore_ban_sweep(user_id: PydanticObjectId, banned_at: datetime) -> int:

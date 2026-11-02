@@ -99,7 +99,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def lifespan(app_: FastAPI):
         client = await database.init_db(settings)
         app_.state.mongo_client = client
-        await moderation_service.backfill_owner_banned_at()
+        await moderation_service.reconcile_owner_stamps()
         # Start the background job processor (US-9.2) once the DB is up. It polls
         # for queued jobs and runs them in-process; disable it (or run a
         # processor-less API) via ACEMUSIC_API_JOB_PROCESSOR_ENABLED=false. The

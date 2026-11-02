@@ -564,9 +564,8 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
     )
     releases = await release_service.unshare_releases({"user_id": user.id}, {"user_id": user.id})
     if (in_force := await clip_service.hand_over_ban_sweep(user.id, stamp)) != stamp:
-        # The ban's videos and its owner stamp follow its clips: back up, or onto the ban now in force.
+        # The ban's videos follow its clips: back up, or onto the ban now in force.
         await Video.find({"user_id": user.id, "removed_at": stamp}).update({"$set": {"removed_at": in_force}})
-        await Clip.find({"user_id": user.id, "owner_banned_at": stamp}).update({"$set": {"owner_banned_at": in_force}})
     return {"clips_removed": clips_removed, "videos_unpublished": videos.modified_count, **releases}
 
 
@@ -595,8 +594,9 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         raise
     if not lifted.modified_count:
         return "This account is not banned."
-    # Only once the ban is lifted (#655): a cancellation before here must leave the clips out of public listings.
-    await Clip.find({"user_id": user.id, "owner_banned_at": banned_at}).update({"$set": {"owner_banned_at": None}})
+    # Only once the ban is lifted (#655): a cancellation before here leaves the clips out of public listings, and
+    # the next startup's reconcile clears them.
+    await clip_service.settle_owner_stamp(user.id)
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
 
 
@@ -678,18 +678,16 @@ async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]
     return await unpublishes_in_force(_unpublished_video_ids(entries))
 
 
-async def backfill_owner_banned_at() -> int:
-    """Stamp the clips of accounts banned before ``Clip.owner_banned_at`` existed (#655); idempotent, run at startup.
+async def reconcile_owner_stamps() -> None:
+    """Settle the owner stamp of every account whose clips could disagree with it (#655); run at startup.
 
-    Returns how many clips it stamped. Banned accounts are few, so this is one update per banned user.
+    Covers accounts banned before ``Clip.owner_banned_at`` existed, and a ban or unban whose process died before
+    its own settle. Banned accounts are few, so this is one update per account.
     """
-    stamped = 0
-    for user in await User.find({"banned_at": {"$type": "date"}}).to_list():
-        result = await Clip.find({"user_id": user.id, "owner_banned_at": None}).update(
-            {"$set": {"owner_banned_at": user.banned_at}}
-        )
-        stamped += result.modified_count
-    return stamped
+    banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
+    stamped = await Clip.find({"owner_banned_at": {"$ne": None}}).distinct("user_id")
+    for user_id in {*banned, *stamped}:
+        await clip_service.settle_owner_stamp(user_id)
 
 
 async def unpublish_in_force_at(video_id: PydanticObjectId) -> datetime | None:

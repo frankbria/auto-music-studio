@@ -763,17 +763,21 @@ class TestUnban:
 
         assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {None}
 
-    async def test_clips_of_an_account_banned_before_the_stamp_are_backfilled(self, client, settings):
+    async def test_startup_reconcile_settles_stamps_both_ways(self, client, settings):
+        """#655: an account banned before the stamp existed gets it; an unbanned account's stale stamp is cleared."""
         stamp = utcnow()
-        owner = await _user(banned_at=stamp)
-        clip = await _clip(owner)
-        other = await _clip(await _user())
+        banned = await _user(banned_at=stamp)
+        unstamped = await _clip(banned)
+        unbanned = await _user()
+        stale = await _clip(unbanned, owner_banned_at=stamp)
+        bystander = await _clip(await _user())
 
-        assert await moderation.backfill_owner_banned_at() == 1
-        assert await moderation.backfill_owner_banned_at() == 0
+        await moderation.reconcile_owner_stamps()
+        await moderation.reconcile_owner_stamps()
 
-        assert (await Clip.get(clip.id)).owner_banned_at == (await User.get(owner.id)).banned_at
-        assert (await Clip.get(other.id)).owner_banned_at is None
+        assert (await Clip.get(unstamped.id)).owner_banned_at == (await User.get(banned.id)).banned_at
+        assert (await Clip.get(stale.id)).owner_banned_at is None
+        assert (await Clip.get(bystander.id)).owner_banned_at is None
 
     async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
         admin, user = await _admin(), await _user()
