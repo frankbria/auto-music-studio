@@ -55,6 +55,7 @@ from acemusic.storage import StorageBackend
 
 from ..models import Job, VoiceModel, VoiceModelStatus
 from ..services import voice_models as voice_service
+from .common import failure_message
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,7 @@ async def process_voice_training_job(
         await model.set({"status": VoiceModelStatus.QUEUED})
         raise
     except Exception as exc:
-        reason = str(exc) or exc.__class__.__name__
+        reason = failure_message("voice_training", exc)
         try:
             await voice_service.fail_training(model, reason)
             await voice_service.notify_training_finished(model, succeeded=False)

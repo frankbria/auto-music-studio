@@ -317,7 +317,8 @@ class TestLifecycle:
 
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
-        assert refreshed.error == "model overloaded"
+        assert refreshed.error_detail == "model overloaded"
+        assert refreshed.error.startswith("This track didn't finish. Any credits it used were refunded.")
         assert await Clip.find(Clip.user_id == job.user_id).to_list() == []
 
     async def test_completed_without_audio_marks_failed(self, mongo_db, tmp_path) -> None:
@@ -334,7 +335,7 @@ class TestLifecycle:
 
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
-        assert "no audio" in (refreshed.error or "").lower()
+        assert "no audio" in (refreshed.error_detail or "").lower()
 
     async def test_partial_failure_rolls_back_stored_clips(self, mongo_db, tmp_path) -> None:
         # Second download fails after the first clip is already stored — the job
@@ -426,7 +427,8 @@ class TestRemoteRunPod:
 
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
-        assert refreshed.error == "GPU OOM on worker"
+        assert refreshed.error_detail == "GPU OOM on worker"
+        assert "GPU" not in refreshed.error, "an operator's text never reaches the musician (#339)"
 
     async def test_remote_timeout_surfaces_error(self, mongo_db, tmp_path) -> None:
         storage = LocalStorage(root_dir=tmp_path)
@@ -443,7 +445,7 @@ class TestRemoteRunPod:
 
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
-        assert "timed out" in (refreshed.error or "").lower()
+        assert "timed out" in (refreshed.error_detail or "").lower()
 
     async def test_remote_job_without_factory_fails_clearly(self, mongo_db, tmp_path) -> None:
         storage = LocalStorage(root_dir=tmp_path)
@@ -459,7 +461,8 @@ class TestRemoteRunPod:
 
         refreshed = await Job.get(job.id)
         assert refreshed.status == JobStatus.FAILED
-        assert "runpod is not configured" in (refreshed.error or "").lower()
+        assert "runpod is not configured" in (refreshed.error_detail or "").lower()
+        assert "RUNPOD" not in refreshed.error.upper()
 
     async def test_local_job_still_uses_ace_step(self, mongo_db, tmp_path) -> None:
         # A job with compute_target="local" must ignore the configured RunPod client.
@@ -686,7 +689,11 @@ class TestHandlerRegistry:
 
         assert done, "failing handler did not mark the job failed"
         refreshed = await Job.get(job.id)
-        assert refreshed.error == "edit boom"
+        assert refreshed.error_detail == "edit boom"
+        assert refreshed.error == (
+            "This didn't finish. Any credits it used were refunded. Try again in a few minutes. "
+            "If it keeps happening, contact support."
+        )
 
     async def test_stale_requeue_covers_all_registered_types(self, mongo_db, tmp_path) -> None:
         from acemusic.api.models.common import utcnow

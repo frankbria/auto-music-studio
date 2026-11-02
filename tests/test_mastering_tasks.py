@@ -332,7 +332,7 @@ class TestGracefulDegradation:
         cost = credits_service.get_mastering_cost("landr")
         before = await credits_service.deduct_credits(job.user_id, cost)
 
-        with pytest.raises(tasks.JobProcessingError, match="not configured"):
+        with pytest.raises(tasks.JobProcessingError, match="isn.t available right now"):
             await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
 
         user = await user_service.get_user_by_id(str(job.user_id))
@@ -350,7 +350,7 @@ class TestGracefulDegradation:
         cost = credits_service.get_mastering_cost("bakuage")
         before = await credits_service.deduct_credits(job.user_id, cost)
 
-        with pytest.raises(tasks.JobProcessingError, match="not configured"):
+        with pytest.raises(tasks.JobProcessingError, match="isn.t available right now"):
             await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
 
         assert dolby.master_calls == []
@@ -364,7 +364,7 @@ class TestGracefulDegradation:
         cost = credits_service.get_mastering_cost("dolby")
         before = await credits_service.deduct_credits(job.user_id, cost)
 
-        with pytest.raises(tasks.JobProcessingError, match="not configured"):
+        with pytest.raises(tasks.JobProcessingError, match="isn.t available right now"):
             await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
 
         user = await user_service.get_user_by_id(str(job.user_id))

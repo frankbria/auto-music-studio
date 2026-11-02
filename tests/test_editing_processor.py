@@ -296,7 +296,8 @@ class TestEditFailures:
         finished = await _run_to_terminal(storage, job)
 
         assert finished.status == JobStatus.FAILED
-        assert str(ghost_id) in (finished.error or "")
+        assert str(ghost_id) in (finished.error_detail or "")
+        assert str(ghost_id) not in finished.error, "an internal id never reaches the musician (#339)"
         assert await Clip.count() == 0
         assert _storage_files(storage) == set()
 

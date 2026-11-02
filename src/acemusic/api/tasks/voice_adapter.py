@@ -42,7 +42,7 @@ import httpx
 
 from ..models import Job
 from ..services import voice_models as voice_service
-from .common import JobProcessingError
+from .common import UserFacingJobError
 
 logger = logging.getLogger(__name__)
 
@@ -179,4 +179,4 @@ async def resolve_weights(job: Job) -> str | None:
     try:
         return await voice_service.weights_for(str(voice_model_id), str(job.user_id))
     except (voice_service.VoiceModelNotFoundError, voice_service.VoiceModelNotReadyError) as exc:
-        raise JobProcessingError(str(exc)) from exc
+        raise UserFacingJobError(str(exc)) from exc

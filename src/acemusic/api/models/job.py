@@ -39,7 +39,10 @@ class Job(Document):
     status: JobStatus = JobStatus.QUEUED
     input_params: dict = Field(default_factory=dict)
     result: dict | None = None
+    #: What the musician is told when the job fails (#339): guidance, never an exception's text.
     error: str | None = None
+    #: The failure's own text, for operators and the log; never sent to the job's owner (#339).
+    error_detail: str | None = None
     # Human-readable progress for long, multi-step jobs (US-10.4 full-song writes
     # "Processing section N of M" per section). None for single-step jobs.
     progress: str | None = None
