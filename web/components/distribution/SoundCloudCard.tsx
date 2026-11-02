@@ -33,10 +33,7 @@ type Message = { tone: "error" | "success"; text: string } | null
 /** First letters of the username, for the placeholder avatar (no avatar_url from backend). */
 function initials(username: string | null): string {
   if (!username) return "SC"
-  const parts = username
-    .trim()
-    .split(/[\s_-]+/)
-    .filter(Boolean)
+  const parts = username.trim().split(/[\s_-]+/).filter(Boolean)
   const chars = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")
   return (chars || username.slice(0, 2)).toUpperCase()
 }
@@ -109,12 +106,7 @@ export function SoundCloudCard() {
       setMessage({ tone: "error", text: res.detail })
       return
     }
-    setStatus({
-      connected: false,
-      username: null,
-      connectedAt: null,
-      tokenValid: null,
-    })
+    setStatus({ connected: false, username: null, connectedAt: null, tokenValid: null })
     setMessage({ tone: "success", text: "SoundCloud disconnected." })
   }
 
@@ -123,15 +115,8 @@ export function SoundCloudCard() {
   return (
     <div className="flex flex-col gap-3">
       {phase === "loading" ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <HugeiconsIcon
-            icon={Loading03Icon}
-            size={16}
-            className="animate-spin"
-          />
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <HugeiconsIcon icon={Loading03Icon} size={16} className="animate-spin" />
           Checking SoundCloud connection…
         </p>
       ) : phase === "error" ? (
@@ -168,10 +153,7 @@ export function SoundCloudCard() {
                 size={13}
                 className="text-emerald-700 dark:text-emerald-400"
               />
-              Connected
-              {status?.connectedAt
-                ? ` · ${formatDate(status.connectedAt)}`
-                : ""}
+              Connected{status?.connectedAt ? ` · ${formatDate(status.connectedAt)}` : ""}
               {status?.tokenValid === false ? " · reauthorize to publish" : ""}
             </p>
           </div>
@@ -187,17 +169,12 @@ export function SoundCloudCard() {
       ) : (
         <div className="flex flex-col items-start gap-3">
           <p className="text-sm text-muted-foreground">
-            Connect your SoundCloud account to publish masters in a single
-            click.
+            Connect your SoundCloud account to publish masters in a single click.
           </p>
           <Button size="sm" disabled={busy} onClick={handleConnect}>
             {busy ? (
               <>
-                <HugeiconsIcon
-                  icon={Loading03Icon}
-                  size={16}
-                  className="animate-spin"
-                />
+                <HugeiconsIcon icon={Loading03Icon} size={16} className="animate-spin" />
                 Connecting…
               </>
             ) : (
@@ -217,9 +194,7 @@ export function SoundCloudCard() {
           }
         >
           <HugeiconsIcon
-            icon={
-              message.tone === "error" ? Alert01Icon : CheckmarkCircle01Icon
-            }
+            icon={message.tone === "error" ? Alert01Icon : CheckmarkCircle01Icon}
             size={14}
           />
           {message.text}
@@ -231,24 +206,15 @@ export function SoundCloudCard() {
           <DialogHeader>
             <DialogTitle>Disconnect SoundCloud?</DialogTitle>
             <DialogDescription>
-              You&apos;ll need to reconnect before you can publish to SoundCloud
-              again.
+              You&apos;ll need to reconnect before you can publish to SoundCloud again.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setConfirmOpen(false)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={busy}>
               <HugeiconsIcon icon={Cancel01Icon} size={16} />
               Keep connected
             </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDisconnect}
-              disabled={busy}
-            >
+            <Button variant="destructive" onClick={handleDisconnect} disabled={busy}>
               Disconnect
             </Button>
           </DialogFooter>
@@ -263,9 +229,5 @@ function formatDate(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime())
     ? ""
-    : d.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      })
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
 }

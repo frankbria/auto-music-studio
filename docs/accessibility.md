@@ -11,7 +11,7 @@ Target: WCAG 2.1 AA. How it is checked, and where the app stood on 2026-11-02.
 
 Usage is in the script's header.
 
-On staging at `1958ff1`, axe found **no critical violations** on any page. The serious ones it found were fixed in
+axe only sees the states a page renders, so status colours were checked by hand too. On staging at `1958ff1`, axe found **no critical violations** on any page. The serious ones it found were fixed in
 the PR that added this file:
 
 | Rule | Where | Fix |
@@ -19,6 +19,7 @@ the PR that added this file:
 | `color-contrast` | Every tab bar (Create, Studio, Release): inactive tab text 4.34:1 on the tab background | Inactive tabs use `foreground/70` |
 | `color-contrast` | Search's "Coming soon" filter placeholders, dimmed to 1.96:1 with `opacity-50` | Muted text without the opacity |
 | `color-contrast` | Green status text (`emerald-500`, 2.47:1) on Release, mastering and SoundCloud | `emerald-700` (`emerald-400` in dark mode) |
+| `color-contrast` (by inspection) | The other status tones (`sky`, `amber`, `violet`-500), which staging had no releases or jobs to show | The same: 700 in light mode, 400 in dark |
 | `label-content-name-mismatch` | Model selector named "Select model" while showing the model | "Select model: <model>" |
 | `label-content-name-mismatch` | Workspace clip card: thumbnail "Play" showing a duration; title button "Edit title" showing the title | "Play <title>" with the duration hidden from assistive tech; "Edit title: <title>" |
 | `label-content-name-mismatch` | Pagination: "Prev" named "Previous page" | Visible text "Previous" |

@@ -127,9 +127,7 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                     />
                     <span>
                       <span className="font-medium">{c.item}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {c.message}
-                      </span>
+                      <span className="block text-xs text-muted-foreground">{c.message}</span>
                     </span>
                   </li>
                 ))}
@@ -142,21 +140,14 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                   </pre>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Button asChild variant="outline" size="sm">
-                      <a
-                        href={pkg.bundleUrl!}
-                        download={`${target}-release-package.json`}
-                      >
+                      <a href={pkg.bundleUrl!} download={`${target}-release-package.json`}>
                         <HugeiconsIcon icon={Download04Icon} size={16} />
                         Download package
                       </a>
                     </Button>
                     {info.portalUrl && (
                       <Button asChild size="sm">
-                        <a
-                          href={info.portalUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                        <a href={info.portalUrl} target="_blank" rel="noopener noreferrer">
                           <HugeiconsIcon icon={LinkSquare02Icon} size={16} />
                           Open {info.label}
                         </a>

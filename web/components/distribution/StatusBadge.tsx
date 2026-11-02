@@ -23,18 +23,10 @@ type StatusMeta = { icon: IconSvgElement; label: string; tone: string }
 // destructive for rejected.
 const STATUS_META: Record<DistributionStatus, StatusMeta> = {
   draft: { icon: Edit02Icon, label: "Draft", tone: "text-muted-foreground" },
-  ready: { icon: Tick02Icon, label: "Ready", tone: "text-sky-500" },
-  submitted: {
-    icon: Upload04Icon,
-    label: "Submitted",
-    tone: "text-violet-500",
-  },
-  in_review: { icon: Clock01Icon, label: "In Review", tone: "text-amber-500" },
-  live: {
-    icon: Globe02Icon,
-    label: "Live",
-    tone: "text-emerald-700 dark:text-emerald-400",
-  },
+  ready: { icon: Tick02Icon, label: "Ready", tone: "text-sky-700 dark:text-sky-400" },
+  submitted: { icon: Upload04Icon, label: "Submitted", tone: "text-violet-700 dark:text-violet-400" },
+  in_review: { icon: Clock01Icon, label: "In Review", tone: "text-amber-700 dark:text-amber-400" },
+  live: { icon: Globe02Icon, label: "Live", tone: "text-emerald-700 dark:text-emerald-400" },
   rejected: { icon: Cancel01Icon, label: "Rejected", tone: "text-destructive" },
 }
 
@@ -51,16 +43,9 @@ export function StatusBadge({
   channel?: string
 }) {
   const meta = STATUS_META[status]
-  const label = channel
-    ? `${channelLabel(channel)} · ${meta.label}`
-    : meta.label
+  const label = channel ? `${channelLabel(channel)} · ${meta.label}` : meta.label
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-xs font-medium",
-        meta.tone
-      )}
-    >
+    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", meta.tone)}>
       <HugeiconsIcon icon={meta.icon} size={14} />
       {label}
     </span>
