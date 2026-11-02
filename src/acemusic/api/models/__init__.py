@@ -13,6 +13,7 @@ from .clip_report import ClipReport, ReportCategory
 from .counter import Counter
 from .credit_transaction import CreditTransaction
 from .distribution import DistributionStatus, VisibilityState
+from .feature_flag import FeatureFlagSetting
 from .job import Job, JobStatus
 from .moderation_log import ModerationLogEntry
 from .notification_event import NotificationEvent
@@ -52,6 +53,7 @@ ALL_MODELS = [
     ModerationLogEntry,
     ClipAppeal,
     ClipEngagement,
+    FeatureFlagSetting,
 ]
 
 __all__ = [
@@ -63,6 +65,7 @@ __all__ = [
     "Clip",
     "ClipReport",
     "ClipEngagement",
+    "FeatureFlagSetting",
     "EngagementKind",
     "ReportCategory",
     "ModerationLogEntry",

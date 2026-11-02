@@ -54,6 +54,8 @@ class User(Document):
     subscription_tier: str = "free"
     #: US-27.1: may edit platform-wide settings such as content-screening rules. Granted in the database only.
     is_admin: bool = False
+    #: US-28.5 (#342): the experimental features this user has switched on in /labs (``services/feature_flags``).
+    labs_opt_ins: list[str] = Field(default_factory=list)
     #: US-27.3: suspended by an admin. Refused at sign-in, refresh, plugin-token and every endpoint that loads
     #: the account (require_existing_user / require_admin); a live access token lasts until expiry elsewhere.
     banned_at: datetime | None = None

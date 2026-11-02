@@ -126,6 +126,11 @@ function AccountMenuItems() {
           <Link href="/admin/moderation">Moderation</Link>
         </DropdownMenuItem>
       )}
+      {isAdmin && (
+        <DropdownMenuItem asChild>
+          <Link href="/admin/feature-flags">Feature flags</Link>
+        </DropdownMenuItem>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
         Log out
