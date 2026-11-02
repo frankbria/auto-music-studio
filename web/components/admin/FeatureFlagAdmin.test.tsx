@@ -43,6 +43,27 @@ describe("FeatureFlagAdmin (#342)", () => {
     expect(fetchMock.mock.calls[1][1].method).toBe("PUT")
   })
 
+  it("locks the panel while a change is in flight, so a second click can't race it", async () => {
+    let answer: (response: Response) => void = () => {}
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(flags())))
+      .mockReturnValueOnce(new Promise<Response>((r) => (answer = r)))
+    vi.stubGlobal("fetch", fetchMock)
+    render(<FeatureFlagAdmin token="tok" />)
+
+    const everyone = await screen.findByRole("switch", { name: "Everyone" })
+    await userEvent.click(everyone)
+    await waitFor(() => expect(everyone).toBeDisabled())
+    expect(screen.getByRole("button", { name: "Grant" })).toBeDisabled()
+    await userEvent.click(everyone)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    answer(new Response(JSON.stringify(flags(true))))
+    await waitFor(() => expect(everyone).toBeEnabled())
+    expect(everyone).toBeChecked()
+  })
+
   it("grants one user by email, and removes them", async () => {
     const granted = [{ id: "u1", email: "fan@example.com" }]
     const fetchMock = vi

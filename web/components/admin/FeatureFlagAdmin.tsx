@@ -22,6 +22,8 @@ export function FeatureFlagAdmin({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null)
   const [emails, setEmails] = useState<Record<string, string>>({})
   const [grantErrors, setGrantErrors] = useState<Record<string, string>>({})
+  // Every response carries every flag, so one change at a time: a slower response can't land last and undo a newer one.
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -34,16 +36,20 @@ export function FeatureFlagAdmin({ token }: { token: string }) {
     }
   }, [token])
 
-  const run = (key: string, change: Promise<FeatureFlag[]>) =>
-    change.then(
-      (next) => {
-        setFlags(next)
-        setGrantErrors((errors) => ({ ...errors, [key]: "" }))
-        setEmails((current) => ({ ...current, [key]: "" }))
-      },
-      (e: Error) =>
-        setGrantErrors((errors) => ({ ...errors, [key]: e.message }))
-    )
+  const run = (key: string, change: Promise<FeatureFlag[]>) => {
+    setSaving(true)
+    change
+      .then(
+        (next) => {
+          setFlags(next)
+          setGrantErrors((errors) => ({ ...errors, [key]: "" }))
+          setEmails((current) => ({ ...current, [key]: "" }))
+        },
+        (e: Error) =>
+          setGrantErrors((errors) => ({ ...errors, [key]: e.message }))
+      )
+      .finally(() => setSaving(false))
+  }
 
   if (error) {
     return (
@@ -85,6 +91,7 @@ export function FeatureFlagAdmin({ token }: { token: string }) {
                 <Switch
                   id={everyoneId}
                   checked={flag.enabled_for_everyone}
+                  disabled={saving}
                   onCheckedChange={(on) =>
                     run(flag.key, rollOutToEveryone(flag.key, on, token))
                   }
@@ -110,6 +117,7 @@ export function FeatureFlagAdmin({ token }: { token: string }) {
                     variant="ghost"
                     size="sm"
                     aria-label={`Remove ${user.email ?? user.id} from ${flag.name}`}
+                    disabled={saving}
                     onClick={() =>
                       user.email &&
                       run(
@@ -157,7 +165,7 @@ export function FeatureFlagAdmin({ token }: { token: string }) {
                   message={grantErrors[flag.key]}
                 />
               </div>
-              <Button type="submit" variant="outline">
+              <Button type="submit" variant="outline" disabled={saving}>
                 Grant
               </Button>
             </form>
