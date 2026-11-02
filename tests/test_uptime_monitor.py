@@ -3,6 +3,7 @@
 ``curl`` is stubbed on PATH: health checks succeed or fail by a flag file, and webhook posts are recorded.
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -17,10 +18,13 @@ def rig(tmp_path: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     posts = tmp_path / "posts.log"
+    bodies = tmp_path / "bodies.log"
     down = tmp_path / "down"
     (bin_dir / "curl").write_text(f"""#!/bin/sh
 case "$*" in
-  *"-X POST"*) echo "$*" >> {posts}; exit 0 ;;
+  *"-X POST"*) echo "$*" >> {posts}
+    while [ $# -gt 0 ]; do [ "$1" = --data ] && printf '%s\\n' "$2" >> {bodies}; shift; done
+    exit 0 ;;
 esac
 [ -f {down} ] && exit 7
 exit 0
@@ -44,6 +48,8 @@ exit 0
     def alerts() -> list[str]:
         return posts.read_text().splitlines() if posts.exists() else []
 
+    run.bodies = bodies
+    run.state = tmp_path / "state" / "uptime"
     return run, alerts, down
 
 
@@ -108,3 +114,25 @@ def test_it_refuses_to_run_unconfigured(rig) -> None:
 
     assert result.returncode != 0
     assert "ALERT_WEBHOOK_URL" in result.stderr
+
+
+def test_the_alert_is_valid_json_whatever_the_url_holds(rig) -> None:
+    run, _, down = rig
+    down.touch()
+    url = 'https://example.com/a"b\\c'
+    for _ in range(3):
+        run(HEALTH_URL=url)
+
+    [body] = run.bodies.read_text().splitlines()
+    assert json.loads(body)["text"] == f"Down: {url} has failed 3 checks in a row."
+
+
+def test_a_damaged_state_file_starts_the_count_again(rig) -> None:
+    run, alerts, down = rig
+    run.state.parent.mkdir()
+    run.state.write_text("garbage here\n")
+    down.touch()
+
+    assert run().returncode == 0
+    assert run.state.read_text() == "1 0\n"
+    assert alerts() == []

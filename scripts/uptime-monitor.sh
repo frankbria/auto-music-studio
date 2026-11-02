@@ -21,13 +21,17 @@ CHECK_TIMEOUT="${CHECK_TIMEOUT:-10}"
 failures=0
 alerted=0
 [[ -f "$STATE_FILE" ]] && read -r failures alerted < "$STATE_FILE" || true
+# A damaged state file starts the count again rather than stopping the monitor.
+[[ "$failures" =~ ^[0-9]+$ && "$alerted" =~ ^[01]$ ]] || { failures=0; alerted=0; }
 
 alert() {
-  local message="$1" body content_type="application/json"
+  local message="$1" body content_type="application/json" escaped
+  escaped=${message//\\/\\\\}
+  escaped=${escaped//\"/\\\"}
   case "$ALERT_FORMAT" in
-    discord) body=$(printf '{"content": "%s"}' "$message") ;;
+    discord) body=$(printf '{"content": "%s"}' "$escaped") ;;
     ntfy) body="$message" content_type="text/plain" ;;
-    *) body=$(printf '{"text": "%s"}' "$message") ;;
+    *) body=$(printf '{"text": "%s"}' "$escaped") ;;
   esac
   # A failed alert is retried on the next run: the state below is only written once it went out.
   curl -fsS --max-time "$CHECK_TIMEOUT" -X POST -H "Content-Type: $content_type" --data "$body" "$ALERT_WEBHOOK_URL" >/dev/null
