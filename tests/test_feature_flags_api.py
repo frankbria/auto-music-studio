@@ -109,6 +109,10 @@ async def test_revoking_turns_it_off_even_for_a_user_who_switched_it_on(client, 
     assert (revoked["available"], revoked["enabled"]) == (False, False)
     assert not await feature_flags.is_enabled(await User.get(user.id), "real_time_generation")
 
+    await client.put(f"{FLAGS}/real_time_generation/users/{user.email}", headers=_auth(admin, settings))
+    regranted = _by_key(await client.get(LABS, headers=_auth(user, settings)))["real_time_generation"]
+    assert regranted["enabled"], "the user's own switch outlives a revoke, so a re-grant turns it back on"
+
 
 async def test_only_admins_roll_out_and_every_change_is_logged(client, settings) -> None:
     admin = await make_user("labs-admin4@example.com", is_admin=True)
@@ -116,11 +120,13 @@ async def test_only_admins_roll_out_and_every_change_is_logged(client, settings)
 
     refused = await client.put(f"{FLAGS}/ai_arrangement", json={"enabled": True}, headers=_auth(user, settings))
     unknown = await client.put(f"{FLAGS}/ai_arrangement/users/nobody@example.com", headers=_auth(admin, settings))
+    no_such_flag = await client.put(f"{FLAGS}/time_travel", json={"enabled": True}, headers=_auth(admin, settings))
     await client.put(f"{FLAGS}/ai_arrangement", json={"enabled": True}, headers=_auth(admin, settings))
     await client.put(f"{FLAGS}/ai_arrangement/users/{user.email}", headers=_auth(admin, settings))
 
     assert refused.status_code == 403
     assert unknown.status_code == 404
+    assert no_such_flag.status_code == 404
     log = await ModerationLogEntry.find(ModerationLogEntry.target_type == "feature_flag").sort("created_at").to_list()
     assert [(e.action, e.target_id) for e in log] == [
         ("feature_flag_everyone", "ai_arrangement"),
