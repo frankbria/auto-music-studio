@@ -167,9 +167,19 @@ def _current_period_end(subscription: dict[str, Any]) -> int | None:
 
 
 def _invoice_period_end(invoice: dict[str, Any]) -> int | None:
-    """The latest period end among an invoice's lines: the end of the period it paid for."""
+    """The latest period end among the lines an invoice charged for: the end of the period it paid for.
+
+    Proration and credit lines are skipped: on an annual-to-monthly switch the credit for unused annual time keeps the
+    old annual end, which would otherwise win.
+    """
     lines = (invoice.get("lines") or {}).get("data") or []
-    return max((line["period"]["end"] for line in lines if (line.get("period") or {}).get("end")), default=None)
+    return max((line["period"]["end"] for line in lines if _is_period_charge(line)), default=None)
+
+
+def _is_period_charge(line: dict[str, Any]) -> bool:
+    item = ((line.get("parent") or {}).get("subscription_item_details")) or {}
+    prorated = line.get("proration") or item.get("proration")
+    return bool((line.get("period") or {}).get("end")) and not prorated and (line.get("amount") or 0) >= 0
 
 
 def invoice_subscription_id(invoice: dict[str, Any]) -> str | None:
@@ -800,7 +810,8 @@ async def _handle_invoice(
     # The paid period is the one a checkout started, and no subscription event carries it then (#705). $max, so an
     # invoice for an earlier period never moves the renewal date back.
     paid_until = _timestamp(_invoice_period_end(invoice))
-    if paid_until:
+    # Not for a subscription that has since ended; an invoice may still land before its checkout links one.
+    if paid_until and (tiers.is_paid(user.subscription_tier) or not user.stripe_subscription_id):
         await User.get_pymongo_collection().update_one(
             {"_id": user.id}, {"$max": {"subscription_current_period_end": paid_until}}
         )
