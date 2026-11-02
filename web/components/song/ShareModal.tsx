@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useContext, useEffect, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   CheckmarkCircle01Icon,
@@ -10,6 +10,8 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { AuthContext } from "@/contexts/auth-context"
+import { reportEngagement } from "@/lib/engagement"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -33,14 +35,26 @@ export type ShareModalProps = {
 
 /** Public share URL for a clip: `{origin}/song/{clipId}`. */
 export function shareUrlForClip(clipId: string): string {
-  const origin =
-    typeof window !== "undefined" ? window.location.origin : ""
+  const origin = typeof window !== "undefined" ? window.location.origin : ""
   return `${origin}/song/${encodeURIComponent(clipId)}`
 }
 
-export function ShareModal({ open, clipId, clipTitle, onClose }: ShareModalProps) {
+export function ShareModal({
+  open,
+  clipId,
+  clipTitle,
+  onClose,
+}: ShareModalProps) {
   const [copied, setCopied] = useState(false)
   const url = shareUrlForClip(clipId)
+  const token = useContext(AuthContext)?.accessToken ?? null
+
+  // A Share click is a share (#656): every clip's Share button opens this dialog. The server counts it once a day.
+  useEffect(() => {
+    if (open) void reportEngagement(clipId, "share", token)
+    // Keyed on opening, not on a token refresh while it is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, clipId])
   const title = clipTitle ?? "Untitled clip"
 
   async function copyLink() {
@@ -106,12 +120,7 @@ export function ShareModal({ open, clipId, clipTitle, onClose }: ShareModalProps
 
         <div className="flex flex-wrap gap-2">
           {shareIntents.map((intent) => (
-            <Button
-              key={intent.label}
-              asChild
-              variant="outline"
-              size="sm"
-            >
+            <Button key={intent.label} asChild variant="outline" size="sm">
               <a href={intent.href} target="_blank" rel="noopener noreferrer">
                 <HugeiconsIcon icon={intent.icon} size={16} />
                 {intent.label}

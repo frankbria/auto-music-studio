@@ -5,14 +5,13 @@ import { FavouriteIcon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { usePlayer } from "@/contexts/player-context"
+import { useLikeToggle } from "@/hooks/use-like-toggle"
 import { cn } from "@/lib/utils"
 
-/**
- * Heart toggle for the current track. ponytail: local state only (player store
- * + localStorage); no backend like endpoint exists yet.
- */
+/** Heart toggle for the current track; saved on the server when signed in (#656). */
 export function LikeButton() {
-  const { state, dispatch } = usePlayer()
+  const { state } = usePlayer()
+  const toggleLike = useLikeToggle()
   const id = state.current?.id
   const liked = id ? state.likedIds.includes(id) : false
 
@@ -23,7 +22,7 @@ export function LikeButton() {
       aria-label={liked ? "Unlike" : "Like"}
       aria-pressed={liked}
       disabled={!id}
-      onClick={() => id && dispatch({ type: "like/toggle", id })}
+      onClick={() => id && toggleLike(id)}
       className={cn(
         "transition-transform active:scale-125",
         liked && "text-primary"

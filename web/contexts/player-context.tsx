@@ -85,6 +85,10 @@ export type PlayerAction =
   | { type: "repeat/cycle" }
   | { type: "shuffle/toggle" }
   | { type: "like/toggle"; id: string }
+  /** #656: put a like back as the server has it (a failed save is undone with this). */
+  | { type: "like/set"; id: string; liked: boolean }
+  /** #656: the clips a signed-in viewer liked on the server, as a page of them loads. */
+  | { type: "likes/seed"; ids: string[] }
   | { type: "dislike/toggle"; id: string }
 
 const clampVolume = (v: number) => Math.min(1, Math.max(0, v))
@@ -284,6 +288,28 @@ export function playerReducer(
         dislikedIds: liking
           ? state.dislikedIds.filter((id) => id !== action.id)
           : state.dislikedIds,
+      }
+    }
+    case "like/set": {
+      if (state.likedIds.includes(action.id) === action.liked) return state
+      return action.liked
+        ? {
+            ...state,
+            likedIds: [...state.likedIds, action.id],
+            dislikedIds: state.dislikedIds.filter((id) => id !== action.id),
+          }
+        : {
+            ...state,
+            likedIds: state.likedIds.filter((id) => id !== action.id),
+          }
+    }
+    case "likes/seed": {
+      const added = action.ids.filter((id) => !state.likedIds.includes(id))
+      if (added.length === 0) return state
+      return {
+        ...state,
+        likedIds: [...state.likedIds, ...added],
+        dislikedIds: state.dislikedIds.filter((id) => !added.includes(id)),
       }
     }
     case "dislike/toggle": {

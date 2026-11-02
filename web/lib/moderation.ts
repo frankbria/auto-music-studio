@@ -324,6 +324,9 @@ const LOG_ACTION_LABELS: Record<string, string> = {
   appeal_upheld: "Upheld appeal",
   appeal_reversed: "Reversed appeal",
   appeal_info_requested: "Requested appeal info",
+  // Editorial picks for Explore (#656).
+  staff_pick: "Made staff pick",
+  staff_unpick: "Removed staff pick",
   // Platform-written outcomes of the SoundCloud un-share queue (#569).
   soundcloud_unshared: "SoundCloud track made private",
   soundcloud_unshare_failed: "SoundCloud un-share failed, retrying",

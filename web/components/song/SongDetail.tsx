@@ -13,6 +13,8 @@ import { SongLyrics } from "@/components/song/SongLyrics"
 import { SongMetadata } from "@/components/song/SongMetadata"
 import { SongPlayer } from "@/components/song/SongPlayer"
 import { SongVideo } from "@/components/song/SongVideo"
+import { StaffPickControl } from "@/components/song/StaffPickControl"
+import { useIsAdmin } from "@/hooks/use-is-admin"
 import { usePublicClip } from "@/hooks/use-public-clip"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
@@ -80,6 +82,7 @@ function SongDetailContent({ clip }: { clip: Clip }) {
   // Server-computed (US-20.0). Absent => not from the public read, so require an
   // explicit true rather than letting undefined read as ownership.
   const isOwner = clip.is_owner === true
+  const { isAdmin } = useIsAdmin()
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8 p-8 lg:flex-row">
@@ -107,6 +110,7 @@ function SongDetailContent({ clip }: { clip: Clip }) {
             ) : undefined
           }
         />
+        {isAdmin && <StaffPickControl clipId={clip.id} />}
         {/* Download errors surface here; delete errors show in their dialog. */}
         {actions.actionError && !actions.confirmingDelete && (
           <p role="alert" className="text-sm text-destructive">

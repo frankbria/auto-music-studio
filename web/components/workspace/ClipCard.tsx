@@ -36,6 +36,7 @@ import { SongActionModal } from "@/components/song/SongActionModal"
 import { VisibilityBadge } from "@/components/song/VisibilityBadge"
 import { VisibilityToggle } from "@/components/song/VisibilityToggle"
 import { usePlayer } from "@/contexts/player-context"
+import { useLikeToggle } from "@/hooks/use-like-toggle"
 import { useSongActions } from "@/hooks/use-song-actions"
 import { setClipDragData, setDragTrackType } from "@/lib/clip-drag"
 import { inferTrackType } from "@/lib/track-types"
@@ -154,6 +155,7 @@ export function ClipCard({
   isOwner = true,
 }: ClipCardProps) {
   const { state, dispatch } = usePlayer()
+  const toggleLike = useLikeToggle()
   // Registry-driven dispatch: modal / navigation / download / delete-confirm /
   // publish (persist + guard).
   const actions = useSongActions(clip, { onDeleted })
@@ -376,7 +378,7 @@ export function ClipCard({
             size="icon-sm"
             aria-label={liked ? "Unlike" : "Like"}
             aria-pressed={liked}
-            onClick={() => dispatch({ type: "like/toggle", id: clip.id })}
+            onClick={() => toggleLike(clip.id)}
             className={cn(liked && "text-primary")}
           >
             <HugeiconsIcon

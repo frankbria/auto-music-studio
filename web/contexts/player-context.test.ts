@@ -207,6 +207,24 @@ describe("playerReducer modes + likes", () => {
     expect(s.dislikedIds).not.toContain("x")
   })
 
+  it("like/set puts a like back as the server has it, clearing a dislike (#656)", () => {
+    let s = base({ dislikedIds: ["x"] })
+    s = playerReducer(s, { type: "like/set", id: "x", liked: true })
+    expect(s.likedIds).toEqual(["x"])
+    expect(s.dislikedIds).toEqual([])
+    expect(playerReducer(s, { type: "like/set", id: "x", liked: true })).toBe(s)
+    s = playerReducer(s, { type: "like/set", id: "x", liked: false })
+    expect(s.likedIds).toEqual([])
+  })
+
+  it("likes/seed adds the server's likes without duplicates (#656)", () => {
+    let s = base({ likedIds: ["a"], dislikedIds: ["b"] })
+    s = playerReducer(s, { type: "likes/seed", ids: ["a", "b"] })
+    expect(s.likedIds).toEqual(["a", "b"])
+    expect(s.dislikedIds).toEqual([])
+    expect(playerReducer(s, { type: "likes/seed", ids: ["a"] })).toBe(s)
+  })
+
   it("like and dislike are mutually exclusive per clip", () => {
     let s = base({ dislikedIds: ["x"] })
     // Liking a disliked clip clears the dislike.

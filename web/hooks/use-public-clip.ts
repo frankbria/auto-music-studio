@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useContext, useEffect, useState } from "react"
 
+import { PlayerContext } from "@/contexts/player-context"
 import { useAuth } from "@/hooks/use-auth"
 import type { Clip } from "@/lib/workspace-clips"
 
@@ -26,6 +27,8 @@ type Outcome =
  */
 export function usePublicClip(id: string | undefined) {
   const { accessToken, isLoading: authLoading } = useAuth()
+  // The viewer's server-side like (#656); absent outside a PlayerProvider.
+  const seedLikes = useContext(PlayerContext)?.dispatch
   const [outcome, setOutcome] = useState<Outcome | null>(null)
 
   useEffect(() => {
@@ -55,7 +58,10 @@ export function usePublicClip(id: string | undefined) {
         }
         if (!res.ok) throw new Error("fetch failed")
         const clip = (await res.json()) as Clip
-        if (active) setOutcome({ id, kind: "ok", clip })
+        if (!active) return
+        if (clip.viewer_liked)
+          seedLikes?.({ type: "likes/seed", ids: [clip.id] })
+        setOutcome({ id, kind: "ok", clip })
       })
       .catch(() => {
         if (active) setOutcome({ id, kind: "error" })
@@ -63,7 +69,7 @@ export function usePublicClip(id: string | undefined) {
     return () => {
       active = false
     }
-  }, [id, accessToken, authLoading])
+  }, [id, accessToken, authLoading, seedLikes])
 
   const current = outcome?.id === id ? outcome : null
   const clip = current?.kind === "ok" ? current.clip : null

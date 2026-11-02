@@ -196,16 +196,18 @@ describe("SearchView", () => {
     ).toBeInTheDocument()
   })
 
-  it("offers only Relevance and Newest, and emits the chosen sort (AC3)", async () => {
+  it("offers Relevance, Newest and Most Popular, and emits the chosen sort (AC3, #656)", async () => {
     stubDiscoverFetch(() => discoverPage([]))
     const onChange = vi.fn()
     render(<SearchView params={params({ q: "a" })} onChange={onChange} />)
     await userEvent.click(screen.getByRole("button", { name: /sort by/i }))
     expect(
       screen.getAllByRole("menuitemradio").map((item) => item.textContent)
-    ).toEqual(["Relevance", "Newest"])
-    await userEvent.click(screen.getByRole("menuitemradio", { name: "Newest" }))
-    expect(onChange).toHaveBeenCalledWith({ sort: "newest" })
+    ).toEqual(["Relevance", "Newest", "Most Popular"])
+    await userEvent.click(
+      screen.getByRole("menuitemradio", { name: "Most Popular" })
+    )
+    expect(onChange).toHaveBeenCalledWith({ sort: "popular" })
   })
 
   it("debounces the search box before committing the query", () => {

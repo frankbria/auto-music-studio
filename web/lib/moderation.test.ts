@@ -307,6 +307,8 @@ describe("formatLogAction", () => {
     expect(formatLogAction("update_screening_rules")).toBe(
       "Updated screening rules"
     )
+    expect(formatLogAction("staff_pick")).toBe("Made staff pick")
+    expect(formatLogAction("staff_unpick")).toBe("Removed staff pick")
     expect(formatLogAction("something_new")).toBe("something new")
   })
 

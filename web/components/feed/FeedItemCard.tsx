@@ -18,6 +18,8 @@ import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { Badge } from "@/components/ui/badge"
 import { ShareModal } from "@/components/song/ShareModal"
 import { usePlayer } from "@/contexts/player-context"
+import { useLikeToggle } from "@/hooks/use-like-toggle"
+import { usePlayReport } from "@/hooks/use-play-report"
 import { clipInspirationHref, type FeedItem } from "@/lib/feed"
 import { cn } from "@/lib/utils"
 
@@ -81,6 +83,8 @@ export function FeedItemCard({
   active: boolean
 }) {
   const { state, dispatch } = usePlayer()
+  const toggleLike = useLikeToggle()
+  const reportProgress = usePlayReport()
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -186,7 +190,7 @@ export function FeedItemCard({
           icon={FavouriteIcon}
           label={liked ? "Liked" : "Like"}
           active={liked}
-          onClick={() => dispatch({ type: "like/toggle", id: item.id })}
+          onClick={() => toggleLike(item.id)}
         />
         <RailButton
           icon={Share01Icon}
@@ -215,6 +219,9 @@ export function FeedItemCard({
         preload="none"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        onTimeUpdate={(event) =>
+          reportProgress(item.id, event.currentTarget.currentTime)
+        }
         data-testid="feed-audio"
       />
 

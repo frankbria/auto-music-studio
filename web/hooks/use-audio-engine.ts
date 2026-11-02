@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react"
 
 import { usePlayer } from "@/contexts/player-context"
+import { usePlayReport } from "@/hooks/use-play-report"
 
 /**
  * Owns the single HTML5 <audio> element and keeps it in sync with the player
@@ -13,12 +14,23 @@ import { usePlayer } from "@/contexts/player-context"
 export function useAudioEngine(): void {
   const { state, dispatch } = usePlayer()
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const reportProgress = usePlayReport()
+  // The listeners are wired once, so they read the playing clip's id from here (#656).
+  const playingIdRef = useRef("")
+  const playingId = state.current?.id ?? ""
+  useEffect(() => {
+    playingIdRef.current = playingId
+  }, [playingId])
 
   // Create the single element once and wire event listeners that feed the store.
   useEffect(() => {
     const audio = new Audio()
     audioRef.current = audio
-    const onTime = () => dispatch({ type: "time/set", time: audio.currentTime })
+    const onTime = () => {
+      dispatch({ type: "time/set", time: audio.currentTime })
+      if (playingIdRef.current)
+        reportProgress(playingIdRef.current, audio.currentTime)
+    }
     const onLoaded = () => {
       dispatch({ type: "duration/set", duration: audio.duration })
       dispatch({ type: "loading/set", loading: false })
@@ -47,7 +59,7 @@ export function useAudioEngine(): void {
       audio.pause()
       audioRef.current = null
     }
-  }, [dispatch])
+  }, [dispatch, reportProgress])
 
   // (Re)load and restart whenever the *track* changes — keyed on id, not src,
   // so advancing between tracks that share an audio URL still restarts from 0
