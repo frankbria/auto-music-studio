@@ -16,7 +16,15 @@ describe("page Cache-Control (#338)", () => {
   it("covers pages but not hashed assets or the API", () => {
     // The source is one custom regex group, which Next's path-to-regexp anchors and uses as written.
     const pages = new RegExp(`^${PAGE_ROUTES}$`)
-    for (const path of ["/", "/explore", "/song/abc", "/studio", "/@handle"]) {
+    // Files in public/ are covered too: Next serves them with max-age=0 already.
+    for (const path of [
+      "/",
+      "/explore",
+      "/song/abc",
+      "/studio",
+      "/@handle",
+      "/favicon.ico",
+    ]) {
       expect(pages.test(path), path).toBe(true)
     }
     for (const path of [

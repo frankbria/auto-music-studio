@@ -7,6 +7,7 @@ case- and diacritic-insensitive, any word matching. A partial word finds nothing
 Relevance is the index's weighted score: title 5, style tags 2, lyrics 1.
 """
 
+import asyncio
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ _facets_cache: tuple[float, dict[str, list[str]]] | None = None
 TRENDING_TTL_SECONDS = 60.0
 _TRENDING_BATCH = 100
 _trending_cache: dict[str, tuple[float, list[tuple[int, PydanticObjectId]]]] = {}
+_trending_locks: dict[str, asyncio.Lock] = {}
 
 
 def _text_criteria(q: str, style: str | None) -> dict:
@@ -151,6 +153,15 @@ async def _trending_ranking(sort: str) -> list[tuple[int, PydanticObjectId]]:
     cached = _trending_cache.get(sort)
     if cached is not None and time.monotonic() - cached[0] < TRENDING_TTL_SECONDS:
         return cached[1]
+    # Requests arriving while the ranking is rebuilt wait for it rather than each running the aggregation.
+    async with _trending_locks.setdefault(sort, asyncio.Lock()):
+        cached = _trending_cache.get(sort)
+        if cached is not None and time.monotonic() - cached[0] < TRENDING_TTL_SECONDS:
+            return cached[1]
+        return await _rank_trending(sort)
+
+
+async def _rank_trending(sort: str) -> list[tuple[int, PydanticObjectId]]:
     weight = {
         "$switch": {"branches": [{"case": {"$eq": ["$kind", k]}, "then": w} for k, w in _TRENDING_WEIGHTS.items()]}
     }

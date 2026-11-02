@@ -5,6 +5,7 @@ share once per user per clip per day. Trending is plays + 3 x likes + 5 x shares
 Most Popular are all-time plays; staff picks are newest first. Plays and likes are public, shares admin-only.
 """
 
+import asyncio
 import itertools
 from datetime import timedelta
 
@@ -263,6 +264,23 @@ class TestTrending:
 
         monkeypatch.setattr(discovery, "TRENDING_TTL_SECONDS", 0.0)
         assert await _ids(client, sort="trending_7d") == [str(second.id), str(first.id)]
+
+    async def test_concurrent_requests_share_one_rebuild(self, client, monkeypatch) -> None:
+        await _engaged(await _clip(), "play")
+        real = discovery._rank_trending
+        rebuilds = 0
+
+        async def counted(sort: str):
+            nonlocal rebuilds
+            rebuilds += 1
+            await asyncio.sleep(0.05)
+            return await real(sort)
+
+        monkeypatch.setattr(discovery, "_rank_trending", counted)
+
+        await asyncio.gather(*(client.get(DISCOVER, params={"sort": "trending_7d"}) for _ in range(5)))
+
+        assert rebuilds == 1
 
     async def test_a_ranked_clip_that_went_private_is_skipped(self, client) -> None:
         hidden, shown = await _clip(), await _clip()

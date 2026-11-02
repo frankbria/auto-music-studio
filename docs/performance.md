@@ -39,7 +39,8 @@ made only by a signed-in session; a refused token falls back to anonymous and st
 ## API reads at scale
 
 Staging's data is small, so discovery was also timed against a throwaway database of 20,000 public clips and 200,000
-engagement rows in the last week (about 20 plays a minute), 30 calls per sort, 20 per page:
+engagement rows in the last week (about 20 plays a minute), 30 calls per sort, 20 per page
+(`uv run python scripts/perf_discovery.py`, against a local MongoDB):
 
 | Sort | p50 | p95 |
 | --- | --- | --- |
@@ -52,12 +53,14 @@ engagement rows in the last week (about 20 plays a minute), 30 calls per sort, 2
 
 Trending was 430 ms at p50 (463 ms p95) for the 7-day window before its ranking was cached: the aggregation reads every
 engagement row in the window. It now runs once per window per process every `TRENDING_TTL_SECONDS` (60 s), and pages
-are cut from the cached ranking, so one request a minute pays that cost.
+are cut from the cached ranking, so one request a minute pays that cost; requests arriving during a rebuild wait for
+it rather than each running the aggregation.
 
 ## Caching
 
 - `/_next/static/*` is content-hashed and served `public, max-age=31536000, immutable` by Next.
-- Pages are `private, no-cache` (`web/next.config.ts`). Next marks a prerendered page `s-maxage=31536000`, so a CDN
+- Pages, and the files in `web/public`, are `private, no-cache` (`web/next.config.ts`); Next serves public files with
+  `max-age=0` anyway, so they lose nothing. Next marks a prerendered page `s-maxage=31536000`, so a CDN
   would keep serving the previous deploy's HTML, whose chunk hashes no longer exist, until it was purged.
 - Public clip audio is `public, max-age=300`, private audio `private, no-store`, both with `Accept-Ranges: bytes`.
 - nginx compresses responses (gzip).
