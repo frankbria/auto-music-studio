@@ -34,3 +34,19 @@ the PR that added this file:
   connection banner are `role="status"`; errors are `role="alert"`, and form errors are tied to their field with
   `aria-describedby` (#339).
 - **Modals** are Radix dialogs: focus is trapped inside while open and returns to the trigger on close.
+
+## Mobile (US-28.4, #341)
+
+Pages are checked at 360, 414 and 768 px wide with `scripts/mobile-audit.mjs`, which emulates a touch screen, so
+the `pointer: coarse` styles apply.
+
+- **Layout:** no page scrolls sideways at 360 px. Explore's rows scroll inside themselves, which is intended. The
+  icon rail is the navigation at every width; it scrolls when a short screen can't fit every item, so items are
+  never squashed.
+- **Touch targets:** on a touch screen every button, tab, text input, sidebar item, chip and the clear-search button
+  is at least 44x44 (`pointer-coarse:` styles on the shared `Button`, `Tabs`, `Input` and the few hand-rolled
+  controls). The seek and volume bars keep their thin track inside a 44 px tall touch area. Desktop is unchanged.
+  Left under 44 on purpose: "Skip to content", which is 1x1 until it has focus, and links inside a sentence
+  (WCAG 2.5.5 exempts both).
+- **Player:** the playbar's play, pause, previous, next and like buttons are 44x44 on touch, and seeking works by
+  tapping or dragging the 44 px seek area.

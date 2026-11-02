@@ -147,7 +147,7 @@ export function SearchFilters({
                 aria-pressed={active}
                 onClick={() => onChange({ style: active ? "" : g.slug })}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  "rounded-full border px-3 py-1 text-xs transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:min-h-11",
                   active
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border hover:bg-accent"

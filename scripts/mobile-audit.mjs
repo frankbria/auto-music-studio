@@ -1,0 +1,50 @@
+// Mobile audit (#341): each page at a phone width, with touch emulation (so `pointer: coarse` applies). Reports
+// horizontal overflow and every interactive element under 44x44, and screenshots each page.
+//
+//   Set up as for scripts/a11y-audit.mjs (same folder, tokens file and pages.json), then
+//   node mobile-audit.mjs tokens.txt 360 https://dev.automusicstudio.com
+//
+// Exempt and expected in the list: "Skip to content" (1x1 until focused) and links inside a sentence.
+import { readFileSync, writeFileSync } from "node:fs"
+import { chromium } from "playwright"
+
+const [tokensFile, width = "360", base = "https://dev.automusicstudio.com"] = process.argv.slice(2)
+const tokens = readFileSync(tokensFile, "utf8").split(/\r?\n/).filter(Boolean)
+const extra = JSON.parse(readFileSync(new URL("./pages.json", import.meta.url), "utf8"))
+const PUBLIC = ["/", "/explore", "/search?q=harbor", "/feed", "/login", "/support", ...extra.public]
+const SIGNED_IN = ["/create", "/studio", "/me", "/settings", "/settings/billing", "/playlists", "/notifications", "/release", ...extra.signedIn]
+
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/usr/bin/google-chrome", args: ["--no-sandbox"] })
+const out = []
+async function check(path, token, i) {
+  const context = await browser.newContext({ viewport: { width: Number(width), height: 740 }, isMobile: true, hasTouch: true })
+  if (token) await context.addCookies([{ name: "ams_refresh_token", value: token, url: base, httpOnly: true, secure: true }])
+  const page = await context.newPage()
+  await page.goto(base + path, { waitUntil: "networkidle" })
+  await page.waitForTimeout(1200)
+  const report = await page.evaluate(() => {
+    const overflow = document.documentElement.scrollWidth - window.innerWidth
+    const small = []
+    for (const el of document.querySelectorAll("a[href], button, input, select, textarea, [role=button], [role=tab], [role=slider], [role=switch]")) {
+      const r = el.getBoundingClientRect()
+      if (!r.width || !r.height || getComputedStyle(el).visibility === "hidden") continue
+      if (r.width < 44 || r.height < 44) {
+        small.push(`${el.tagName.toLowerCase()}[${(el.getAttribute("aria-label") || el.textContent || el.getAttribute("type") || "").trim().slice(0, 24)}] ${Math.round(r.width)}x${Math.round(r.height)}`)
+      }
+    }
+    const wide = [...document.querySelectorAll("body *")]
+      .filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1)
+      .slice(0, 5)
+      .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")}`)
+    return { overflow, small, wide }
+  })
+  await page.screenshot({ path: new URL(`./m${width}-${i}.png`, import.meta.url).pathname })
+  out.push({ path, ...report })
+  await context.close()
+}
+let i = 0
+for (const p of PUBLIC) await check(p, undefined, i++)
+for (const [n, p] of SIGNED_IN.entries()) await check(p, tokens[n], i++)
+await browser.close()
+writeFileSync(new URL(`./mobile-${width}.json`, import.meta.url), JSON.stringify(out, null, 2))
+for (const r of out) console.log(`${r.path.padEnd(34)} overflow=${r.overflow}px small=${r.small.length} ${r.wide.slice(0, 2).join(" ")}`)
