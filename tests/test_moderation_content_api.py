@@ -897,6 +897,8 @@ def test_moderated_documents_are_never_whole_document_saved():
         ("services/voice_models.py", "model"),
         ("services/video.py", "video"),
         ("services/artwork.py", "clip"),
+        ("services/mastering.py", "clip"),
+        ("services/mastering.py", "sibling"),
     ]:
         text = (root / rel).read_text()
         if f"{name}.save()" in text:

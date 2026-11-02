@@ -328,16 +328,14 @@ async def approve_preview(source_job: Job, preview_clip_id: str, user_id: str) -
     # rather than leaving several clips all tagged as the final master.
     source_oid = coerce_object_id(source_clip_id) if source_clip_id else None
     if source_oid is not None:
-        siblings = await Clip.find(
+        # $set, never save(): a whole-document write of a snapshot read before a moderation action or a ban
+        # would revert it (#655).
+        await Clip.find(
             Clip.user_id == clip.user_id,
             Clip.parent_clip_ids == source_oid,
             Clip.generation_mode == APPROVED_GENERATION_MODE,
-        ).to_list()
-        for sibling in siblings:
-            if sibling.id != clip.id:
-                sibling.generation_mode = MASTERED_CANDIDATE_MODE
-                await sibling.save()
+            Clip.id != clip.id,
+        ).update({"$set": {"generation_mode": MASTERED_CANDIDATE_MODE}})
 
-    clip.generation_mode = APPROVED_GENERATION_MODE
-    await clip.save()
+    await clip.set({"generation_mode": APPROVED_GENERATION_MODE})
     return clip
