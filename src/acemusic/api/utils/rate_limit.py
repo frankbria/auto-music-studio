@@ -64,7 +64,7 @@ class FixedWindowRateLimiter:
                 )
 
 
-def _client_key(request: Request, trusted_proxies: Collection[str]) -> str:
+def client_key(request: Request, trusted_proxies: Collection[str]) -> str:
     """Rate-limit key: the real client IP.
 
     Keyed by the raw socket peer IP, except when that peer is a configured
@@ -97,10 +97,10 @@ def enforce_stream_rate_limit(request: Request) -> None:
     """FastAPI dependency: rate-limit by client IP using the app's limiter."""
     limiter: FixedWindowRateLimiter = request.app.state.stream_limiter
     trusted = request.app.state.settings.trusted_proxy_set
-    limiter.check(_client_key(request, trusted))
+    limiter.check(client_key(request, trusted))
 
 
 def enforce_discover_rate_limit(request: Request) -> None:
     """FastAPI dependency: rate-limit the public discovery listings by client IP (#651)."""
     limiter: FixedWindowRateLimiter = request.app.state.discover_limiter
-    limiter.check(_client_key(request, request.app.state.settings.trusted_proxy_set))
+    limiter.check(client_key(request, request.app.state.settings.trusted_proxy_set))

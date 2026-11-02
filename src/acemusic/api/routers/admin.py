@@ -25,7 +25,13 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from ..auth.dependencies import CurrentUser, get_settings, require_admin
 from ..models import ReportCategory
 from ..models.screening import ScreeningRules
-from ..services import appeals as appeal_service, moderation, reports as report_service, screening
+from ..services import (
+    appeals as appeal_service,
+    engagement,
+    moderation,
+    reports as report_service,
+    screening,
+)
 from ..settings import ApiSettings
 
 logger = logging.getLogger(__name__)
@@ -274,4 +280,40 @@ async def decide_appeal(
 ) -> appeal_service.AppealView:
     return appeal_service.AppealView.of(
         await appeal_service.decide(current.user_id, appeal_id, body.decision, body.note, settings)
+    )
+
+
+class StaffPickResponse(BaseModel):
+    staff_picked_at: datetime | None
+
+
+@router.put("/clips/{clip_id}/staff-pick", response_model=StaffPickResponse)
+async def pick_clip(clip_id: str) -> StaffPickResponse:
+    """Mark a clip as a staff pick (#656); Explore lists public picks newest first. Picking again re-dates it."""
+    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, True))
+
+
+@router.delete("/clips/{clip_id}/staff-pick", response_model=StaffPickResponse)
+async def unpick_clip(clip_id: str) -> StaffPickResponse:
+    """Take a clip off the staff picks (#656)."""
+    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, False))
+
+
+class ClipEngagementResponse(BaseModel):
+    """Every count of a clip, shares included: those are admin-only (#656)."""
+
+    play_count: int
+    like_count: int
+    share_count: int
+    staff_picked_at: datetime | None
+
+
+@router.get("/clips/{clip_id}/engagement", response_model=ClipEngagementResponse)
+async def clip_engagement(clip_id: str) -> ClipEngagementResponse:
+    clip = await engagement.get_clip(clip_id)
+    return ClipEngagementResponse(
+        play_count=clip.play_count,
+        like_count=clip.like_count,
+        share_count=clip.share_count,
+        staff_picked_at=clip.staff_picked_at,
     )

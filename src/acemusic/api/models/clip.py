@@ -70,6 +70,12 @@ class Clip(Document):
     #: #619: tracks that went out with a cover moderation since dropped. They can't be shared again until the owner
     #: has picked a new cover and the re-share has replaced the track's artwork.
     soundcloud_stale_artwork_track_ids: list[str] = Field(default_factory=list)
+    # #656: engagement counters, moved only by $inc from services/engagement (never a whole-document save).
+    play_count: int = 0
+    like_count: int = 0
+    share_count: int = 0
+    #: #656: an admin's staff pick; Explore lists picks newest first.
+    staff_picked_at: datetime | None = None
     # International Standard Recording Code (US-13.4). Identifies this *recording*;
     # minted (or reused) when the clip is first packaged into a release and shared
     # with that release. Globally unique via the partial index below — a recording
@@ -129,6 +135,12 @@ class Clip(Document):
             IndexModel([("moderation_flags", ASCENDING)]),
             # The public discovery pool, newest first with the keyset tiebreak (#651).
             IndexModel([("is_public", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)]),
+            # Charts and Most Popular (#656): all-time plays, keyset-paged.
+            IndexModel([("is_public", ASCENDING), ("play_count", DESCENDING), ("_id", DESCENDING)]),
+            IndexModel(
+                [("staff_picked_at", DESCENDING), ("_id", DESCENDING)],
+                partialFilterExpression={"staff_picked_at": {"$type": "date"}},
+            ),
             # Public text search (#655): whole words, stemmed (English), weighted as the old client-side ranking.
             IndexModel(
                 [("title", TEXT), ("style_tags", TEXT), ("lyrics", TEXT)],

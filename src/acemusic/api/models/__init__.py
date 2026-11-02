@@ -8,6 +8,7 @@ from .batch_job import BatchClipEntry, BatchJob
 from .billing_event import BillingEvent
 from .clip import Clip
 from .clip_appeal import OPEN_APPEAL_STATUSES, AppealStatus, ClipAppeal
+from .clip_engagement import ClipEngagement, EngagementKind
 from .clip_report import ClipReport, ReportCategory
 from .counter import Counter
 from .credit_transaction import CreditTransaction
@@ -50,6 +51,7 @@ ALL_MODELS = [
     ClipReport,
     ModerationLogEntry,
     ClipAppeal,
+    ClipEngagement,
 ]
 
 __all__ = [
@@ -60,6 +62,8 @@ __all__ = [
     "Workspace",
     "Clip",
     "ClipReport",
+    "ClipEngagement",
+    "EngagementKind",
     "ReportCategory",
     "ModerationLogEntry",
     "ClipAppeal",
