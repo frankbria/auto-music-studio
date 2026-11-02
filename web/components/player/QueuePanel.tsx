@@ -10,7 +10,6 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { usePlayer } from "@/contexts/player-context"
-import { LAYOUT } from "@/lib/constants/layout"
 import { cn } from "@/lib/utils"
 
 /** Toggle button with a badge for the upcoming-track count. */
@@ -52,7 +51,7 @@ export function QueuePanel() {
   return (
     <aside
       aria-label="Play queue"
-      style={{ bottom: LAYOUT.playbarHeight }}
+      style={{ bottom: "var(--playbar-height)" }}
       // z-40: above page content, below the z-50 playbar.
       className="fixed right-4 z-40 flex max-h-[60vh] w-80 flex-col overflow-hidden rounded-t-xl border border-border bg-background shadow-lg"
     >

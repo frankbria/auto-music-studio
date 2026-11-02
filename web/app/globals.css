@@ -116,6 +116,17 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* The playbar's height (LAYOUT.playbarHeight on desktop). On a touch screen its two rows of 44px targets need more
+   room (#341). */
+:root {
+  --playbar-height: 72px;
+}
+@media (pointer: coarse) {
+  :root {
+    --playbar-height: 100px;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

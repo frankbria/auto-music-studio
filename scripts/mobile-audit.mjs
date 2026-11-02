@@ -14,12 +14,20 @@ const extra = JSON.parse(readFileSync(new URL("./pages.json", import.meta.url), 
 const PUBLIC = ["/", "/explore", "/search?q=harbor", "/feed", "/login", "/support", ...extra.public]
 const SIGNED_IN = ["/create", "/studio", "/me", "/settings", "/settings/billing", "/playlists", "/notifications", "/release", ...extra.signedIn]
 
+if (tokens.length < SIGNED_IN.length) {
+  // An unauthenticated run of a signed-in page measures the login redirect and reads as clean.
+  console.error(`Need ${SIGNED_IN.length} tokens, one per signed-in page; ${tokensFile} has ${tokens.length}.`)
+  process.exit(1)
+}
+
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/usr/bin/google-chrome", args: ["--no-sandbox"] })
 const out = []
 async function check(path, token, i) {
   const context = await browser.newContext({ viewport: { width: Number(width), height: 740 }, isMobile: true, hasTouch: true })
   if (token) await context.addCookies([{ name: "ams_refresh_token", value: token, url: base, httpOnly: true, secure: true }])
   const page = await context.newPage()
+  const calls = []
+  page.on("request", (req) => calls.push(new URL(req.url()).pathname))
   await page.goto(base + path, { waitUntil: "networkidle" })
   await page.waitForTimeout(1200)
   const report = await page.evaluate(() => {
@@ -39,7 +47,7 @@ async function check(path, token, i) {
     return { overflow, small, wide }
   })
   await page.screenshot({ path: new URL(`./m${width}-${i}.png`, import.meta.url).pathname })
-  out.push({ path, ...report })
+  out.push({ path, signedIn: !!token, authed: calls.includes("/api/credits/balance"), ...report })
   await context.close()
 }
 let i = 0
@@ -47,4 +55,8 @@ for (const p of PUBLIC) await check(p, undefined, i++)
 for (const [n, p] of SIGNED_IN.entries()) await check(p, tokens[n], i++)
 await browser.close()
 writeFileSync(new URL(`./mobile-${width}.json`, import.meta.url), JSON.stringify(out, null, 2))
-for (const r of out) console.log(`${r.path.padEnd(34)} overflow=${r.overflow}px small=${r.small.length} ${r.wide.slice(0, 2).join(" ")}`)
+for (const r of out) {
+  const flag = r.signedIn && !r.authed ? " [NOT SIGNED IN]" : ""
+  if (flag) process.exitCode = 1
+  console.log(`${r.path.padEnd(34)} overflow=${r.overflow}px small=${r.small.length} ${r.wide.slice(0, 2).join(" ")}${flag}`)
+}
