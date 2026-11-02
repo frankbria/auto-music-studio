@@ -132,8 +132,8 @@ class TestErrorTracking:
         finally:
             real_init()  # no DSN: Sentry off again for the rest of the run
 
-        assert events, "the unhandled error was not reported"
-        assert {event["tags"]["request_id"] for event in events} == {"sentry-0001-ab"}
+        [event] = events
+        assert event["tags"]["request_id"] == "sentry-0001-ab"
 
     def test_on_with_a_dsn_and_tags_events_with_the_request_id(self, monkeypatch) -> None:
         calls = []
