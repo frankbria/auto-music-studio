@@ -251,7 +251,7 @@ class ApiSettings(BaseSettings):
         price is a 400 from Stripe at click time, which is a worse failure than an
         honest "billing is not configured" at the door.
         """
-        return bool(self.stripe_secret_key and self.stripe_webhook_secret and self.stripe_price_id("pro", "month"))
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret and self.stripe_price_tiers)
 
     def stripe_price_id(self, plan: str, interval: str) -> str | None:
         """The configured Price for ``plan`` billed every ``interval`` (``month`` or ``year``), if any."""
@@ -266,7 +266,9 @@ class ApiSettings(BaseSettings):
     def stripe_price_tiers(self) -> dict[str, str]:
         """Each configured Price id and the tier a paid subscription on it grants."""
         pairs = [(plan, interval) for plan in ("pro", "enterprise") for interval in ("month", "year")]
-        return {price: plan for plan, interval in pairs if (price := self.stripe_price_id(plan, interval))}
+        configured = {price: plan for plan, interval in pairs if (price := self.stripe_price_id(plan, interval))}
+        # Subscribers who checked out on the pre-#695 Price stay Pro after PRICE_ID_PRO_MONTHLY replaces it.
+        return ({self.stripe_price_id_pro: "pro"} if self.stripe_price_id_pro else {}) | configured
 
     @property
     def runpod_enabled(self) -> bool:

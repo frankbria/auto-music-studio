@@ -142,7 +142,9 @@ class TestBillingDisabled:
     """A deployment with no Stripe must still boot and serve everything else."""
 
     def test_checkout_is_503_not_a_crash(self) -> None:
+        # _env_file=None: a developer's .env with Stripe keys must not make this deployment look configured.
         settings = ApiSettings(
+            _env_file=None,
             jwt_secret_key="test-secret-key-at-least-32-bytes-long-xx",
             job_processor_enabled=False,
         )
@@ -152,7 +154,7 @@ class TestBillingDisabled:
         assert client.post(CHECKOUT_URL).status_code == 401
 
     def test_enabled_requires_all_three_settings(self) -> None:
-        partial = ApiSettings(stripe_secret_key="sk_test_x", stripe_webhook_secret=WEBHOOK_SECRET)
+        partial = ApiSettings(_env_file=None, stripe_secret_key="sk_test_x", stripe_webhook_secret=WEBHOOK_SECRET)
         # No price id: a checkout would 400 at Stripe on click, which is a worse failure
         # than refusing at the door.
         assert partial.stripe_enabled is False
@@ -1295,3 +1297,35 @@ class TestPlans:
         assert stripe.params["managed_payments"] == {"enabled": True}
         product = stripe.params["line_items"][0]["price_data"]["product_data"]
         assert product["tax_code"] == billing_service.TOPUP_TAX_CODE
+
+    async def test_an_unknown_price_keeps_the_subscribers_current_plan(self, client) -> None:
+        """#695 review: a rotated or unset Price id must not move a paying Enterprise subscriber to Pro."""
+        user = await make_user("plans-unknown-price@example.com", stripe_customer_id=CUSTOMER, tier="enterprise")
+        on_unknown = _subscription(
+            items={
+                "object": "list",
+                "data": [{"id": "si_1", "current_period_end": 1_800_000_000, "price": {"id": "price_rotated"}}],
+            }
+        )
+        await _post_event_at(client, "customer.subscription.updated", on_unknown, "evt_unknown_1", 1_700_000_000)
+        assert (await User.get(user.id)).subscription_tier == "enterprise"
+
+
+class TestBillingSwitch:
+    def test_billing_turns_on_with_any_plan_price(self, settings) -> None:
+        """#695 review: a deployment selling only Enterprise is still a billing deployment."""
+        only_enterprise = settings.model_copy(
+            update={
+                "stripe_price_id_pro": None,
+                "stripe_price_id_pro_annual": None,
+                "stripe_price_id_enterprise_monthly": "price_e",
+            }
+        )
+        assert only_enterprise.stripe_enabled
+
+    def test_the_legacy_pro_price_still_maps_to_pro(self, settings) -> None:
+        both = settings.model_copy(
+            update={"stripe_price_id_pro": "price_legacy", "stripe_price_id_pro_monthly": "price_new"}
+        )
+        assert both.stripe_price_tiers["price_legacy"] == "pro"
+        assert both.stripe_price_tiers["price_new"] == "pro"

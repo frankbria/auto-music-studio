@@ -92,8 +92,8 @@ def tier_for_status(status: str | None, paid_tier: str = tiers.PRO) -> str:
     return paid_tier if status in PAID_STATUSES else tiers.FREE
 
 
-def subscription_plan(subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str:
-    """The plan a subscription's Price is for (#695); Pro when its Price isn't one of ours, as before #695.
+def subscription_plan(subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str | None:
+    """The plan a subscription's Price is for (#695), or None when its Price isn't one configured here.
 
     Read from the Price, not from metadata: a plan change in the billing portal swaps the Price and leaves the
     checkout's metadata behind.
@@ -102,7 +102,7 @@ def subscription_plan(subscription: dict[str, Any], price_tiers: dict[str, str] 
     for price in _subscription_prices(subscription):
         if price in known:
             return known[price]
-    return tiers.PRO
+    return None
 
 
 def _subscription_prices(subscription: dict[str, Any]) -> list[str | None]:
@@ -137,7 +137,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def subscription_fields(subscription: dict[str, Any], price_tiers: dict[str, str] | None = None) -> dict[str, Any]:
+def subscription_fields(
+    subscription: dict[str, Any], price_tiers: dict[str, str] | None = None, unknown_price_tier: str = tiers.PRO
+) -> dict[str, Any]:
     """Map a Stripe subscription object onto the user fields that mirror it.
 
     Returned as a plain dict rather than applied in place so the mapping stays pure and
@@ -148,7 +150,9 @@ def subscription_fields(subscription: dict[str, Any], price_tiers: dict[str, str
     return {
         "stripe_subscription_id": subscription.get("id"),
         "subscription_status": status,
-        "subscription_tier": tier_for_status(status, subscription_plan(subscription, price_tiers)),
+        "subscription_tier": tier_for_status(
+            status, subscription_plan(subscription, price_tiers) or unknown_price_tier
+        ),
         "subscription_current_period_end": _timestamp(_current_period_end(subscription)),
         "subscription_cancel_at_period_end": bool(subscription.get("cancel_at_period_end")),
     }
@@ -568,6 +572,17 @@ async def _handle_checkout_completed(
     return "subscribed"
 
 
+def _unknown_price_tier(user: User, subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str:
+    """What a paid subscription on a Price not configured here is worth: the plan the user already has.
+
+    A rotated or unset Price id must not quietly move an Enterprise subscriber to Pro (or the reverse) while they
+    keep paying; it is logged so the configuration gets fixed.
+    """
+    if price_tiers and subscription_plan(subscription, price_tiers) is None:
+        logger.warning("billing: subscription %s is on a Price not configured here", subscription.get("id"))
+    return user.subscription_tier if tiers.is_paid(user.subscription_tier) else tiers.PRO
+
+
 def _checkout_plan(session: dict[str, Any]) -> str:
     """The plan a subscription checkout was for (#695); Pro for a session created before #695."""
     plan = (session.get("metadata") or {}).get(PLAN_METADATA_KEY)
@@ -663,7 +678,7 @@ async def _handle_subscription_change(
         )
         return "stale"
 
-    fields = subscription_fields(subscription, price_tiers)
+    fields = subscription_fields(subscription, price_tiers, _unknown_price_tier(user, subscription, price_tiers))
     if occurred_at:
         fields["subscription_synced_at"] = occurred_at
     if event_type == "customer.subscription.deleted":
