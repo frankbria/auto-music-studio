@@ -98,9 +98,16 @@ def subscription_plan(subscription: dict[str, Any], price_tiers: dict[str, str] 
     Read from the Price, not from metadata: a plan change in the billing portal swaps the Price and leaves the
     checkout's metadata behind.
     """
+    known = price_tiers or {}
+    for price in _subscription_prices(subscription):
+        if price in known:
+            return known[price]
+    return tiers.PRO
+
+
+def _subscription_prices(subscription: dict[str, Any]) -> list[str | None]:
     items = (subscription.get("items") or {}).get("data") or []
-    prices = [((item.get("price") or {}).get("id")) for item in items]
-    return next((price_tiers[p] for p in prices if price_tiers and p in price_tiers), tiers.PRO)
+    return [(item.get("price") or {}).get("id") for item in items]
 
 
 def _timestamp(value: Any) -> datetime | None:
@@ -542,9 +549,7 @@ async def _handle_checkout_completed(
         return "stale"
 
     user.stripe_subscription_id = session.get("subscription") or user.stripe_subscription_id
-    # The plan the checkout was for; Pro for a session created before #695.
-    plan = (session.get("metadata") or {}).get(PLAN_METADATA_KEY)
-    user.subscription_tier = plan if tiers.is_paid(plan) else tiers.PRO
+    user.subscription_tier = _checkout_plan(session)
     user.subscription_status = "active"
     user.subscription_cancel_at_period_end = False
     changed: dict[str, Any] = {
@@ -561,6 +566,12 @@ async def _handle_checkout_completed(
     if not await _record_event(user, event_id, event_type):
         return "duplicate"
     return "subscribed"
+
+
+def _checkout_plan(session: dict[str, Any]) -> str:
+    """The plan a subscription checkout was for (#695); Pro for a session created before #695."""
+    plan = (session.get("metadata") or {}).get(PLAN_METADATA_KEY)
+    return plan if tiers.is_paid(plan) else tiers.PRO
 
 
 async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str) -> str:

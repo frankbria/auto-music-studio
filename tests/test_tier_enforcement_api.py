@@ -354,8 +354,8 @@ class TestResolutionAndFormatGates:
 
         assert (await User.get(user.id)).credits_balance == 100.0
 
-    @pytest.mark.parametrize("resolution", ["720p", "1080p", "4k"])
-    async def test_a_pro_account_may_render_any_resolution(self, client, settings, resolution) -> None:
+    @pytest.mark.parametrize("resolution", ["720p", "1080p"])
+    async def test_a_pro_account_may_render_up_to_1080p(self, client, settings, resolution) -> None:
         user = await _user(f"pro-{resolution}", tier="pro", credits=100.0)
         clip = await _wav_clip(user)
 
@@ -366,6 +366,25 @@ class TestResolutionAndFormatGates:
         )
 
         assert resp.status_code != 403, resp.text
+
+    async def test_4k_is_enterprise_only(self, client, settings) -> None:
+        """#695: a Pro account is refused 4K, naming Enterprise; an Enterprise account is not."""
+        pro = await _user("pro-4k", tier="pro", credits=5000.0)
+        refused = await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str((await _wav_clip(pro)).id), "resolution": "4k", "prompt": "neon city"},
+            headers=_auth(pro, settings),
+        )
+        assert refused.status_code == 403
+        assert refused.json()["detail"]["required_tier"] == "enterprise"
+
+        enterprise = await _user("enterprise-4k", tier="enterprise", credits=5000.0)
+        allowed = await client.post(
+            f"{API_V1_PREFIX}/videos/generate",
+            json={"clip_id": str((await _wav_clip(enterprise)).id), "resolution": "4k", "prompt": "neon city"},
+            headers=_auth(enterprise, settings),
+        )
+        assert allowed.status_code != 403, allowed.text
 
 
 class TestLosslessExportGate:
