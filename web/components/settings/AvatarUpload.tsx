@@ -5,7 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { UserIcon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
-import { FieldError } from "@/components/settings/FieldError"
+import { FieldError } from "@/components/forms/FieldError"
 
 const ACCEPTED = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 

@@ -60,6 +60,37 @@ function createButton() {
 }
 
 describe("AdvancedCreationForm", () => {
+  it("puts an out-of-range BPM beside the BPM field, opening More Options to show it (#339)", async () => {
+    const user = userEvent.setup()
+    render(<AdvancedCreationForm />)
+    await user.type(screen.getByLabelText("Styles"), "rock")
+    await user.click(screen.getByRole("button", { name: "More Options" }))
+    await user.click(screen.getAllByLabelText("Auto")[0])
+    await user.type(screen.getByLabelText("BPM"), "999")
+    await user.click(screen.getByRole("button", { name: "More Options" }))
+
+    await user.click(screen.getByRole("button", { name: /^create$/i }))
+
+    const bpm = screen.getByLabelText("BPM")
+    expect(bpm).toBeVisible()
+    expect(bpm).toHaveAttribute("aria-invalid", "true")
+    expect(bpm).toHaveAccessibleDescription(/BPM must be between/)
+    expect(submitAdvancedGeneration).not.toHaveBeenCalled()
+  })
+
+  it("says a style or lyrics is needed once Styles is left empty (#339)", async () => {
+    const user = userEvent.setup()
+    render(<AdvancedCreationForm />)
+    const styles = screen.getByLabelText("Styles")
+
+    await user.click(styles)
+    await user.tab()
+
+    expect(styles).toHaveAccessibleDescription(
+      "Add a style or lyrics to create."
+    )
+  })
+
   it("renders the lyrics panel with structure-tag placeholder and a vocal language selector", () => {
     render(<AdvancedCreationForm />)
     expect(screen.getByPlaceholderText(/\[Verse 1\]/)).toBeInTheDocument()

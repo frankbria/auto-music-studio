@@ -182,7 +182,10 @@ describe("validateAdvanced", () => {
   })
 
   it("requires a style or lyrics", () => {
-    expect(validateAdvanced(advancedData())).toMatch(/style or lyrics/i)
+    expect(validateAdvanced(advancedData())).toMatchObject({
+      field: "styles",
+      message: expect.stringMatching(/style or lyrics/i),
+    })
   })
 
   it("rejects an out-of-range BPM", () => {
@@ -190,12 +193,18 @@ describe("validateAdvanced", () => {
       validateAdvanced(
         advancedData({ styles: "rock", bpmAuto: false, bpm: "300" })
       )
-    ).toMatch(/bpm/i)
+    ).toMatchObject({
+      field: "bpm",
+      message: expect.stringMatching(/bpm/i),
+    })
     expect(
       validateAdvanced(
         advancedData({ styles: "rock", bpmAuto: false, bpm: "10" })
       )
-    ).toMatch(/bpm/i)
+    ).toMatchObject({
+      field: "bpm",
+      message: expect.stringMatching(/bpm/i),
+    })
   })
 
   it("ignores BPM bounds when Auto is on", () => {
@@ -209,25 +218,40 @@ describe("validateAdvanced", () => {
   it("rejects an out-of-range duration", () => {
     expect(
       validateAdvanced(advancedData({ styles: "rock", duration: "5" }))
-    ).toMatch(/duration/i)
+    ).toMatchObject({
+      field: "duration",
+      message: expect.stringMatching(/duration/i),
+    })
     expect(
       validateAdvanced(advancedData({ styles: "rock", duration: "999" }))
-    ).toMatch(/duration/i)
+    ).toMatchObject({
+      field: "duration",
+      message: expect.stringMatching(/duration/i),
+    })
   })
 
   it("rejects an over-long key", () => {
     expect(
       validateAdvanced(advancedData({ styles: "rock", key: "x".repeat(60) }))
-    ).toMatch(/key/i)
+    ).toMatchObject({
+      field: "key",
+      message: expect.stringMatching(/key/i),
+    })
   })
 
   it("rejects out-of-range weirdness and style influence", () => {
     expect(
       validateAdvanced(advancedData({ styles: "rock", weirdness: 200 }))
-    ).toMatch(/weirdness/i)
+    ).toMatchObject({
+      field: "weirdness",
+      message: expect.stringMatching(/weirdness/i),
+    })
     expect(
       validateAdvanced(advancedData({ styles: "rock", styleInfluence: -1 }))
-    ).toMatch(/influence/i)
+    ).toMatchObject({
+      field: "styleInfluence",
+      message: expect.stringMatching(/influence/i),
+    })
   })
 })
 
@@ -306,19 +330,26 @@ describe("validateSounds", () => {
   })
 
   it("requires a sound type", () => {
-    expect(validateSounds(soundsData({ soundType: "" }))).toMatch(/type/i)
+    expect(validateSounds(soundsData({ soundType: "" }))).toMatchObject({
+      field: "type",
+      message: expect.stringMatching(/type/i),
+    })
   })
 
   it("requires a description", () => {
-    expect(validateSounds(soundsData({ description: "  " }))).toMatch(
-      /description/i
-    )
+    expect(validateSounds(soundsData({ description: "  " }))).toMatchObject({
+      field: "description",
+      message: expect.stringMatching(/description/i),
+    })
   })
 
   it("rejects an over-long description (the prompt bound)", () => {
     expect(
       validateSounds(soundsData({ description: "x".repeat(2001) }))
-    ).toMatch(/description/i)
+    ).toMatchObject({
+      field: "description",
+      message: expect.stringMatching(/description/i),
+    })
   })
 
   it("rejects an out-of-range loop BPM", () => {
@@ -326,7 +357,10 @@ describe("validateSounds", () => {
       validateSounds(
         soundsData({ soundType: "loop", bpmAuto: false, bpm: "300" })
       )
-    ).toMatch(/bpm/i)
+    ).toMatchObject({
+      field: "bpm",
+      message: expect.stringMatching(/bpm/i),
+    })
   })
 
   it("ignores BPM bounds when Auto is on", () => {

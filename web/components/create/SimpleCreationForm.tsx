@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 
+import { FieldError } from "@/components/forms/FieldError"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -30,6 +31,8 @@ import type { InspirationSelection } from "@/lib/audio-inputs"
  * submit → poll → progress/estimate → clips. `onGenerated` fires once clips exist
  * so the Create page can refresh the workspace panel.
  */
+const MISSING_TEXT = "Describe the song, or add lyrics, to create it."
+
 export function SimpleCreationForm({
   onGenerated,
   initialInspiration,
@@ -67,6 +70,9 @@ export function SimpleCreationForm({
   // toggle don't gate submission (per the acceptance criteria).
   const canSubmit =
     description.trim().length > 0 || effectiveLyrics.trim().length > 0
+  // #339: say why Create is off once the description was left empty, not only grey the button.
+  const [leftEmpty, setLeftEmpty] = useState(false)
+  const missingText = leftEmpty && !canSubmit
   const busy =
     generation.state.phase === "submitting" ||
     generation.state.phase === "polling"
@@ -99,6 +105,7 @@ export function SimpleCreationForm({
 
   function clearAll() {
     setDescription("")
+    setLeftEmpty(false)
     setInstrumental(false)
     setLyrics("")
     setShowLyrics(false)
@@ -118,6 +125,13 @@ export function SimpleCreationForm({
           placeholder="Describe the song you want to create..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}
+          onBlur={() => setLeftEmpty(!canSubmit)}
+          aria-invalid={missingText}
+          aria-describedby={missingText ? "song-description-error" : undefined}
+        />
+        <FieldError
+          id="song-description-error"
+          message={missingText ? MISSING_TEXT : null}
         />
       </div>
 
@@ -192,6 +206,7 @@ export function SimpleCreationForm({
           type="button"
           className="w-fit"
           disabled={!canSubmit || busy || modelLoading}
+          aria-describedby={missingText ? "song-description-error" : undefined}
           onClick={handleCreate}
         >
           {busy ? "Creating..." : "Create"}

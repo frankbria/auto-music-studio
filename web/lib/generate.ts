@@ -154,21 +154,43 @@ export function buildAdvancedPayload(
  * a bad value surfaces inline instead of as a 422. Returns the first problem
  * message, or null when the form is valid.
  */
-export function validateAdvanced(data: AdvancedFormData): string | null {
+/** Which Advanced field a validation message belongs beside (#339). */
+export type AdvancedField =
+  | "styles"
+  | "lyrics"
+  | "bpm"
+  | "duration"
+  | "key"
+  | "weirdness"
+  | "styleInfluence"
+
+export type FieldProblem = { field: AdvancedField; message: string }
+
+export function validateAdvanced(data: AdvancedFormData): FieldProblem | null {
   const style = combineStyles(data.styles, data.selectedTags)
   const lyrics = data.lyricsMode === "manual" ? data.lyrics.trim() : ""
-  if (!style && !lyrics) return "Add a style or lyrics to create."
+  if (!style && !lyrics)
+    return { field: "styles", message: "Add a style or lyrics to create." }
 
   if (style.length > STYLE_MAX_LENGTH) {
-    return `Styles must be ${STYLE_MAX_LENGTH} characters or fewer.`
+    return {
+      field: "styles",
+      message: `Styles must be ${STYLE_MAX_LENGTH} characters or fewer.`,
+    }
   }
   if (lyrics.length > LYRICS_MAX_LENGTH) {
-    return `Lyrics must be ${LYRICS_MAX_LENGTH} characters or fewer.`
+    return {
+      field: "lyrics",
+      message: `Lyrics must be ${LYRICS_MAX_LENGTH} characters or fewer.`,
+    }
   }
   if (!data.bpmAuto && data.bpm.trim()) {
     const bpm = Number(data.bpm)
     if (!Number.isFinite(bpm) || bpm < BPM_MIN || bpm > BPM_MAX) {
-      return `BPM must be between ${BPM_MIN} and ${BPM_MAX}.`
+      return {
+        field: "bpm",
+        message: `BPM must be between ${BPM_MIN} and ${BPM_MAX}.`,
+      }
     }
   }
   if (data.duration.trim()) {
@@ -178,20 +200,32 @@ export function validateAdvanced(data: AdvancedFormData): string | null {
       duration < DURATION_MIN ||
       duration > DURATION_MAX
     ) {
-      return `Duration must be between ${DURATION_MIN} and ${DURATION_MAX} seconds.`
+      return {
+        field: "duration",
+        message: `Duration must be between ${DURATION_MIN} and ${DURATION_MAX} seconds.`,
+      }
     }
   }
   if (data.key.length > KEY_MAX_LENGTH) {
-    return `Key must be ${KEY_MAX_LENGTH} characters or fewer.`
+    return {
+      field: "key",
+      message: `Key must be ${KEY_MAX_LENGTH} characters or fewer.`,
+    }
   }
   if (data.weirdness < WEIRDNESS_MIN || data.weirdness > WEIRDNESS_MAX) {
-    return `Weirdness must be between ${WEIRDNESS_MIN} and ${WEIRDNESS_MAX}.`
+    return {
+      field: "weirdness",
+      message: `Weirdness must be between ${WEIRDNESS_MIN} and ${WEIRDNESS_MAX}.`,
+    }
   }
   if (
     data.styleInfluence < STYLE_INFLUENCE_MIN ||
     data.styleInfluence > STYLE_INFLUENCE_MAX
   ) {
-    return `Style influence must be between ${STYLE_INFLUENCE_MIN} and ${STYLE_INFLUENCE_MAX}.`
+    return {
+      field: "styleInfluence",
+      message: `Style influence must be between ${STYLE_INFLUENCE_MIN} and ${STYLE_INFLUENCE_MAX}.`,
+    }
   }
   return null
 }
@@ -288,19 +322,35 @@ export function buildSoundsPayload(data: SoundsFormData): GenerationPayload {
  * non-empty, and a loop's explicit BPM is range-checked to surface a message
  * inline instead of as a 422. Returns the first problem, or null when valid.
  */
-export function validateSounds(data: SoundsFormData): string | null {
-  if (!data.soundType) return "Choose a sound type to create."
+export const SOUND_TYPE_MISSING = "Choose a sound type to create."
+export const SOUND_DESCRIPTION_MISSING = "Add a description to create."
+
+/** Which Sounds field a validation message belongs beside (#339). */
+export type SoundsProblem = {
+  field: "type" | "description" | "bpm"
+  message: string
+}
+
+export function validateSounds(data: SoundsFormData): SoundsProblem | null {
+  if (!data.soundType) return { field: "type", message: SOUND_TYPE_MISSING }
   const description = data.description.trim()
-  if (!description) return "Add a description to create."
+  if (!description)
+    return { field: "description", message: SOUND_DESCRIPTION_MISSING }
   // The description is the prompt; the backend caps it, so surface a clear
   // message inline instead of a generic 422 (mirrors buildAdvancedPayload's cap).
   if (description.length > PROMPT_MAX_LENGTH) {
-    return `Description must be ${PROMPT_MAX_LENGTH} characters or fewer.`
+    return {
+      field: "description",
+      message: `Description must be ${PROMPT_MAX_LENGTH} characters or fewer.`,
+    }
   }
   if (data.soundType === "loop" && !data.bpmAuto && data.bpm.trim()) {
     const bpm = Number(data.bpm)
     if (!Number.isFinite(bpm) || bpm < BPM_MIN || bpm > BPM_MAX) {
-      return `BPM must be between ${BPM_MIN} and ${BPM_MAX}.`
+      return {
+        field: "bpm",
+        message: `BPM must be between ${BPM_MIN} and ${BPM_MAX}.`,
+      }
     }
   }
   return null
