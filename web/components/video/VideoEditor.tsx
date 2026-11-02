@@ -144,7 +144,7 @@ export function VideoEditor({ videoId }: { videoId: string }) {
           <Label htmlFor="edit-operation">Edit</Label>
           <select
             id="edit-operation"
-            className="h-9 rounded-md border bg-transparent px-3 text-sm"
+            className="h-9 rounded-md border bg-transparent px-3 text-sm pointer-coarse:h-11"
             value={operation}
             onChange={(e) => {
               setOperation(e.target.value as VideoEditOperation)

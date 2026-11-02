@@ -130,7 +130,7 @@ const CATEGORY_LABELS = Object.fromEntries(
 const SOURCE_LABELS = { report: "User report", automated: "Automated" }
 
 const selectClass =
-  "h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+  "h-8 pointer-coarse:h-11 rounded-lg border border-input bg-transparent px-2 text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
 
 function plural(n: number, noun: string) {
   return `${n} ${noun}${n === 1 ? "" : "s"}`
