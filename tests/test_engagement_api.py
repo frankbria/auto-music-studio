@@ -140,6 +140,25 @@ class TestLikes:
         assert (await client.delete(url, headers=_auth(fan, settings))).json() == {"liked": False, "like_count": 0}
         assert (await client.delete(url, headers=_auth(fan, settings))).json()["like_count"] == 0
 
+    async def test_a_like_can_be_undone_after_the_clip_leaves_the_public_pool(self, client, settings) -> None:
+        clip, fan = await _clip(), await _user()
+        url = f"{CLIPS}/{clip.id}/like"
+        await client.put(url, headers=_auth(fan, settings))
+        await Clip.find_one(Clip.id == clip.id).update({"$set": {"is_public": False, "visibility": "private"}})
+
+        resp = await client.delete(url, headers=_auth(fan, settings))
+
+        assert resp.json() == {"liked": False, "like_count": 0}
+        assert await ClipEngagement.find(ClipEngagement.kind == "like").count() == 0
+        assert (await client.put(url, headers=_auth(fan, settings))).status_code == 404
+
+    async def test_plays_and_shares_expire_but_likes_are_kept(self, client) -> None:
+        indexes = await ClipEngagement.get_pymongo_collection().index_information()
+
+        expiry = indexes["expire_plays_and_shares"]
+        assert expiry["expireAfterSeconds"] == 8 * 24 * 3600
+        assert expiry["partialFilterExpression"] == {"kind": {"$in": ["play", "share"]}}
+
     async def test_liking_needs_a_signed_in_user(self, client) -> None:
         clip = await _clip()
 

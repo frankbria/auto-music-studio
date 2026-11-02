@@ -48,18 +48,23 @@ async def record_share(clip_id: str, actor: str) -> bool:
 
 
 async def set_like(clip_id: str, user_id: str, liked: bool) -> int:
-    """Like or unlike a public clip for ``user_id``; return its like count. Repeating either is a no-op."""
-    oid = await _public_clip_id(clip_id)
+    """Like a public clip, or undo a like on any clip, for ``user_id``; return its like count. Repeating either is a
+    no-op. Undoing doesn't need the clip to still be public: a like must not get stuck when it leaves the pool."""
     if liked:
+        oid = await _public_clip_id(clip_id)
         await _count_once(oid, "like", user_id)
     else:
+        oid = coerce_object_id(clip_id)
+        if oid is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
         removed = await ClipEngagement.get_pymongo_collection().delete_one(
             {"clip_id": oid, "kind": "like", "actor": user_id, "bucket": ""}
         )
         if removed.deleted_count:
             await Clip.find({"_id": oid}).update({"$inc": {"like_count": -1}})
     clip = await Clip.get(oid)
-    return clip.like_count if clip else 0
+    # An unlike's -1 can land before its like's +1, briefly; never report that.
+    return max(0, clip.like_count) if clip else 0
 
 
 async def liked_clip_ids(user_id: str | None, clip_ids: list[PydanticObjectId]) -> set[str]:

@@ -15,6 +15,7 @@ from pymongo import ASCENDING, DESCENDING, IndexModel
 from .common import utcnow
 
 EngagementKind = Literal["play", "like", "share"]
+EXPIRE_AFTER_SECONDS = 8 * 24 * 3600
 
 
 class ClipEngagement(Document):
@@ -33,4 +34,11 @@ class ClipEngagement(Document):
                 unique=True,
             ),
             IndexModel([("created_at", DESCENDING), ("clip_id", ASCENDING)]),
+            # Plays and shares only matter for their dedupe bucket and trending's 7-day window; likes are kept.
+            IndexModel(
+                [("created_at", ASCENDING)],
+                name="expire_plays_and_shares",
+                expireAfterSeconds=EXPIRE_AFTER_SECONDS,
+                partialFilterExpression={"kind": {"$in": ["play", "share"]}},
+            ),
         ]
