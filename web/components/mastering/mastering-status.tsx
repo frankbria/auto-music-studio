@@ -35,10 +35,10 @@ type StatusMeta = { icon: IconSvgElement; label: string; tone: string; spin?: bo
 // solid icon and a distinct color.
 const STATUS_META: Record<MasteringStatusPhase, StatusMeta> = {
   submitting: { icon: Loading03Icon, label: "Submitting mastering job…", tone: "text-muted-foreground", spin: true },
-  queued: { icon: Clock01Icon, label: "Queued", tone: "text-amber-500" },
-  processing: { icon: Loading03Icon, label: "Processing", tone: "text-sky-500", spin: true },
-  preview_ready: { icon: PlayCircle02Icon, label: "Preview ready", tone: "text-violet-500" },
-  approved: { icon: CheckmarkCircle01Icon, label: "Approved", tone: "text-emerald-500" },
+  queued: { icon: Clock01Icon, label: "Queued", tone: "text-amber-700 dark:text-amber-400" },
+  processing: { icon: Loading03Icon, label: "Processing", tone: "text-sky-700 dark:text-sky-400", spin: true },
+  preview_ready: { icon: PlayCircle02Icon, label: "Preview ready", tone: "text-violet-700 dark:text-violet-400" },
+  approved: { icon: CheckmarkCircle01Icon, label: "Approved", tone: "text-emerald-700 dark:text-emerald-400" },
   failed: { icon: Alert01Icon, label: "Failed", tone: "text-destructive" },
 }
 

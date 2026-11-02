@@ -62,7 +62,7 @@ export function ReleaseCard({ release }: { release: ReleaseSummary }) {
                         href={link}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-sky-500 hover:underline"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:underline dark:text-sky-400"
                       >
                         <HugeiconsIcon icon={LinkSquare02Icon} size={13} />
                         View on {channelLabel(ch.channel)}

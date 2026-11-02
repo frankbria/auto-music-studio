@@ -151,7 +151,7 @@ export function SoundCloudCard() {
               <HugeiconsIcon
                 icon={CheckmarkCircle01Icon}
                 size={13}
-                className="text-emerald-500"
+                className="text-emerald-700 dark:text-emerald-400"
               />
               Connected{status?.connectedAt ? ` · ${formatDate(status.connectedAt)}` : ""}
               {status?.tokenValid === false ? " · reauthorize to publish" : ""}

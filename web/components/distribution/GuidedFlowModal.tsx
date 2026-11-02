@@ -121,7 +121,7 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                       size={16}
                       className={
                         c.passed
-                          ? "mt-0.5 shrink-0 text-emerald-500"
+                          ? "mt-0.5 shrink-0 text-emerald-700 dark:text-emerald-400"
                           : "mt-0.5 shrink-0 text-destructive"
                       }
                     />
@@ -166,7 +166,7 @@ export function GuidedFlowModal({ target, ready, resolveMetadata }: Props) {
                         <HugeiconsIcon
                           icon={CheckmarkCircle01Icon}
                           size={16}
-                          className="text-emerald-500"
+                          className="text-emerald-700 dark:text-emerald-400"
                         />
                         Marked as submitted
                       </>

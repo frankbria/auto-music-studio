@@ -39,7 +39,7 @@ export function ModelSelector() {
           type="button"
           variant="outline"
           size="sm"
-          aria-label="Select model"
+          aria-label={`Select model: ${triggerLabel}`}
           data-testid="model-selector-trigger"
         >
           {triggerLabel}

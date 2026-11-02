@@ -35,6 +35,7 @@ export function VolumeControl() {
       <input
         type="range"
         aria-label="Volume"
+        aria-valuetext={`${Math.round(effective * 100)}%`}
         min={0}
         max={1}
         step={0.01}

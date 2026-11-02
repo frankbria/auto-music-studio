@@ -78,8 +78,8 @@ function FilterSelect({
 /** Read-only placeholder for a filter whose backend support hasn't landed. */
 function ComingSoonFilter({ label }: { label: string }) {
   return (
-    <div className="flex flex-col gap-1.5 opacity-50">
-      <Label>{label}</Label>
+    <div className="flex flex-col gap-1.5">
+      <Label className="text-muted-foreground">{label}</Label>
       <div className="flex h-8 items-center rounded-md border border-dashed border-border px-3 text-xs text-muted-foreground">
         Coming soon
       </div>

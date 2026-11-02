@@ -24,8 +24,21 @@ export function AppShell({
       style={{ paddingBottom: LAYOUT.playbarHeight }}
       className="flex h-svh w-full overflow-hidden"
     >
+      {/* #340: the first Tab stop on every page skips the sidebar's links. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:ring-3 focus:ring-ring/50"
+      >
+        Skip to content
+      </a>
       <Sidebar />
-      <main className="flex-1 overflow-y-auto bg-background">{children}</main>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex-1 overflow-y-auto bg-background outline-none"
+      >
+        {children}
+      </main>
       {rightPanel ? <RightPanel>{rightPanel}</RightPanel> : null}
     </div>
   )
