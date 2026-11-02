@@ -40,6 +40,7 @@ from .routers import (
     health,
     iterative,
     jobs,
+    labs,
     mastering,
     models,
     presets,
@@ -251,6 +252,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     # #651: anonymous public discovery listings (Feed, Explore, Search).
     app.include_router(discover.router, prefix=API_V1_PREFIX)
     app.include_router(admin.router, prefix=API_V1_PREFIX)
+    app.include_router(labs.router, prefix=API_V1_PREFIX)
 
     errors.install(app)
 

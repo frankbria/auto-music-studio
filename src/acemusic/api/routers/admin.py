@@ -28,6 +28,7 @@ from ..models.screening import ScreeningRules
 from ..services import (
     appeals as appeal_service,
     engagement,
+    feature_flags,
     moderation,
     reports as report_service,
     screening,
@@ -345,3 +346,51 @@ async def rate_limits(request: Request) -> RateLimitsResponse:
             for r in reversed(limits.rejections)
         ],
     )
+
+
+class FlagUser(BaseModel):
+    id: str
+    email: str | None
+
+
+class FeatureFlag(BaseModel):
+    key: str
+    name: str
+    stage: Literal["alpha", "beta"]
+    enabled_for_everyone: bool
+    users: list[FlagUser]
+
+
+class FeatureFlagsResponse(BaseModel):
+    """Each experimental feature's rollout (#342): on for everyone, or only for the users granted it."""
+
+    flags: list[FeatureFlag]
+
+
+class EveryoneRollout(BaseModel):
+    enabled: bool
+
+
+@router.get("/feature-flags", response_model=FeatureFlagsResponse)
+async def feature_flag_overview() -> FeatureFlagsResponse:
+    return FeatureFlagsResponse(flags=await feature_flags.admin_overview())
+
+
+@router.put("/feature-flags/{key}", response_model=FeatureFlagsResponse)
+async def roll_out_to_everyone(
+    key: str, body: EveryoneRollout, current: CurrentUser = Depends(require_admin)
+) -> FeatureFlagsResponse:
+    await feature_flags.set_everyone(current.user_id, key, body.enabled)
+    return FeatureFlagsResponse(flags=await feature_flags.admin_overview())
+
+
+@router.put("/feature-flags/{key}/users/{email}", response_model=FeatureFlagsResponse)
+async def grant_to_user(key: str, email: str, current: CurrentUser = Depends(require_admin)) -> FeatureFlagsResponse:
+    await feature_flags.set_user_grant(current.user_id, key, email, True)
+    return FeatureFlagsResponse(flags=await feature_flags.admin_overview())
+
+
+@router.delete("/feature-flags/{key}/users/{email}", response_model=FeatureFlagsResponse)
+async def revoke_from_user(key: str, email: str, current: CurrentUser = Depends(require_admin)) -> FeatureFlagsResponse:
+    await feature_flags.set_user_grant(current.user_id, key, email, False)
+    return FeatureFlagsResponse(flags=await feature_flags.admin_overview())
