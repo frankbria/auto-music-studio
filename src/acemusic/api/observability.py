@@ -26,7 +26,7 @@ from .settings import ApiSettings
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
 
-_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{8,64}$")
+_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{8,64}")
 _access = logging.getLogger("acemusic.access")
 
 
@@ -41,12 +41,14 @@ def _stamped_record(*args, **kwargs) -> logging.LogRecord:
     return record
 
 
-logging.setLogRecordFactory(_stamped_record)
+if getattr(_base_factory, "__name__", None) != _stamped_record.__name__:
+    logging.setLogRecordFactory(_stamped_record)
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         entry: dict[str, object] = {
+            **getattr(record, "fields", {}),
             "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
@@ -56,7 +58,6 @@ class JsonFormatter(logging.Formatter):
             value = getattr(record, key, None)
             if value:
                 entry[key] = value
-        entry.update(getattr(record, "fields", {}))
         if record.exc_info:
             entry["exc"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
@@ -113,10 +114,9 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
         incoming = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1")
-        request_id = incoming if _SAFE_REQUEST_ID.match(incoming) else uuid.uuid4().hex
-        # On Sentry's per-request scope too: an unhandled error is captured after this middleware's context is gone.
+        request_id = incoming if _SAFE_REQUEST_ID.fullmatch(incoming) else uuid.uuid4().hex
+        # Also on Sentry's and the ASGI scope: an unhandled error is captured and answered after this context is gone.
         sentry_sdk.set_tag("request_id", request_id)
-        # Kept on the scope too: an unhandled error is answered outside this middleware, after its context is gone.
         scope.setdefault("state", {})["request_id"] = request_id
         request_token = request_id_var.set(request_id)
         user_token = user_id_var.set(None)

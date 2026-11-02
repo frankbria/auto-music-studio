@@ -204,9 +204,8 @@ class ApiSettings(BaseSettings):
 
     # US-28.5 (#342): one JSON object per log line (``text`` for plain lines in local development), and Sentry
     # error tracking when a DSN is set.
-    # ``text`` is for local development: it shows neither id.
     log_format: Literal["json", "text"] = "json"
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     sentry_dsn: str | None = None
     sentry_environment: str = "production"
 

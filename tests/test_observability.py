@@ -47,6 +47,19 @@ def test_a_well_formed_incoming_id_is_kept_and_anything_else_replaced(client) ->
     assert replaced.headers["x-request-id"] != "has spaces <script>"
 
 
+def test_an_id_with_a_trailing_newline_is_replaced() -> None:
+    assert observability._SAFE_REQUEST_ID.fullmatch("edge-abc12345\n") is None
+
+
+def test_extra_fields_cannot_overwrite_the_core_keys() -> None:
+    record = logging.LogRecord("acemusic.x", logging.INFO, __file__, 1, "real", None, None)
+    record.fields = {"message": "forged", "level": "DEBUG", "path": "/x"}
+
+    line = json.loads(observability.JsonFormatter().format(record))
+
+    assert (line["message"], line["level"], line["path"]) == ("real", "INFO", "/x")
+
+
 def test_a_500_quotes_the_request_id_and_its_log_lines_carry_it(client, caplog) -> None:
     with caplog.at_level(logging.INFO):
         resp = client.get("/test/crash", headers={"X-Request-ID": "trace-0001-abcd"})
@@ -86,6 +99,7 @@ def test_a_line_outside_any_request_has_no_ids() -> None:
 
 def test_the_log_level_is_checked_and_case_insensitive() -> None:
     assert _settings(log_level="warning").log_level == "WARNING"
+    assert _settings(log_level="critical").log_level == "CRITICAL"
     with pytest.raises(ValueError):
         _settings(log_level="info2")
 
