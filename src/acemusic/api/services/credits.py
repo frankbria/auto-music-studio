@@ -232,6 +232,35 @@ async def grant_purchased_credits(user_id: PydanticObjectId, amount: float) -> f
     return _total(doc)
 
 
+async def grant_plan_allocation(user_id: PydanticObjectId, tier: str) -> float:
+    """Raise the monthly bucket to ``tier``'s allocation when the plan is bought (#704); return what was added.
+
+    Never lowers it, like the monthly reset, so a balance already above the allocation keeps its surplus.
+    """
+    from . import tiers
+
+    allocation = tiers.monthly_allocation(tier)
+    monthly = {"$ifNull": ["$credits_balance", DEFAULT_CREDITS_BALANCE]}
+    before = await User.get_pymongo_collection().find_one_and_update(
+        {"_id": user_id},
+        [{"$set": {"credits_balance": {"$max": [monthly, allocation]}}}],
+        return_document=ReturnDocument.BEFORE,
+    )
+    if before is None:
+        return 0.0
+    monthly_before, purchased = _before_buckets(before)
+    granted = max(0.0, allocation - monthly_before)
+    if granted:
+        await record_transaction(
+            user_id=user_id,
+            amount=granted,
+            action_type="plan_upgrade",
+            job_id="",
+            balance_after=monthly_before + granted + purchased,
+        )
+    return granted
+
+
 def _before_buckets(doc: dict) -> tuple[float, float]:
     """The two buckets as the spend pipeline reads them, defaults for absent fields included."""
     monthly = doc.get("credits_balance")

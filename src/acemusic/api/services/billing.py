@@ -24,6 +24,7 @@ Like the other service modules this raises plain exceptions, never ``HTTPExcepti
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -567,9 +568,11 @@ async def _handle_checkout_completed(
         changed["subscription_synced_at"] = occurred_at
     await _persist_user_fields(user, **changed)
 
-    if not await _record_event(user, event_id, event_type):
-        return "duplicate"
-    return "subscribed"
+    recorded = await _record_event(user, event_id, event_type)
+    # Still attempted on a redelivery: a crash after recording must not cost the subscriber their credits.
+    tier = user.subscription_tier
+    await _grant_once(event_id, lambda: credits_service.grant_plan_allocation(user.id, tier))
+    return "subscribed" if recorded else "duplicate"
 
 
 def _unknown_price_tier(user: User, subscription: dict[str, Any], price_tiers: dict[str, str] | None) -> str:
@@ -587,6 +590,28 @@ def _checkout_plan(session: dict[str, Any]) -> str:
     """The plan a subscription checkout was for (#695); Pro for a session created before #695."""
     plan = (session.get("metadata") or {}).get(PLAN_METADATA_KEY)
     return plan if tiers.is_paid(plan) else tiers.PRO
+
+
+async def _grant_once(event_id: str, grant: Callable[[], Awaitable[object]]) -> bool:
+    """Run ``grant`` for this recorded event at most once across redeliveries; False if another delivery has it.
+
+    Recording and marking are two writes in two collections, so "look, then grant" is only safe sequentially: a
+    redelivery landing mid-grant would read ``credits_granted_at`` as None and grant again (PR #421). The conditional
+    update is the claim, and a failed grant releases it so a redelivery can retry.
+    """
+    collection = BillingEvent.get_pymongo_collection()
+    claimed = await collection.find_one_and_update(
+        {"stripe_event_id": event_id, "credits_granted_at": None},
+        {"$set": {"credits_granted_at": datetime.now(timezone.utc)}},
+    )
+    if claimed is None:
+        return False
+    try:
+        await grant()
+    except Exception:
+        await collection.update_one({"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}})
+        raise
+    return True
 
 
 async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str) -> str:
@@ -610,32 +635,8 @@ async def _handle_topup(event_id: str, event_type: str, user: User, pack_id: str
 
     await _record_event(user, event_id, event_type)
 
-    # Claim the grant atomically. Recording and marking are two writes in two
-    # collections, so "look, then grant" is only safe sequentially — a redelivery landing
-    # while the first delivery is still inside grant_purchased_credits would read
-    # credits_granted_at as None and grant again. Raised in review on PR #421, and a real
-    # race under Stripe's at-least-once delivery rather than a hypothetical one.
-    #
-    # A conditional find_one_and_update is the claim: exactly one caller can move the row
-    # from unclaimed to claimed, whatever the concurrency, and only that one grants.
-    now = datetime.now(timezone.utc)
-    claimed = await BillingEvent.get_pymongo_collection().find_one_and_update(
-        {"stripe_event_id": event_id, "credits_granted_at": None},
-        {"$set": {"credits_granted_at": now}},
-    )
-    if claimed is None:
-        # Someone else already granted this event, or is granting it right now.
+    if not await _grant_once(event_id, lambda: credits_service.grant_purchased_credits(user.id, pack["credits"])):
         return "duplicate"
-
-    try:
-        await credits_service.grant_purchased_credits(user.id, pack["credits"])
-    except Exception:
-        # Release the claim so a redelivery can retry, rather than leaving the row
-        # looking settled while the credits never landed.
-        await BillingEvent.get_pymongo_collection().update_one(
-            {"stripe_event_id": event_id}, {"$set": {"credits_granted_at": None}}
-        )
-        raise
 
     logger.info("billing: granted %s credits to %s (pack %s)", pack["credits"], user.id, pack_id)
     return "topped_up"

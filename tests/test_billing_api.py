@@ -12,6 +12,7 @@ outbound calls to Stripe's API and need credentials this environment does not ha
 Those are covered against the SDK seam instead — see ``TestCheckoutSurface``.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -23,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import BillingEvent, User
+from acemusic.api.models import BillingEvent, CreditTransaction, User
 from acemusic.api.services import billing as billing_service
 from acemusic.api.settings import ApiSettings
 from tests.users import make_user
@@ -234,6 +235,69 @@ class TestSubscribing:
         assert refreshed.subscription_tier == "pro"
         assert refreshed.stripe_subscription_id == "sub_test_1"
         assert refreshed.subscription_status == "active"
+
+
+@pytest.mark.integration
+class TestPlanCreditsOnCheckout:
+    """#704: buying a plan grants its monthly allocation now, not at the next reset."""
+
+    async def test_buying_pro_raises_the_balance_to_its_allocation(self, client) -> None:
+        user = await _subscriber("plan-credits-pro@example.com")
+
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+
+        assert (await User.get(user.id)).credits_balance == 500.0
+        [row] = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
+        assert (row.action_type, row.amount, row.balance_after) == ("plan_upgrade", 490.0, 500.0)
+
+    async def test_buying_enterprise_raises_the_balance_to_its_allocation(self, client) -> None:
+        user = await _subscriber("plan-credits-ent@example.com")
+        body = {"customer": CUSTOMER, "subscription": "sub_test_1", "metadata": {"acemusic_plan": "enterprise"}}
+
+        await _post_event(client, "checkout.session.completed", body)
+
+        assert (await User.get(user.id)).credits_balance == 2500.0
+
+    async def test_a_balance_above_the_allocation_is_left_alone(self, client) -> None:
+        user = await _subscriber("plan-credits-rich@example.com")
+        await User.find_one(User.id == user.id).update({"$set": {"credits_balance": 700.0, "purchased_credits": 40.0}})
+
+        await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_test_1"})
+
+        refreshed = await User.get(user.id)
+        assert (refreshed.credits_balance, refreshed.purchased_credits) == (700.0, 40.0)
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 0
+
+    async def test_concurrent_deliveries_of_one_checkout_grant_once(self, client) -> None:
+        user = await _subscriber("plan-credits-concurrent@example.com")
+        await User.find_one(User.id == user.id).update({"$set": {"credits_balance": 0.0}})
+        body = {"customer": CUSTOMER, "subscription": "sub_test_1"}
+
+        await asyncio.gather(
+            *(_post_event(client, "checkout.session.completed", body, event_id="evt_plan_once") for _ in range(5))
+        )
+        await User.find_one(User.id == user.id).update({"$inc": {"credits_balance": -100.0}})
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_plan_once")
+
+        assert (await User.get(user.id)).credits_balance == 400.0, "a redelivery after spending grants nothing"
+        assert await CreditTransaction.find(CreditTransaction.user_id == user.id).count() == 1
+
+    async def test_a_failed_grant_is_retried_by_the_redelivery(self, client, monkeypatch) -> None:
+        user = await _subscriber("plan-credits-retry@example.com")
+        real = billing_service.credits_service.grant_plan_allocation
+
+        async def broken(*_args):
+            raise RuntimeError("mongo went away")
+
+        monkeypatch.setattr(billing_service.credits_service, "grant_plan_allocation", broken)
+        with pytest.raises(RuntimeError):
+            await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_1"})
+        monkeypatch.setattr(billing_service.credits_service, "grant_plan_allocation", real)
+
+        resp = await _post_event(client, "checkout.session.completed", {"customer": CUSTOMER, "subscription": "sub_1"})
+
+        assert resp.status_code == 200
+        assert (await User.get(user.id)).credits_balance == 500.0
 
 
 @pytest.mark.integration
