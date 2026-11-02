@@ -585,7 +585,6 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         return "This account is not banned."
     clips_restored = await clip_service.restore_ban_sweep(user.id, banned_at)
     try:
-        await Clip.find({"user_id": user.id, "owner_banned_at": banned_at}).update({"$set": {"owner_banned_at": None}})
         videos = await Video.find({"user_id": user.id, "removed_at": banned_at}).update({"$set": {"removed_at": None}})
         lifted = await User.find({"_id": user.id, "banned_at": banned_at}).update({"$set": {"banned_at": None}})
     except Exception:
@@ -593,10 +592,11 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         # the account is unbanned and its restored clips must stay up.
         if (await User.get(user.id)).banned_at == banned_at:
             await clip_service.take_down_visible({"user_id": user.id}, banned_at)
-            await Clip.find({"user_id": user.id}).update({"$set": {"owner_banned_at": banned_at}})
         raise
     if not lifted.modified_count:
         return "This account is not banned."
+    # Only once the ban is lifted (#655): a cancellation before here must leave the clips out of public listings.
+    await Clip.find({"user_id": user.id, "owner_banned_at": banned_at}).update({"$set": {"owner_banned_at": None}})
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
 
 
@@ -676,6 +676,20 @@ async def _restorable_videos(oids: list[PydanticObjectId]) -> set[str]:
 async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
     """The page's video unpublish entries in force."""
     return await unpublishes_in_force(_unpublished_video_ids(entries))
+
+
+async def backfill_owner_banned_at() -> int:
+    """Stamp the clips of accounts banned before ``Clip.owner_banned_at`` existed (#655); idempotent, run at startup.
+
+    Returns how many clips it stamped. Banned accounts are few, so this is one update per banned user.
+    """
+    stamped = 0
+    for user in await User.find({"banned_at": {"$type": "date"}}).to_list():
+        result = await Clip.find({"user_id": user.id, "owner_banned_at": None}).update(
+            {"$set": {"owner_banned_at": user.banned_at}}
+        )
+        stamped += result.modified_count
+    return stamped
 
 
 async def unpublish_in_force_at(video_id: PydanticObjectId) -> datetime | None:

@@ -284,6 +284,8 @@ async def take_down_visible(query: dict, banned_at: datetime) -> int:
                     "visibility": VisibilityState.PRIVATE.value,
                     "is_public": False,
                     "removed_at": banned_at,
+                    # Also on the release path's takedown of a banned owner's clip, not just the ban's own sweep (#655).
+                    "owner_banned_at": banned_at,
                 }
             }
         ],

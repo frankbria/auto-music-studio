@@ -33,6 +33,7 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
+from acemusic.api.models.common import utcnow
 from acemusic.api.services import moderation, releases as release_service, routing, screening, soundcloud
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
@@ -761,6 +762,18 @@ class TestUnban:
         await _act_on_users(client, admin, settings, "unban", [owner.id])
 
         assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {None}
+
+    async def test_clips_of_an_account_banned_before_the_stamp_are_backfilled(self, client, settings):
+        stamp = utcnow()
+        owner = await _user(banned_at=stamp)
+        clip = await _clip(owner)
+        other = await _clip(await _user())
+
+        assert await moderation.backfill_owner_banned_at() == 1
+        assert await moderation.backfill_owner_banned_at() == 0
+
+        assert (await Clip.get(clip.id)).owner_banned_at == (await User.get(owner.id)).banned_at
+        assert (await Clip.get(other.id)).owner_banned_at is None
 
     async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
         admin, user = await _admin(), await _user()
