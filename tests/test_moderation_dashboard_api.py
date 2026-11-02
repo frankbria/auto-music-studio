@@ -33,7 +33,15 @@ from acemusic.api.models import (
     VisibilityState,
     Workspace,
 )
-from acemusic.api.services import moderation, releases as release_service, routing, screening, soundcloud
+from acemusic.api.models.common import utcnow
+from acemusic.api.services import (
+    clips as clip_service,
+    moderation,
+    releases as release_service,
+    routing,
+    screening,
+    soundcloud,
+)
 from acemusic.api.services.tiers import PRO
 from acemusic.api.settings import ApiSettings
 from acemusic.api.tasks.soundcloud_poller import SoundCloudStatusPoller
@@ -745,6 +753,60 @@ def _video(clip, **fields) -> Video:
 
 @pytest.mark.integration
 class TestUnban:
+    async def test_ban_stamps_every_owner_clip_and_unban_clears_it(self, client, settings):
+        """#655: public listings exclude a banned owner by this stamp, not by reading every banned id."""
+        owner, admin = await _user(), await _admin()
+        public = await _clip(owner)
+        private = await _clip(owner, VisibilityState.PRIVATE)
+        other = await _clip(await _user())
+
+        await _act_on_users(client, admin, settings, "ban", [owner.id])
+
+        banned_at = (await User.get(owner.id)).banned_at
+        assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {banned_at}
+        assert (await Clip.get(other.id)).owner_banned_at is None
+
+        await _act_on_users(client, admin, settings, "unban", [owner.id])
+
+        assert {(await Clip.get(c.id)).owner_banned_at for c in (public, private)} == {None}
+
+    async def test_startup_reconcile_settles_stamps_both_ways(self, client, settings):
+        """#655: an account banned before the stamp existed gets it; an unbanned account's stale stamp is cleared."""
+        stamp = utcnow()
+        banned = await _user(banned_at=stamp)
+        unstamped = await _clip(banned)
+        unbanned = await _user()
+        stale = await _clip(unbanned, owner_banned_at=stamp)
+        bystander = await _clip(await _user())
+
+        await moderation.reconcile_owner_stamps()
+        await moderation.reconcile_owner_stamps()
+
+        assert (await Clip.get(unstamped.id)).owner_banned_at == (await User.get(banned.id)).banned_at
+        assert (await Clip.get(stale.id)).owner_banned_at is None
+        assert (await Clip.get(bystander.id)).owner_banned_at is None
+
+    async def test_settling_follows_an_unban_that_lands_between_its_read_and_write(self, client, settings, monkeypatch):
+        stamp = utcnow()
+        owner = await _user(banned_at=stamp)
+        clip = await _clip(owner)
+        real_state = clip_service._ban_state
+        reads = 0
+
+        async def unbanned_after_the_first_read(user_id):
+            nonlocal reads
+            reads += 1
+            state = await real_state(user_id)
+            if reads == 1:
+                await User.find_one(User.id == owner.id).update({"$set": {"banned_at": None}})
+            return state
+
+        monkeypatch.setattr(clip_service, "_ban_state", unbanned_after_the_first_read)
+
+        assert await clip_service.settle_owner_stamp(owner.id) is None
+
+        assert (await Clip.get(clip.id)).owner_banned_at is None
+
     async def test_unban_restores_the_account_and_what_the_ban_took_down(self, client, settings):
         admin, user = await _admin(), await _user()
         public, unlisted, private = (

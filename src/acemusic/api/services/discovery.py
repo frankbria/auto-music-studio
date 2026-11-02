@@ -1,12 +1,18 @@
 """Public discovery listings for Feed, Explore and Search (#651).
 
 Every listing reads the shared public pool, :func:`services.clips.public_clip_filter`.
+
+Free text uses the ``clip_text_search`` index (#655): whole words, stemmed in English ("loving" finds "love"),
+case- and diacritic-insensitive, any word matching. A partial word finds nothing ("lov" does not find "love").
+Relevance is the index's weighted score: title 5, style tags 2, lyrics 1.
 """
 
 import re
+import time
 from typing import Literal
 
 from fastapi import HTTPException, status
+from pymongo.errors import ExecutionTimeout
 
 from ..models import Clip, User
 from .clips import public_clip_filter
@@ -16,15 +22,18 @@ from .moderation import after_cursor, decode_cursor, encode_cursor
 DiscoverSort = Literal["newest", "relevance"]
 
 _NEWEST = [("created_at", -1), ("_id", -1)]
+_LEADING_HYPHENS = re.compile(r"(?<!\S)-+")
+# A query past this answers 503 rather than holding a connection: the pool is public and unauthenticated.
+MAX_QUERY_MS = 3000
+FACETS_TTL_SECONDS = 45.0
+_facets_cache: tuple[float, dict[str, list[str]]] | None = None
 
 
 def _text_criteria(q: str, style: str | None) -> dict:
     criteria: dict = {}
     if q:
-        # shortcut: an unanchored regex over the public pool (bounded by the is_public index, scanned
-        # again for total); move to a search index once the public pool reaches tens of thousands.
-        needle = re.compile(re.escape(q), re.IGNORECASE)
-        criteria["$or"] = [{"title": needle}, {"style_tags": needle}, {"lyrics": needle}]
+        # Quotes and a leading "-" are $text syntax (phrase, negation); a user's search is plain words.
+        criteria["$text"] = {"$search": _LEADING_HYPHENS.sub(" ", q.replace('"', " "))}
     words = [word for word in re.split(r"[\s-]+", style or "") if word]
     if words:
         # Generated clips store their whole style prompt as one tag ("dark hip hop beat"), so a
@@ -38,22 +47,6 @@ def _text_criteria(q: str, style: str | None) -> dict:
 def _exact_criteria(bpm_min: int | None, bpm_max: int | None, key: str | None, model: str | None) -> dict:
     bpm = {op: value for op, value in (("$gte", bpm_min), ("$lte", bpm_max)) if value is not None}
     return {field: value for field, value in (("bpm", bpm), ("key", key), ("model", model)) if value}
-
-
-def _relevance_score(q: str) -> dict:
-    """The old client-side ranking (title prefix 5, title 3, a tag 2, lyrics 1), computed in Mongo."""
-
-    def matches(field: str, pattern: str) -> dict:
-        return {"$regexMatch": {"input": {"$ifNull": [field, ""]}, "regex": pattern, "options": "i"}}
-
-    needle = re.escape(q)
-    title = {"$cond": [matches("$title", f"^{needle}"), 5, {"$cond": [matches("$title", needle), 3, 0]}]}
-    tags = {
-        "$anyElementTrue": [
-            {"$map": {"input": {"$ifNull": ["$style_tags", []]}, "as": "tag", "in": matches("$$tag", needle)}}
-        ]
-    }
-    return {"$add": [title, {"$cond": [tags, 2, 0]}, {"$cond": [matches("$lyrics", needle), 1, 0]}]}
 
 
 def _after_relevance(cursor: str | None) -> dict:
@@ -72,16 +65,19 @@ def _after_relevance(cursor: str | None) -> dict:
     }
 
 
-async def _by_relevance(match: dict, q: str, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
+async def _by_relevance(match: dict, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
+    # The sort runs over the text-matched rows only; allowDiskUse lifts the 100MB in-memory cap for a broad query.
     rows = (
         await Clip.find(match)
         .aggregate(
             [
-                {"$addFields": {"score": _relevance_score(q)}},
+                {"$addFields": {"score": {"$meta": "textScore"}}},
                 {"$match": _after_relevance(cursor)},
                 {"$sort": {"score": -1, "created_at": -1, "_id": -1}},
                 {"$limit": limit + 1},
-            ]
+            ],
+            allowDiskUse=True,
+            maxTimeMS=MAX_QUERY_MS,
         )
         .to_list()
     )
@@ -93,8 +89,18 @@ async def _by_relevance(match: dict, q: str, limit: int, cursor: str | None) -> 
     return clips, encode_cursor("discover_relevance", (last["score"], last["created_at"], str(last["_id"])))
 
 
+async def _count(match: dict) -> int:
+    # count_documents directly: Beanie's count() forwards max_time_ms into an aggregate, which rejects it.
+    return await Clip.get_pymongo_collection().count_documents(match, maxTimeMS=MAX_QUERY_MS)
+
+
 async def _by_newest(match: dict, limit: int, cursor: str | None) -> tuple[list[Clip], str | None]:
-    rows = await Clip.find(match, after_cursor("discover_newest", cursor)).sort(_NEWEST).limit(limit + 1).to_list()
+    rows = await (
+        Clip.find(match, after_cursor("discover_newest", cursor), max_time_ms=MAX_QUERY_MS)
+        .sort(_NEWEST)
+        .limit(limit + 1)
+        .to_list()
+    )
     page = rows[:limit]
     if len(rows) <= limit:
         return page, None
@@ -112,28 +118,53 @@ async def list_public_clips(
     sort: DiscoverSort = "newest",
     limit: int = 20,
     cursor: str | None = None,
-) -> tuple[list[Clip], str | None, int]:
+) -> tuple[list[Clip], str | None, int | None]:
     """One keyset page of the public pool, its next cursor, and how many clips match in all.
 
-    ``relevance`` with no query ranks newest, as the client-side search did.
+    ``total`` is counted on the first page only (no cursor), and None after it: the caller keeps the first page's.
+    ``relevance`` with no query ranks newest, as the client-side search did. A query past ``MAX_QUERY_MS`` is a 503.
     """
     q = q.strip()
     match = {**await public_clip_filter(), **_text_criteria(q, style), **_exact_criteria(bpm_min, bpm_max, key, model)}
-    total = await Clip.find(match).count()
-    if sort == "relevance" and q:
-        clips, next_cursor = await _by_relevance(match, q, limit, cursor)
-    else:
-        clips, next_cursor = await _by_newest(match, limit, cursor)
+    try:
+        total = None if cursor else await _count(match)
+        if sort == "relevance" and q:
+            clips, next_cursor = await _by_relevance(match, limit, cursor)
+        else:
+            clips, next_cursor = await _by_newest(match, limit, cursor)
+    except ExecutionTimeout as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Search took too long. Try narrowing it."
+        ) from exc
     return clips, next_cursor, total
 
 
 async def public_facets() -> dict[str, list[str]]:
-    """The keys and models present in the public pool, for Search's filter options."""
+    """The keys and models present in the public pool, for Search's filter options.
+
+    Cached per process for ``FACETS_TTL_SECONDS``: Search asks on every load, and a filter option missing for
+    that long is harmless.
+    """
+    global _facets_cache
+    if _facets_cache is not None and time.monotonic() - _facets_cache[0] < FACETS_TTL_SECONDS:
+        return _facets_cache[1]
+    facets = await _read_facets()
+    _facets_cache = (time.monotonic(), facets)
+    return facets
+
+
+async def _read_facets() -> dict[str, list[str]]:
     pool = await public_clip_filter()
     return {
         "keys": sorted(v for v in await Clip.find(pool).distinct("key") if v),
         "models": sorted(v for v in await Clip.find(pool).distinct("model") if v),
     }
+
+
+def clear_facets_cache() -> None:
+    """For tests, which change the pool between requests in one process."""
+    global _facets_cache
+    _facets_cache = None
 
 
 #: shortcut: a profile lists its newest public clips without paging; page it when a creator publishes more than this.

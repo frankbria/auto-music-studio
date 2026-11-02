@@ -6,7 +6,7 @@ import type { Clip } from "@/lib/workspace-clips"
 export function discoverPage(
   clips: Clip[],
   nextCursor: string | null = null,
-  total = clips.length
+  total: number | null = clips.length
 ): Response {
   return new Response(
     JSON.stringify({ clips, next_cursor: nextCursor, total }),

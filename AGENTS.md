@@ -430,7 +430,10 @@ Package manager: `uv` with `hatchling` build backend
   `useDiscoveryAuth`, which waits for the session and doesn't refetch when the token rotates. Every public listing
   filters through `services/clips.public_clip_filter` (`is_public`, not removed, owner not banned), which similar-clips
   uses too. A new public listing must use it. Filter on `is_public`, never `visibility`: pre-US-20.7 clips have no
-  `visibility` key in Mongo. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them
+  `visibility` key in Mongo. Free text uses the `clip_text_search` index (#655): stemmed whole words (English), any word matching, ranked
+  by the index score (title 5, tags 2, lyrics 1). A partial word finds nothing. `total` is counted on the first page
+  only (null after it), queries carry `maxTimeMS` (503 past it), facets are cached per process for 45 s, and a banned
+  owner's clips are excluded by `Clip.owner_banned_at`, which ban and unban set and clear. Trending, Staff Picks, Charts and "Most Popular" were removed because nothing backs them
   (no play, like or share counters, no staff-pick flag). Profiles read `GET /api/v1/discover/profiles/{handle}`
   (the owner's public clips through `public_clip_filter`, #654), and the playlist add-songs picker searches
   `/api/discover/clips`; the mock clip pool is gone

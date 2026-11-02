@@ -107,7 +107,10 @@ class TestPublicProfile:
         real_filter = discovery.public_clip_filter
 
         async def banned_meanwhile():
-            await User.find_one(User.id == nova.id).update({"$set": {"banned_at": datetime.now(timezone.utc)}})
+            # What a ban writes first: the account's stamp, then the same stamp on its clips (#655).
+            stamp = datetime.now(timezone.utc)
+            await User.find_one(User.id == nova.id).update({"$set": {"banned_at": stamp}})
+            await Clip.find({"user_id": nova.id}).update({"$set": {"owner_banned_at": stamp}})
             return await real_filter()
 
         monkeypatch.setattr(discovery, "public_clip_filter", banned_meanwhile)

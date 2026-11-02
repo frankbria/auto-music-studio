@@ -16,7 +16,8 @@ router = APIRouter(prefix="/discover", tags=["discover"], dependencies=[Depends(
 class DiscoverClipsResponse(BaseModel):
     clips: list[PublicClipResponse]
     next_cursor: str | None
-    total: int
+    # Counted on the first page only (no cursor); null after it, so the client keeps the first count (#655).
+    total: int | None
 
 
 class DiscoverFacetsResponse(BaseModel):

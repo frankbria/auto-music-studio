@@ -9,7 +9,7 @@ from typing import Any
 
 from beanie import Document, PydanticObjectId
 from pydantic import Field, model_validator
-from pymongo import ASCENDING, DESCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, TEXT, IndexModel
 
 from .common import utcnow
 from .distribution import VisibilityState
@@ -41,6 +41,9 @@ class Clip(Document):
     flagged_at: datetime | None = None
     #: US-27.3: taken down by moderation. Forced private, and the owner cannot make it public again.
     removed_at: datetime | None = None
+    # The owner's ban stamp while they are banned, so public listings exclude their clips without reading every
+    # banned id (#655). Set and cleared by the ban and unban, matched on the stamp.
+    owner_banned_at: datetime | None = None
     #: #581: what a ban's sweep took this clip down from, so lifting the ban restores it.
     visibility_before_ban: VisibilityState | None = None
     vocal_language: str | None = None
@@ -123,6 +126,12 @@ class Clip(Document):
             IndexModel([("moderation_flags", ASCENDING)]),
             # The public discovery pool, newest first with the keyset tiebreak (#651).
             IndexModel([("is_public", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)]),
+            # Public text search (#655): whole words, stemmed (English), weighted as the old client-side ranking.
+            IndexModel(
+                [("title", TEXT), ("style_tags", TEXT), ("lyrics", TEXT)],
+                weights={"title": 5, "style_tags": 2, "lyrics": 1},
+                name="clip_text_search",
+            ),
             # One ISRC per recording (US-13.4). Partial filter excludes the many
             # clips with no code so they don't collide on null.
             IndexModel(

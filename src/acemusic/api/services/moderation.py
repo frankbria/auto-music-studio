@@ -110,7 +110,7 @@ _CURSORS: dict[str, TypeAdapter] = {
     "appeals_newest": _cursor("appeals_newest", AwareDatetime, str),
     # #651: public discovery, newest first and by search relevance.
     "discover_newest": _cursor("discover_newest", AwareDatetime, str),
-    "discover_relevance": _cursor("discover_relevance", int, AwareDatetime, str),
+    "discover_relevance": _cursor("discover_relevance", float, AwareDatetime, str),
 }
 
 
@@ -554,6 +554,8 @@ async def _ban(actor_id: str, user: User, _reason: str | None) -> dict | str:
         return_document=ReturnDocument.AFTER,
     )
     stamp = claimed["banned_at"]
+    # First, so public listings drop every clip of theirs at once, whatever its visibility (#655).
+    await Clip.find({"user_id": user.id}).update({"$set": {"owner_banned_at": stamp}})
     await revoke_all_user_tokens(user.id)
     clips_removed = await clip_service.take_down_visible({"user_id": user.id}, stamp)
     # #539: removed, like the clips, so a still-live access token can't publish them again.
@@ -592,6 +594,9 @@ async def _unban(_actor_id: str, user: User, _reason: str | None) -> dict | str:
         raise
     if not lifted.modified_count:
         return "This account is not banned."
+    # Only once the ban is lifted (#655): a cancellation before here leaves the clips out of public listings, and
+    # the next startup's reconcile clears them.
+    await clip_service.settle_owner_stamp(user.id)
     return {"clips_restored": clips_restored, "videos_restored": videos.modified_count}
 
 
@@ -671,6 +676,18 @@ async def _restorable_videos(oids: list[PydanticObjectId]) -> set[str]:
 async def _restorable_unpublishes(entries: list[ModerationLogEntry]) -> set[str]:
     """The page's video unpublish entries in force."""
     return await unpublishes_in_force(_unpublished_video_ids(entries))
+
+
+async def reconcile_owner_stamps() -> None:
+    """Settle the owner stamp of every account whose clips could disagree with it (#655); run at startup.
+
+    Covers accounts banned before ``Clip.owner_banned_at`` existed, and a ban or unban whose process died before
+    its own settle. Banned accounts are few, so this is one update per account.
+    """
+    banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
+    stamped = await Clip.find({"owner_banned_at": {"$ne": None}}).distinct("user_id")
+    for user_id in {*banned, *stamped}:
+        await clip_service.settle_owner_stamp(user_id)
 
 
 async def unpublish_in_force_at(video_id: PydanticObjectId) -> datetime | None:

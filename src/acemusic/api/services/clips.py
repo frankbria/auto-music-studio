@@ -246,16 +246,13 @@ async def public_clip_filter() -> dict:
     Moderation already makes a removed clip and a banned owner's clips private; this checks both
     itself, so a clip written around those paths still stays out of every listing.
     """
-    # shortcut: the banned-owner list is read whole on every listing; fine while bans number in the
-    # thousands, move to a denormalized owner_banned flag on Clip if that list grows past that.
-    banned = await User.find({"banned_at": {"$type": "date"}}).distinct("_id")
     # Both copies must agree, so a writer that sets one without the other can't leak a clip. A missing
     # visibility ($in matches null) is a clip written before US-20.7, which only ever had is_public.
     return {
         "is_public": True,
         "visibility": {"$in": [VisibilityState.PUBLIC.value, None]},
         "removed_at": None,
-        "user_id": {"$nin": banned},
+        "owner_banned_at": None,
     }
 
 
@@ -287,6 +284,8 @@ async def take_down_visible(query: dict, banned_at: datetime) -> int:
                     "visibility": VisibilityState.PRIVATE.value,
                     "is_public": False,
                     "removed_at": banned_at,
+                    # Also on the release path's takedown of a banned owner's clip, not just the ban's own sweep (#655).
+                    "owner_banned_at": banned_at,
                 }
             }
         ],
@@ -298,7 +297,7 @@ async def hand_over_ban_sweep(user_id: PydanticObjectId, swept_with: datetime) -
     """Settle clips a ban's sweep took down after the ban stopped being the one in force (#581); returns the
     stamp now in force. Unbanned: put them back, which the unban, running first, found nothing of. Banned
     again: restamp them with that ban, whose unban then restores them."""
-    in_force = (await User.get(user_id)).banned_at
+    in_force = await settle_owner_stamp(user_id)
     if in_force == swept_with:
         return in_force
     if in_force is None:
@@ -308,6 +307,29 @@ async def hand_over_ban_sweep(user_id: PydanticObjectId, swept_with: datetime) -
             {"$set": {"removed_at": in_force}}
         )
     return in_force
+
+
+async def settle_owner_stamp(user_id: PydanticObjectId) -> datetime | None:
+    """Set ``owner_banned_at`` on every clip of theirs to their ban state now, and return that state (#655).
+
+    Every path that bans, unbans or takes down for a ban ends with this, so whichever runs last leaves the stamps
+    right; startup runs it too (``moderation.reconcile_owner_stamps``), which heals a process that died between.
+    """
+    stamp = await _ban_state(user_id)
+    while True:
+        await Clip.find({"user_id": user_id, "owner_banned_at": {"$ne": stamp}}).update(
+            {"$set": {"owner_banned_at": stamp}}
+        )
+        # A ban or unban landing between the read and the write would be overwritten; read again and follow it.
+        now = await _ban_state(user_id)
+        if now == stamp:
+            return stamp
+        stamp = now
+
+
+async def _ban_state(user_id: PydanticObjectId) -> datetime | None:
+    owner = await User.get(user_id)
+    return owner.banned_at if owner else None
 
 
 async def restore_ban_sweep(user_id: PydanticObjectId, banned_at: datetime) -> int:
