@@ -338,6 +338,24 @@ class TestGracefulDegradation:
         user = await user_service.get_user_by_id(str(job.user_id))
         assert user.credits_balance == before + cost
 
+    async def test_a_pinned_job_without_bakuage_configured_refunds_rather_than_running_elsewhere(self, storage) -> None:
+        """#694 review: a non-admin's job on a deployment without Bakuage fails clearly and is refunded."""
+        from acemusic.api.services import credits as credits_service
+
+        job, _ = await _make_clip(
+            storage, email="master-pinned-unconfigured@example.com", service="bakuage", allowed_services=["bakuage"]
+        )
+        dolby = FakeService(service="dolby", output=_wav_bytes(3.0))
+        orch = _orchestrator(dolby=dolby)
+        cost = credits_service.get_mastering_cost("bakuage")
+        before = await credits_service.deduct_credits(job.user_id, cost)
+
+        with pytest.raises(tasks.JobProcessingError, match="not configured"):
+            await tasks.process_mastering_job(job, storage=storage, orchestrator=orch)
+
+        assert dolby.master_calls == []
+        assert (await user_service.get_user_by_id(str(job.user_id))).credits_balance == before + cost
+
     async def test_no_backends_at_all_refunds_and_raises(self, storage) -> None:
         from acemusic.api.services import credits as credits_service
 

@@ -535,7 +535,8 @@ async def edit_video(
         params["moderation_flags"] = moderation_flags
     job = await credits_service.charge_and_create(
         user_id=user.id,
-        cost=credits_service.get_video_cost(resolution, clip.duration),
+        # #694: the provider renders the source video, which may be shorter than the song.
+        cost=credits_service.get_video_cost(resolution, effective_duration),
         action_type=video_service.VIDEO_JOB_TYPE,
         create=lambda: video_service.create_video_job(user_id=user.id, workspace_id=clip.workspace_id, params=params),
     )

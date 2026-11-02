@@ -796,6 +796,20 @@ class TestVideoEdit:
         txns = await CreditTransaction.find(CreditTransaction.user_id == user.id).to_list()
         assert any(t.amount == pytest.approx(-63.0) for t in txns)
 
+    async def test_an_edit_is_priced_on_the_video_it_renders_not_the_whole_song(
+        self, client, settings, local_storage
+    ) -> None:
+        """#694 review: the provider renders the (shorter) source video, so a 10 s cut of a 4 min song costs 26."""
+        user, _ws, clip = await _user_with_clip("video-edit-short@example.com", balance=1000, duration=240.0)
+        source = await _insert_video(user, clip, resolution="720p", duration=10.0)
+        resp = await client.post(
+            _edit_url(str(source.id)),
+            json={"operation": "trim", "start_seconds": 0.0, "end_seconds": 5.0},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202, resp.text
+        assert (await _reload(user)).credits_balance == pytest.approx(974.0)
+
     async def test_edit_range_past_song_returns_422_no_charge(self, client, settings, local_storage) -> None:
         user, _ws, clip = await _user_with_clip("video-edit-oob@example.com", balance=100, duration=10.0)
         source = await _insert_video(user, clip)
