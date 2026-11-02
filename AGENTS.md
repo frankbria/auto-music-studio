@@ -340,6 +340,15 @@ Package manager: `uv` with `hatchling` build backend
 - API demos run on `scripts/demo_api_stack.py`: one process holds a throwaway `acemusic_demo_*` database, a seeded
   Pro user with clips and a linked SoundCloud account, and a local SoundCloud stand-in. Source its `env.sh` for
   `TOKEN`, `api` and `M`, and stop it with `kill $(cat <dir>/pid)`. Its docstring has the usage
+- **Plans and pricing (#693–#695)**: tiers are `free` (50 credits/month), `pro` ($24/month or $228/year, 500)
+  and `enterprise` ($99/month or $998/year, 2,500); `tiers.normalise` fails closed to free for anything else, and
+  `tiers.is_paid` is the "Pro or better" check. Enterprise has every Pro capability plus `VIDEO_4K` and a priority
+  job queue (`Job.priority`, set from the owner's tier by a `before_event(Insert)` hook; the processor claims by
+  priority, then age). Checkout takes `{plan, interval}`; the webhook grants the plan in the session's metadata, and
+  a subscription update reads the tier from its Price (`ApiSettings.stripe_price_tiers`), so a portal plan change
+  lands. `ACEMUSIC_API_STRIPE_MANAGED_PAYMENTS=true` sets `managed_payments[enabled]` on every Checkout session.
+  Credit costs are priced above vendor cost at the worst-case revenue per credit (Enterprise annual, about $0.032):
+  see `services/credits.py` before changing one.
 - **Content screening (US-27.1)**: every generation entry point calls `services/screening.enforce(...)`
   on its free text *before* `charge_and_create`, so a blocked request (422, string `detail`) never
   charges. Borderline matches ride in `job.input_params["moderation_flags"]` and are copied to
