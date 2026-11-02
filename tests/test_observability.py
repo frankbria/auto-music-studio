@@ -41,10 +41,10 @@ def test_every_response_carries_a_generated_request_id(client) -> None:
 
 def test_a_well_formed_incoming_id_is_kept_and_anything_else_replaced(client) -> None:
     kept = client.get(NOWHERE, headers={"X-Request-ID": "edge-abc12345"})
-    replaced = client.get(NOWHERE, headers={"X-Request-ID": "x\\n<script>"})
+    replaced = client.get(NOWHERE, headers={"X-Request-ID": "has spaces <script>"})
 
     assert kept.headers["x-request-id"] == "edge-abc12345"
-    assert replaced.headers["x-request-id"] != "x\\n<script>"
+    assert replaced.headers["x-request-id"] != "has spaces <script>"
 
 
 def test_a_500_quotes_the_request_id_and_its_log_lines_carry_it(client, caplog) -> None:
@@ -84,6 +84,12 @@ def test_a_line_outside_any_request_has_no_ids() -> None:
     assert "request_id" not in line and "user_id" not in line
 
 
+def test_the_log_level_is_checked_and_case_insensitive() -> None:
+    assert _settings(log_level="warning").log_level == "WARNING"
+    with pytest.raises(ValueError):
+        _settings(log_level="info2")
+
+
 class TestErrorTracking:
     def test_off_without_a_dsn(self, monkeypatch) -> None:
         calls = []
@@ -92,6 +98,28 @@ class TestErrorTracking:
         observability.configure_error_tracking(_settings())
 
         assert calls == []
+
+    def test_an_unhandled_error_reaches_sentry_tagged_with_its_request_id(self, monkeypatch) -> None:
+        events: list[dict] = []
+        real_init = sentry_sdk.init
+        # A plain function transport receives each event as a dict.
+        monkeypatch.setattr(sentry_sdk, "init", lambda **kw: real_init(**kw, transport=events.append))
+        app = create_app(_settings(sentry_dsn="https://key@o1.ingest.sentry.io/1"))
+
+        async def crash() -> None:
+            raise RuntimeError("boom")
+
+        app.add_api_route("/test/crash", crash)
+        try:
+            TestClient(app, raise_server_exceptions=False).get(
+                "/test/crash", headers={"X-Request-ID": "sentry-0001-ab"}
+            )
+            sentry_sdk.flush()
+        finally:
+            real_init()  # no DSN: Sentry off again for the rest of the run
+
+        assert events, "the unhandled error was not reported"
+        assert {event["tags"]["request_id"] for event in events} == {"sentry-0001-ab"}
 
     def test_on_with_a_dsn_and_tags_events_with_the_request_id(self, monkeypatch) -> None:
         calls = []

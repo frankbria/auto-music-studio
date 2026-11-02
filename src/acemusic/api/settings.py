@@ -204,8 +204,9 @@ class ApiSettings(BaseSettings):
 
     # US-28.5 (#342): one JSON object per log line (``text`` for plain lines in local development), and Sentry
     # error tracking when a DSN is set.
+    # ``text`` is for local development: it shows neither id.
     log_format: Literal["json", "text"] = "json"
-    log_level: str = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     sentry_dsn: str | None = None
     sentry_environment: str = "production"
 
@@ -339,6 +340,11 @@ class ApiSettings(BaseSettings):
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(f"local_url {value!r} must be an absolute http(s):// URL")
         return value.strip()
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
     @field_validator("oauth_cookie_samesite")
     @classmethod

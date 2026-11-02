@@ -18,6 +18,7 @@ import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
 
+import sentry_sdk
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .settings import ApiSettings
@@ -84,7 +85,6 @@ def configure_error_tracking(settings: ApiSettings) -> None:
     """Report unhandled exceptions to Sentry when a DSN is configured; nothing otherwise."""
     if not settings.sentry_dsn:
         return
-    import sentry_sdk
 
     def tag_request(event: dict, _hint: dict) -> dict:
         request_id = request_id_var.get()
@@ -114,6 +114,8 @@ class RequestIdMiddleware:
             return
         incoming = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1")
         request_id = incoming if _SAFE_REQUEST_ID.match(incoming) else uuid.uuid4().hex
+        # On Sentry's per-request scope too: an unhandled error is captured after this middleware's context is gone.
+        sentry_sdk.set_tag("request_id", request_id)
         # Kept on the scope too: an unhandled error is answered outside this middleware, after its context is gone.
         scope.setdefault("state", {})["request_id"] = request_id
         request_token = request_id_var.set(request_id)
