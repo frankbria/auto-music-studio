@@ -172,6 +172,8 @@ jobs:
       - name: Ship the stack definition and roll forward
         env:
           ENVIRONMENT: staging
+          # Tailscale SSH authorizes the runner, so no key is provisioned (#699).
+          DEPLOY_SSH_KEY_OPTIONAL: "true"
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

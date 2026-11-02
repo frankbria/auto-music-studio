@@ -35,14 +35,14 @@ def stubs(tmp_path: Path) -> Path:
     (bin_dir / "ssh").write_text(
         f'#!/bin/sh\nstdin=$(cat)\necho "ssh $* <<$stdin" >> {log}\ncase "$*" in *deploy.sh*) exit "${{DEPLOY_EXIT:-0}}";; esac\n'
     )
-    (bin_dir / "scp").write_text(f'#!/bin/sh\necho "scp $*" >> {log}\n')
+    (bin_dir / "scp").write_text(f'#!/bin/sh\necho "scp $*" >> {log}\nexit "${{SCP_EXIT:-0}}"\n')
     (bin_dir / "ssh-keyscan").write_text("#!/bin/sh\necho 'host key'\n")
     for name in ("ssh", "scp", "ssh-keyscan"):
         (bin_dir / name).chmod(0o755)
     return tmp_path
 
 
-def _run(stubs: Path, **overrides: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _run(stubs: Path, **overrides: str | None) -> tuple[subprocess.CompletedProcess, list[str]]:
     env = {
         "PATH": f"{stubs / 'bin'}:{os.environ['PATH']}",
         "HOME": str(stubs),
@@ -60,8 +60,8 @@ def test_it_ships_the_stack_logs_the_host_in_and_hands_deploy_sh_the_sha(stubs: 
 
     assert result.returncode == 0, result.stderr
     assert (
-        calls[0]
-        == "scp -i " + f"{stubs}/.ssh/deploy_key compose.yaml scripts/deploy.sh deployer@staging.example:/opt/stack/"
+        calls[0] == f"scp -o BatchMode=yes -i {stubs}/.ssh/deploy_key compose.yaml scripts/deploy.sh "
+        "deployer@staging.example:/opt/stack/"
     )
     assert "docker login ghcr.io -u 'bot' --password-stdin <<ghs_token" in calls[1]
     deploy = calls[2]
@@ -94,9 +94,30 @@ def test_a_missing_secret_names_the_environment_and_touches_nothing(stubs: Path,
 
 
 def test_without_a_key_it_relies_on_the_network_to_authorize_ssh(stubs: Path) -> None:
-    result, calls = _run(stubs, DEPLOY_SSH_KEY="")
+    result, calls = _run(stubs, DEPLOY_SSH_KEY="", DEPLOY_SSH_KEY_OPTIONAL="true")
 
     assert result.returncode == 0, result.stderr
-    assert calls[0] == "scp compose.yaml scripts/deploy.sh deployer@staging.example:/opt/stack/"
+    assert calls[0] == "scp -o BatchMode=yes compose.yaml scripts/deploy.sh deployer@staging.example:/opt/stack/"
     assert all(" -i " not in call for call in calls)
     assert not (stubs / ".ssh" / "deploy_key").exists()
+
+
+def test_an_environment_that_did_not_opt_out_still_needs_a_key(stubs: Path) -> None:
+    result, calls = _run(stubs, ENVIRONMENT="production", DEPLOY_SSH_KEY="")
+
+    assert result.returncode == 1
+    assert "DEPLOY_SSH_KEY is not set on the production environment" in result.stdout
+    assert calls == []
+
+
+def test_a_failed_copy_stops_the_rollout(stubs: Path) -> None:
+    result, calls = _run(stubs, SCP_EXIT="1")
+
+    assert result.returncode == 1
+    assert [call for call in calls if "deploy.sh '" in call] == []
+
+
+def test_an_unset_environment_name_still_reports_the_missing_secret(stubs: Path) -> None:
+    result, _ = _run(stubs, ENVIRONMENT=None, DEPLOY_HOST="")
+
+    assert "DEPLOY_HOST is not set on the deploy environment" in result.stdout

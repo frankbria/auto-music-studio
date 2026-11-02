@@ -5,25 +5,31 @@
 #
 # Required: ENVIRONMENT (named in errors), DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, IMAGE_TAG, API_IMAGE, WEB_IMAGE,
 #           GHCR_USER, GHCR_TOKEN
-# Optional: DEPLOY_SSH_KEY, the private key the host trusts. Left unset where the network authorizes SSH itself
-#           (Tailscale SSH on the staging box), so no unused key with access to the host is ever provisioned.
+#           DEPLOY_SSH_KEY, the private key the host trusts, unless DEPLOY_SSH_KEY_OPTIONAL=true: an environment whose
+#           network authorizes SSH itself (Tailscale SSH on the staging box) leaves it unset, so no unused key with
+#           access to the host is ever provisioned.
+# Optional:
 #           DEPLOY_HEALTH_URL, the host-local health URL deploy.sh waits on; its default (localhost:8000) is wrong on a
 #           shared host where another stack owns that port.
 set -euo pipefail
 
-for required in DEPLOY_HOST DEPLOY_USER; do
-  if [[ -z "${!required:-}" ]]; then
-    echo "::error title=Deploy misconfigured::$required is not set on the $ENVIRONMENT environment."
+required=(DEPLOY_HOST DEPLOY_USER)
+[[ "${DEPLOY_SSH_KEY_OPTIONAL:-}" == "true" ]] || required+=(DEPLOY_SSH_KEY)
+for name in "${required[@]}"; do
+  if [[ -z "${!name:-}" ]]; then
+    echo "::error title=Deploy misconfigured::$name is not set on the ${ENVIRONMENT:-deploy} environment."
     exit 1
   fi
 done
 
 install -m 700 -d ~/.ssh
-key=()
+# BatchMode: a refused login or an unknown host key fails the job now, rather than waiting on a prompt until it
+# times out. The values interpolated into remote commands come from the workflow, not from users.
+key=(-o BatchMode=yes)
 if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
   printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
   chmod 600 ~/.ssh/deploy_key
-  key=(-i ~/.ssh/deploy_key)
+  key+=(-i ~/.ssh/deploy_key)
 fi
 ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 remote=(ssh "${key[@]}" "$DEPLOY_USER@$DEPLOY_HOST")
