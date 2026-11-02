@@ -202,6 +202,12 @@ class ApiSettings(BaseSettings):
     # stops a repeat report, not one account reporting every public clip.
     report_rate_limit_per_hour: int = Field(default=20, ge=1)
 
+    # US-28.4 (#341): per-user limits per minute, for the Free plan; Pro gets 3x, Enterprise 10x
+    # (``utils.user_rate_limit.TIER_FACTORS``). Reads are GET/HEAD, writes everything else, generations billed jobs.
+    rate_limit_reads_per_minute: int = Field(default=120, ge=1)
+    rate_limit_writes_per_minute: int = Field(default=60, ge=1)
+    rate_limit_generations_per_minute: int = Field(default=10, ge=1)
+
     # Reverse proxies whose forwarded client-IP header the limiter trusts (#283).
     # A same-origin BFF proxy calls the backend server-side, so every visitor
     # arrives as the proxy's egress IP and the per-IP limiter collapses to one

@@ -17,6 +17,7 @@ from pymongo import DESCENDING, ReturnDocument
 
 from ..models import CreditTransaction, Job, JobStatus, User
 from ..models.user import DEFAULT_CREDITS_BALANCE
+from ..utils import user_rate_limit
 from . import users
 
 logger = logging.getLogger(__name__)
@@ -446,6 +447,8 @@ async def charge_and_create(
     A banned account is refused here, before any money moves (US-27.3): most job routes
     authenticate on the access token alone, which outlives a ban by up to its TTL.
     """
+    # #341: a billed job counts against the requester's generation limit, before anything is charged.
+    user_rate_limit.check_generation()
     user = await User.get(user_id)
     if user is not None:
         users.reject_banned(user)
