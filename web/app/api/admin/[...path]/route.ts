@@ -36,7 +36,7 @@ async function proxy(
     ...clientIpHeaders(request),
   }
   const init: RequestInit = { method, headers }
-  if (method === "POST") {
+  if (method === "POST" || method === "PUT") {
     headers["content-type"] = "application/json"
     const payload = await readTextCapped(request)
     if (payload === null) return bodyTooLarge()

@@ -28,13 +28,11 @@ describe("/api/admin/[...path]", () => {
   ] as const)(
     "forwards a staff-pick %s with the token (#656)",
     async (method, handler) => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ staff_picked_at: null }), {
-            status: 200,
-          })
-        )
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ staff_picked_at: null }), {
+          status: 200,
+        })
+      )
       vi.stubGlobal("fetch", fetchMock)
 
       const res = await handler(
@@ -50,7 +48,7 @@ describe("/api/admin/[...path]", () => {
       expect(url).toContain("/api/v1/admin/clips/c1/staff-pick")
       expect(init.method).toBe(method)
       expect(init.headers.authorization).toBe("Bearer tok")
-      expect(init.body).toBeUndefined()
+      expect(init.body).toBe(method === "PUT" ? "" : undefined)
     }
   )
 
