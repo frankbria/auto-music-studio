@@ -84,7 +84,8 @@ nothing, which is the failure mode this work exists to remove.
 On the host: install Docker, create `DEPLOY_PATH`, and put a `.env.docker` there built
 from `.env.docker.example` with production values. (Named `.env.docker`, not `.env`,
 because a checkout already carries a `.env` holding the development configuration — a
-different schema entirely — and compose would silently load that one.) The workflow ships
+different schema entirely — and compose would silently load that one.) The API container loads that file whole (`env_file`), so any `ACEMUSIC_API_*` setting
+you put there takes effect without being listed in `compose.yaml` (#702). The workflow ships
 `compose.yaml` and `deploy.sh` on every deploy, so those are never edited in place.
 
 Three things that are easy to get wrong the first time:
@@ -94,11 +95,9 @@ Three things that are easy to get wrong the first time:
   `GITHUB_TOKEN` before pulling — scoped to the run, so there is no long-lived PAT to
   provision or rotate. If you would rather the host not authenticate at all, make the two
   packages public once under *Packages → Package settings*.
-- **Compose version.** `compose.yaml` uses a nested default
-  (`${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-…}}`) so the worker's URL inherits the
-  probe's rather than silently diverging. Docker Compose **v2.20+** resolves this
-  correctly; it is verified on the version used to build this stack. On anything older,
-  set both variables explicitly in `.env.docker`.
+- **Compose version: v2.24+.** The API loads `.env.docker` through `env_file` with
+  `required: false`, which older Compose rejects, so the stack will not even parse there (#702).
+  The nested default (`${ACEMUSIC_BASE_URL:-${ACEMUSIC_API_LOCAL_URL:-…}}`) also needs v2.20+.
 - **`build images` is not a required check yet.** Branch protection on `main` requires
   `ci (3.11)` and `ci (3.12)` only, so a Dockerfile that fails to build shows red without
   blocking the merge. Add `build images` to the required checks to close that.
