@@ -102,7 +102,7 @@ The application uses a two-panel layout:
 | Upload/Export | Mastering & Distribution | `/release` |
 | Plug | VST3 / DAW Integration | `/daw` |
 | Flask (bottom) | Experimental Features | `/labs` |
-| Circle (bottom) | Subscription / Account dialog | dialog |
+| Circle (bottom) | Account settings | `/settings` |
 
 ### 1.3 Sidebar Expand
 - A "Expand sidebar" button at the top toggles the sidebar between icon-only and full-label mode.
