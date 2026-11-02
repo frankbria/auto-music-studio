@@ -300,6 +300,21 @@ class TestPlanCreditsOnCheckout:
         assert resp.status_code == 200
         assert (await User.get(user.id)).credits_balance == 500.0
 
+    async def test_a_failed_ledger_row_does_not_reopen_the_grant(self, client, monkeypatch) -> None:
+        user = await _subscriber("plan-credits-ledger@example.com")
+        await User.find_one(User.id == user.id).update({"$set": {"credits_balance": 10.0}})
+
+        async def broken(**_fields):
+            raise RuntimeError("ledger down")
+
+        monkeypatch.setattr(credits_service, "record_transaction", broken)
+        body = {"customer": CUSTOMER, "subscription": "sub_test_1"}
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_ledger")
+        await User.find_one(User.id == user.id).update({"$inc": {"credits_balance": -100.0}})
+        await _post_event(client, "checkout.session.completed", body, event_id="evt_ledger")
+
+        assert (await User.get(user.id)).credits_balance == 400.0
+
     async def test_a_checkout_arriving_after_a_newer_subscription_event_still_grants(self, client) -> None:
         # Stripe does not order deliveries: the subscription's own update can land first, which makes the checkout
         # stale for the tier but must not cost the subscriber their credits.

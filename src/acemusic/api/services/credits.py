@@ -264,13 +264,16 @@ async def grant_plan_allocation(user_id: PydanticObjectId, tier: str) -> float:
     monthly_before, purchased = _before_buckets(before)
     granted = max(0.0, allocation - monthly_before)
     if granted:
-        await record_transaction(
-            user_id=user_id,
-            amount=granted,
-            action_type="plan_upgrade",
-            job_id="",
-            balance_after=monthly_before + granted + purchased,
-        )
+        try:
+            await record_transaction(
+                user_id=user_id,
+                amount=granted,
+                action_type="plan_upgrade",
+                job_id="",
+                balance_after=monthly_before + granted + purchased,
+            )
+        except Exception:  # the grant landed: failing here would release its claim and let a redelivery grant again
+            logger.exception("Plan allocation granted to %s but its ledger row failed", user_id)
     return granted
 
 
