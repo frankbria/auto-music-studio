@@ -9,8 +9,8 @@ import {
 } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for /api/v1/admin/* (US-27.3). One catch-all because the
-// moderation endpoints (queue, log, clip and user actions) forward identically. GET,
-// POST, and PUT/DELETE for staff picks (#656) are exported. The backend's
+// admin endpoints (moderation queue, log, clip and user actions, staff picks #656) forward
+// identically. GET, POST, PUT and DELETE are all forwarded, for every admin path. The backend's
 // require_admin is the gate, so a non-admin's token gets the backend's 403 passed
 // straight back. No allowlist: unlike billing, an unknown admin path 404s at the
 // backend rather than silently here.

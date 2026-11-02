@@ -41,20 +41,27 @@ export function FeedView() {
   const viewer = useDiscoveryAuth()
   const { token } = viewer
   // The viewer's server-side likes (#656); absent outside a PlayerProvider.
-  const seedLikes = useContext(PlayerContext)?.dispatch
+  const syncLikes = useContext(PlayerContext)?.dispatch
   const loadPage = useCallback(
     (cursor: string | null) => {
       const requestKey = cursor ?? ""
       if (requestedCursors.current.has(requestKey)) return
       requestedCursors.current.add(requestKey)
-      getFeedPage(cursor, token()).then(
+      const viewerToken = token()
+      getFeedPage(cursor, viewerToken).then(
         (page) => {
-          seedLikes?.({
-            type: "likes/seed",
-            ids: page.items
-              .filter((item) => item.viewer_liked)
-              .map((item) => item.id),
-          })
+          // Only a signed-in read knows the viewer's likes; an anonymous one says false for every clip.
+          if (viewerToken) {
+            syncLikes?.({
+              type: "likes/sync",
+              liked: page.items
+                .filter((item) => item.viewer_liked)
+                .map((item) => item.id),
+              unliked: page.items
+                .filter((item) => !item.viewer_liked)
+                .map((item) => item.id),
+            })
+          }
           setFeed((current) => ({
             items: [...current.items, ...page.items],
             nextCursor: page.nextCursor,
@@ -67,7 +74,7 @@ export function FeedView() {
         }
       )
     },
-    [seedLikes, token]
+    [syncLikes, token]
   )
 
   useEffect(() => {

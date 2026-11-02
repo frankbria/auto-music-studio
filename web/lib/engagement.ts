@@ -26,6 +26,13 @@ export async function reportEngagement(
   }
 }
 
+/** Why a like didn't save; `status` is the server's answer (404: the clip isn't public, so its like stays local). */
+export class LikeSaveError extends Error {
+  constructor(readonly status: number) {
+    super(`Saving the like failed (${status})`)
+  }
+}
+
 /** Like or unlike a clip for the signed-in user; resolves to the server's state. Throws when it didn't save. */
 export async function saveLike(
   clipId: string,
@@ -36,7 +43,7 @@ export async function saveLike(
     method: liked ? "PUT" : "DELETE",
     headers: authHeaders(token),
   })
-  if (!res.ok) throw new Error(`Saving the like failed (${res.status})`)
+  if (!res.ok) throw new LikeSaveError(res.status)
   return (await res.json()) as { liked: boolean; like_count: number }
 }
 

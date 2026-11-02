@@ -217,12 +217,18 @@ describe("playerReducer modes + likes", () => {
     expect(s.likedIds).toEqual([])
   })
 
-  it("likes/seed adds the server's likes without duplicates (#656)", () => {
-    let s = base({ likedIds: ["a"], dislikedIds: ["b"] })
-    s = playerReducer(s, { type: "likes/seed", ids: ["a", "b"] })
+  it("likes/sync takes the server's likes and unlikes for the clips it read (#656)", () => {
+    let s = base({ likedIds: ["a", "gone"], dislikedIds: ["b"] })
+    s = playerReducer(s, {
+      type: "likes/sync",
+      liked: ["a", "b"],
+      unliked: ["gone", "never"],
+    })
     expect(s.likedIds).toEqual(["a", "b"])
     expect(s.dislikedIds).toEqual([])
-    expect(playerReducer(s, { type: "likes/seed", ids: ["a"] })).toBe(s)
+    expect(
+      playerReducer(s, { type: "likes/sync", liked: ["a"], unliked: ["never"] })
+    ).toBe(s)
   })
 
   it("like and dislike are mutually exclusive per clip", () => {

@@ -28,7 +28,7 @@ type Outcome =
 export function usePublicClip(id: string | undefined) {
   const { accessToken, isLoading: authLoading } = useAuth()
   // The viewer's server-side like (#656); absent outside a PlayerProvider.
-  const seedLikes = useContext(PlayerContext)?.dispatch
+  const syncLikes = useContext(PlayerContext)?.dispatch
   const [outcome, setOutcome] = useState<Outcome | null>(null)
 
   useEffect(() => {
@@ -42,12 +42,16 @@ export function usePublicClip(id: string | undefined) {
     // header: an expired session must not hide a song that a signed-out
     // stranger can see. `is_owner` comes back false, which is the truth for a
     // viewer we can no longer identify.
+    // Whether the answer came back for this viewer: only then does `viewer_liked` say anything about them.
+    let readAsViewer = false
     async function read(): Promise<Response> {
       if (!accessToken) return fetch(url)
       const res = await fetch(url, {
         headers: { authorization: `Bearer ${accessToken}` },
       })
-      return res.status === 401 ? fetch(url) : res
+      if (res.status === 401) return fetch(url)
+      readAsViewer = true
+      return res
     }
 
     read()
@@ -59,8 +63,13 @@ export function usePublicClip(id: string | undefined) {
         if (!res.ok) throw new Error("fetch failed")
         const clip = (await res.json()) as Clip
         if (!active) return
-        if (clip.viewer_liked)
-          seedLikes?.({ type: "likes/seed", ids: [clip.id] })
+        if (readAsViewer) {
+          syncLikes?.({
+            type: "likes/sync",
+            liked: clip.viewer_liked ? [clip.id] : [],
+            unliked: clip.viewer_liked ? [] : [clip.id],
+          })
+        }
         setOutcome({ id, kind: "ok", clip })
       })
       .catch(() => {
@@ -69,7 +78,7 @@ export function usePublicClip(id: string | undefined) {
     return () => {
       active = false
     }
-  }, [id, accessToken, authLoading, seedLikes])
+  }, [id, accessToken, authLoading, syncLikes])
 
   const current = outcome?.id === id ? outcome : null
   const clip = current?.kind === "ok" ? current.clip : null
