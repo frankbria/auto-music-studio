@@ -120,7 +120,8 @@ async def set_everyone(actor_id: str, key: str, enabled: bool) -> None:
 async def set_user_grant(actor_id: str, key: str, email: str, granted: bool) -> None:
     """Grant an experiment to one user, by email, or take it back; 404 for an unknown email."""
     _experiment(key)
-    user = await User.find_one(User.email == email.strip())
+    email = email.strip()
+    user = await User.find_one(User.email == email)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No user has that email address.")
     update = {"$addToSet": {"user_ids": user.id}} if granted else {"$pull": {"user_ids": user.id}}

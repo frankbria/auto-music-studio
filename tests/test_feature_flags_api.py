@@ -1,5 +1,7 @@
 """Experimental features on /labs and their rollout from the admin panel (US-28.5, #342)."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -124,3 +126,32 @@ async def test_only_admins_roll_out_and_every_change_is_logged(client, settings)
         ("feature_flag_everyone", "ai_arrangement"),
         ("feature_flag_granted", "ai_arrangement"),
     ]
+
+
+async def test_switching_off_and_granting_twice(client, settings) -> None:
+    admin = await make_user("labs-admin5@example.com", is_admin=True)
+    user = await make_user("labs-twice@example.com")
+    for _ in range(2):
+        await client.put(f"{FLAGS}/ai_arrangement/users/{user.email}", headers=_auth(admin, settings))
+    await client.put(f"{LABS}/ai_arrangement", json={"enabled": True}, headers=_auth(user, settings))
+
+    off = await client.put(f"{LABS}/ai_arrangement", json={"enabled": False}, headers=_auth(user, settings))
+
+    assert (_by_key(off)["ai_arrangement"]["available"], _by_key(off)["ai_arrangement"]["enabled"]) == (True, False)
+    [flag] = await feature_flags.FeatureFlagSetting.find({"key": "ai_arrangement"}).to_list()
+    assert flag.user_ids == [user.id]
+
+
+async def test_concurrent_first_writes_to_a_flag_all_succeed(client, settings) -> None:
+    # MongoDB retries an upsert that loses the race on the unique `key` index, so none of these is a 500.
+    admin = await make_user("labs-admin6@example.com", is_admin=True)
+
+    responses = await asyncio.gather(
+        *(
+            client.put(f"{FLAGS}/style_transfer", json={"enabled": True}, headers=_auth(admin, settings))
+            for _ in range(8)
+        )
+    )
+
+    assert {r.status_code for r in responses} == {200}
+    assert await feature_flags.FeatureFlagSetting.find({"key": "style_transfer"}).count() == 1
