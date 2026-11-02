@@ -288,15 +288,15 @@ class StaffPickResponse(BaseModel):
 
 
 @router.put("/clips/{clip_id}/staff-pick", response_model=StaffPickResponse)
-async def pick_clip(clip_id: str) -> StaffPickResponse:
+async def pick_clip(clip_id: str, current: CurrentUser = Depends(require_admin)) -> StaffPickResponse:
     """Mark a clip as a staff pick (#656); Explore lists public picks newest first. Picking again re-dates it."""
-    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, True))
+    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, True, current.user_id))
 
 
 @router.delete("/clips/{clip_id}/staff-pick", response_model=StaffPickResponse)
-async def unpick_clip(clip_id: str) -> StaffPickResponse:
+async def unpick_clip(clip_id: str, current: CurrentUser = Depends(require_admin)) -> StaffPickResponse:
     """Take a clip off the staff picks (#656)."""
-    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, False))
+    return StaffPickResponse(staff_picked_at=await engagement.set_staff_pick(clip_id, False, current.user_id))
 
 
 class ClipEngagementResponse(BaseModel):

@@ -14,7 +14,7 @@ from beanie import PydanticObjectId
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import Clip, ClipEngagement, VisibilityState, Workspace
+from acemusic.api.models import Clip, ClipEngagement, ModerationLogEntry, VisibilityState, Workspace
 from acemusic.api.models.common import utcnow
 from acemusic.api.services import engagement
 from acemusic.api.settings import ApiSettings
@@ -253,6 +253,11 @@ class TestStaffPicks:
         resp = await client.delete(f"{ADMIN}/{second.id}/staff-pick", headers=_auth(admin, settings))
         assert resp.json() == {"staff_picked_at": None}
         assert await _ids(client, sort="staff_picks") == [str(first.id)]
+        log = await ModerationLogEntry.find(ModerationLogEntry.target_id == str(second.id)).sort("created_at").to_list()
+        assert [(entry.action, entry.actor_id) for entry in log] == [
+            ("staff_pick", admin.id),
+            ("staff_unpick", admin.id),
+        ]
 
     async def test_a_private_pick_stays_out_of_the_listing(self, client, settings) -> None:
         admin = await _user(is_admin=True)

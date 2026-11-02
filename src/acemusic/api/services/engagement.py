@@ -1,8 +1,8 @@
 """Plays, likes and shares of public clips, and the staff picks (#656).
 
 Owner decisions (2026-11-01): a play counts after 30 s of listening (the client reports it then), once per listener
-per clip per hour; a like is signed-in only, one per user, undoable; a share is a Share click or link copy, once per
-user per clip per day. The unique index on :class:`ClipEngagement` enforces each "once": an insert that succeeds is
+per clip per clock hour (UTC); a like is signed-in only, one per user, undoable; a share is a Share click or link
+copy, once per user per clip per UTC calendar day. The unique index on :class:`ClipEngagement` enforces each "once": an insert that succeeds is
 one more count, and the clip's counter moves only then.
 """
 
@@ -12,7 +12,7 @@ from beanie import PydanticObjectId
 from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
-from ..models import Clip, ClipEngagement, EngagementKind
+from ..models import Clip, ClipEngagement, EngagementKind, ModerationLogEntry
 from .clips import public_clip_filter
 from .common import coerce_object_id
 
@@ -81,13 +81,20 @@ async def get_clip(clip_id: str) -> Clip:
     return clip
 
 
-async def set_staff_pick(clip_id: str, picked: bool) -> datetime | None:
-    """Mark or unmark a clip as a staff pick; return its pick date (None when unmarked). 404 for an unknown clip."""
+async def set_staff_pick(clip_id: str, picked: bool, actor_id: str) -> datetime | None:
+    """Mark or unmark a clip as a staff pick, logged like every admin action; return its pick date (None when
+    unmarked). 404 for an unknown clip."""
     oid = coerce_object_id(clip_id)
     picked_at = datetime.now(timezone.utc) if picked else None
     result = await Clip.find({"_id": oid}).update({"$set": {"staff_picked_at": picked_at}}) if oid else None
     if result is None or not result.matched_count:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found.")
+    await ModerationLogEntry(
+        actor_id=PydanticObjectId(actor_id),
+        action="staff_pick" if picked else "staff_unpick",
+        target_type="clip",
+        target_id=str(oid),
+    ).insert()
     return picked_at
 
 

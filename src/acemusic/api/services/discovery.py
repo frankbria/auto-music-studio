@@ -209,7 +209,8 @@ async def list_public_clips(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Trending can't be searched.")
     match = {**await public_clip_filter(), **_text_criteria(q, style), **_exact_criteria(bpm_min, bpm_max, key, model)}
     if sort == "staff_picks":
-        match["staff_picked_at"] = {"$ne": None}
+        # $type, not $ne None: it is what the partial index is filtered on, so the planner can use it.
+        match["staff_picked_at"] = {"$type": "date"}
     try:
         # Trending ranks only the clips engaged with in its window, so the pool's size is not its total.
         total = None if cursor or sort in _TRENDING_WINDOWS else await _count(match)
