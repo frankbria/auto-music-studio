@@ -117,7 +117,7 @@ describe("VideoForm", () => {
     )
   })
 
-  it("shows a Pro badge and disables 1080p/4K for free users, with upgrade copy", () => {
+  it("locks 1080p behind Pro and 4K behind Enterprise for free users, with upgrade copy", () => {
     renderForm()
     const resolutions = screen.getByRole("radiogroup", { name: /resolution/i })
     expect(
@@ -129,17 +129,32 @@ describe("VideoForm", () => {
     expect(
       within(resolutions).getByRole("radio", { name: /4k/i })
     ).toBeDisabled()
-    expect(within(resolutions).getAllByText("Pro")).toHaveLength(2)
+    expect(within(resolutions).getByText("Pro")).toBeInTheDocument()
+    expect(within(resolutions).getByText("Enterprise")).toBeInTheDocument()
     expect(screen.getByText(/upgrade to pro/i)).toBeInTheDocument()
   })
 
-  it("lets Pro users select every resolution and aspect ratio combination", () => {
+  it("locks only 4K for Pro users, with an Enterprise upsell (#695)", () => {
     tier = { tier: "pro", isFreeTier: false, isLoading: false }
+    renderForm()
+    const resolutions = screen.getByRole("radiogroup", { name: /resolution/i })
+    expect(
+      within(resolutions).getByRole("radio", { name: /1080p/i })
+    ).toBeEnabled()
+    expect(
+      within(resolutions).getByRole("radio", { name: /4k/i })
+    ).toBeDisabled()
+    expect(screen.getByText(/upgrade to enterprise/i)).toBeInTheDocument()
+    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument()
+  })
+
+  it("lets Enterprise users select every resolution and aspect ratio combination", () => {
+    tier = { tier: "enterprise", isFreeTier: false, isLoading: false }
     const onGenerate = renderForm()
     fireEvent.change(screen.getByLabelText(/style prompt/i), {
       target: { value: "x" },
     })
-    expect(screen.queryByText(/upgrade to pro/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/upgrade to/i)).not.toBeInTheDocument()
 
     const aspects = screen.getByRole("radiogroup", { name: /aspect ratio/i })
     const resolutions = screen.getByRole("radiogroup", { name: /resolution/i })

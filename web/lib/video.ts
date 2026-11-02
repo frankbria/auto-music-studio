@@ -4,6 +4,8 @@
 // backend URL server-side (mirrors lib/mastering). The backend endpoints
 // (US-22.1) already exist.
 
+import type { Tier } from "@/lib/tiers"
+
 /** The six style presets, mirroring the backend Literal. */
 export type VideoStylePreset =
   | "abstract"
@@ -87,17 +89,17 @@ export const VIDEO_ASPECT_RATIOS: { value: VideoAspectRatio; label: string }[] =
     { value: "1:1", label: "1:1 Square" },
   ]
 
-/** A resolution's display metadata; Pro-only tiers are subscription-gated. */
+/** A resolution's display metadata and the lowest tier that may render it. */
 export type ResolutionOption = {
   value: VideoResolution
   label: string
-  proOnly: boolean
+  requiredTier: Tier
 }
 
 export const VIDEO_RESOLUTIONS: ResolutionOption[] = [
-  { value: "720p", label: "720p", proOnly: false },
-  { value: "1080p", label: "1080p", proOnly: true },
-  { value: "4k", label: "4K", proOnly: true },
+  { value: "720p", label: "720p", requiredTier: "free" },
+  { value: "1080p", label: "1080p", requiredTier: "pro" },
+  { value: "4k", label: "4K", requiredTier: "enterprise" },
 ]
 
 export const VIDEO_FRAME_RATES: { value: VideoFrameRate; label: string }[] = [

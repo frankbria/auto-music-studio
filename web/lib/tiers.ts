@@ -7,6 +7,26 @@
  * predicted client-side read the same way.
  */
 
+export type Tier = "free" | "pro" | "enterprise"
+
+const TIER_RANK: Record<Tier, number> = { free: 0, pro: 1, enterprise: 2 }
+
+export const TIER_LABELS: Record<Tier, string> = {
+  free: "Free",
+  pro: "Pro",
+  enterprise: "Enterprise",
+}
+
+/** Anything the API sends that this build does not know is free: an unknown tier must never unlock a paid feature. */
+export function toTier(value: string | null | undefined): Tier {
+  return value === "pro" || value === "enterprise" ? value : "free"
+}
+
+/** Enterprise has every Pro capability, so a gate asks "at least", never "exactly". */
+export function hasTier(tier: Tier, required: Tier): boolean {
+  return TIER_RANK[tier] >= TIER_RANK[required]
+}
+
 /** Where an upgrade prompt sends someone. Mirrors the API's `upgrade_url`. */
 export const UPGRADE_URL = "/settings/billing"
 
@@ -48,8 +68,12 @@ export const LOCKED_FEATURES: Record<string, LockedFeature> = {
     benefit: "arrange and mix in the multi-track Studio",
   },
   high_res_video: {
-    name: "1080p and 4K video",
+    name: "High-resolution video",
     benefit: "render videos above 720p, without a watermark",
+  },
+  video_4k: {
+    name: "4K video",
+    benefit: "render videos in 4K (Enterprise)",
   },
   lossless_export: {
     name: "Lossless export",
@@ -57,14 +81,31 @@ export const LOCKED_FEATURES: Record<string, LockedFeature> = {
   },
 }
 
-/** What the upgrade modal lists. Deliberately short — a wall of copy sells nothing. */
-export const PRO_BENEFITS = [
-  "500 credits a month, instead of 50",
+export const FREE_FEATURES = [
+  "Song generation and editing",
+  "MP3 export",
+  "720p video with a watermark",
+]
+
+/** Pro's capabilities, without the credit allowance, which the billing page reads from the API. */
+export const PRO_FEATURES = [
   "Stems, MIDI, and lossless WAV/FLAC export",
   "Mastering and distribution to streaming platforms",
   "Custom voice models trained on your own recordings",
   "Full multi-track Studio editing",
-  "1080p and 4K video, without a watermark",
+  "1080p video, without a watermark",
+]
+
+export const ENTERPRISE_FEATURES = [
+  "Everything in Pro",
+  "Priority job queue",
+  "4K video",
+]
+
+/** What the upgrade modal lists. Deliberately short — a wall of copy sells nothing. */
+export const PRO_BENEFITS = [
+  "500 credits a month, instead of 50",
+  ...PRO_FEATURES,
 ]
 
 /**

@@ -30,6 +30,19 @@ export type CreditPack = {
   currency: string
 }
 
+export type PaidPlan = "pro" | "enterprise"
+export type BillingInterval = "month" | "year"
+
+export type Plan = {
+  plan: PaidPlan
+  monthly_credits: number
+  /** Major units (dollars). */
+  prices: Record<BillingInterval, number | null>
+  currency: string
+  /** False when that interval's Stripe price is not configured — don't offer it. */
+  available: Record<BillingInterval, boolean>
+}
+
 function authHeaders(token: string): HeadersInit {
   return { authorization: `Bearer ${token}` }
 }
@@ -65,6 +78,16 @@ export async function fetchCreditPacks(token: string): Promise<CreditPack[]> {
   return body.packs ?? []
 }
 
+export async function fetchPlans(token: string): Promise<Plan[]> {
+  const res = await fetch("/api/billing/plans", {
+    headers: authHeaders(token),
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error("Could not load plans.")
+  const body = (await res.json()) as { plans?: Plan[] }
+  return body.plans ?? []
+}
+
 /**
  * Start checkout or open the billing portal, returning the URL to navigate to.
  *
@@ -96,7 +119,11 @@ async function redirectUrl(
   return body.url as string
 }
 
-export const startCheckout = (token: string) => redirectUrl("checkout", token)
+export const startCheckout = (
+  token: string,
+  plan: PaidPlan,
+  interval: BillingInterval
+) => redirectUrl("checkout", token, { plan, interval })
 export const openPortal = (token: string) => redirectUrl("portal", token)
 /** Buy a credit pack — a one-off charge, available on every tier (US-26.4). */
 export const startTopUp = (token: string, packId: string) =>

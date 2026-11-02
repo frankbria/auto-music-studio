@@ -78,6 +78,14 @@ describe("UsageSettings", () => {
     expect(screen.getByText("Pro")).toBeInTheDocument()
   })
 
+  it("labels an Enterprise balance as Enterprise (#695)", async () => {
+    stubUsage(summary({ tier: "enterprise" }))
+
+    render(<UsageSettings accessToken="tok" />)
+
+    expect(await screen.findByText("Enterprise")).toBeInTheDocument()
+  })
+
   it("charts daily consumption over the window", async () => {
     stubUsage(summary())
 
@@ -117,8 +125,9 @@ describe("UsageSettings", () => {
     render(<UsageSettings accessToken="tok" />)
 
     const breakdown = await screen.findByTestId("category-breakdown")
-    const bars =
-      breakdown.querySelectorAll<HTMLElement>('[data-testid="category-bar"]')
+    const bars = breakdown.querySelectorAll<HTMLElement>(
+      '[data-testid="category-bar"]'
+    )
     expect(bars[0].style.width).toBe("100%")
     expect(bars[1].style.width).toBe("0%")
     expect(breakdown).toHaveTextContent("-4 credits")
@@ -172,9 +181,7 @@ describe("UsageSettings", () => {
     render(<UsageSettings accessToken="tok" />)
 
     expect(await screen.findByText(/no credits used/i)).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: /csv/i })
-    ).toBeDisabled()
+    expect(screen.getByRole("button", { name: /csv/i })).toBeDisabled()
   })
 
   it("reports a failed load instead of rendering an empty dashboard", async () => {

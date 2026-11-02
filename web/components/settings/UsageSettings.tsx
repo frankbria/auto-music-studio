@@ -20,6 +20,7 @@ import {
   formatCategory,
   type UsageSummary,
 } from "@/lib/usage"
+import { TIER_LABELS, toTier } from "@/lib/tiers"
 
 // US-26.5: the usage dashboard. Split from the route component so it can be rendered in
 // a test without the App Router, like BillingSettings next door.
@@ -99,7 +100,9 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
       })
       .catch((err: unknown) => {
         if (!active) return
-        setError(err instanceof Error ? err.message : "Could not load your usage.")
+        setError(
+          err instanceof Error ? err.message : "Could not load your usage."
+        )
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -112,7 +115,11 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
   if (loading && !summary) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <HugeiconsIcon icon={Loading03Icon} size={16} className="animate-spin" />
+        <HugeiconsIcon
+          icon={Loading03Icon}
+          size={16}
+          className="animate-spin"
+        />
         Loading usage…
       </p>
     )
@@ -126,6 +133,7 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
     )
   }
 
+  const tier = toTier(summary.tier)
   const peakCategory = Math.max(
     ...summary.categories.map((row) => row.credits),
     0
@@ -143,8 +151,8 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             Credits remaining
-            <Badge variant={summary.tier === "pro" ? "default" : "outline"}>
-              {summary.tier === "pro" ? "Pro" : "Free"}
+            <Badge variant={tier === "free" ? "outline" : "default"}>
+              {TIER_LABELS[tier]}
             </Badge>
           </CardTitle>
           <CardDescription>
@@ -208,7 +216,10 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
               No credits used in the last {summary.window_days} days.
             </p>
           ) : (
-            <ul data-testid="category-breakdown" className="flex flex-col gap-3">
+            <ul
+              data-testid="category-breakdown"
+              className="flex flex-col gap-3"
+            >
               {summary.categories.map((row) => (
                 <li key={row.category} className="flex flex-col gap-1">
                   <div className="flex justify-between text-sm">
@@ -285,7 +296,7 @@ export function UsageSettings({ accessToken }: { accessToken: string | null }) {
                           ? `+${formatCredits(row.amount)}`
                           : formatCredits(-row.amount)}
                       </td>
-                      <td className="py-2 whitespace-nowrap tabular-nums text-muted-foreground">
+                      <td className="py-2 whitespace-nowrap text-muted-foreground tabular-nums">
                         {formatCredits(row.balance_after)}
                       </td>
                     </tr>
