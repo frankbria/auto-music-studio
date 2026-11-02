@@ -18,6 +18,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Every setting in .env.docker reaches ApiSettings, so a new one never needs listing here (#702). The entries
+    # below still win where they set a value: they pin what the image depends on.
+    env_file:
+      - path: .env.docker
+        required: false
     environment:
       ACEMUSIC_API_MONGODB_URL: mongodb://mongo:27017
       ACEMUSIC_API_MONGODB_DB_NAME: ${ACEMUSIC_API_MONGODB_DB_NAME:-acemusic}

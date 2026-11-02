@@ -84,7 +84,8 @@ nothing, which is the failure mode this work exists to remove.
 On the host: install Docker, create `DEPLOY_PATH`, and put a `.env.docker` there built
 from `.env.docker.example` with production values. (Named `.env.docker`, not `.env`,
 because a checkout already carries a `.env` holding the development configuration — a
-different schema entirely — and compose would silently load that one.) The workflow ships
+different schema entirely — and compose would silently load that one.) The API container loads that file whole (`env_file`), so any `ACEMUSIC_API_*` setting
+you put there takes effect without being listed in `compose.yaml` (#702). The workflow ships
 `compose.yaml` and `deploy.sh` on every deploy, so those are never edited in place.
 
 Three things that are easy to get wrong the first time:
