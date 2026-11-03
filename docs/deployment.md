@@ -69,7 +69,7 @@ project's own servers are in the operator's runbook, not here. Replace `example.
 6. **Check it.** `curl https://example.com/api/v1/health` reports the deployed `build_sha`; `/docs` shows the API
    reference; signing in with Google reaches `/create`.
 7. **Keep it running.**
-   - *Automatic deploys:* see [Enabling it](#enabling-it) and [Staging](#staging-699).
+   - *Automatic deploys:* see [Enabling it](#enabling-it), [Staging](#staging-699) and [Production](#production-700).
    - *Error tracking:* set `ACEMUSIC_API_SENTRY_DSN` in `.env.docker`.
    - *Uptime:* `scripts/uptime-monitor.sh` checks the health URL and posts to a webhook after three failed checks
      in a row (over two minutes down), and again on recovery. Copy it to `/usr/local/bin/acemusic-uptime-monitor`
@@ -115,10 +115,10 @@ project's own servers are in the operator's runbook, not here. Replace `example.
 ## The pipeline
 
 ```
-push to main ──► CI (3.11, 3.12) ──► CD: publish ──► CD: deploy
-                    required           ghcr.io/…-api      scp compose.yaml + deploy.sh
-                    checks             ghcr.io/…-web      ssh → ./deploy.sh <sha>
-                                       :<sha> + :latest   health gate → rollback on failure
+push to main ──► CI (3.11, 3.12) ──► CD: publish ──► deploy to staging ──► approval ──► deploy to production
+                    required           ghcr.io/…-api      ./deploy.sh <sha>     required      ./deploy.sh <same sha>
+                    checks             ghcr.io/…-web      health gate,          reviewer      health gate,
+                                       :<sha> + :latest   rollback on failure                 rollback on failure
 ```
 
 CD triggers on `workflow_run` when CI **completes successfully** on `main`, rather than on
@@ -148,15 +148,10 @@ recorded tag alone, so a stack that has since fallen over is still brought back.
 The deploy job is skipped until it is configured — *skipped*, not green having done
 nothing, which is the failure mode this work exists to remove.
 
-| Kind | Name | Purpose |
-| --- | --- | --- |
-| Variable | `DEPLOY_ENABLED` | `true` turns the deploy job on |
-| Variable | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` (default `/srv/acemusic`) |
-| Variable | `PRODUCTION_HEALTH_URL` | Public health URL, checked independently after the rollout |
-| Variable | `DOCKERHUB_PUBLISH_ENABLED` | `true` re-enables the ACE-Step publish |
-| Secret (`production` env) | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` | SSH target |
+Each environment's settings are in [Staging](#staging-699) and [Production](#production-700).
+`DOCKERHUB_PUBLISH_ENABLED=true` (a repository variable) re-enables the ACE-Step publish.
 
-On the host: install Docker, create `DEPLOY_PATH`, and put a `.env.docker` there built
+On each host: install Docker, create `DEPLOY_PATH`, and put a `.env.docker` there built
 from `.env.docker.example` with production values. (Named `.env.docker`, not `.env`,
 because a checkout already carries a `.env` holding the development configuration — a
 different schema entirely — and compose would silently load that one.) The API container loads that file whole (`env_file`), so any `ACEMUSIC_API_*` setting
@@ -193,6 +188,44 @@ and everything else to the web app. nginx replaces `X-Forwarded-For` with the cl
 `ACEMUSIC_API_TRUSTED_PROXIES` lists the Docker gateway and the web container, so the rate limiters key on real
 clients.
 
+### Production (#700)
+
+Production promotes what staging proved: the `deploy` job needs `deploy-staging`, so it runs only in a CD run whose
+staging rollout passed its health gate and whose public staging URL served the SHA. It deploys that same SHA's images;
+nothing is rebuilt. The `production` environment has a required reviewer, so every promotion waits for an approval in
+the run (*Review deployments*). A newer run's approval supersedes an older pending one, so approve the latest.
+
+The site is `https://www.automusicstudio.com`, on a shared production box reachable only over Tailscale (details in
+the operator's local runbook). Like staging, it runs Tailscale SSH, so no key is provisioned, and its stack binds
+loopback ports behind host nginx and certbot.
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Variable (repository) | `DEPLOY_ENABLED` | `true` turns the production job on; until then it is skipped |
+| Protection rule (`production` env) | Required reviewer | Approves each promotion |
+| Variable (`production` env) | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` |
+| Variable (`production` env) | `DEPLOY_HEALTH_URL` | Host-local health URL `deploy.sh` gates on |
+| Variable (`production` env) | `PRODUCTION_HEALTH_URL` | Public health URL, checked after the rollout |
+| Secret (`production` env) | `DEPLOY_HOST`, `DEPLOY_USER` | SSH target over Tailscale |
+
+The Tailscale OAuth client (`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET`) is shared with staging. The tailnet policy needs
+an `ssh` rule letting `tag:ci` reach the production tag as the deploy user, as it does for staging.
+
+Production's `.env.docker` differs from staging's in what it talks to: Stripe **live** keys and the signing secret of a
+live webhook endpoint at `https://www.automusicstudio.com/api/v1/billing/webhook`, a Google OAuth redirect of
+`https://www.automusicstudio.com/api/auth/callback/google`, and CORS and Stripe return URLs on that origin.
+
+**Rollback.**
+
+- *A failed health gate* rolls back by itself: `deploy.sh` re-pins the previous SHA and the job fails, as on staging.
+- *A healthy release you want to undo:* open the CD run that shipped the previous release and re-run its
+  **Deploy to production** job. It redeploys that run's SHA (the images are still in GHCR) through the same health
+  gate, after the same approval. Runs can be re-run for 30 days.
+- *By hand, or older than that:* on the host, `./deploy.sh <sha>` in `DEPLOY_PATH`, with the same `API_IMAGE`,
+  `WEB_IMAGE` and `HEALTH_URL` as in [Deploy from scratch](#deploy-from-scratch-on-a-vps-342).
+
+As on staging, a rollback restores images, not data.
+
 Three things that are easy to get wrong the first time:
 
 - **GHCR packages are private by default**, independent of whether the repository is
@@ -223,14 +256,12 @@ database that already holds two `Video` documents for one job (only possible if 
 above ever ran) would refuse to start; run `uv run python scripts/dedupe_videos.py --apply`
 against it first (dry run without the flag).
 
-### Deploys are fully automatic
+### Staging is automatic, production is approved (#699, #700)
 
-No human approval step. CI is already a hard gate with two required checks and strict
-up-to-date enforcement, and the health gate plus automatic rollback carry the safety —
-which a person approving a diff they have not run does not.
-
-Reversible either way: an environment protection rule on `production` adds a click without
-touching the workflow. Revisit if a bad deploy ever gets past the gate.
+Staging takes every green `main` with no approval: CI is a hard gate, and the health gate plus automatic rollback
+carry the safety there. Production adds a person, approving a SHA that is already running on staging, so the
+approval is of something that can be tried at `https://dev.automusicstudio.com` rather than of a diff. The approval
+is an environment protection rule, so it can be removed without touching the workflow.
 
 ### Known gaps
 

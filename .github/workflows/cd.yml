@@ -9,10 +9,11 @@
 # because its credentials were never set, and a pipeline that needs no new secrets cannot
 # fail that way. Docker Hub stays correct for the ACE-Step image, which RunPod pulls.
 #
-# To enable the production rollout, set the repository variable DEPLOY_ENABLED=true and populate the
-# `production` environment with DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY. Staging (#699) is the same with
-# STAGING_DEPLOY_ENABLED=true and the `staging` environment, plus TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET to reach its
-# host over Tailscale. Until then each deploy job is *skipped*: visibly inert, rather than green having done nothing.
+# Every green main deploys to staging (#699). Production (#700) then promotes that same SHA: its job needs the staging
+# job, so a SHA that failed or skipped staging's health gate never reaches it, and the `production` environment's
+# required reviewer approves each promotion. Both hosts are reached over Tailscale (TS_OAUTH_CLIENT_ID /
+# TS_OAUTH_SECRET). Each job is *skipped* until its repository variable (STAGING_DEPLOY_ENABLED, DEPLOY_ENABLED) is
+# true: visibly inert, rather than green having done nothing.
 
 name: CD
 
@@ -90,7 +91,8 @@ jobs:
 
   deploy:
     name: Deploy to production
-    needs: publish
+    # deploy-staging must succeed: its rollout passed the health gate and the public URL served this SHA.
+    needs: [publish, deploy-staging]
     runs-on: ubuntu-latest
     # A repository *variable* (not a secret) so this can be evaluated at job level: an
     # unconfigured deploy renders as Skipped instead of a green job that did nothing —
@@ -113,9 +115,17 @@ jobs:
         with:
           ref: ${{ needs.publish.outputs.sha }}
 
+      # The production box accepts SSH only from the tailnet, as staging does (#700).
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Ship the stack definition and roll forward
         env:
           ENVIRONMENT: production
+          DEPLOY_SSH_KEY_OPTIONAL: "true"
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
