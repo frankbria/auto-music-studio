@@ -3,7 +3,13 @@
 *2026-11-03T01:07:25Z by Showboat 0.6.1*
 <!-- showboat-id: 3cd098ef-4843-4a74-a74d-477287d1913b -->
 
-Issue #607 tracked three functions over the CRAP ceiling of 6. CRAP can't fall below a function's own complexity, so each was split into helpers of cyclomatic complexity 5 or less. The demo shows the complexity before and after, then runs each refactored path against a live API stack (scripts/demo_api_stack.py: throwaway Mongo database, seeded Pro musician, admin, and a local SoundCloud stand-in). The output shows the paths still work the same way. To replay it, set `SCRATCH` to a scratch directory outside the repo and start the stack there with `--dir $SCRATCH/demo-607 --db acemusic_demo_607 --clips 3 --port 8607`. `$SCRATCH/demo_flow.sh` defines `upload`, `report` and `queue` as thin wrappers over the stack's `api` and `admin_api`.
+Issue #607 tracked three functions over the CRAP ceiling of 6. CRAP can't fall below a function's own complexity, so each was split into helpers of cyclomatic complexity 5 or less. The demo shows the complexity before and after, then runs each refactored path against a live API stack (scripts/demo_api_stack.py: throwaway Mongo database, seeded Pro musician, admin, and a local SoundCloud stand-in). The output shows the paths still work the same way. To replay it, set `SCRATCH` to a scratch directory outside the repo and start the stack there with `--dir $SCRATCH/demo-607 --db acemusic_demo_607 --clips 3 --port 8607`. `$SCRATCH/demo_flow.sh` holds the three wrappers the steps call:
+
+```bash
+upload() { api POST /distribution/soundcloud/upload '{"clip_id": "'"$1"'"}'; }
+report() { admin_api POST /clips/$1/report '{"category": "'"$2"'"}'; }
+queue() { admin_api GET "/admin/moderation/queue?$1"; }
+```
 
 ## AC1: every split body is at complexity 5 or less (lizard, main vs branch)
 
