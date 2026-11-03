@@ -17,8 +17,9 @@ def _image_tag(job: dict) -> str:
 def test_production_waits_for_a_green_staging_deploy() -> None:
     assert PRODUCTION["environment"] == "production"
     assert "deploy-staging" in PRODUCTION["needs"]
-    # always(), failure() or !cancelled() in the condition would let production run after staging failed or skipped.
-    assert not any(override in PRODUCTION["if"] for override in ("always()", "failure()", "cancelled()"))
+    # always(), failure(), !cancelled() or a needs.*.result check would let production run after staging failed or skipped.
+    assert not any(override in PRODUCTION["if"] for override in ("always()", "failure()", "cancelled()", "needs."))
+    assert "vars.DEPLOY_ENABLED == 'true'" in PRODUCTION["if"]
 
 
 def test_production_promotes_the_image_staging_ran_rather_than_building_one() -> None:
