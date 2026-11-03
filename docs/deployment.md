@@ -193,7 +193,9 @@ clients.
 Production promotes what staging proved: the `deploy` job needs `deploy-staging`, so it runs only in a CD run whose
 staging rollout passed its health gate and whose public staging URL served the SHA. It deploys that same SHA's images;
 nothing is rebuilt. The `production` environment has a required reviewer, so every promotion waits for an approval in
-the run (*Review deployments*). A newer run's approval supersedes an older pending one, so approve the latest.
+the run (*Review deployments*). Production deploys one at a time, and of the runs queued behind one, only the
+newest is kept. Reject a promotion you don't want rather than leaving it waiting. The `production` environment
+accepts deployments from protected branches only, so a dispatched run from a feature branch stops at staging.
 
 The site is `https://www.automusicstudio.com`, on a shared production box reachable only over Tailscale (details in
 the operator's local runbook). Like staging, it runs Tailscale SSH, so no key is provisioned, and its stack binds
@@ -219,8 +221,9 @@ live webhook endpoint at `https://www.automusicstudio.com/api/v1/billing/webhook
 
 - *A failed health gate* rolls back by itself: `deploy.sh` re-pins the previous SHA and the job fails, as on staging.
 - *A healthy release you want to undo:* open the CD run that shipped the previous release and re-run its
-  **Deploy to production** job. It redeploys that run's SHA (the images are still in GHCR) through the same health
-  gate, after the same approval. Runs can be re-run for 30 days.
+  **Deploy to production** job, that job only: *Re-run all jobs* would rebuild and redeploy staging too. It redeploys
+  that run's SHA (the images are still in GHCR) through the same health gate, after the same approval. Runs can be
+  re-run for 30 days.
 - *By hand, or older than that:* on the host, `./deploy.sh <sha>` in `DEPLOY_PATH`, with the same `API_IMAGE`,
   `WEB_IMAGE` and `HEALTH_URL` as in [Deploy from scratch](#deploy-from-scratch-on-a-vps-342).
 
