@@ -307,7 +307,7 @@ async def _download_audio(clip: Clip, storage: StorageBackend) -> bytes:
 
 async def _upload_track(
     connection: SoundCloudConnection, clip: Clip, audio: bytes, metadata: dict[str, object], artwork: bytes | None
-) -> dict:
+) -> dict[str, object]:
     """The created track, which always carries an id."""
     filename = f"{clip.title or clip.id}.{clip.format or 'wav'}"
     try:
