@@ -66,7 +66,7 @@ export function SongActionModal({ clip, action, onClose }: SongActionModalProps)
   }
 }
 
-/** Fallback for modal actions whose workflow lands in a later story. */
+/** Fallback for modal actions whose workflow isn't available yet. */
 function PlaceholderModal({
   action,
   onClose,

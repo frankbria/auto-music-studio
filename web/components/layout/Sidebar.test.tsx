@@ -41,12 +41,15 @@ describe("Sidebar navigation (US-15.3)", () => {
       const link = screen.getByRole("link", { name: item.label })
       expect(link).toHaveAttribute("href", item.href)
     }
-    // Labs is a link, Account is a dialog trigger (button), pinned to the bottom.
+    // Labs and Account are pinned to the bottom; Account goes to the settings (#722).
     expect(screen.getByRole("link", { name: "Labs" })).toHaveAttribute(
       "href",
       "/labs"
     )
-    expect(screen.getByRole("button", { name: "Account" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Account" })).toHaveAttribute(
+      "href",
+      "/settings"
+    )
   })
 
   it("marks the active route and only the active route", () => {
@@ -178,15 +181,6 @@ describe("Sidebar navigation (US-15.3)", () => {
       }
     }
   )
-
-  it("opens the account dialog from the bottom-pinned Account item", async () => {
-    const user = userEvent.setup()
-    renderSidebar()
-
-    await user.click(screen.getByRole("button", { name: "Account" }))
-
-    expect(await screen.findByRole("dialog")).toBeInTheDocument()
-  })
 })
 
 describe("Sidebar notifications badge (US-20.6, AC5)", () => {

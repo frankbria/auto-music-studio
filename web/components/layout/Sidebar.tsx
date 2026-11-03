@@ -11,12 +11,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { LAYOUT } from "@/lib/constants/layout"
-import {
-  bottomNav,
-  mainNav,
-  type NavDialogItem,
-  type NavLinkItem,
-} from "@/config/navigation"
+import { bottomNav, mainNav, type NavLinkItem } from "@/config/navigation"
 import { useCredits } from "@/contexts/credits-context"
 import { useUnreadCount } from "@/contexts/notifications-context"
 import { formatCredits } from "@/lib/credits"
@@ -31,14 +26,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 
 /** Shared base styling for every interactive sidebar item (links, triggers). */
 const sidebarItemBase =
@@ -159,35 +146,6 @@ function ProfileMenu({ expanded }: { expanded: boolean }) {
   )
 }
 
-/** Bottom-pinned dialog item (Account): opens a placeholder dialog (spec 1.2). */
-function NavDialog({
-  item,
-  expanded,
-}: {
-  item: NavDialogItem
-  expanded: boolean
-}) {
-  return (
-    <Dialog>
-      <DialogTrigger
-        aria-label={expanded ? undefined : item.label}
-        className={cn(sidebarItemBase, !expanded && "justify-center px-0")}
-      >
-        <HugeiconsIcon icon={item.icon} size={22} className="shrink-0" />
-        {expanded && <span className="truncate text-sm">{item.label}</span>}
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{item.label}</DialogTitle>
-          <DialogDescription>
-            Account, subscription, and billing details arrive in a later story.
-          </DialogDescription>
-        </DialogHeader>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 /**
  * Primary sidebar navigation (US-15.3). Collapsed 64px icon bar by default;
  * the toggle expands it to an icon+label rail. Lives in the persistent App
@@ -283,18 +241,14 @@ export function Sidebar() {
 
       <div className="flex flex-col gap-1">
         <CreditBalanceItem expanded={expanded} />
-        {bottomNav.map((item) =>
-          item.isDialog ? (
-            <NavDialog key={item.id} item={item} expanded={expanded} />
-          ) : (
-            <NavLink
-              key={item.id}
-              item={item}
-              expanded={expanded}
-              active={isActive(pathname, item.href)}
-            />
-          )
-        )}
+        {bottomNav.map((item) => (
+          <NavLink
+            key={item.id}
+            item={item}
+            expanded={expanded}
+            active={isActive(pathname, item.href)}
+          />
+        ))}
       </div>
     </aside>
   )
