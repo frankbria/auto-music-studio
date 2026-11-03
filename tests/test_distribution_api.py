@@ -440,6 +440,16 @@ class TestUpload:
         )
         assert resp.status_code == 413
 
+    async def test_missing_audio_object_returns_404(self, client, settings, local_storage) -> None:
+        user = await make_user("up-noaudio@example.com", tier=PRO)
+        clip = await _make_clip(user, b"audio", store=False)
+        await _make_connection(user)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Audio file not found."
+
 
 # --- disconnect -------------------------------------------------------------
 class TestDisconnect:
