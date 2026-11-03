@@ -167,6 +167,22 @@ async def get_queue(
     video, artwork option or voice model: a page of them in ``sort`` order, plus the cursor
     for the next page (None on the last)."""
     after = decode_cursor(sort, cursor) if cursor else None
+    reports = await _open_reports()
+    flagged = await _unreviewed(Clip)
+    videos = await _unreviewed(Video)
+    artwork = await _unreviewed(ArtworkOption)
+    voices = await _unreviewed(VoiceModel)
+    clips = await _clips_for(flagged, reports, [*videos, *artwork])
+    creators = await _creators_for([*clips.values(), *videos, *artwork, *voices])
+    items = [
+        *_clip_items(flagged, reports, clips, creators),
+        *await _content_items(videos, artwork, voices, clips, creators),
+    ]
+    return _queue_page([i for i in items if _matches(i, source, category)], sort, after, limit)
+
+
+async def _open_reports() -> dict[PydanticObjectId, dict]:
+    """Per clip with open reports: their count per category and the latest one's time."""
     groups = await ClipReport.aggregate(
         [
             {"$match": {"resolved_at": None}},
@@ -184,39 +200,76 @@ async def get_queue(
         entry = reports.setdefault(group["_id"]["clip_id"], {"categories": {}, "latest": group["latest"]})
         entry["categories"][group["_id"]["category"]] = group["count"]
         entry["latest"] = max(entry["latest"], group["latest"])
+    return reports
 
-    flagged = await _unreviewed(Clip)
-    videos = await _unreviewed(Video)
-    artwork = await _unreviewed(ArtworkOption)
-    voices = await _unreviewed(VoiceModel)
+
+async def _clips_for(
+    flagged: list[Clip], reports: dict[PydanticObjectId, dict], content: list[Video | ArtworkOption]
+) -> dict[PydanticObjectId, Clip]:
+    """The flagged clips, plus the reported ones and the songs flagged content was made for."""
     clips = {clip.id: clip for clip in flagged}
-    missing = {cid for cid in [*reports, *(d.clip_id for d in [*videos, *artwork])] if cid not in clips}
+    missing = {*reports, *(doc.clip_id for doc in content)} - clips.keys()
     if missing:
         clips.update({clip.id: clip for clip in await Clip.find(In(Clip.id, list(missing))).to_list()})
-    owners = {clip.user_id for clip in clips.values()} | {d.user_id for d in [*videos, *artwork, *voices]}
-    creators = {user.id: user for user in await User.find(In(User.id, list(owners))).to_list()}
-    jobs = {job.id: job for job in await Job.find(In(Job.id, [d.job_id for d in [*videos, *artwork]])).to_list()}
+    return clips
 
-    items = [
+
+async def _creators_for(docs: list[Clip | Video | ArtworkOption | VoiceModel]) -> dict[PydanticObjectId, User]:
+    owners = list({doc.user_id for doc in docs})
+    return {user.id: user for user in await User.find(In(User.id, owners)).to_list()}
+
+
+def _clip_items(
+    flagged: list[Clip],
+    reports: dict[PydanticObjectId, dict],
+    clips: dict[PydanticObjectId, Clip],
+    creators: dict[PydanticObjectId, User],
+) -> list[QueueItem]:
+    return [
         _queue_item(clip_id, clips.get(clip_id), reports.get(clip_id), creators)
-        for clip_id in {*reports, *(c.id for c in flagged)}
+        for clip_id in {*reports, *(clip.id for clip in flagged)}
     ]
-    for kind, docs in (("video", videos), ("artwork", artwork)):
-        for doc in docs:
-            job = jobs.get(doc.job_id)
-            params = (job.input_params or {}) if job else {}
-            # A replace_scene edit keeps its prompt inside the edit spec.
-            prompt = params.get("prompt") or (params.get("edit") or {}).get("prompt")
-            items.append(_content_item(kind, doc, clips.get(doc.clip_id), creators, prompt))
-    items.extend(_content_item("voice_model", voice, None, creators, voice.description) for voice in voices)
+
+
+async def _content_items(
+    videos: list[Video],
+    artwork: list[ArtworkOption],
+    voices: list[VoiceModel],
+    clips: dict[PydanticObjectId, Clip],
+    creators: dict[PydanticObjectId, User],
+) -> list[QueueItem]:
+    jobs = await _jobs_for([*videos, *artwork])
     items = [
-        i
-        for i in items
-        if (source == "all" or source in i.sources)
-        and (category == "all" or i.categories.get(category, 0) > 0)
-        and (after is None or _queue_key(i, sort) < after)
+        _content_item(kind, doc, clips.get(doc.clip_id), creators, _job_prompt(jobs.get(doc.job_id)))
+        for kind, docs in (("video", videos), ("artwork", artwork))
+        for doc in docs
     ]
-    items.sort(key=lambda i: _queue_key(i, sort), reverse=True)
+    return items + [_content_item("voice_model", voice, None, creators, voice.description) for voice in voices]
+
+
+async def _jobs_for(docs: list[Video | ArtworkOption]) -> dict[PydanticObjectId, Job]:
+    return {job.id: job for job in await Job.find(In(Job.id, [doc.job_id for doc in docs])).to_list()}
+
+
+def _job_prompt(job: Job | None) -> str | None:
+    params = (job.input_params or {}) if job else {}
+    # A replace_scene edit keeps its prompt inside the edit spec.
+    return params.get("prompt") or (params.get("edit") or {}).get("prompt")
+
+
+def _matches(item: QueueItem, source: Literal["all"] | QueueSource, category: Literal["all"] | ReportCategory) -> bool:
+    return (source == "all" or source in item.sources) and (category == "all" or item.categories.get(category, 0) > 0)
+
+
+def _queue_page(
+    items: list[QueueItem], sort: QueueSort, after: tuple | None, limit: int
+) -> tuple[list[QueueItem], str | None]:
+    """The page of ``items`` after the cursor key ``after``, in ``sort`` order, and the next page's cursor."""
+    items = sorted(
+        (item for item in items if after is None or _queue_key(item, sort) < after),
+        key=lambda item: _queue_key(item, sort),
+        reverse=True,
+    )
     page = items[:limit]
     return page, encode_cursor(sort, _queue_key(page[-1], sort)) if len(items) > limit else None
 

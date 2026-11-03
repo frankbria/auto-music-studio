@@ -315,6 +315,33 @@ class TestUpload:
         # The link survives a transient outage so a later retry can succeed.
         assert await SoundCloudConnection.find_one(SoundCloudConnection.user_id == user.id) is not None
 
+    @pytest.mark.parametrize(
+        ("outcome", "detail"),
+        [
+            (sc.SoundCloudError("SoundCloud upload failed."), "SoundCloud upload failed."),
+            ({"permalink_url": "https://snd.sc/x"}, "SoundCloud returned no track id."),
+        ],
+    )
+    async def test_upload_that_yields_no_track_returns_502_and_records_nothing(
+        self, client, settings, local_storage, monkeypatch, outcome, detail
+    ) -> None:
+        user = await make_user("up-notrack@example.com", tier=PRO)
+        clip = await _make_clip(user, b"audio")
+        await _make_connection(user)
+
+        async def _upload(token, audio, filename, metadata, artwork=None):
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(sc, "upload_track", _upload)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == detail
+        assert (await Clip.get(clip.id)).soundcloud_track_ids == []
+
     async def test_revoked_refresh_token_unlinks_and_returns_401(
         self, client, settings, local_storage, monkeypatch
     ) -> None:
@@ -412,6 +439,16 @@ class TestUpload:
             json={"clip_id": str(clip.id)},
         )
         assert resp.status_code == 413
+
+    async def test_missing_audio_object_returns_404(self, client, settings, local_storage) -> None:
+        user = await make_user("up-noaudio@example.com", tier=PRO)
+        clip = await _make_clip(user, b"audio", store=False)
+        await _make_connection(user)
+        resp = await client.post(
+            _url("/soundcloud/upload"), headers=_auth_headers(user, settings), json={"clip_id": str(clip.id)}
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Audio file not found."
 
 
 # --- disconnect -------------------------------------------------------------
