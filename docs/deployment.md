@@ -203,14 +203,14 @@ loopback ports behind host nginx and certbot.
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
-| Variable (repository) | `DEPLOY_ENABLED` | `true` turns the production job on; until then it is skipped |
+| Variable (repository) | `DEPLOY_ENABLED` | `true` turns the production job on; until then it is skipped. It also needs staging on, since it waits for staging |
 | Protection rule (`production` env) | Required reviewer | Approves each promotion |
 | Variable (`production` env) | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` |
 | Variable (`production` env) | `DEPLOY_HEALTH_URL` | Host-local health URL `deploy.sh` gates on |
 | Variable (`production` env) | `PRODUCTION_HEALTH_URL` | Public health URL, checked after the rollout |
 | Secret (`production` env) | `DEPLOY_HOST`, `DEPLOY_USER` | SSH target over Tailscale |
 
-The Tailscale OAuth client (`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET`) is shared with staging. The tailnet policy needs
+The Tailscale OAuth client (`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_SECRET`) is a pair of repository secrets, so both jobs see it. The tailnet policy needs
 an `ssh` rule letting `tag:ci` reach the production tag as the deploy user, as it does for staging.
 
 Production's `.env.docker` differs from staging's in what it talks to: Stripe **live** keys and the signing secret of a
