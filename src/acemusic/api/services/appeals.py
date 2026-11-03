@@ -304,16 +304,31 @@ async def decide(
     A superseded appeal can still be upheld, which closes it: reversing it would undo the newer decision, and
     asking the creator for more about a decision no longer in force goes nowhere.
     """
-    oid = coerce_object_id(appeal_id)
-    existing = await ClipAppeal.get(oid) if oid is not None else None
-    if existing is None:
-        raise _appeal_not_found()
+    existing = await _get_appeal(appeal_id)
     clip, subject, in_force, in_force_id = await _load(existing)
     if decision != "uphold" and _is_superseded(subject, existing, in_force_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SUPERSEDED)
+    claimed_from, appeal = await _claim(existing.id, actor_id, decision, note)
+    await _apply_unless_superseded(claimed_from, appeal, subject, in_force, decision)
+    restored = await _restore_releases(clip, appeal, in_force, decision, settings)
+    await _notify_creator(appeal, clip, note)
+    await _log_decision(actor_id, appeal, note, restored)
+    return appeal
 
-    new_status = _DECISION_STATUS[decision]
-    updates: dict = {"status": new_status, "admin_note": note}
+
+async def _get_appeal(appeal_id: str) -> ClipAppeal:
+    oid = coerce_object_id(appeal_id)
+    appeal = await ClipAppeal.get(oid) if oid is not None else None
+    if appeal is None:
+        raise _appeal_not_found()
+    return appeal
+
+
+async def _claim(
+    oid: PydanticObjectId, actor_id: str, decision: AppealDecision, note: str | None
+) -> tuple[ClipAppeal, ClipAppeal]:
+    """The appeal as it was before this decision claimed it, and as it is now; 409 if no longer open."""
+    updates: dict = {"status": _DECISION_STATUS[decision], "admin_note": note}
     if decision != "request_info":
         updates.update(decided_at=utcnow(), decided_by=PydanticObjectId(actor_id))
     # The pre-claim state, not `existing`: a creator's answer landing before the claim must survive a rollback.
@@ -322,13 +337,14 @@ async def decide(
     )
     if claimed_from is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This appeal has already been decided.")
-    appeal = claimed_from.model_copy(update=updates)
-    await _apply_unless_superseded(claimed_from, appeal, subject, in_force, decision)
-    restored = await _restore_releases(clip, appeal, in_force, decision, settings)
+    return claimed_from, claimed_from.model_copy(update=updates)
+
+
+async def _notify_creator(appeal: ClipAppeal, clip: Clip | None, note: str | None) -> None:
     await NotificationEvent(
         user_id=appeal.user_id,
         clip_id=appeal.clip_id,
-        event_type=f"moderation_appeal_{new_status}",
+        event_type=f"moderation_appeal_{appeal.status}",
         channel="in_app",
         payload={
             "appeal_id": str(appeal.id),
@@ -339,15 +355,17 @@ async def decide(
             "note": note,
         },
     ).insert()
+
+
+async def _log_decision(actor_id: str, appeal: ClipAppeal, note: str | None, restored: dict) -> None:
     await log_action(
         actor_id,
-        f"appeal_{new_status}",
+        f"appeal_{appeal.status}",
         "video" if appeal.video_id else "clip",
         str(appeal.video_id or appeal.clip_id),
         note,
         {"appeal_id": str(appeal.id), "appealed_action": appeal.action, **restored},
     )
-    return appeal
 
 
 async def _load(

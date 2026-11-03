@@ -24,7 +24,7 @@ from pymongo.errors import DuplicateKeyError
 from acemusic.storage import StorageBackend, get_storage_backend
 
 from ..auth.dependencies import CurrentUser, get_current_user, require_capability
-from ..models import Clip, SoundCloudConnection
+from ..models import Clip, Release, SoundCloudConnection
 from ..models.common import utcnow
 from ..models.distribution import SOUNDCLOUD_CHANNEL, DistributionStatus
 from ..services import (
@@ -244,16 +244,7 @@ async def soundcloud_upload(
     """Upload an owned clip to the user's linked SoundCloud account."""
     clip = await clip_service.get_owned_clip(body.clip_id, current.user_id)
     clip_service.ensure_not_removed(clip)
-
-    # Validate the optional release association before the upload, not after.
-    release = None
-    if body.release_id is not None:
-        release = await release_service.get_owned_release(body.release_id, current.user_id)
-        if str(release.clip_id) != str(clip.id):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="release_id does not reference the uploaded clip.",
-            )
+    release = await _owned_release_for(clip, body.release_id, current.user_id)
     # Everything SoundCloud will receive, and the clip's own text, is screened before anything leaves (#555).
     metadata = _merge_metadata(clip, body.metadata_overrides)
     await clip_service.screen_outgoing(
@@ -261,11 +252,36 @@ async def soundcloud_upload(
         clip_service.labelled_clip_texts(clip)
         | {f"SoundCloud {key}": value for key, value in metadata.items() if isinstance(value, str)},
     )
+    # The link is checked first so the common "not connected" / revoked case fast-fails before paying for a
+    # (potentially large) storage download.
+    connection = await _linked_connection(current.user_id, _settings(request))
+    storage = get_storage_backend()
+    audio = await _download_audio(clip, storage)
+    artwork = await _resolve_artwork(clip, storage)
+    track = await _upload_track(connection, clip, audio, metadata, artwork)
+    track_id = str(track["id"])
+    await _record_track(clip, release, artwork, track_id)
+    # A removal landing mid-upload (#538) ran before the track id was recorded, so it is queued again here.
+    await release_service.unshare_if_source_removed(clip.id, current.user_id)
+    return UploadResponse(track_id=track_id, permalink_url=track.get("permalink_url"))
 
-    # Validate the SoundCloud link first so the common "not connected" / revoked
-    # case fast-fails before paying for a (potentially large) storage download.
+
+async def _owned_release_for(clip: Clip, release_id: str | None, user_id: str) -> Release | None:
+    """The optional release the upload is for, validated before the upload rather than after."""
+    if release_id is None:
+        return None
+    release = await release_service.get_owned_release(release_id, user_id)
+    if str(release.clip_id) != str(clip.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="release_id does not reference the uploaded clip.",
+        )
+    return release
+
+
+async def _linked_connection(user_id: str, settings: ApiSettings) -> SoundCloudConnection:
     try:
-        connection = await sc.get_valid_connection(current.user_id, _settings(request))
+        return await sc.get_valid_connection(user_id, settings)
     except sc.SoundCloudNotConnectedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except sc.SoundCloudAuthError as exc:
@@ -274,51 +290,52 @@ async def soundcloud_upload(
         # Transient refresh failure — the connection is preserved; ask to retry.
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    storage = get_storage_backend()
+
+async def _download_audio(clip: Clip, storage: StorageBackend) -> bytes:
     try:
         audio = await asyncio.to_thread(storage.download, clip.file_path)
     except FileNotFoundError as exc:
         logger.warning("Clip %s audio object %r is missing", clip.id, clip.file_path)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found.") from exc
-
     if len(audio) > sc.MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Audio exceeds SoundCloud's {sc.MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
         )
+    return audio
 
-    artwork = await _resolve_artwork(clip, storage)
 
+async def _upload_track(
+    connection: SoundCloudConnection, clip: Clip, audio: bytes, metadata: dict[str, object], artwork: bytes | None
+) -> dict:
+    """The created track, which always carries an id."""
     filename = f"{clip.title or clip.id}.{clip.format or 'wav'}"
     try:
         track = await sc.upload_track(connection.access_token, audio, filename, metadata, artwork)
     except sc.SoundCloudError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    track_id = track.get("id")
-    if track_id is None:
+    if track.get("id") is None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="SoundCloud returned no track id.")
+    return track
 
+
+async def _record_track(clip: Clip, release: Release | None, artwork: bytes | None, track_id: str) -> None:
     # Recorded on the clip with or without a release, so a later removal or ban can un-share it (#569).
-    await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": str(track_id)}})
+    await Clip.find_one(Clip.id == clip.id).update({"$addToSet": {"soundcloud_track_ids": track_id}})
     if release is not None:
         # Persist the track id, then start the SoundCloud channel at ``submitted``
         # so the poller (US-13.6) can advance it as the upload is processed. Both are
         # targeted writes, so a concurrent moderation privatization isn't reverted;
         # validate is off — this is the channel's initial state.
-        await release.set({"soundcloud_track_id": str(track_id)})
+        await release.set({"soundcloud_track_id": track_id})
         await status_service.apply_channel_status(
             release, SOUNDCLOUD_CHANNEL, DistributionStatus.SUBMITTED, validate=False
         )
     if artwork is not None and not await Clip.find_one({"_id": clip.id, "artwork_path": clip.artwork_path}):
         # The cover this upload carried was dropped mid-upload (#569), and the drop queued before this track existed.
         # ponytail: an owner replacing their own cover in that window also lands here; the cost is one re-upload.
-        await release_service.queue_track(clip.user_id, clip.id, str(track_id))
-        await Clip.find({"_id": clip.id}).update({"$addToSet": {"soundcloud_stale_artwork_track_ids": str(track_id)}})
-    # A removal landing mid-upload (#538) ran before the track id was recorded, so it is queued again here.
-    await release_service.unshare_if_source_removed(clip.id, current.user_id)
-
-    return UploadResponse(track_id=str(track_id), permalink_url=track.get("permalink_url"))
+        await release_service.queue_track(clip.user_id, clip.id, track_id)
+        await Clip.find({"_id": clip.id}).update({"$addToSet": {"soundcloud_stale_artwork_track_ids": track_id}})
 
 
 def _merge_metadata(clip: Clip, overrides: MetadataOverrides) -> dict[str, object]:
