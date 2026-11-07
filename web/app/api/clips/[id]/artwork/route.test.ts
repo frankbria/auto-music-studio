@@ -44,6 +44,25 @@ describe("GET /api/clips/[id]/artwork (#737)", () => {
     ).toBeUndefined()
   })
 
+  it("passes the backend's visibility-aware Cache-Control through", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("img", {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+            "cache-control": "private, no-store",
+          },
+        })
+      )
+    )
+
+    const res = await GET(req({ cookie: "cookieTok" }), ctx("c1"))
+
+    expect(res.headers.get("cache-control")).toBe("private, no-store")
+  })
+
   it("falls back to the access cookie as a Bearer token so an <img> can load a private clip's art", async () => {
     const fetchMock = vi.fn().mockResolvedValue(png())
     vi.stubGlobal("fetch", fetchMock)

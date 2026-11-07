@@ -290,6 +290,8 @@ class TestGetArtworkAccess:
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "image/png"
+        # Same policy as the stream endpoint: a short shared-cache lifetime for public media.
+        assert resp.headers["cache-control"] == "public, max-age=300"
 
     async def test_private_clip_art_is_hidden_from_anonymous(self, client, settings, local_storage) -> None:
         clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.PRIVATE)
@@ -307,6 +309,8 @@ class TestGetArtworkAccess:
         clip = await _clip_with_art(owner, VisibilityState.PRIVATE)
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork", headers=_auth_headers(owner, settings))
         assert resp.status_code == 200
+        # Never cached, so logout, an account switch or a later visibility change can't replay it.
+        assert resp.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.integration

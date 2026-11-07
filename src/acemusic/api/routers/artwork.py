@@ -155,4 +155,8 @@ async def get_artwork(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cover art file not found.")
 
     ext = clip.artwork_path.rsplit(".", 1)[-1].lower()
-    return Response(content=image, media_type=_CONTENT_TYPES.get(ext, "application/octet-stream"))
+    return Response(
+        content=image,
+        media_type=_CONTENT_TYPES.get(ext, "application/octet-stream"),
+        headers={"Cache-Control": clip_service.media_cache_control(clip)},
+    )
