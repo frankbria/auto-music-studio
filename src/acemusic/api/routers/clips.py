@@ -26,6 +26,7 @@ import math
 from datetime import datetime
 from typing import Annotated, Literal
 
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,7 +39,7 @@ from ..auth.dependencies import (
     require_existing_user,
     require_tier_capability,
 )
-from ..models import Clip, ReportCategory, VisibilityState
+from ..models import Clip, ReportCategory, User, VisibilityState
 from ..services import (
     appeals as appeal_service,
     clips as clip_service,
@@ -193,9 +194,11 @@ class ClipResponse(BaseModel):
     flagged_at: datetime | None
     removed_at: datetime | None
     created_at: datetime
+    # #735: the owner's public name (display name, else handle); null when they set neither.
+    artist: str | None = None
 
     @classmethod
-    def from_clip(cls, clip: Clip) -> "ClipResponse":
+    def from_clip(cls, clip: Clip, artist: str | None = None) -> "ClipResponse":
         return cls(
             id=str(clip.id),
             workspace_id=str(clip.workspace_id),
@@ -218,7 +221,19 @@ class ClipResponse(BaseModel):
             flagged_at=clip.flagged_at,
             removed_at=clip.removed_at,
             created_at=clip.created_at,
+            artist=artist,
         )
+
+
+async def artist_names(clips: list[Clip]) -> dict[PydanticObjectId, str | None]:
+    """Each owner's public name (#735), in one query per page rather than one per clip."""
+    owners = await User.find({"_id": {"$in": list({clip.user_id for clip in clips})}}).to_list()
+    return {owner.id: owner.display_name or owner.handle for owner in owners}
+
+
+async def clip_responses(clips: list[Clip]) -> list[ClipResponse]:
+    names = await artist_names(clips)
+    return [ClipResponse.from_clip(clip, names.get(clip.user_id)) for clip in clips]
 
 
 class PublicClipResponse(ClipResponse):
@@ -251,9 +266,11 @@ class PublicClipResponse(ClipResponse):
     viewer_liked: bool = False
 
     @classmethod
-    def from_clip_for(cls, clip: Clip, current_user_id: str | None, liked: bool = False) -> "PublicClipResponse":
+    def from_clip_for(
+        cls, clip: Clip, current_user_id: str | None, liked: bool = False, artist: str | None = None
+    ) -> "PublicClipResponse":
         is_owner = current_user_id is not None and str(clip.user_id) == current_user_id
-        fields = ClipResponse.from_clip(clip).model_dump()
+        fields = ClipResponse.from_clip(clip, artist).model_dump()
         if not is_owner:
             fields.update(workspace_id=None, seed=None, inference_steps=None, parent_clip_ids=[])
         return cls(
@@ -264,7 +281,11 @@ class PublicClipResponse(ClipResponse):
 async def public_clip_responses(clips: list[Clip], current_user_id: str | None) -> list[PublicClipResponse]:
     """A page of public cards for this viewer, each marked with whether they liked it (#656)."""
     liked = await engagement_service.liked_clip_ids(current_user_id, [clip.id for clip in clips])
-    return [PublicClipResponse.from_clip_for(clip, current_user_id, str(clip.id) in liked) for clip in clips]
+    names = await artist_names(clips)
+    return [
+        PublicClipResponse.from_clip_for(clip, current_user_id, str(clip.id) in liked, names.get(clip.user_id))
+        for clip in clips
+    ]
 
 
 class ClipListResponse(BaseModel):
@@ -363,7 +384,7 @@ async def list_clips(
         per_page=params.per_page,
     )
     return ClipListResponse(
-        clips=[ClipResponse.from_clip(clip) for clip in items],
+        clips=await clip_responses(items),
         total=total,
         page=params.page,
         per_page=params.per_page,
@@ -412,13 +433,15 @@ async def upload_clip(
         style_tags=tags,
         model=model,
     )
-    return ClipResponse.from_clip(clip)
+    [response] = await clip_responses([clip])
+    return response
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)
 async def get_clip(clip_id: str, current: CurrentUser = Depends(require_existing_user)) -> ClipResponse:
     clip = await clip_service.get_owned_clip(clip_id, current.user_id)
-    return ClipResponse.from_clip(clip)
+    [response] = await clip_responses([clip])
+    return response
 
 
 @router.get("/{clip_id}/lineage", response_model=ClipLineageResponse)
@@ -558,7 +581,8 @@ async def update_clip(
     clip = await clip_service.update_clip_fields(
         clip_id, current.user_id, title=body.title, is_public=body.is_public, visibility=body.visibility
     )
-    return ClipResponse.from_clip(clip)
+    [response] = await clip_responses([clip])
+    return response
 
 
 @router.delete("/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)
