@@ -107,7 +107,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.23.1" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy", specifier = ">=1.10.0" },
-    { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2" },
+    { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.73.0" },
     { name = "setuptools", marker = "extra == 'audio-ml-midi'", specifier = "<81" },
     { name = "soundfile", specifier = ">=0.14.0" },
     { name = "stripe", specifier = ">=16.0.0" },
