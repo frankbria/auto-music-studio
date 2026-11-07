@@ -228,7 +228,8 @@ class ClipResponse(BaseModel):
 async def artist_names(clips: list[Clip]) -> dict[PydanticObjectId, str | None]:
     """Each owner's public name (#735), in one query per page rather than one per clip."""
     owners = await User.find({"_id": {"$in": list({clip.user_id for clip in clips})}}).to_list()
-    return {owner.id: owner.display_name or owner.handle for owner in owners}
+    # Stripped: profile updates accept a whitespace-only display name.
+    return {owner.id: (owner.display_name or "").strip() or owner.handle for owner in owners}
 
 
 async def clip_responses(clips: list[Clip]) -> list[ClipResponse]:

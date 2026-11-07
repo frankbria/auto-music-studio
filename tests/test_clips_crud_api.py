@@ -392,6 +392,8 @@ class TestClipArtist:
         [
             ({"display_name": "Ivory Lanes", "handle": "ivory"}, "Ivory Lanes"),
             ({"display_name": None, "handle": "ivory"}, "ivory"),
+            # PATCH /users/me accepts a whitespace-only display name (min_length=1, no strip).
+            ({"display_name": "   ", "handle": "ivory"}, "ivory"),
             ({"display_name": "", "handle": None}, None),
         ],
     )
