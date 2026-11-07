@@ -450,7 +450,6 @@ async def get_mastering_job_detail(
 def _job_detail(job: Job) -> MasteringJobDetailResponse:
     params = job.input_params or {}
     result = job.result or {}
-    clip_ids = result.get("clip_ids") or []
     return MasteringJobDetailResponse(
         job_id=str(job.id),
         status=job.status,
@@ -461,7 +460,7 @@ def _job_detail(job: Job) -> MasteringJobDetailResponse:
         target_lufs=params.get("target_lufs"),
         created_at=job.created_at,
         completed_at=job.completed_at,
-        mastered_clip_id=clip_ids[0] if clip_ids else None,
+        mastered_clip_id=mastering_service.first_clip_id(result),
         metrics=result.get("metrics"),
         error=job.error,
     )

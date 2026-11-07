@@ -272,6 +272,21 @@ async def list_source_previews(source_clip_id: str | None, user_id: str) -> list
     return matching
 
 
+def first_clip_id(result: dict | None) -> str | None:
+    """A mastering job's mastered clip id (the first of ``result["clip_ids"]``), or None before there is one."""
+    clip_ids = (result or {}).get("clip_ids") or []
+    return clip_ids[0] if clip_ids else None
+
+
+async def _approved_masters(user_id: PydanticObjectId, clip_ids) -> set[str]:
+    """Which of ``clip_ids`` are the owner's approved masters."""
+    oids = [oid for oid in map(coerce_object_id, filter(None, clip_ids)) if oid is not None]
+    approved = await Clip.find(
+        In(Clip.id, oids), Clip.user_id == user_id, Clip.generation_mode == APPROVED_GENERATION_MODE
+    ).to_list()
+    return {str(clip.id) for clip in approved}
+
+
 async def list_clip_history(source_clip_id: str, user_id: str, limit: int) -> list[tuple[Job, bool]]:
     """The owner's mastering jobs for ``source_clip_id`` in any state, newest first (#738).
 
@@ -286,14 +301,8 @@ async def list_clip_history(source_clip_id: str, user_id: str, limit: int) -> li
         .limit(limit)
         .to_list()
     )
-    masters = {job.id: next(iter((job.result or {}).get("clip_ids") or []), None) for job in jobs}
-    master_oids = [oid for cid in masters.values() if cid and (oid := coerce_object_id(cid)) is not None]
-    approved = {
-        str(clip.id)
-        for clip in await Clip.find(
-            In(Clip.id, master_oids), Clip.user_id == uid, Clip.generation_mode == APPROVED_GENERATION_MODE
-        ).to_list()
-    }
+    masters = {job.id: first_clip_id(job.result) for job in jobs}
+    approved = await _approved_masters(uid, masters.values())
     return [(job, masters[job.id] in approved) for job in jobs]
 
 

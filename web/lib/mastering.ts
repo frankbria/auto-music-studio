@@ -347,24 +347,19 @@ export async function fetchMasteringHistory(
   return body?.jobs ?? null
 }
 
+// A Record over every non-completed status, so a new MasteringStatus member fails to compile.
+const DISPLAY_STATUS: Record<
+  Exclude<MasteringStatus, "completed">,
+  MasteringDisplayStatus
+> = { queued: "queued", processing: "processing", failed: "failed" }
+
 /** Collapse a job's status (+ approval) into a display state: a completed job
  *  is "approved" once its master was picked, else "preview ready". */
 export function masteringDisplayStatus(
   job: MasteringHistoryItem
 ): MasteringDisplayStatus {
-  switch (job.status) {
-    case "queued":
-    case "processing":
-    case "failed":
-      return job.status
-    case "completed":
-      return job.is_approved ? "approved" : "preview_ready"
-    default: {
-      // Fails to compile if MasteringStatus grows a member this doesn't map.
-      const unexpected: never = job.status
-      return unexpected
-    }
-  }
+  if (job.status !== "completed") return DISPLAY_STATUS[job.status]
+  return job.is_approved ? "approved" : "preview_ready"
 }
 
 /** The approved master's song page, else null. */
