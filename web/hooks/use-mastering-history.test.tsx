@@ -93,6 +93,31 @@ describe("useMasteringHistory", () => {
     expect(result.current.state.status).toBe("loading")
   })
 
+  it("never shows the previous user's rows after the signed-in user changes", async () => {
+    fetchMasteringHistory.mockResolvedValue(jobs)
+    let auth = authValue
+    const { result, rerender } = renderHook(() => useMasteringHistory("c1"), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <AuthContext.Provider value={auth}>{children}</AuthContext.Provider>
+      ),
+    })
+    await waitFor(() => expect(result.current.state.status).toBe("ready"))
+
+    fetchMasteringHistory.mockReturnValue(new Promise(() => {}))
+    auth = {
+      ...authValue,
+      user: { id: "u2", email: "b@b.co" },
+      accessToken: "tok2",
+    }
+    rerender()
+    expect(result.current.state.status).toBe("loading")
+    expect(fetchMasteringHistory).toHaveBeenLastCalledWith("c1", "tok2")
+
+    auth = { ...authValue, user: null as never, accessToken: null as never }
+    rerender()
+    expect(result.current.state.status).toBe("loading")
+  })
+
   it("reload re-fetches", async () => {
     fetchMasteringHistory.mockResolvedValue(null)
     const { result } = renderHook(() => useMasteringHistory("c1"), { wrapper })
