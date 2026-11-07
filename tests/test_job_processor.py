@@ -223,6 +223,26 @@ class TestBuildSubmitKwargs:
         assert kwargs == {"prompt": "lofi"}
 
 
+class TestClipTitle:
+    """#734: a generated clip is titled by the user, else from its prompt."""
+
+    def test_given_title_wins(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "lofi", "title": "Night Drive"}) == "Night Drive"
+
+    def test_short_prompt_becomes_the_title(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "  upbeat   pop\nanthem "}) == "upbeat pop anthem"
+
+    def test_section_tags_are_dropped_from_a_lyrics_prompt(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "[Verse]\nWe cross the river"}) == "We cross the river"
+
+    def test_long_prompt_is_cut_at_a_word(self) -> None:
+        title = JobProcessor._clip_title({"prompt": "cinematic epic orchestral " * 10})
+        assert title == "cinematic epic orchestral cinematic epic orchestral…"
+
+    def test_no_prompt_text_leaves_it_untitled(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "[Intro]"}) is None
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle / claim / shutdown — integration (real MongoDB + LocalStorage)
 # ---------------------------------------------------------------------------
@@ -287,6 +307,36 @@ class TestLifecycle:
         assert clip.model == "turbo"
         assert clip.seed == 7
         assert clip.generation_mode == "sound"
+
+    async def test_every_take_gets_the_title(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/a.wav", "http://ace/b.wav"])
+        proc = _make_processor(fake, storage, concurrency=1)
+        job = await _enqueue({"prompt": "lofi", "format": "wav", "title": "Night Drive"})
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        clips = await Clip.find(Clip.user_id == job.user_id).to_list()
+        assert [c.title for c in clips] == ["Night Drive", "Night Drive"]
+
+    async def test_untitled_job_is_titled_from_its_prompt(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/only.wav"])
+        proc = _make_processor(fake, storage, concurrency=1)
+        job = await _enqueue({"prompt": "a calm piano ballad", "format": "wav"})
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        clip = (await Clip.find(Clip.user_id == job.user_id).to_list())[0]
+        assert clip.title == "a calm piano ballad"
 
     async def test_bpm_auto_is_not_persisted_as_int(self, mongo_db, tmp_path) -> None:
         storage = LocalStorage(root_dir=tmp_path)

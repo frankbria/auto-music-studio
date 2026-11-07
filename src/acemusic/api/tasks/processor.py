@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -77,6 +78,10 @@ _SUBMIT_FIELDS = (
     "mode",
     "sound_type",
 )
+
+# #734: an untitled generation is named after the start of its prompt.
+_DERIVED_TITLE_MAX = 60
+_SECTION_TAG = re.compile(r"\[[^\]]*\]")
 
 
 JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
@@ -565,6 +570,16 @@ class JobProcessor:
         return kwargs
 
     @staticmethod
+    def _clip_title(params: dict[str, Any]) -> str | None:
+        """The user's title, else the prompt's first words (lyrics section tags dropped)."""
+        if params.get("title"):
+            return params["title"]
+        prompt = " ".join(_SECTION_TAG.sub(" ", params.get("prompt") or "").split())
+        if len(prompt) <= _DERIVED_TITLE_MAX:
+            return prompt or None
+        return prompt[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
+
+    @staticmethod
     def _build_clip(
         job: Job,
         params: dict[str, Any],
@@ -583,6 +598,7 @@ class JobProcessor:
             user_id=job.user_id,
             workspace_id=job.workspace_id,
             file_path=path,
+            title=JobProcessor._clip_title(params),
             format=fmt,
             duration=params.get("duration"),
             bpm=bpm if isinstance(bpm, int) else None,
