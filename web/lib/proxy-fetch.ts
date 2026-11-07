@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
 
+import { ACCESS_COOKIE } from "@/lib/auth"
+
 // Shared fetch wrapper for the same-origin BFF proxies. Adds an abort-based
 // timeout so a stalled upstream fails closed (the caller's catch returns 502)
 // instead of hanging the request indefinitely.
@@ -37,6 +39,34 @@ export function clientIpHeaders(request: {
     request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
     request.headers.get("x-real-ip")?.trim()
   return ip ? { "x-forwarded-for": ip } : {}
+}
+
+/**
+ * Auth for a media URL an `<img>`/`<audio>` loads (#737): those can't attach a
+ * header, so with none the httpOnly access cookie is forwarded as the Bearer token.
+ */
+export function mediaAuthHeaders(request: {
+  headers: Headers
+  cookies: { get(name: string): { value: string } | undefined }
+}): Record<string, string> {
+  const cookieToken = request.cookies.get(ACCESS_COOKIE)?.value
+  const auth =
+    request.headers.get("authorization") ??
+    (cookieToken ? `Bearer ${cookieToken}` : null)
+  return auth ? { authorization: auth } : {}
+}
+
+/** Copy the named headers that are present on `source`. */
+export function pickHeaders(
+  source: Headers,
+  names: readonly string[]
+): Headers {
+  const picked = new Headers()
+  for (const name of names) {
+    const value = source.get(name)
+    if (value) picked.set(name, value)
+  }
+  return picked
 }
 
 /** The most a JSON-relaying BFF route reads from a request (#567): far above any form, far below a flood. */

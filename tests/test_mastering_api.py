@@ -7,6 +7,7 @@ are ``integration`` and drive the real app over a local MongoDB.
 """
 
 import io
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -478,6 +479,10 @@ async def _insert_mastering_job(
 
 
 class TestPreviewAuthGate:
+    def test_list_history_missing_auth_returns_401(self) -> None:
+        client = TestClient(create_app())
+        assert client.get(MASTERING_URL, params={"clip_id": str(PydanticObjectId())}).status_code == 401
+
     def test_get_detail_missing_auth_returns_401(self) -> None:
         client = TestClient(create_app())
         assert client.get(_detail_url(str(PydanticObjectId()))).status_code == 401
@@ -543,6 +548,62 @@ class TestMasteringJobDetail:
         assert body["mastered_clip_id"] == str(mastered.id)
         assert body["metrics"]["loudness"] == _MASTER_METRICS["loudness"]
         assert body["service"] == "dolby"
+
+
+@pytest.mark.integration
+class TestMasteringHistory:
+    async def test_lists_the_clips_mastering_jobs_newest_first(self, client, settings) -> None:
+        user = await make_user("m738-history@example.com", tier=PRO)
+        other = await make_user("m738-history-other@example.com", tier=PRO)
+        ws = PydanticObjectId()
+        src = await _insert_clip_doc(user, ws)
+        approved = await _insert_clip_doc(user, ws, generation_mode="mastered", parents=[src.id])
+        candidate = await _insert_clip_doc(user, ws, generation_mode="mastering", parents=[src.id])
+        oldest = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, mastered_clip=approved)
+        failed = await _insert_mastering_job(
+            user, source_clip_id=str(src.id), workspace_id=ws, status=JobStatus.FAILED, service="bakuage"
+        )
+        await failed.set({"error": "Mastering failed. Please try again."})
+        preview = await _insert_mastering_job(
+            user, source_clip_id=str(src.id), workspace_id=ws, profile="club", mastered_clip=candidate
+        )
+        queued = await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, status=JobStatus.QUEUED)
+        # Noise the list must leave out: another clip, another feature's job, another user's job.
+        await _insert_mastering_job(user, source_clip_id=str(PydanticObjectId()), workspace_id=ws)
+        await _insert_mastering_job(user, source_clip_id=str(src.id), workspace_id=ws, job_type="generate")
+        await _insert_mastering_job(other, source_clip_id=str(src.id), workspace_id=ws)
+        base = oldest.created_at
+        for minutes, job in enumerate([oldest, failed, preview, queued]):
+            await job.set({"created_at": base + timedelta(minutes=minutes)})
+
+        resp = await client.get(MASTERING_URL, params={"clip_id": str(src.id)}, headers=_auth_headers(user, settings))
+
+        assert resp.status_code == 200
+        jobs = resp.json()["jobs"]
+        assert [j["job_id"] for j in jobs] == [str(queued.id), str(preview.id), str(failed.id), str(oldest.id)]
+        by_id = {j["job_id"]: j for j in jobs}
+        assert by_id[str(oldest.id)]["is_approved"] is True
+        assert by_id[str(oldest.id)]["mastered_clip_id"] == str(approved.id)
+        assert by_id[str(preview.id)]["is_approved"] is False
+        assert by_id[str(preview.id)]["profile"] == "club"
+        assert by_id[str(failed.id)]["status"] == "failed"
+        assert by_id[str(failed.id)]["service"] == "bakuage"
+        assert by_id[str(failed.id)]["error"] == "Mastering failed. Please try again."
+        assert by_id[str(queued.id)]["status"] == "queued"
+        assert "mastered_clip_id" not in by_id[str(queued.id)]
+
+    async def test_a_clip_with_no_jobs_lists_nothing(self, client, settings) -> None:
+        user = await make_user("m738-history-empty@example.com", tier=PRO)
+        resp = await client.get(
+            MASTERING_URL, params={"clip_id": str(PydanticObjectId())}, headers=_auth_headers(user, settings)
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"jobs": []}
+
+    async def test_clip_id_is_required(self, client, settings) -> None:
+        user = await make_user("m738-history-noclip@example.com", tier=PRO)
+        resp = await client.get(MASTERING_URL, headers=_auth_headers(user, settings))
+        assert resp.status_code == 422
 
 
 @pytest.mark.integration

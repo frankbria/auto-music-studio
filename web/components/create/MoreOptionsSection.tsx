@@ -77,7 +77,7 @@ function Field({
  * The collapsible "More Options" section (US-16.2): every remaining generation
  * parameter from spec section 4.4. Collapsed by default. Uses native `<select>`
  * and range inputs (accessible, no extra dependencies). UI-only fields (vocal
- * gender, exclude styles, song title) are held for completeness but never sent.
+ * gender, exclude styles) are held for completeness but never sent.
  */
 export function MoreOptionsSection({
   value,
@@ -284,7 +284,8 @@ export function MoreOptionsSection({
         <Field label="Song title" htmlFor={id("title")}>
           <Input
             id={id("title")}
-            placeholder="Untitled"
+            placeholder="Named from your styles if left blank"
+            maxLength={200}
             value={value.songTitle}
             onChange={(e) => onChange({ songTitle: e.target.value })}
           />

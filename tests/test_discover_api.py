@@ -189,6 +189,20 @@ class TestPublicPool:
 
 
 @pytest.mark.integration
+class TestArtist:
+    async def test_each_clip_carries_its_own_owners_public_name(self, client) -> None:
+        """#735: one page mixes creators, so each card names its own; the public read does too."""
+        named = await _clip(await _owner(display_name="Ivory Lanes"), title="A", minutes=2)
+        await _clip(await _owner(display_name="", handle="night-owl"), title="B", minutes=1)
+
+        resp = await client.get(CLIPS_URL)
+        assert resp.status_code == 200, resp.text
+        assert {c["title"]: c["artist"] for c in resp.json()["clips"]} == {"A": "Ivory Lanes", "B": "night-owl"}
+        public = await client.get(f"{API_V1_PREFIX}/clips/{named.id}/public")
+        assert public.json()["artist"] == "Ivory Lanes"
+
+
+@pytest.mark.integration
 class TestFiltersAndSorts:
     async def test_newest_first(self, client) -> None:
         old = await _clip(minutes=1)

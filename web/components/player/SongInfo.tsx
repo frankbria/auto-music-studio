@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { MusicNote01Icon } from "@hugeicons/core-free-icons"
 
@@ -12,15 +13,25 @@ import { usePlayer } from "@/contexts/player-context"
 export function SongInfo() {
   const { state } = usePlayer()
   const track = state.current
+  // Whether the current track's art failed (404 = no cover art). Reset during render whenever
+  // a track starts, so a transient failure or art added later is retried on the next play.
+  const [failed, setFailed] = useState(false)
+  const [shownTrack, setShownTrack] = useState(track)
+  if (track !== shownTrack) {
+    setShownTrack(track)
+    setFailed(false)
+  }
+  const artworkUrl = !failed ? track?.artworkUrl : undefined
 
   return (
     <div className="flex min-w-0 items-center gap-3">
       <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted">
-        {track?.artworkUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- artwork is a dynamic backend stream, not a build-time asset
+        {artworkUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- artwork is a dynamic proxied stream, not a build-time asset
           <img
-            src={track.artworkUrl}
+            src={artworkUrl}
             alt=""
+            onError={() => setFailed(true)}
             className="size-full object-cover"
           />
         ) : (

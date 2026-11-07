@@ -17,7 +17,7 @@ from PIL import Image
 
 from acemusic.api.auth.tokens import create_access_token
 from acemusic.api.main import API_V1_PREFIX, create_app
-from acemusic.api.models import ArtworkOption, Clip, Job, JobStatus, User, Workspace
+from acemusic.api.models import ArtworkOption, Clip, Job, JobStatus, User, VisibilityState, Workspace
 from acemusic.api.services.artwork import ARTWORK_JOB_TYPE
 from acemusic.api.settings import ApiSettings
 from acemusic.storage import get_storage_backend
@@ -49,10 +49,11 @@ class TestAuthGate:
         resp = client.post(f"{CLIPS_URL}/{PydanticObjectId()}/artwork", json={"artwork_id": "x"})
         assert resp.status_code == 401
 
-    def test_get_requires_auth(self) -> None:
+    def test_get_does_not_require_auth(self) -> None:
+        # #737: an <img> can't send a Bearer token, so a public clip's art must load anonymously.
         client = TestClient(create_app())
-        resp = client.get(f"{CLIPS_URL}/{PydanticObjectId()}/artwork")
-        assert resp.status_code == 401
+        resp = client.get(f"{CLIPS_URL}/not-an-id/artwork")
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def _auth_headers(user, settings: ApiSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_clip(user) -> Clip:
+async def _make_clip(user, visibility: VisibilityState = VisibilityState.PRIVATE) -> Clip:
     workspace = Workspace(name="WS", user_id=user.id)
     await workspace.insert()
     clip = Clip(
@@ -101,6 +102,7 @@ async def _make_clip(user) -> Clip:
         file_path=f"{user.id}/{workspace.id}/clips/c.wav",
         title="Song",
         style_tags=["lofi"],
+        visibility=visibility,
     )
     await clip.insert()
     return clip
@@ -270,6 +272,52 @@ class TestGetArtworkMissing:
         clip = await _make_clip(user)
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork", headers=_auth_headers(user, settings))
         assert resp.status_code == 404
+
+
+async def _clip_with_art(user, visibility: VisibilityState) -> Clip:
+    clip = await _make_clip(user, visibility)
+    path = f"{user.id}/{clip.workspace_id}/artwork/{clip.id}/cover.png"
+    get_storage_backend().upload(path, _png((8, 8)))
+    clip.artwork_path = path
+    await clip.save()
+    return clip
+
+
+@pytest.mark.integration
+class TestGetArtworkAccess:
+    async def test_public_clip_art_is_readable_anonymously(self, client, settings, local_storage) -> None:
+        clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.PUBLIC)
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+        # Same policy as the stream endpoint: a short shared-cache lifetime for public media.
+        assert resp.headers["cache-control"] == "public, max-age=300"
+
+    async def test_unlisted_clip_art_is_readable_anonymously(self, client, settings, local_storage) -> None:
+        clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.UNLISTED)
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
+        assert resp.status_code == 200
+        # Unlisted isn't public, so it gets the stream endpoint's no-store policy.
+        assert resp.headers["cache-control"] == "private, no-store"
+
+    async def test_private_clip_art_is_hidden_from_anonymous(self, client, settings, local_storage) -> None:
+        clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.PRIVATE)
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
+        assert resp.status_code == 404
+
+    async def test_private_clip_art_is_forbidden_to_another_user(self, client, settings, local_storage) -> None:
+        clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.PRIVATE)
+        intruder = await make_user("intruder@example.com")
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork", headers=_auth_headers(intruder, settings))
+        assert resp.status_code == 403
+
+    async def test_private_clip_art_is_readable_by_owner(self, client, settings, local_storage) -> None:
+        owner = await make_user("art@example.com")
+        clip = await _clip_with_art(owner, VisibilityState.PRIVATE)
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork", headers=_auth_headers(owner, settings))
+        assert resp.status_code == 200
+        # Never cached, so logout, an account switch or a later visibility change can't replay it.
+        assert resp.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.integration

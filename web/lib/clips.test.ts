@@ -5,6 +5,7 @@ import {
   clipArtworkUrl,
   downloadClipAudio,
   formatTime,
+  trackFromClip,
   updateClipVisibility,
 } from "@/lib/clips"
 
@@ -15,8 +16,9 @@ describe("clip url builders", () => {
     expect(clipAudioUrl("abc")).toBe("/api/clips/abc/stream")
   })
 
-  it("builds the artwork backend path", () => {
-    expect(clipArtworkUrl("abc")).toBe("/api/v1/clips/abc/artwork")
+  it("points artwork at the same-origin artwork proxy (#737)", () => {
+    // An <img src> can't send a Bearer token and /api/v1/* doesn't exist here.
+    expect(clipArtworkUrl("abc")).toBe("/api/clips/abc/artwork")
   })
 
   it("encodes ids with unsafe characters", () => {
@@ -189,5 +191,22 @@ describe("downloadClipAudio", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net down")))
     const ok = await downloadClipAudio("c1", "mp3", "tok", "x")
     expect(ok).toBe(false)
+  })
+})
+
+describe("trackFromClip artist (#735)", () => {
+  const base = { id: "c1", title: "Midnight", duration: 95 }
+
+  it("names the clip owner as the track artist", () => {
+    expect(trackFromClip({ ...base, artist: "Ivory Lanes" }).artist).toBe(
+      "Ivory Lanes"
+    )
+  })
+
+  it("falls back to a placeholder only when the owner has no public name", () => {
+    expect(trackFromClip({ ...base, artist: null }).artist).toBe(
+      "Unknown artist"
+    )
+    expect(trackFromClip(base).artist).toBe("Unknown artist")
   })
 })

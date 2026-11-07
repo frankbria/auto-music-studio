@@ -33,6 +33,8 @@ export type GenerationFormData = {
 /** Subset of the backend GenerationRequest these forms send (extra keys forbidden). */
 export type GenerationPayload = {
   prompt: string
+  /** Clip title (#734); omitted, the backend titles clips from the prompt. */
+  title?: string
   /** Model variant key (US-16.4); omitted lets the backend pick its default. */
   model?: string
   style?: string
@@ -106,6 +108,8 @@ export type AdvancedFormData = {
   seed: string
   /** Trained voice attached via the Add Voice modal (US-25.4); undefined = default voice. */
   voiceModelId?: string
+  /** Song title from More Options (#734); blank is omitted. */
+  title?: string
 }
 
 /** Combine the styles textarea and the selected tag pills into one style string. */
@@ -119,7 +123,7 @@ export function combineStyles(styles: string, tags: string[]): string {
  * back to the lyrics). The lyrics fallback is capped to PROMPT_MAX_LENGTH — the
  * backend allows longer lyrics than prompts, so an uncapped fallback would 422
  * on lyrics-only submissions; the full lyrics still go in the `lyrics` field.
- * UI-only fields (vocal gender, exclude styles, song title, workspace) are never
+ * UI-only fields (vocal gender, exclude styles, workspace) are never
  * included — the backend uses `extra="forbid"`.
  */
 export function buildAdvancedPayload(
@@ -146,6 +150,8 @@ export function buildAdvancedPayload(
   if (data.duration.trim()) payload.duration = Number(data.duration)
   if (!data.seedRandom && data.seed.trim()) payload.seed = Number(data.seed)
   if (data.voiceModelId) payload.voice_model_id = data.voiceModelId
+  const title = data.title?.trim()
+  if (title) payload.title = title
   return payload
 }
 

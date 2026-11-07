@@ -335,6 +335,7 @@ async def _batch_sub_job_status(entry: BatchClipEntry) -> BatchSubJobStatus:
 # frequently-remastered source can have more completed candidates, so the previews
 # view shows the most recent few. Approval still accepts any historical candidate.
 _MAX_PREVIEW_VARIANTS = 5
+_MAX_HISTORY = 20
 
 
 def _job_not_found() -> HTTPException:
@@ -375,6 +376,16 @@ class MasteringJobDetailResponse(BaseModel):
     mastered_clip_id: str | None = None
     metrics: dict | None = None
     error: str | None = None
+
+
+class MasteringHistoryItem(MasteringJobDetailResponse):
+    """A history row: the job detail plus whether its master is the source's approved one."""
+
+    is_approved: bool
+
+
+class MasteringHistoryResponse(BaseModel):
+    jobs: list[MasteringHistoryItem]
 
 
 class PreviewItem(BaseModel):
@@ -433,9 +444,12 @@ async def get_mastering_job_detail(
     job = await mastering_service.get_mastering_job(job_id, current.user_id)
     if job is None:
         raise _job_not_found()
+    return _job_detail(job)
+
+
+def _job_detail(job: Job) -> MasteringJobDetailResponse:
     params = job.input_params or {}
     result = job.result or {}
-    clip_ids = result.get("clip_ids") or []
     return MasteringJobDetailResponse(
         job_id=str(job.id),
         status=job.status,
@@ -446,9 +460,21 @@ async def get_mastering_job_detail(
         target_lufs=params.get("target_lufs"),
         created_at=job.created_at,
         completed_at=job.completed_at,
-        mastered_clip_id=clip_ids[0] if clip_ids else None,
+        mastered_clip_id=mastering_service.first_clip_id(result),
         metrics=result.get("metrics"),
         error=job.error,
+    )
+
+
+@router.get("/jobs", response_model=MasteringHistoryResponse, response_model_exclude_none=True)
+async def list_mastering_history(
+    clip_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> MasteringHistoryResponse:
+    """The caller's mastering jobs for one source clip, newest first (#738): the release page's history."""
+    history = await mastering_service.list_clip_history(clip_id, current.user_id, _MAX_HISTORY)
+    return MasteringHistoryResponse(
+        jobs=[MasteringHistoryItem(**_job_detail(job).model_dump(), is_approved=approved) for job, approved in history]
     )
 
 

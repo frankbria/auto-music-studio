@@ -159,6 +159,17 @@ class TestJobPersistence:
         assert job.input_params["bpm"] == 90
         assert job.workspace_id is not None
 
+    async def test_title_is_kept_in_job_params(self, client, settings):
+        user = await make_user("gen-title@example.com")
+        resp = await client.post(
+            GENERATE_URL,
+            json={"prompt": "lofi beat", "title": "Night Drive"},
+            headers=_auth_headers(user, settings),
+        )
+        assert resp.status_code == 202
+        job = await Job.get(resp.json()["job_id"])
+        assert job.input_params["title"] == "Night Drive"
+
     async def test_default_workspace_created_and_reused(self, client, settings):
         user = await make_user("gen-ws@example.com")
         headers = _auth_headers(user, settings)

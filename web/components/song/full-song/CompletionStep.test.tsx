@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { CompletionStep } from "@/components/song/full-song/CompletionStep"
-import { PlayerProvider } from "@/contexts/player-context"
+import { PlayerProvider, usePlayer } from "@/contexts/player-context"
+
+function NowPlayingArtist() {
+  return <p data-testid="now-playing">{usePlayer().state.current?.artist}</p>
+}
 
 function renderCompletion(
   props: Partial<React.ComponentProps<typeof CompletionStep>> = {}
@@ -20,6 +24,7 @@ function renderCompletion(
         {...handlers}
         {...props}
       />
+      <NowPlayingArtist />
     </PlayerProvider>
   )
   return handlers
@@ -33,6 +38,12 @@ describe("CompletionStep", () => {
     expect(screen.getAllByText("3:30").length).toBeGreaterThan(0)
     expect(screen.getByText("7")).toBeInTheDocument() // sections
     expect(screen.getByText("8")).toBeInTheDocument() // credits
+  })
+
+  it("plays the finished song under the seed clip's artist (#735)", async () => {
+    renderCompletion({ seedArtist: "Ivory Lanes" })
+    await userEvent.click(screen.getByRole("button", { name: "Play preview" }))
+    expect(screen.getByTestId("now-playing")).toHaveTextContent("Ivory Lanes")
   })
 
   it("wires the open-in-song-detail and close buttons", async () => {

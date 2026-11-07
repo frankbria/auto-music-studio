@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-import { ACCESS_COOKIE } from "@/lib/auth"
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  clientIpHeaders,
+  fetchWithTimeout,
+  mediaAuthHeaders,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id}/stream (US-20.0), the
 // URL an <audio> element points at. Distinct from the sibling /audio route,
@@ -34,12 +37,6 @@ export async function GET(
   request: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
-  // Prefer an explicit Bearer header (fetch callers); fall back to the
-  // clip-scoped access cookie so an <audio src> can authenticate (issue #282).
-  const cookieToken = request.cookies.get(ACCESS_COOKIE)?.value
-  const auth =
-    request.headers.get("authorization") ??
-    (cookieToken ? `Bearer ${cookieToken}` : null)
   const range = request.headers.get("range")
   const { id } = await ctx.params
 
@@ -53,7 +50,8 @@ export async function GET(
       {
         headers: {
           ...clientIpHeaders(request),
-          ...(auth ? { authorization: auth } : {}),
+          // A Bearer header, else the access cookie, so an <audio src> can authenticate (#282).
+          ...mediaAuthHeaders(request),
           ...(range ? { range } : {}),
         },
       }

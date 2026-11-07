@@ -25,6 +25,7 @@ function makeClip(overrides: Partial<Clip> = {}): Clip {
     generation_mode: "text",
     is_public: false,
     created_at: "2026-07-01T00:00:00Z",
+    artist: "Ivory Lanes",
     ...overrides,
   }
 }
@@ -41,6 +42,8 @@ describe("DistributionForm", () => {
   it("pre-populates fields from the selected song (AC1)", () => {
     render(<DistributionForm clip={makeClip()} />)
     expect(screen.getByLabelText(/^title/i)).toHaveValue("Midnight Drive")
+    // #735: the owner's public name
+    expect(screen.getByLabelText(/^artist/i)).toHaveValue("Ivory Lanes")
     expect(screen.getByLabelText(/^genre/i)).toHaveValue("synthwave")
     expect(screen.getByLabelText(/^bpm/i)).toHaveValue(122)
     expect(screen.getByLabelText(/^key/i)).toHaveValue("A minor")
@@ -176,11 +179,21 @@ describe("DistributionForm", () => {
     expect(screen.getByLabelText(/producer/i)).toHaveValue("") // backfilled, not undefined
   })
 
+  it("replaces a pre-#735 draft's placeholder artist with the owner's name", () => {
+    localStorage.setItem(
+      "ams:release-draft:clip-1",
+      JSON.stringify({ title: "Legacy", artist: "Unknown artist" })
+    )
+    render(<DistributionForm clip={makeClip()} />)
+    expect(screen.getByLabelText(/^title/i)).toHaveValue("Legacy")
+    expect(screen.getByLabelText(/^artist/i)).toHaveValue("Ivory Lanes")
+  })
+
   it("keeps a live validation summary count of remaining required fields", async () => {
     const user = userEvent.setup()
     render(<DistributionForm clip={makeClip({ title: null, style_tags: [] })} />)
     await user.click(screen.getByRole("button", { name: /save draft/i }))
-    // Two required fields missing (title, genre); artist has a placeholder default.
+    // Two required fields missing (title, genre); artist is pre-filled with the owner's name.
     const summary = screen.getByRole("alert")
     expect(within(summary).getByText(/2/)).toBeInTheDocument()
   })

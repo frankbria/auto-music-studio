@@ -148,6 +148,7 @@ export function AdvancedCreationForm({
       seedRandom: options.seedRandom,
       seed: options.seed,
       voiceModelId: inputs.voice?.id,
+      title: options.songTitle,
     }
   }
 

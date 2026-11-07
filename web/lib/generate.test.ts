@@ -170,6 +170,17 @@ describe("buildAdvancedPayload", () => {
     expect(payload).not.toHaveProperty("song_title")
     expect(payload).not.toHaveProperty("workspace")
   })
+
+  it("sends the trimmed song title, and omits a blank one (#734)", () => {
+    expect(
+      buildAdvancedPayload(
+        advancedData({ styles: "rock", title: "  Night Drive " })
+      ).title
+    ).toBe("Night Drive")
+    expect(
+      buildAdvancedPayload(advancedData({ styles: "rock", title: "   " }))
+    ).not.toHaveProperty("title")
+  })
 })
 
 describe("validateAdvanced", () => {
