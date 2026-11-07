@@ -79,6 +79,10 @@ class TestCategoryFor:
 @pytest.mark.integration
 @pytest.mark.usefixtures("mongo_db")
 class TestBuildUsageSummary:
+    @pytest.fixture(autouse=True)
+    async def _db(self, mongo_db):
+        return mongo_db
+
     async def test_it_reports_both_buckets_the_tier_and_the_reset_date(self) -> None:
         user = await _user("usage-balance@example.com", monthly=30.0, purchased=12.0)
 
