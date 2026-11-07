@@ -15,8 +15,9 @@ describe("clip url builders", () => {
     expect(clipAudioUrl("abc")).toBe("/api/clips/abc/stream")
   })
 
-  it("builds the artwork backend path", () => {
-    expect(clipArtworkUrl("abc")).toBe("/api/v1/clips/abc/artwork")
+  it("points artwork at the same-origin artwork proxy (#737)", () => {
+    // An <img src> can't send a Bearer token and /api/v1/* doesn't exist here.
+    expect(clipArtworkUrl("abc")).toBe("/api/clips/abc/artwork")
   })
 
   it("encodes ids with unsafe characters", () => {
