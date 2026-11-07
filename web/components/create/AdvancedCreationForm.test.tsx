@@ -269,4 +269,24 @@ describe("AdvancedCreationForm", () => {
       voiceModelId: "v1",
     })
   })
+
+  it("sends the Song title with the generation (#734)", async () => {
+    submitAdvancedGeneration.mockResolvedValue({
+      status: "accepted",
+      jobId: "j1",
+      estimatedSeconds: 30,
+    })
+    const user = userEvent.setup()
+    render(<AdvancedCreationForm />)
+
+    await user.type(screen.getByLabelText("Styles"), "orchestral")
+    await user.click(screen.getByRole("button", { name: "More Options" }))
+    await user.type(screen.getByLabelText("Song title"), "Night Drive")
+    await user.click(createButton())
+
+    await waitFor(() => expect(submitAdvancedGeneration).toHaveBeenCalled())
+    expect(submitAdvancedGeneration.mock.calls[0][0]).toMatchObject({
+      title: "Night Drive",
+    })
+  })
 })
