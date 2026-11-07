@@ -212,6 +212,10 @@ flowchart LR
 
 ## Licensing
 
-Auto Music Studio has not yet published a licence for its own source. The licences chosen for
-dual-licensed dependencies (JUCE and the VST3 SDK) are in the
+Auto Music Studio is licensed under the [Functional Source License, Version 1.1, ALv2 Future
+License](LICENSE.md) (FSL-1.1-ALv2). You may use, modify and self-host it for any purpose other than
+offering a competing commercial product or service. Each version becomes available under the
+Apache License 2.0 two years after it is released.
+
+The licences chosen for dual-licensed dependencies (JUCE and the VST3 SDK) are in the
 [developer guide](docs/development.md#licensing) and [`plugin/LICENSE.md`](plugin/LICENSE.md).

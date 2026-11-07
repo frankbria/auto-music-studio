@@ -584,8 +584,9 @@ to `.env` and fill in the required values before running.
 
 ## Licensing
 
-This project has not published a licence for its own source. What is recorded here is
-the arm chosen for dependencies that are dual-licensed, where the choice constrains how
+This project's source is licensed under [FSL-1.1-ALv2](../LICENSE.md): any use except a
+competing commercial product or service, converting to Apache-2.0 two years after each
+release. What is recorded below is the arm chosen for dependencies that are dual-licensed, where the choice constrains how
 we build and distribute.
 
 | Component | Arm chosen | Obligation it creates |
