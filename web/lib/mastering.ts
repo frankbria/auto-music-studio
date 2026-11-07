@@ -4,6 +4,8 @@
 // the Bearer token and keeps the backend URL server-side (mirrors lib/generate
 // + lib/job-status). The backend endpoints (US-12.1/12.4) already exist.
 
+import type { MasteringDisplayStatus } from "@/components/mastering/mastering-status"
+
 /** The five mastering profiles (loudness targets), mirroring the backend Literal. */
 export type MasteringProfile =
   "streaming" | "soundcloud" | "club" | "vinyl" | "custom"
@@ -318,4 +320,51 @@ export async function approveMasteringPreview(
     }
   }
   return { status: "approved", clipId, audioUrl: audioUrl ?? "" }
+}
+
+/** A past mastering job for one song (#738): the job detail plus whether its
+ *  master is the song's approved one. */
+export type MasteringHistoryItem = MasteringJobDetail & { is_approved: boolean }
+
+/** The selected song's mastering jobs, newest first. Null on any failure. */
+export async function fetchMasteringHistory(
+  clipId: string,
+  accessToken: string
+): Promise<MasteringHistoryItem[] | null> {
+  let res: Response
+  try {
+    res = await fetch(
+      `/api/mastering/jobs?clip_id=${encodeURIComponent(clipId)}`,
+      { headers: { authorization: `Bearer ${accessToken}` } }
+    )
+  } catch {
+    return null
+  }
+  if (!res.ok) return null
+  const body = (await res.json().catch(() => null)) as {
+    jobs?: MasteringHistoryItem[]
+  } | null
+  return body?.jobs ?? null
+}
+
+// A Record over every non-completed status, so a new MasteringStatus member fails to compile.
+const DISPLAY_STATUS: Record<
+  Exclude<MasteringStatus, "completed">,
+  MasteringDisplayStatus
+> = { queued: "queued", processing: "processing", failed: "failed" }
+
+/** Collapse a job's status (+ approval) into a display state: a completed job
+ *  is "approved" once its master was picked, else "preview ready". */
+export function masteringDisplayStatus(
+  job: MasteringHistoryItem
+): MasteringDisplayStatus {
+  if (job.status !== "completed") return DISPLAY_STATUS[job.status]
+  return job.is_approved ? "approved" : "preview_ready"
+}
+
+/** The approved master's song page, else null. */
+export function masteredHref(job: MasteringHistoryItem): string | null {
+  return job.is_approved && job.mastered_clip_id
+    ? `/song/${job.mastered_clip_id}`
+    : null
 }

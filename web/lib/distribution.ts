@@ -9,7 +9,7 @@
 //    lib/mastering + the OAuth callback BFF).
 //
 // 2. The guided LANDR/DistroKid flow is a local seam, like release-draft
-//    ([[us-21-4-distribution-metadata-form]]) and mastering-history. The backend
+//    ([[us-21-4-distribution-metadata-form]]). The backend
 //    `POST /releases/{id}/prepare/{target}` exists but needs a real release_id,
 //    and the web app has no release-creation yet (only a localStorage draft). So
 //    `prepareDistribution` computes the same checklist the backend would, from the
