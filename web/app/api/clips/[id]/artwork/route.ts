@@ -1,8 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-import { ACCESS_COOKIE } from "@/lib/auth"
 import { BACKEND_URL } from "@/lib/auth-server"
-import { clientIpHeaders, fetchWithTimeout } from "@/lib/proxy-fetch"
+import {
+  clientIpHeaders,
+  fetchWithTimeout,
+  mediaAuthHeaders,
+  pickHeaders,
+} from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/clips/{clip_id}/artwork (#737), the URL an
 // <img> points at. Like the /stream proxy: an <img src> can't attach an
@@ -18,10 +22,6 @@ export async function GET(
   request: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
-  const cookieToken = request.cookies.get(ACCESS_COOKIE)?.value
-  const auth =
-    request.headers.get("authorization") ??
-    (cookieToken ? `Bearer ${cookieToken}` : null)
   const { id } = await ctx.params
 
   let res: Response
@@ -31,7 +31,7 @@ export async function GET(
       {
         headers: {
           ...clientIpHeaders(request),
-          ...(auth ? { authorization: auth } : {}),
+          ...mediaAuthHeaders(request),
         },
       }
     )
@@ -47,10 +47,8 @@ export async function GET(
     return NextResponse.json(body, { status: res.status })
   }
 
-  const headers = new Headers()
-  for (const name of PASSTHROUGH_HEADERS) {
-    const value = res.headers.get(name)
-    if (value) headers.set(name, value)
-  }
-  return new NextResponse(res.body, { status: res.status, headers })
+  return new NextResponse(res.body, {
+    status: res.status,
+    headers: pickHeaders(res.headers, PASSTHROUGH_HEADERS),
+  })
 }
