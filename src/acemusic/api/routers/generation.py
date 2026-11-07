@@ -13,7 +13,15 @@ validation share one source of truth.
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from acemusic.constants import (
     BPM_MAX,
@@ -47,6 +55,7 @@ from ..services import (
 from ..services.routing import ComputePreference, ComputeUnavailableError
 from ..settings import ApiSettings
 from ._validators import require_voice_model, validate_format, validate_model, validate_time_signature
+from .clips import CLIP_TITLE_MAX_LENGTH
 
 # Estimate heuristic (seconds): a song's wall-clock scales with its duration; a
 # short sound is roughly fixed. These are advisory hints returned to the client.
@@ -83,6 +92,10 @@ class GenerationRequest(BaseModel):
     # kept in the job params so the worker can load the adapter before submitting.
     voice_model_id: str | None = None
 
+    # #734: the clip title from the Create form; the job processor derives one from the prompt when absent.
+    title: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=CLIP_TITLE_MAX_LENGTH)] | None
+    ) = None
     prompt: Annotated[str, Field(min_length=1, max_length=PROMPT_MAX_LENGTH)]
     style: Annotated[str, Field(max_length=STYLE_MAX_LENGTH)] | None = None
     lyrics: Annotated[str, Field(max_length=LYRICS_MAX_LENGTH)] | None = None
@@ -205,7 +218,7 @@ async def create_generation(
         request = _apply_preset(request, preset)
     # US-27.1: screen the merged request (a preset can supply style/lyrics) before charging.
     moderation_flags = await screening_service.enforce(
-        request.prompt, request.style, request.lyrics, request.vocal_language
+        request.prompt, request.style, request.lyrics, request.vocal_language, request.title
     )
     # US-25.4: a voice the caller cannot use is rejected before anything is charged.
     await require_voice_model(request.voice_model_id, str(user.id))
