@@ -17,6 +17,7 @@ import logging
 import math
 
 from beanie import PydanticObjectId
+from beanie.operators import In
 
 from acemusic.storage import StorageBackend
 
@@ -269,6 +270,31 @@ async def list_source_previews(source_clip_id: str | None, user_id: str) -> list
     matching = [j for j in jobs if (j.input_params or {}).get("clip_id") == source_clip_id]
     matching.sort(key=lambda j: j.created_at)
     return matching
+
+
+async def list_clip_history(source_clip_id: str, user_id: str, limit: int) -> list[tuple[Job, bool]]:
+    """The owner's mastering jobs for ``source_clip_id`` in any state, newest first (#738).
+
+    Each job is paired with whether its mastered clip is the source's approved master.
+    """
+    uid = coerce_object_id(user_id)
+    if uid is None:
+        return []
+    jobs = (
+        await Job.find({"user_id": uid, "job_type": MASTERING_JOB_TYPE, "input_params.clip_id": source_clip_id})
+        .sort(-Job.created_at, -Job.id)
+        .limit(limit)
+        .to_list()
+    )
+    masters = {job.id: next(iter((job.result or {}).get("clip_ids") or []), None) for job in jobs}
+    master_oids = [oid for cid in masters.values() if cid and (oid := coerce_object_id(cid)) is not None]
+    approved = {
+        str(clip.id)
+        for clip in await Clip.find(
+            In(Clip.id, master_oids), Clip.user_id == uid, Clip.generation_mode == APPROVED_GENERATION_MODE
+        ).to_list()
+    }
+    return [(job, masters[job.id] in approved) for job in jobs]
 
 
 def _measure_loudness_sync(data: bytes) -> float | None:
