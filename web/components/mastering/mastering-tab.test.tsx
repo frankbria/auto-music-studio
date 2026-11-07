@@ -30,6 +30,14 @@ vi.mock("@/hooks/use-mastering-previews", () => ({
   useMasteringPreviews: () => previewsResult,
 }))
 
+const useMasteringHistory = vi.fn()
+vi.mock("@/hooks/use-mastering-history", () => ({
+  useMasteringHistory: (...a: unknown[]) => {
+    useMasteringHistory(...a)
+    return { state: { status: "ready", jobs: [] }, reload: vi.fn() }
+  },
+}))
+
 vi.mock("@/hooks/use-auth", () => ({ useAuth: () => ({ accessToken: "tok" }) }))
 
 const notify = vi.fn()
@@ -38,7 +46,10 @@ vi.mock("@/contexts/notifications-context", () => ({ useNotify: () => notify }))
 const approveMasteringPreview = vi.fn()
 vi.mock("@/lib/mastering", async (orig) => {
   const actual = await orig<typeof import("@/lib/mastering")>()
-  return { ...actual, approveMasteringPreview: (...a: unknown[]) => approveMasteringPreview(...a) }
+  return {
+    ...actual,
+    approveMasteringPreview: (...a: unknown[]) => approveMasteringPreview(...a),
+  }
 })
 
 function clip(id: string): Clip {
@@ -71,7 +82,14 @@ const readyPreviews: UseMasteringPreviews = {
       original_audio_url: "orig",
       original_metrics: { loudness: -20 },
       previews: [
-        { preview_id: "m1", audio_url: "u1", profile: "streaming", service: "bakuage", loudness_delta: 6, metrics: { loudness: -14 } },
+        {
+          preview_id: "m1",
+          audio_url: "u1",
+          profile: "streaming",
+          service: "bakuage",
+          loudness_delta: 6,
+          metrics: { loudness: -14 },
+        },
       ],
     },
   },
@@ -85,31 +103,82 @@ afterEach(() => vi.clearAllMocks())
 describe("MasteringTab", () => {
   it("prompts to select a song when none is chosen", () => {
     jobState = { phase: "idle" }
-    previewsResult = { state: { status: "loading" }, selectedId: null, select: vi.fn(), reload: vi.fn() }
+    previewsResult = {
+      state: { status: "loading" },
+      selectedId: null,
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
     render(<MasteringTab selectedClip={null} />)
     expect(screen.getByText(/select a song above/i)).toBeInTheDocument()
+    expect(screen.queryByText(/mastering history/i)).not.toBeInTheDocument()
+  })
+
+  it("shows the selected song's history, refreshed by the job phase (#738)", () => {
+    jobState = { phase: "idle" }
+    previewsResult = {
+      state: { status: "loading" },
+      selectedId: null,
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
+    const { rerender } = render(<MasteringTab selectedClip={clip("c1")} />)
+    expect(
+      screen.getByText(/no mastering jobs for this song yet/i)
+    ).toBeInTheDocument()
+    expect(useMasteringHistory).toHaveBeenLastCalledWith("c1", "idle:idle")
+
+    jobState = {
+      phase: "completed",
+      detail: { job_id: "j1", status: "completed" },
+    }
+    previewsResult = readyPreviews
+    rerender(<MasteringTab selectedClip={clip("c1")} />)
+    expect(useMasteringHistory).toHaveBeenLastCalledWith("c1", "completed:idle")
   })
 
   it("renders the config panel and submits for the selected clip", async () => {
     jobState = { phase: "idle" }
-    previewsResult = { state: { status: "loading" }, selectedId: null, select: vi.fn(), reload: vi.fn() }
+    previewsResult = {
+      state: { status: "loading" },
+      selectedId: null,
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
     const user = userEvent.setup()
     render(<MasteringTab selectedClip={clip("c1")} />)
 
     await user.click(screen.getByRole("button", { name: /start mastering/i }))
-    expect(submit).toHaveBeenCalledWith("c1", { profile: "streaming", service: "bakuage", format: "wav" })
+    expect(submit).toHaveBeenCalledWith("c1", {
+      profile: "streaming",
+      service: "bakuage",
+      format: "wav",
+    })
   })
 
   it("shows progress while polling", () => {
-    jobState = { phase: "polling", detail: { job_id: "j1", status: "processing" } }
-    previewsResult = { state: { status: "loading" }, selectedId: null, select: vi.fn(), reload: vi.fn() }
+    jobState = {
+      phase: "polling",
+      detail: { job_id: "j1", status: "processing" },
+    }
+    previewsResult = {
+      state: { status: "loading" },
+      selectedId: null,
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
     render(<MasteringTab selectedClip={clip("c1")} />)
     expect(screen.getByRole("status")).toHaveTextContent(/processing/i)
   })
 
   it("shows a failure with a working retry", async () => {
     jobState = { phase: "error", message: "boom" }
-    previewsResult = { state: { status: "loading" }, selectedId: null, select: vi.fn(), reload: vi.fn() }
+    previewsResult = {
+      state: { status: "loading" },
+      selectedId: null,
+      select: vi.fn(),
+      reload: vi.fn(),
+    }
     const user = userEvent.setup()
     render(<MasteringTab selectedClip={clip("c1")} />)
 
@@ -119,19 +188,31 @@ describe("MasteringTab", () => {
   })
 
   it("shows previews, the A/B player, and approves a master", async () => {
-    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    jobState = {
+      phase: "completed",
+      detail: { job_id: "j1", status: "completed" },
+    }
     previewsResult = readyPreviews
-    approveMasteringPreview.mockResolvedValue({ status: "approved", clipId: "m1", audioUrl: "u" })
+    approveMasteringPreview.mockResolvedValue({
+      status: "approved",
+      clipId: "m1",
+      audioUrl: "u",
+    })
     const user = userEvent.setup()
     render(<MasteringTab selectedClip={clip("c1")} />)
 
     // Preview list + A/B player render.
     expect(screen.getByLabelText(/mastered previews/i)).toBeInTheDocument()
-    expect(screen.getByTestId("preview-audio")).toHaveAttribute("src", "/api/clips/m1/stream")
+    expect(screen.getByTestId("preview-audio")).toHaveAttribute(
+      "src",
+      "/api/clips/m1/stream"
+    )
 
     await user.click(screen.getByRole("button", { name: /approve master/i }))
     expect(approveMasteringPreview).toHaveBeenCalledWith("j1", "m1", "tok")
-    await waitFor(() => expect(screen.getByText(/master approved/i)).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/master approved/i)).toBeInTheDocument()
+    )
     // The approval confirmation carries the "Mastered" badge.
     expect(
       screen.getByText("Mastered", { selector: "[data-slot='badge']" })
@@ -139,7 +220,10 @@ describe("MasteringTab", () => {
   })
 
   it("re-shows Approve after approving one preview and selecting another", async () => {
-    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    jobState = {
+      phase: "completed",
+      detail: { job_id: "j1", status: "completed" },
+    }
     // Two candidates; start with m1 selected.
     const two: UseMasteringPreviews = {
       state: {
@@ -157,13 +241,19 @@ describe("MasteringTab", () => {
       reload: vi.fn(),
     }
     previewsResult = two
-    approveMasteringPreview.mockResolvedValue({ status: "approved", clipId: "x", audioUrl: "u" })
+    approveMasteringPreview.mockResolvedValue({
+      status: "approved",
+      clipId: "x",
+      audioUrl: "u",
+    })
     const user = userEvent.setup()
     const { rerender } = render(<MasteringTab selectedClip={clip("c1")} />)
 
     await user.click(screen.getByRole("button", { name: /approve master/i }))
     await waitFor(() =>
-      expect(screen.getByText("Mastered", { selector: "[data-slot='badge']" })).toBeInTheDocument()
+      expect(
+        screen.getByText("Mastered", { selector: "[data-slot='badge']" })
+      ).toBeInTheDocument()
     )
 
     // The user now selects a different candidate to keep comparing.
@@ -171,15 +261,22 @@ describe("MasteringTab", () => {
     rerender(<MasteringTab selectedClip={clip("c1")} />)
 
     // The approval banner is gone; Approve is offered for the new selection.
-    expect(screen.queryByText("Mastered", { selector: "[data-slot='badge']" })).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /approve master/i })).toBeInTheDocument()
+    expect(
+      screen.queryByText("Mastered", { selector: "[data-slot='badge']" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /approve master/i })
+    ).toBeInTheDocument()
     // And the top status pill no longer contradicts it: it falls back to
     // "Preview ready" for the newly-selected, unapproved candidate (review #1).
     expect(screen.getByRole("status")).toHaveTextContent(/preview ready/i)
   })
 
   it("raises a mastering_complete notification when a job completes (AC5)", () => {
-    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    jobState = {
+      phase: "completed",
+      detail: { job_id: "j1", status: "completed" },
+    }
     previewsResult = readyPreviews
     render(<MasteringTab selectedClip={clip("Velvet Static")} />)
 
@@ -189,12 +286,14 @@ describe("MasteringTab", () => {
       expect.objectContaining({ type: "mastering_complete" })
     )
     // A distinct "Preview ready" status shows for the completed-not-approved job (AC2).
-    // Scope to the status role — the history section below also lists a preview_ready row.
     expect(screen.getByRole("status")).toHaveTextContent(/preview ready/i)
   })
 
   it("redirects to login when approval is unauthorized", async () => {
-    jobState = { phase: "completed", detail: { job_id: "j1", status: "completed" } }
+    jobState = {
+      phase: "completed",
+      detail: { job_id: "j1", status: "completed" },
+    }
     previewsResult = readyPreviews
     approveMasteringPreview.mockResolvedValue({ status: "unauthorized" })
     const user = userEvent.setup()

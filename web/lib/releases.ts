@@ -7,8 +7,7 @@
 // ([[us-21-4-distribution-metadata-form]]) — so `GET /releases` returns an empty
 // list for every web user today, and the dashboard would have nothing to show.
 //
-// So, like mastering history ([[us-21-3-mastering-status-tracking]]) and the
-// Stage-20 pages, this is a typed seam seeded across every status state. Its
+// So, like the Stage-20 pages, this is a typed seam seeded across every status state. Its
 // shape mirrors the backend `ReleaseListResponse` / `ReleaseResponse` /
 // `channel_statuses` so it swaps cleanly: when web release-creation lands, replace
 // `fetchReleases`'s body with a BFF fetch to `GET /releases` (mirroring

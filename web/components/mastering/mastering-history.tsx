@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -10,62 +11,99 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { MasteringStatusBadge } from "@/components/mastering/mastering-status"
+import { useMasteringHistory } from "@/hooks/use-mastering-history"
 import { relativeTime } from "@/lib/notifications"
 import {
   masteredHref,
   masteringDisplayStatus,
-  masteringHistory,
-  type MasteringHistoryEntry,
-} from "@/lib/mastering-history"
-import { profileLabel, serviceLabel } from "@/lib/mastering"
+  profileLabel,
+  serviceLabel,
+  type MasteringHistoryItem,
+} from "@/lib/mastering"
 import { cn } from "@/lib/utils"
 
 /**
- * Mastering history (US-21.3): past mastering jobs for the current user with their
- * status, and a link to the approved master where one exists (AC4). Reads the local
- * history seam (lib/mastering-history) until a backend listing endpoint exists.
+ * Mastering history (US-21.3, #738): the selected song's mastering jobs with
+ * their status, linking an approved master to its song page. Hidden until a
+ * song is selected.
  */
 export function MasteringHistory({
-  entries = masteringHistory,
+  clipId,
+  refreshKey,
 }: {
-  entries?: MasteringHistoryEntry[]
+  clipId: string | undefined
+  refreshKey?: string
 }) {
+  const history = useMasteringHistory(clipId, refreshKey)
+  if (!clipId) return null
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Mastering history</CardTitle>
-        <CardDescription>Your recent mastering jobs and approved masters.</CardDescription>
+        <CardDescription>
+          This song&apos;s mastering jobs and approved master.
+        </CardDescription>
       </CardHeader>
-      <CardContent>
-        {entries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No mastering jobs yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-2" aria-label="Mastering history">
-            {entries.map((entry) => (
-              <li key={entry.id}>
-                <HistoryRow entry={entry} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
+      <CardContent>{renderBody()}</CardContent>
     </Card>
   )
+
+  function renderBody() {
+    if (history.state.status === "loading") {
+      return (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading mastering history…
+        </p>
+      )
+    }
+    if (history.state.status === "error") {
+      return (
+        <div className="flex flex-col items-start gap-3">
+          <p className="text-sm text-destructive">
+            Couldn&apos;t load mastering history.
+          </p>
+          <Button variant="outline" size="sm" onClick={history.reload}>
+            Try again
+          </Button>
+        </div>
+      )
+    }
+    if (history.state.jobs.length === 0) {
+      return (
+        <p className="text-sm text-muted-foreground">
+          No mastering jobs for this song yet.
+        </p>
+      )
+    }
+    return (
+      <ul className="flex flex-col gap-2" aria-label="Mastering history">
+        {history.state.jobs.map((job) => (
+          <li key={job.job_id}>
+            <HistoryRow job={job} />
+          </li>
+        ))}
+      </ul>
+    )
+  }
 }
 
 /** A single history row. Approved rows link to the master; the rest are static. */
-function HistoryRow({ entry }: { entry: MasteringHistoryEntry }) {
-  const href = masteredHref(entry)
+function HistoryRow({ job }: { job: MasteringHistoryItem }) {
+  const href = masteredHref(job)
   const body = (
     <>
       <span className="flex min-w-0 flex-col">
-        <span className="truncate text-sm font-medium">{entry.songTitle}</span>
-        <span className="text-xs text-muted-foreground">
-          {profileLabel(entry.profile)} · {serviceLabel(entry.service)} ·{" "}
-          {relativeTime(entry.createdAt)}
+        <span className="truncate text-sm font-medium">
+          {profileLabel(job.profile)} · {serviceLabel(job.service)}
         </span>
+        {job.created_at && (
+          <span className="text-xs text-muted-foreground">
+            {relativeTime(job.created_at)}
+          </span>
+        )}
       </span>
-      <MasteringStatusBadge status={masteringDisplayStatus(entry)} />
+      <MasteringStatusBadge status={masteringDisplayStatus(job)} />
     </>
   )
 

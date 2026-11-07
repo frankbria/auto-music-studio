@@ -93,8 +93,12 @@ export function MasteringTab({ selectedClip }: { selectedClip: Clip | null }) {
         <CardContent>{renderBody()}</CardContent>
       </Card>
 
-      {/* Past jobs + approved masters (AC4). US-21.3. */}
-      <MasteringHistory />
+      {/* The song's past jobs + approved master (AC4). US-21.3. Refetches as
+          this tab's job or approval moves on, so the new job shows up. */}
+      <MasteringHistory
+        clipId={selectedClip?.id}
+        refreshKey={`${job.state.phase}:${approve.phase}`}
+      />
     </div>
   )
 
