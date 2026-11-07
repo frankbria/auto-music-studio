@@ -13,12 +13,15 @@ import { usePlayer } from "@/contexts/player-context"
 export function SongInfo() {
   const { state } = usePlayer()
   const track = state.current
-  // The art URL that failed to load (404 = no cover art). Keyed by URL, so the next track retries.
-  const [failedUrl, setFailedUrl] = useState<string | null>(null)
-  const artworkUrl =
-    track?.artworkUrl && track.artworkUrl !== failedUrl
-      ? track.artworkUrl
-      : null
+  // Whether the current track's art failed (404 = no cover art). Reset during render whenever
+  // a track starts, so a transient failure or art added later is retried on the next play.
+  const [failed, setFailed] = useState(false)
+  const [shownTrack, setShownTrack] = useState(track)
+  if (track !== shownTrack) {
+    setShownTrack(track)
+    setFailed(false)
+  }
+  const artworkUrl = !failed ? track?.artworkUrl : undefined
 
   return (
     <div className="flex min-w-0 items-center gap-3">
@@ -28,7 +31,7 @@ export function SongInfo() {
           <img
             src={artworkUrl}
             alt=""
-            onError={() => setFailedUrl(artworkUrl)}
+            onError={() => setFailed(true)}
             className="size-full object-cover"
           />
         ) : (

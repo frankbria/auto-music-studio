@@ -58,4 +58,18 @@ describe("SongInfo artwork (#737)", () => {
       "/api/clips/t2/artwork"
     )
   })
+
+  it("retries a clip's art when it is played again after a failure", async () => {
+    // A failure may be transient, or art may be added later: it must not stick to the URL.
+    const container = renderInfo()
+    await userEvent.click(screen.getByText("load t1"))
+    fireEvent.error(container.querySelector("img")!)
+    await userEvent.click(screen.getByText("load t2"))
+    await userEvent.click(screen.getByText("load t1"))
+
+    expect(container.querySelector("img")).toHaveAttribute(
+      "src",
+      "/api/clips/t1/artwork"
+    )
+  })
 })
