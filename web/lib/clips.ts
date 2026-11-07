@@ -118,6 +118,43 @@ export async function updateClipVisibility(
   visibility: Visibility,
   accessToken: string
 ): Promise<VisibilityResult> {
+  const result = await patchClip(
+    id,
+    { visibility },
+    accessToken,
+    "Couldn't update visibility. Please try again."
+  )
+  return result.ok
+    ? { ok: true, visibility }
+    : { ok: false, guardFailed: result.status === 422, message: result.message }
+}
+
+/**
+ * Rename a clip via `PATCH /api/clips/{id}` (#736). The server screens the title,
+ * so a refusal's message is its string `detail` when it sends one.
+ */
+export async function updateClipTitle(
+  id: string,
+  title: string,
+  accessToken: string
+) {
+  return patchClip(
+    id,
+    { title },
+    accessToken,
+    "Couldn't rename this song. Please try again."
+  )
+}
+
+/** PATCH the clip proxy; a failure carries the server's string `detail`, else `fallback`. */
+async function patchClip(
+  id: string,
+  body: Record<string, unknown>,
+  accessToken: string,
+  fallback: string
+): Promise<
+  { ok: true } | { ok: false; status: number | null; message: string }
+> {
   let res: Response
   try {
     res = await fetch(`/api/clips/${encodeURIComponent(id)}`, {
@@ -126,22 +163,19 @@ export async function updateClipVisibility(
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ visibility }),
+      body: JSON.stringify(body),
     })
   } catch {
     return {
       ok: false,
-      guardFailed: false,
+      status: null,
       message: "Couldn't reach the server. Please try again.",
     }
   }
-  if (res.ok) return { ok: true, visibility }
+  if (res.ok) return { ok: true }
   const detail = (await res.json().catch(() => ({}))) as { detail?: unknown }
-  const message =
-    typeof detail.detail === "string"
-      ? detail.detail
-      : "Couldn't update visibility. Please try again."
-  return { ok: false, guardFailed: res.status === 422, message }
+  const message = typeof detail.detail === "string" ? detail.detail : fallback
+  return { ok: false, status: res.status, message }
 }
 
 /** Format a number of seconds as `m:ss` (negative/NaN → `0:00`). */
