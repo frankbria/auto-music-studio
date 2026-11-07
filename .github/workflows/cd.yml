@@ -10,8 +10,8 @@
 # fail that way. Docker Hub stays correct for the ACE-Step image, which RunPod pulls.
 #
 # Every green main deploys to staging (#699). Production (#700) then promotes that same SHA: its job needs the staging
-# job, so a SHA that failed or skipped staging's health gate never reaches it, and the `production` environment's
-# required reviewer approves each promotion. Both hosts are reached over Tailscale (TS_OAUTH_CLIENT_ID /
+# job, so a SHA that failed or skipped staging's health gate never reaches it; one that passed deploys with no manual
+# approval. Both hosts are reached over Tailscale (TS_OAUTH_CLIENT_ID /
 # TS_OAUTH_SECRET). Each job is *skipped* until its repository variable (STAGING_DEPLOY_ENABLED, DEPLOY_ENABLED) is
 # true: visibly inert, rather than green having done nothing.
 
