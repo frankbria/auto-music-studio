@@ -42,6 +42,11 @@ export type Clip = {
   visibility?: Visibility
   created_at: string
   /**
+   * The owner's public name (#735): display name, else handle; null when they set neither.
+   * Optional because mocks and older reads omit it.
+   */
+  artist?: string | null
+  /**
    * Server-computed viewer ownership, present only on the public read (US-20.0)
    * and the similar-clips read (#535); the owner-scoped reads omit it because
    * everything they return is already the caller's. Undefined therefore means

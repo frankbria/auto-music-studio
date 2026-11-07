@@ -17,10 +17,12 @@ export function SectionPreviewPlayer({
   clipId,
   title,
   durationSeconds,
+  artist,
 }: {
   clipId: string
   title: string
   durationSeconds: number
+  artist?: string | null
 }) {
   const { state, dispatch } = usePlayer()
   const isCurrent = state.current?.id === clipId
@@ -32,7 +34,12 @@ export function SectionPreviewPlayer({
     } else {
       dispatch({
         type: "play/track",
-        track: trackFromClip({ id: clipId, title, duration: durationSeconds }),
+        track: trackFromClip({
+          id: clipId,
+          title,
+          duration: durationSeconds,
+          artist,
+        }),
       })
     }
   }

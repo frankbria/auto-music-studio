@@ -23,17 +23,19 @@ from acemusic.constants import ARTWORK_MAX_UPLOAD_BYTES, ARTWORK_PROMPT_MAX_LENG
 from acemusic.image_processing import ImageValidationError
 from acemusic.storage import get_storage_backend
 
-from ..auth.dependencies import CurrentUser, get_current_user, require_existing_user
+from ..auth.dependencies import CurrentUser, get_current_user, get_current_user_optional, require_existing_user
 from ..models import Clip
 from ..services import artwork as artwork_service, clips as clip_service, credits as credits_service
 from ..services.artwork import ArtworkNotFoundError
-from ..services.clips import get_clip_for_audio_access
+from ..services.clips import get_clip_for_streaming
 
 logger = logging.getLogger(__name__)
 
 # Router-level dependency gates every route behind a valid Bearer token (mirrors
 # the clips/editing routers), so unauthenticated requests get 401.
 router = APIRouter(prefix="/clips", tags=["artwork"], dependencies=[Depends(get_current_user)])
+# #737: cover art is read by an <img>, which can't send a Bearer token, so GET has no blanket auth.
+public_router = APIRouter(prefix="/clips", tags=["artwork"])
 
 _CONTENT_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 
@@ -131,14 +133,17 @@ async def upload_artwork(
     return await _artwork_response(clip)
 
 
-@router.get("/{clip_id}/artwork")
+@public_router.get("/{clip_id}/artwork")
 async def get_artwork(
     clip_id: str,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser | None = Depends(get_current_user_optional),
 ) -> Response:
-    """Return the clip's cover-art bytes (404 if none is set)."""
-    # Honors is_public like the audio endpoint: a public clip's art is viewable.
-    clip = await get_clip_for_audio_access(clip_id, current.user_id)
+    """Return the clip's cover-art bytes (404 if none is set).
+
+    Same access rule as the stream endpoint: public/unlisted art is readable anonymously,
+    private art only by its owner (or an admin), and a private clip is a 404 to strangers.
+    """
+    clip = await get_clip_for_streaming(clip_id, current.user_id if current else None)
     if not clip.artwork_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This clip has no cover art.")
 
@@ -150,4 +155,8 @@ async def get_artwork(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cover art file not found.")
 
     ext = clip.artwork_path.rsplit(".", 1)[-1].lower()
-    return Response(content=image, media_type=_CONTENT_TYPES.get(ext, "application/octet-stream"))
+    return Response(
+        content=image,
+        media_type=_CONTENT_TYPES.get(ext, "application/octet-stream"),
+        headers={"Cache-Control": clip_service.media_cache_control(clip)},
+    )

@@ -3,11 +3,7 @@
 // The playbar plays `Track` objects that already carry their display metadata
 // and a resolvable `audioUrl`. `clipAudioUrl` points at the same-origin stream
 // proxy so an <audio src> resolves against this app rather than the (non-public)
-// backend origin.
-//
-// ponytail: `clipArtworkUrl` still builds a bare /api/v1 backend path with no
-// proxy route behind it, so cover art does not load. Left as-is — US-20.0 needs
-// audio, and artwork wants its own proxy + placeholder story.
+// backend origin; `clipArtworkUrl` does the same for an <img src> (#737).
 
 import type { Visibility } from "@/lib/workspace-clips"
 
@@ -15,7 +11,7 @@ import type { Visibility } from "@/lib/workspace-clips"
 export type Track = {
   id: string
   title: string
-  /** Backend `ClipResponse` has no artist column yet; default to a placeholder. */
+  /** The clip owner's public name; a placeholder when they set none. */
   artist: string
   /** Resolvable audio source for the <audio> element. */
   audioUrl: string
@@ -25,16 +21,17 @@ export type Track = {
   duration?: number
 }
 
-/** Build a playable Track from a clip (artist/artwork are placeholders today). */
+/** Build a playable Track from a clip (artwork is a placeholder today). */
 export function trackFromClip(clip: {
   id: string
   title: string | null
   duration: number | null
+  artist?: string | null
 }): Track {
   return {
     id: clip.id,
     title: clip.title ?? "Untitled clip",
-    artist: "Unknown artist",
+    artist: clip.artist || "Unknown artist",
     audioUrl: clipAudioUrl(clip.id),
     artworkUrl: clipArtworkUrl(clip.id),
     duration: clip.duration ?? undefined,
@@ -54,9 +51,13 @@ export function clipAudioUrl(id: string): string {
   return `/api/clips/${encodeURIComponent(id)}/stream`
 }
 
-/** Backend cover-art path for a clip. */
+/**
+ * Same-origin cover-art path for a clip (#737). Like `clipAudioUrl`, the proxy
+ * falls back to the access cookie so an <img> can show a private clip's art.
+ * A clip with no art 404s, and the player shows its music-note placeholder.
+ */
 export function clipArtworkUrl(id: string): string {
-  return `/api/v1/clips/${encodeURIComponent(id)}/artwork`
+  return `/api/clips/${encodeURIComponent(id)}/artwork`
 }
 
 /** Formats the same-origin audio proxy can convert to (US-17.2 downloads). */
@@ -117,6 +118,43 @@ export async function updateClipVisibility(
   visibility: Visibility,
   accessToken: string
 ): Promise<VisibilityResult> {
+  const result = await patchClip(
+    id,
+    { visibility },
+    accessToken,
+    "Couldn't update visibility. Please try again."
+  )
+  return result.ok
+    ? { ok: true, visibility }
+    : { ok: false, guardFailed: result.status === 422, message: result.message }
+}
+
+/**
+ * Rename a clip via `PATCH /api/clips/{id}` (#736). The server screens the title,
+ * so a refusal's message is its string `detail` when it sends one.
+ */
+export async function updateClipTitle(
+  id: string,
+  title: string,
+  accessToken: string
+) {
+  return patchClip(
+    id,
+    { title },
+    accessToken,
+    "Couldn't rename this song. Please try again."
+  )
+}
+
+/** PATCH the clip proxy; a failure carries the server's string `detail`, else `fallback`. */
+async function patchClip(
+  id: string,
+  body: Record<string, unknown>,
+  accessToken: string,
+  fallback: string
+): Promise<
+  { ok: true } | { ok: false; status: number | null; message: string }
+> {
   let res: Response
   try {
     res = await fetch(`/api/clips/${encodeURIComponent(id)}`, {
@@ -125,22 +163,19 @@ export async function updateClipVisibility(
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ visibility }),
+      body: JSON.stringify(body),
     })
   } catch {
     return {
       ok: false,
-      guardFailed: false,
+      status: null,
       message: "Couldn't reach the server. Please try again.",
     }
   }
-  if (res.ok) return { ok: true, visibility }
+  if (res.ok) return { ok: true }
   const detail = (await res.json().catch(() => ({}))) as { detail?: unknown }
-  const message =
-    typeof detail.detail === "string"
-      ? detail.detail
-      : "Couldn't update visibility. Please try again."
-  return { ok: false, guardFailed: res.status === 422, message }
+  const message = typeof detail.detail === "string" ? detail.detail : fallback
+  return { ok: false, status: res.status, message }
 }
 
 /** Format a number of seconds as `m:ss` (negative/NaN → `0:00`). */

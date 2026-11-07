@@ -16,6 +16,7 @@ import { SectionPreviewPlayer } from "./SectionPreviewPlayer"
 export function CompletionStep({
   finalClipId,
   seedTitle,
+  seedArtist,
   totalDuration,
   sectionsCompleted,
   creditsUsed,
@@ -24,6 +25,7 @@ export function CompletionStep({
 }: {
   finalClipId: string
   seedTitle: string
+  seedArtist?: string | null
   totalDuration: number
   sectionsCompleted: number
   creditsUsed: number
@@ -45,6 +47,7 @@ export function CompletionStep({
         clipId={finalClipId}
         title={seedTitle}
         durationSeconds={totalDuration}
+        artist={seedArtist}
       />
 
       <dl className="grid grid-cols-3 gap-2 text-center text-sm">

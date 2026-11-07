@@ -232,6 +232,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(clips.stream_router, prefix=API_V1_PREFIX)
     app.include_router(editing.router, prefix=API_V1_PREFIX)
     app.include_router(artwork.router, prefix=API_V1_PREFIX)
+    app.include_router(artwork.public_router, prefix=API_V1_PREFIX)
     app.include_router(extraction.router, prefix=API_V1_PREFIX)
     app.include_router(credits.router, prefix=API_V1_PREFIX)
     app.include_router(billing.router, prefix=API_V1_PREFIX)
