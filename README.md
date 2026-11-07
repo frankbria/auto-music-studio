@@ -1,8 +1,175 @@
-# Auto Music Studio
+<div align="center">
 
-AI-powered music generation platform built on ACE-Step-1.5.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/banner-dark.svg">
+  <img alt="Auto Music Studio: write, produce and release original music with AI" src="docs/readme/banner-light.svg" width="100%">
+</picture>
 
-## Running the platform
+<br>
+
+**Describe a song. Hear it in minutes. Shape it, master it, and release it — all in one studio.**
+
+<a href="https://www.automusicstudio.com"><b>Start free →</b></a>
+&nbsp;·&nbsp;
+<a href="#run-it-yourself">Run it yourself</a>
+&nbsp;·&nbsp;
+<a href="#plans">Plans</a>
+&nbsp;·&nbsp;
+<a href="docs/development.md">Developer guide</a>
+
+<br>
+
+[![CI](https://github.com/frankbria/auto-music-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/frankbria/auto-music-studio/actions/workflows/ci.yml)
+[![VST3 plugin](https://github.com/frankbria/auto-music-studio/actions/workflows/plugin.yml/badge.svg)](https://github.com/frankbria/auto-music-studio/actions/workflows/plugin.yml)
+![ACE-Step 1.5](https://img.shields.io/badge/model-ACE--Step%201.5-7c3aed)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
+![Next.js](https://img.shields.io/badge/web-Next.js-000000?logo=nextdotjs&logoColor=white)
+![VST3 · AU](https://img.shields.io/badge/DAW-VST3%20%C2%B7%20AU-06b6d4)
+
+<br>
+
+<img src="docs/readme/create.gif" alt="Typing a prompt on the Create page, generating, and playing the new song" width="100%">
+
+</div>
+
+---
+
+## One studio, from idea to listeners
+
+Most AI music tools stop at "here's a clip". Auto Music Studio is built for what comes next: turning a
+first take into a finished song, and getting that song in front of people.
+
+| | |
+| --- | --- |
+| 🎼 **Create** | Full songs from a sentence, with your own lyrics, BPM, key and length. Loops and one-shots for producers. |
+| ✂️ **Shape** | Extend, repaint a section, add a vocal, cover it in another genre, mash two songs together, split stems. |
+| 🎛️ **Arrange** | A multi-track studio in the browser, with mixdown and export straight into your DAW. |
+| 🎚️ **Master** | Professional AI mastering through Bakuage, or a one-click loudness remaster. |
+| 🚀 **Release** | AI cover art, release metadata, publishing to SoundCloud, and guided prep for DistroKid, TuneCore and LANDR. |
+| 🎬 **Video** | Music videos in six visual styles, up to 4K, with lyric sync. |
+| 🎤 **Your voice** | Train a custom voice model and hear your songs sung in it. |
+| 🔌 **Everywhere** | The web app and a VST3/AU plugin inside your DAW share one account; a command-line tool runs against your own ACE-Step server. |
+
+---
+
+## Create
+
+Write what you hear in your head. Simple mode takes one sentence; Advanced mode adds lyrics, structure,
+tempo, key, seed and model choice; Sounds mode makes loops and one-shots for your own productions.
+A generation that fails refunds its credits.
+
+Generation runs on **ACE-Step 1.5**, an open music model you can run on your own GPU, with ElevenLabs
+available as a cloud backend for composition plans and short samples.
+
+## Shape every section
+
+A first take is a starting point. Keep the parts you love and redo the rest:
+
+- **Extend** a clip from its end or any timestamp, and **Full song** grows a short idea into a complete
+  intro → verse → chorus → bridge → outro arrangement.
+- **Repaint** or **replace** a section with new instructions, blended in with crossfades.
+- **Cover** a song in a new style, **add a vocal** to an instrumental, or **mash up** two songs with BPM alignment.
+- **Stems and MIDI**: split a track into vocals, drums, bass and other, or pull melody, chords, drums and bass out as MIDI.
+
+<img src="docs/readme/editor.gif" alt="Setting up an edit on a song" width="100%">
+
+## Arrange in the Studio
+
+Lay clips out on tracks, set volume and pan, solo and mute, and hear the whole arrangement play back.
+Mix it down to WAV, FLAC or MP3, or export a DAW bundle with every track as a separate stem.
+
+<img src="docs/readme/studio.gif" alt="The multi-track Studio playing an arrangement" width="100%">
+
+## Master it, release it
+
+Send a finished song to **Bakuage** for AI mastering to a professional loudness target, or run a quick
+loudness remaster in place. Generate cover art options, fill in the release metadata, and publish to
+**SoundCloud** directly, or download a ready-to-submit bundle for **DistroKid**, **TuneCore** or **LANDR**.
+Distribution status is tracked for you.
+
+<img src="docs/readme/release.gif" alt="Preparing a release with cover art and distribution targets" width="100%">
+
+## Make the video
+
+Turn a song into a music video: pick a style (cinematic, abstract, animated, lyric video, live performance
+or nature), describe the look, sync the lyrics, and render in 16:9, 9:16 or square, up to 4K.
+
+<img src="docs/readme/video.gif" alt="Setting up a cinematic, lyric-synced vertical music video" width="100%">
+
+## Share and discover
+
+Every song gets its own page with a waveform player. Make it public and it shows up on your artist profile,
+in Search and in Explore's New Releases and genre channels. Trending and Charts rank songs by real plays,
+likes and shares, and Staff Picks highlight hand-picked favourites. Playlists, a playback queue and a global player follow you around the app.
+
+<img src="docs/readme/song.gif" alt="A song page playing, with waveform and details" width="100%">
+
+<img src="docs/readme/discover.gif" alt="Browsing public music on Explore and searching" width="100%">
+
+## In your DAW
+
+The **Auto Music Studio plugin** (VST3 on Windows, macOS and Linux; AU on macOS) puts generation inside
+your session. It follows the host tempo, generates to fit your selection, takes MIDI and sidechain audio
+as input, builds a track layer by layer, and lets you drag results straight onto a track. Sign in to sync
+clips with your workspace and sing in your own custom voice.
+
+## From the terminal
+
+The `acemusic` CLI talks straight to your ACE-Step server: generate, extend, repaint, cover, mash up,
+split stems, manage workspaces and export, from a script or a headless box.
+
+<img src="docs/readme/cli.gif" alt="Running acemusic health and acemusic generate in a terminal" width="100%">
+
+```bash
+acemusic generate "dark electro" --bpm 128 --key "C minor" --duration 60
+acemusic extend 42 --duration 30s --style "add a bridge feel"
+acemusic full-song 42 --auto
+acemusic export 42 --format flac
+```
+
+---
+
+## Plans
+
+Start free. Upgrade when your music needs more.
+
+| | **Free** | **Pro** | **Enterprise** |
+| --- | :---: | :---: | :---: |
+| **Price** | $0 | **$24**/month<br>or $228/year | **$99**/month<br>or $998/year |
+| **Credits every month** | 50 | 500 | 2,500 |
+| Song and sound generation | ✓ | ✓ | ✓ |
+| Extend, cover, repaint, mashup, add vocal | ✓ | ✓ | ✓ |
+| Studio | View only | Full editing and mixdown | Full editing and mixdown |
+| Convert and export to WAV / FLAC | | ✓ | ✓ |
+| Stem separation and MIDI extraction | | ✓ | ✓ |
+| Mastering | | ✓ | ✓ |
+| Distribution and SoundCloud publishing | | ✓ | ✓ |
+| Custom voice models | | ✓ | ✓ |
+| Music video | 720p, watermarked | Up to 1080p | Up to **4K** |
+| Rate limits | Standard | 3× | 10× |
+| Priority job queue | | | ✓ |
+
+Need more credits mid-month? Any plan can buy a top-up: **50 credits for $5**, **100 for $9** or
+**250 for $20**. Prices in USD.
+
+<p align="center"><a href="https://www.automusicstudio.com"><b>Start free at automusicstudio.com →</b></a></p>
+
+---
+
+## Built to be trusted
+
+- **Your music is yours.** Songs are private until you publish them, and you choose who sees each one: private, unlisted or public.
+- **Safe by default.** Every prompt, style and lyric is screened before generation, so a blocked request is never charged,
+  and titles and release metadata are screened before anything is published. Listeners can report content, and a
+  removal, content warning or video takedown can be appealed.
+- **Fair billing.** Failed jobs refund their credits automatically, and the usage dashboard shows where every credit went.
+- **Open foundations.** Generation runs on the open ACE-Step model, on your own GPU or on serverless GPUs through RunPod.
+
+---
+
+## Run it yourself
+
+The whole platform (web app, API and database) runs from one Compose file:
 
 ```bash
 cp .env.docker.example .env.docker
@@ -10,568 +177,41 @@ sed -i "s|^ACEMUSIC_API_JWT_SECRET_KEY=.*|ACEMUSIC_API_JWT_SECRET_KEY=$(openssl 
 docker compose --env-file .env.docker up --build
 ```
 
-Web on <http://localhost:3000>, API on <http://localhost:8000>, Swagger at <http://localhost:8000/docs>.
-This is the supported way to run the platform, and the same `compose.yaml` describes the
-production topology. Merging to `main` publishes SHA-tagged images and deploys them — see
-[docs/deployment.md](docs/deployment.md).
+The web app is at <http://localhost:3000> and the API at <http://localhost:8000> (Swagger at `/docs`).
+Point it at an ACE-Step server for generation; [model-deployment.md](model-deployment.md) covers a local
+GPU and RunPod.
 
-The commands in the rest of this section run the components directly on your machine, for
-development. They skip the image, so they also skip what the image guarantees: ffmpeg
-present, and data paths that do not depend on the directory you started the process from.
+### How it fits together
 
-## Bootstrap (development)
-
-```bash
-uv venv
-uv sync --extra dev
-uv run python -c "import acemusic"  # smoke test
+```mermaid
+flowchart LR
+    Web["Web studio<br/>Next.js"] --> API
+    Plugin["DAW plugin<br/>VST3 / AU"] --> API
+    Plugin --> ACE
+    CLI["acemusic CLI"] --> ACE
+    API["Platform API<br/>FastAPI + MongoDB"] --> Jobs["Job queue"]
+    Jobs --> ACE["ACE-Step 1.5<br/>local GPU or RunPod"]
+    Jobs --> Cloud["ElevenLabs"]
+    Jobs --> Master["Mastering<br/>Bakuage"]
+    API --> SC["SoundCloud"]
 ```
 
-## Running tests
+---
 
-```bash
-uv run pytest
-```
+## Documentation
 
-## Running the web app (Layer 3, development)
-
-```bash
-cd web && npm install && npm run dev
-```
-
-Starts the Next.js dev server at `http://localhost:3000`.
-
-## Running the API (Layer 2, development)
-
-The platform API is a FastAPI app served under `/api/v1`:
-
-```bash
-uv run uvicorn acemusic.api.main:app --reload
-```
-
-Then visit `http://127.0.0.1:8000/docs` for the interactive Swagger UI, or
-`GET /api/v1/health` for a liveness check — which also reports `build_sha`, the commit the
-running image was built from (`unknown` outside a built image). Allowed CORS origins are configured
-via `ACEMUSIC_API_CORS_ALLOW_ORIGINS` (comma-separated).
-
-The API requires **MongoDB** and fails fast on startup if it is unreachable.
-Set `ACEMUSIC_API_MONGODB_URL` (defaults to `mongodb://localhost:27017`); use an
-Atlas `mongodb+srv://…` string for staging/production. Local integration tests
-run only against a local MongoDB (`uv run pytest -m integration`).
-
-### Authentication
-
-Sign-in uses **OAuth2** (Google and Discord) and issues a short-lived JWT access
-token plus a rotating, single-use refresh token. All `/api/v1` routes except
-`/health` and `/auth/*` require an `Authorization: Bearer <access_token>` header.
-
-| Endpoint | Purpose |
+| Guide | What's in it |
 | --- | --- |
-| `POST /api/v1/auth/login/{provider}` | Returns the provider authorization URL and sets the CSRF state cookie |
-| `POST /api/v1/auth/callback/{provider}` | Validates state against the cookie, exchanges the code, upserts the user, mints tokens |
-| `POST /api/v1/auth/refresh` | Rotates the refresh token for a new access token |
-| `POST /api/v1/auth/logout` | Revokes a refresh token (idempotent) |
-| `POST /api/v1/auth/plugin-token` | Mints a separate token pair for the DAW plugin (bearer required) |
-| `GET /api/v1/auth/plugin-tokens` | Lists the caller's live plugin tokens — id, created, expires; never the token |
-| `DELETE /api/v1/auth/plugin-tokens/{id}` | Revokes one plugin token (idempotent; 404 for anything that is not the caller's own) |
-
-**Replaying a spent refresh token signs that session out (#525).** Rotation records the
-hash it just spent, so presenting an already-consumed token is recognisable rather than
-looking like a random string — the classic sign that someone else holds a copy. The
-lineage is revoked, which kills the credential the real client is still holding, and
-`/auth/refresh` answers with the same 401 either way so nothing on the wire says which
-happened. A client firing two refreshes at once presents the same spent token a thief
-does, so a replay within three seconds of a legitimate rotation is refused without the
-session being killed. Only the replayed lineage dies: a compromised browser session does
-not sign the musician's DAW plugin out.
-
-**One account, several providers (#111).** A `User` carries a list of `identities`
-(`{provider, oauth_id}`), so the same person can sign in with Google or Discord and land
-in the same account. When a provider reports an email that already belongs to a different
-identity, that identity is **linked** rather than refused — but only because the callback
-has already rejected unverified addresses with a `403`. An unverified collision is still a
-`409`, and the service defaults to refusing: linking hands a provider control of an
-existing account, so a caller has to assert verification explicitly.
-
-The trust boundary is worth stating plainly: this treats "provider says the email is
-verified" as proof of the same human. That is the industry-standard trade, and it is a
-real one — Discord's `verified` only means Discord confirmed the address, and users can
-change their Discord email. Anyone who can get a supported provider to verify a victim's
-address can link into that account.
-
-`oauth_provider`/`oauth_id` remain on the document as the *primary* identity, kept in sync
-with `identities[0]`. They are what the existing partial-unique index is built on, and
-accounts created before the list existed have only them — which is what makes the change a
-read-time backfill rather than a migration.
-
-### User profile
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/v1/users/me` | Returns the authenticated user's full profile |
-| `PATCH /api/v1/users/me` | Partially updates the profile (`display_name`, `handle`, `bio`, `style_tags`); unset fields are left unchanged |
-| `GET /api/v1/users/me/credits` | Returns the authenticated user's current credit balance, subscription tier, and recent usage history (newest first, up to 50 entries) |
-
-Profile fields: `display_name` (user-editable name, 1–100 chars), `handle` (unique public identifier — alphanumeric + hyphens, 3–30 chars, must start and end with a letter or number; currently case-sensitive), `bio` (up to 500 chars), `style_tags` (up to 20 tags, 30 chars each). A duplicate handle returns `409 Conflict`; an invalid handle or unknown PATCH key returns `422`.
-
-### Subscription tiers (US-26.2)
-
-Two tiers: **Free** (50 credits/month) and **Pro** (500 credits/month).
-`src/acemusic/api/services/tiers.py` is the single table of what each unlocks; the UI badges
-and the API refusals both derive from it. The table **fails closed** — anything that is not
-exactly `"pro"` is free, and the free tier is defined by what it *lacks*, so a capability
-added later is locked by default rather than leaking.
-
-| Capability | Enforced at |
-| --- | --- |
-| `stems` | `POST /clips/{id}/stems`, `POST /batch/stems` |
-| `midi` | `POST /clips/{id}/midi` |
-| `mastering` | `POST /mastering/jobs`, `POST /mastering/batch` |
-| `distribution` | SoundCloud upload |
-| `studio_editing` | `POST /studio/mixdown`, `POST /studio/export/daw`, `POST /clips/{id}/export/daw` |
-| `voice_models` | `POST /voice-models/train`, and generating with a custom voice |
-| `high_res_video` | `POST /videos/generate` when `resolution` is above 720p |
-| `lossless_export` | `GET /clips/{id}/audio` and `GET /clips/{id}/stream` when `format` converts to wav/flac, and `POST /batch/export` for any non-mp3 format |
-
-Not every restriction is a refusal. The free tier's video is *720p watermarked*, so
-`high_res_video` refuses anything above 720p and the 720p render it does allow comes back
-carrying the mark — see [Free-tier video watermark](#free-tier-video-watermark-401) below.
-
-A refused request returns **`403`** with the same shape as the credits `402` — what is
-locked, what it would do, and where to go:
-
-```json
-{"detail": {"error": "upgrade_required", "capability": "stems", "feature": "Stem separation",
- "tier": "free", "required_tier": "pro",
- "message": "Stem separation is a Pro feature — upgrade to split a track into vocals, drums, bass and other.",
- "upgrade_url": "/settings/billing"}}
-```
-
-Two rules worth knowing. **Reads stay open** — the free tier is "Studio *view-only*" and "no
-stems export", not "cannot see your own data", so a downgraded account can still list and
-delete voices it trained. And **the tier is read from the database, not the token claims**:
-claims outlive a plan change by up to the token TTL, which would let a downgrade keep Pro and
-make someone who has just paid wait for it to expire.
-
-Credits reset to the tier allocation on the **signup anniversary**, applied lazily when a
-balance is read (`GET /credits/balance`, `GET /credits/usage`, `GET /users/me/credits`) rather
-than by a scheduler. It does not claw back a balance above the allocation, does not pay for
-missed periods, and does not pay accounts that predate the field.
-
-### Usage dashboard (US-26.5)
-
-`GET /api/v1/credits/usage?days=30` (1–365) backs `/settings/usage` with one read: both credit
-buckets, the next reset date, a zero-filled daily series, a per-category breakdown, and the
-history rows — three views of the same ledger window, so they cannot disagree mid-render.
-Categories come from `services/usage.py`, which maps each `action_type` (and its `_refund`
-counterpart) onto generation / editing / mastering / video / extraction / voice, so a refunded
-job nets off the charge it reversed instead of inflating the breakdown. Monthly-vs-purchased is
-reported for the **remaining** balance only — each ledger row records a combined `balance_after`
-plus `purchased_amount`, the signed part of the movement that touched the purchased bucket
-(#422), but the dashboard does not break usage down by bucket — and actions that cost nothing
-(crop, speed, export) write no ledger row, so "complete usage data" means complete
-*credit-moving* data. CSV export is built in the browser from the same payload.
-
-Refunds are bucket-aware (#422): a charge is spent monthly-first, its row records how much came
-from purchased credit, and a refund returns each bucket its outstanding share — the exact inverse
-for a full refund, a proportional slice for a partial one, never more purchased credit than the
-job still owes. Rows written before the field existed refund as monthly, which is what they did.
-
-The OAuth `state` is bound to the initiating client to prevent login CSRF /
-session fixation: `/login` sets a per-flow, HttpOnly+SameSite cookie holding a
-nonce, and `/callback` requires that cookie to match the signed `state`. **The
-client must therefore preserve cookies between `/login` and `/callback`.** Use a
-same-origin frontend/API in dev (the default `SameSite=Lax` works); a split-origin
-SPA must serve over HTTPS with `ACEMUSIC_API_OAUTH_COOKIE_SAMESITE=none` and make
-credentialed requests (a cross-origin **plain-HTTP** pair cannot carry the cookie —
-a browser constraint, not a code limitation).
-
-Configure provider credentials and the JWT signing secret via the
-`ACEMUSIC_API_GOOGLE_*`, `ACEMUSIC_API_DISCORD_*`, and `ACEMUSIC_API_JWT_SECRET_KEY`
-environment variables (see `.env.example`); cookie behavior is tuned via
-`ACEMUSIC_API_OAUTH_COOKIE_SECURE` / `ACEMUSIC_API_OAUTH_COOKIE_SAMESITE`.
-`jwt_algorithm` is restricted to the HMAC family (`HS256`/`HS384`/`HS512`).
-
-### Generation
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/generate` | Submits a generation request and returns a `job_id` for async tracking (HTTP 202) |
-| `GET /api/v1/jobs/{id}/status` | Returns a job's current status; owner-scoped (404 for missing or other users' jobs) |
-
-The request body accepts the full creative parameter set: `prompt` (required), `style`, `lyrics`, `vocal_language`, `instrumental`, `bpm` (60–180 or `"auto"`), `key`, `time_signature`, `duration`, `seed`, `inference_steps`, `model`, `weirdness` (0–100), `style_influence` (0–100), `format` (`wav`/`flac`/`mp3`/`aac`/`opus`), `thinking`, `mode` (`song`|`sound`), `sound_type` (`one-shot`|`loop`, required when `mode` is `sound`), the optional `preset_id`, and the optional `compute_target` (`auto`|`local`|`remote`). When `preset_id` is supplied the saved preset's parameters serve as defaults; any field explicitly included in the request overrides the preset value. `compute_target` overrides the server's configured `ACEMUSIC_API_COMPUTE_PREFERENCE` for that request: `auto` (or omitting the field) defers to the server preference with fallback, `local`/`remote` pin the target with no fallback and return `503 Service Unavailable` if that target is unreachable. The job is created with status `queued` and picked up by the async processor (US-9.2).
-
-Invalid parameters return 422 with field-level errors. If the user has insufficient credits for the requested mode (song and sound each cost 1.0 credit, #694), the request is rejected with `402 Payment Required` and a JSON body of `{"detail": {"error": "insufficient_credits", "balance": <current>, "required": <cost>}}`. New accounts start with 10.0 credits. The create response includes `job_id`, `status: "queued"`, and `estimated_time_seconds`.
-
-The status endpoint returns `job_id`, `status` (`queued`|`processing`|`completed`|`failed`), `created_at`, `estimated_time_seconds`, and `compute_target` (`"local"`/`"remote"`, present for routed generation jobs, omitted for edits/exports). Completed jobs additionally include `clip_ids` and `audio_urls`; failed jobs include an `error` message.
-
-#### Async job processor (US-9.2, US-10.1, US-10.3)
-
-A background processor runs inside the API process, polling MongoDB for `queued`
-jobs and dispatching them to the handler registered for their `job_type`. Generation
-jobs (`generate`) forward to ACE-Step, store the audio, and create clip records.
-Editing jobs (`crop`, `speed`, `remaster`) run local CPU operations via the audio
-processing library. Iterative generation jobs (`extend`, `cover`, `remix`, `repaint`,
-`sample`, `add_vocal`, `mashup`) run ACE-Step operations and create lineage-tagged child
-clips. All handlers mark the job `completed` (or `failed` with an
-error). Tunables (all prefixed `ACEMUSIC_API_`): `JOB_CONCURRENCY` (default 2),
-`JOB_POLL_INTERVAL` seconds (default 1.0), `JOB_POLL_TIMEOUT` seconds (default
-600), `JOB_PROCESSOR_ENABLED` (default `true`; set `false` to run the API
-without the worker — recommended to run a single processor instance),
-`COMPUTE_PREFERENCE` (`local_first`/`remote_first`/`local_only`/`remote_only`,
-default `local_first`), and `LOCAL_URL` (local ACE-Step probe URL, default
-`http://localhost:8001`).
-
-Remote generation runs on a RunPod serverless endpoint (US-11.2). Set
-`ACEMUSIC_API_RUNPOD_API_KEY` and `ACEMUSIC_API_RUNPOD_ENDPOINT_ID` (both required) to enable it; remote
-routing is reported available only when both are set and the endpoint's `/health`
-answers, so an unconfigured or down endpoint degrades safely (`*_first` falls back
-to local, `*_only` returns 503) rather than crashing. A remote-routed job submits to
-the endpoint, polls with a cold-start-tolerant cadence (`ACEMUSIC_API_RUNPOD_POLL_INTERVAL`,
-default 5s) up to `ACEMUSIC_API_RUNPOD_TIMEOUT` seconds (default 300), retries transient 5xx
-responses, and stores the returned clips exactly like a local job. `ACEMUSIC_API_RUNPOD_BASE_URL`
-(default `https://api.runpod.ai/v2`) can point at a staging endpoint or proxy.
-
-The RunPod Network Volume — which holds model weights so each worker skips the
-download — is provisioned once by running `scripts/runpod-setup.py` (US-11.5).
-After the script runs, paste the printed volume id into
-`ACEMUSIC_API_RUNPOD_NETWORK_VOLUME_ID` in `.env`. Until that variable is set,
-`GET /api/v1/compute/remote/volume` returns 503.
-
-| Method & path | Purpose |
-| --- | --- |
-| `GET /api/v1/compute/status` | Combined health of both compute targets, for a pre-flight check before generating (US-11.4) |
-| `GET /api/v1/compute/remote/volume` | Metadata (size, used, region) for the configured RunPod Network Volume (US-11.5) |
-
-The response carries `local`, `remote`, and `routing_preference`. `local`
-reports `available` plus best-effort `gpu_name`, `vram_total_mb`, `vram_used_mb`,
-`active_jobs`, and `loaded_models` (detail fields are `null` when the ACE-Step
-`/v1/stats` payload omits them). `remote` reports `available`, `provider`,
-`endpoint_id`, `active_workers`, `max_workers`, and `scaling_status`; an
-unconfigured RunPod returns `available: false` with `provider: null` (and makes
-no HTTP call), while a configured-but-unreachable endpoint keeps
-`provider: "runpod"` and `endpoint_id`. Both targets are probed in parallel,
-each bounded by `COMPUTE_STATUS_TIMEOUT` (default 3s), so the endpoint answers
-well within 5 seconds even when a target hangs — a down or unconfigured target is
-reported as unavailable, never a 5xx. `max_workers` is left `null` (RunPod's
-`/health` does not expose the configured ceiling).
-
-### Workspaces
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/workspaces` | Create a workspace (201; 409 on duplicate name) |
-| `GET /api/v1/workspaces` | List all workspaces for the authenticated user with per-workspace clip counts |
-| `GET /api/v1/workspaces/{id}` | Get a single workspace (404 if missing or not owned) |
-| `PATCH /api/v1/workspaces/{id}` | Rename a workspace (409 on duplicate name; empty body is a no-op) |
-| `DELETE /api/v1/workspaces/{id}` | Delete a workspace (409 if non-empty without `?force=true`; 400 if it is the last workspace) |
-
-A default workspace is created automatically when a new user registers (OAuth callback). The get-or-create call is idempotent, so subsequent logins are a cheap lookup and accounts created before this feature are backfilled on their next login.
-
-### Playback Queue (US-14.3)
-
-A single server-side playback queue per user, so the web player can queue clips, support next/previous, and restore state across page navigations.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/queue` | Add clips at an optional `position` (appends by default) |
-| `GET /api/v1/queue` | Current queue, playback position, and modes |
-| `DELETE /api/v1/queue/{clip_id}` | Remove a clip (404 if not in the queue) |
-| `POST /api/v1/queue/next` | Advance to the next clip (repeat/shuffle aware) |
-| `POST /api/v1/queue/previous` | Go back to the previous clip (repeat/shuffle aware) |
-| `PUT /api/v1/queue/reorder` | Move a clip to a new position |
-| `DELETE /api/v1/queue` | Clear the entire queue (204) |
-| `PATCH /api/v1/queue` | Update `repeat_mode` (`none`/`one`/`all`) and/or `shuffle_enabled` |
-
-The queue is owner-scoped (one document per user, unique on `user_id`). Repeat is `none` (stops at the end, `current_index` → `null`), `one` (holds the current clip), or `all` (wraps). Shuffle is history-based: `next` picks a random unplayed clip and `previous` walks back through the play history. A single `GET` returns everything needed to rebuild player state after a reload.
-
-### Clips
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/v1/clips` | Paginated clip list with search, filter, and sort |
-| `GET /api/v1/clips/{id}` | Get clip metadata (404 if missing or not owned) |
-| `PATCH /api/v1/clips/{id}` | Rename a clip and/or set its `visibility` (empty body is a no-op). A new title is content-screened, and going public/unlisted re-screens the clip's title, tags and lyrics (`422` naming the category when blocked) |
-| `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
-| `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |
-| `GET /api/v1/clips/{id}/stream` | Streams a clip for the web player — optional auth, full range support, rate-limited |
-| `GET /api/v1/clips/{id}/similar` | Clips similar to this one for radio-style discovery (US-14.4) |
-
-`GET /api/v1/clips` supports these query parameters: `workspace_id`, `search` (case-insensitive substring over title or style tags), `style`, `bpm_min`, `bpm_max`, `key`, `model`, `sort` (`newest` or `oldest`, default `newest`), `page` (default 1), `per_page` (default 20, max 100). An inverted BPM range (`bpm_min > bpm_max`) returns 422. The response includes `total`, `page`, `per_page`, and `total_pages`.
-
-All CRUD endpoints are owner-scoped. `GET /api/v1/clips/{id}/audio` additionally supports single HTTP byte ranges (`Range: bytes=…` → `206 Partial Content`, unsatisfiable ranges → `416`) for seeking, and on-the-fly conversion via `?format=wav|flac|mp3` (mp3/flac conversion requires ffmpeg on the host; byte ranges are ignored for converted output). Converting **to** a lossless format is Pro-only (`lossless_export`, US-26.2) — serving a clip in its own stored format is playback, not export, and is never gated. For the audio endpoint an unknown or malformed id returns `404`, another user's private clip returns `403`, and clips marked `is_public` are retrievable by any authenticated user; the CRUD endpoints return `404` for any clip the caller does not own.
-
-`GET /api/v1/clips/{id}/stream` is the web player's playback endpoint. Unlike `/audio` it allows **unauthenticated** streaming of `is_public` clips (a private clip is an indistinguishable `404` for anonymous callers, `403` for an authenticated non-owner). It supports single **and** multi-range requests (`206`; multiple ranges return `multipart/byteranges`), `?format=mp3|wav` conversion (which disables ranges, and is Pro-only when it converts *to* wav — including for anonymous callers, since otherwise signing out would beat the gate), sets `Accept-Ranges`/`Cache-Control`, and is rate-limited per client IP (`429` over the limit; configurable via `ACEMUSIC_API_STREAM_RATE_LIMIT_PER_MINUTE`, default 100).
-
-### Discovery
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/v1/discover/clips` | Public clips for Feed, Explore and Search (#651): anonymous, keyset-paged |
-| `GET /api/v1/discover/facets` | The musical `keys` and `models` present among public clips, for Search's filter options |
-
-`GET /api/v1/discover/clips` takes these query parameters:
-
-- `q`: case-insensitive literal text over title, style tags and lyrics, at most 200 characters.
-- `style`: a word or phrase inside a style tag, so `hip-hop` matches "dark hip hop beat".
-- `bpm_min` / `bpm_max`: inclusive range.
-- `key`, `model`: exact match.
-- `sort`: `newest` (the default) or `relevance`. Relevance ranks a title prefix above a title match, then a tag, then lyrics. With no `q` it orders by newest.
-- `limit`: 1–50, default 20.
-- `cursor`: pass the previous response's `next_cursor`.
-
-The response is `{clips, next_cursor, total}`, where `clips` uses the redacted public clip shape (`GET /clips/{id}/public`). A malformed cursor, or one taken from the other sort, returns `422`.
-
-Both endpoints read one shared pool, `services/clips.public_clip_filter`: public, not removed by moderation, and not owned by a banned user. They are rate-limited per client IP in a bucket of their own, separate from streaming (`ACEMUSIC_API_DISCOVER_RATE_LIMIT_PER_MINUTE`, default 120).
-
-`GET /api/v1/clips/{id}/similar` finds clips related to a seed for a radio-style queue (pairs with the playback queue above). It scores candidates by shared style tags (each +1, case-insensitive), BPM within ±10% (+1), the same or relative key (+1), and matching model **and** generation mode (+1), returning them most-similar first. `?scope=mine|public|all` (default `all`) selects the candidate pool — the caller's own clips, public clips, or both — and `?limit=N` caps the result (default 20, max 50); `total` reports how many candidates matched before the limit. The seed is resolved like `/audio` (`404` unknown, `403` another user's private clip), so any clip the caller can see may seed a queue, and no matches returns `200` with an empty array. Each clip carries `is_owner`; another user's clip comes back with `workspace_id`, `seed`, `inference_steps` and `parent_clip_ids` blanked, as on the public read.
-
-### Audio Editing (US-10.1)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/clips/{id}/crop` | Trim a clip to `[start, end]` with optional fades and beat-snap; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/speed` | Time-stretch a clip by a `multiplier` (0.5–2.0) or to a `target_bpm`; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/remaster` | Loudness-normalise a clip to a `target_lufs` (default −14 LUFS); returns 202 + `job_id` |
-
-All three editing endpoints are non-destructive: the original clip is never modified. Each operation creates a new clip with `parent_clip_ids` and `generation_mode` set for lineage tracking, and tracks progress via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise). No credits are deducted — editing is local CPU work. Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`). The `speed` endpoint accepts either `multiplier` (direct rate) or `target_bpm` (requires BPM metadata on the source clip); exactly one must be provided.
-
-### Stems & MIDI Extraction (US-10.2)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/clips/{id}/stems` | Separate a clip into `vocals`/`drums`/`bass`/`other`; returns 202 + `job_id` (or 200 with the existing stems on a cache hit) |
-| `GET /api/v1/clips/{id}/stems` | The 4 stem clip ids and labels once separated (404 until the full set exists) |
-| `POST /api/v1/clips/{id}/midi` | Extract `melody`/`chords`/`bass`/`drums` MIDI; returns 202 + `job_id` (or 200 with the existing files on a cache hit) |
-| `GET /api/v1/clips/{id}/midi` | Download URLs for the extracted `.mid` files (404 until extracted) |
-
-Both operations run as background jobs and are tracked via `GET /api/v1/jobs/{id}/status` — completed stems jobs surface `clip_ids`/`audio_urls`, completed MIDI jobs surface `midi_download_urls`. Stems become **four child clips** linked to the parent (`generation_mode="stems"`, same duration as the source); MIDI files are stored as objects (not clip records) and referenced from the parent clip's `midi_paths`. Requests are cache-first and idempotent per clip: re-requesting returns the existing results, and a second request while a job is in flight rides the existing job rather than enqueuing a duplicate. Only `wav` source clips are accepted (422 otherwise); no credits are deducted. Both `POST` endpoints are **Pro-only** (`stems` / `midi`, US-26.2) — a free account gets `403 upgrade_required`; the `GET` reads stay open.
-
-### Iterative Generation (US-10.3)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/clips/{id}/extend` | Grow a clip by `duration` from `from_point` (default the end); returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/cover` | Restyle a clip in a new `style`; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/remix` | Style transfer to a new `style`; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/repaint` | Regenerate the `[start, end]` range from a `prompt`; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/sample` | Extract the `[start, end]` range and build `num_clips` tracks around it; returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/add-vocal` | Layer vocals onto a clip from `lyrics`; returns 202 + `job_id` |
-| `POST /api/v1/mashup` | Blend 2–8 owned clips into one; returns 202 + `job_id` |
-
-All iterative endpoints are credit-bearing generative operations (unlike editing/extraction). Credits are deducted at queue time; insufficient balance returns `402 Payment Required` with `{"error": "insufficient_credits", "balance": <current>, "required": <cost>}`. Credit costs: extend/cover/remix/repaint/add-vocal = 1 credit each; sample = 1 credit × `num_clips` (default 1, max 4); mashup = 2 credits.
-
-All endpoints are non-destructive: the original clip(s) are never modified. Each produces a new clip with `parent_clip_ids` and `generation_params` set for lineage tracking. Jobs are tracked via `GET /api/v1/jobs/{id}/status`. Only `wav` source clips are accepted (422 otherwise); clips without duration metadata are also rejected (422). Time parameters use human-readable strings (`"10s"`, `"1m30s"`, `"5"`) matching the CLI commands.
-
-### Batch Processing (US-10.5)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/batch/stems` | Queue stem separation for many clips at once (`{clip_ids[]}`); returns 202 + `batch_job_id` and one `sub_job_id` per queued clip |
-| `POST /api/v1/batch/export` | Queue audio export of many clips to `format` (`{clip_ids[], format}`); returns 202 + `batch_job_id` and `sub_job_ids` |
-| `GET /api/v1/batch/{batch_id}/status` | Overall progress (`completed`/`processing`/`failed`/`partial_success`) with a per-clip breakdown (404 if missing or not owned) |
-
-Both `POST` endpoints are **Pro-only** (US-26.2): `batch/stems` requires the `stems` capability, and `batch/export` requires `lossless_export` when `format` is anything other than `mp3` — the free tier is "MP3 download only", not "no batch export". A free account gets `403 upgrade_required`. See [Subscription tiers](#subscription-tiers-us-262).
-
-Each request fans out into one sub-job per clip, tracked under a `BatchJob`. The 50-clip cap, an empty list, and duplicate ids each return 422. A clip that is unknown, not owned, or (for stems) non-`wav` is recorded as a **failed sub-job** rather than rejecting the whole request, so individual failures never halt the batch — the status reports `partial_success`. Stems sub-jobs reuse the single-clip stems job (wav only); export sub-jobs transcode any generated source (`wav`/`flac`/`mp3`/`aac`/`opus`) to a `wav`/`wav32`/`flac`/`mp3` target via ffmpeg and surface a `download_url` when complete. Like the single-clip extraction endpoints, these are non-generative local work, so **no credits are deducted**.
-
-### Cover Art (US-13.1)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/clips/{id}/artwork/generate` | Generate 4 AI cover-art options from the clip's title/style tags (optional `style_prompt` override); returns 202 + `job_id` |
-| `POST /api/v1/clips/{id}/artwork` | Select a generated option (`{artwork_id}`) as the clip's cover art |
-| `PUT /api/v1/clips/{id}/artwork/upload` | Upload custom artwork (multipart `file`; JPG/PNG, ≥3000×3000) |
-| `GET /api/v1/clips/{id}/artwork` | Stream the selected/uploaded cover art (honours `is_public`, 404 until one is set) |
-
-Generation is async: poll `GET /api/v1/jobs/{id}/status`, whose completed response lists `artwork_options` as `{artwork_id, url}` pairs. Each option is generated at 1024×1024 and upscaled to a 3000×3000 distribution master (PNG). Uploads are validated for format (JPG/PNG only), minimum resolution (≥3000×3000, else `422` with a descriptive error), byte size (≤25 MB), and pixel-bomb safety; corrupt files are rejected with `422`. Generation requires `ACEMUSIC_API_OPENAI_API_KEY` (`gpt-image-2.5-flare`, #693); without it the worker fails the job with a clear "not configured" message, and `ACEMUSIC_API_ARTWORK_GENERATION_ENABLED=false` is a kill-switch. Generating costs 3 credits, after the prompt is screened; a failed job is refunded.
-
-### Distribution — SoundCloud (US-13.2)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/distribution/soundcloud/connect` | Begin the OAuth 2.1 + PKCE account link; returns `authorization_url` and sets per-flow HttpOnly cookies |
-| `POST /api/v1/distribution/soundcloud/callback` | Validate `{code, state}` against the cookies, exchange the code, persist the connection |
-| `GET /api/v1/distribution/soundcloud/status` | Report link status (`connected`, `soundcloud_username`, `connected_at`, `token_valid`) |
-| `POST /api/v1/distribution/soundcloud/upload` | Upload an owned clip (`{clip_id, metadata_overrides}`) as a SoundCloud track; returns `{track_id, permalink_url}` |
-| `DELETE /api/v1/distribution/soundcloud/connect` | Unlink the SoundCloud account (idempotent, 204) |
-
-Account-linking is distinct from login: it connects an already-authenticated user's SoundCloud account so the platform can upload on their behalf, with PKCE (S256), a `uid`-bound signed `state`, and the PKCE verifier held in a per-flow HttpOnly cookie. Upload maps clip metadata (`title`, `bpm`, `key`→`key_signature`, first style tag→`genre`) onto the track, lets `metadata_overrides` (`title`, `genre`, `description`, `bpm`, `key_signature`, `isrc`, `sharing`) take precedence, and attaches the clip's own cover art (US-13.1) when present. Access tokens are refreshed transparently on expiry; a rejected refresh (revoked grant) unlinks the account, while a transient failure preserves it for retry. Uploads over 500 MB are rejected. Requires `ACEMUSIC_API_SOUNDCLOUD_CLIENT_ID/SECRET/REDIRECT_URI`.
-
-### Distribution — Guided prep for LANDR / DistroKid / TuneCore (US-13.5)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/releases/{id}/prepare/{target}` | Validate a release against `target` (`landr`, `distrokid`, `tunecore`); returns a pass/fail `checklist`, `all_checks_passed`, a `bundle_url` (null until every check passes), and target-specific `instructions` |
-| `POST /api/v1/releases/{id}/submit/{target}` | Confirm a manual submission; moves the release to `submitted` and records the target in `submitted_channels` |
-
-Because LANDR, DistroKid, and TuneCore have no public submission API, the platform prepares the package and the user submits manually. Validation reads the source clip (audio at `clip.file_path`, cover at `clip.artwork_path`) and checks audio presence/format (WAV or FLAC), cover-art presence and ≥3000×3000 resolution, required metadata, and ISRC/UPC. When everything passes, a target-formatted zip (`audio.* + cover.* + metadata.json + README.txt`) is uploaded to storage and its URL returned. An unknown target is rejected with `422`; releases are owner-scoped (`404`). `submit` is the user's attestation that they completed the upload on the target platform, and a release can be confirmed to more than one target.
-
-### Distribution status tracking (US-13.6)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/v1/releases` | Each release in the listing now carries `channel_statuses` (per-channel status map) and `visibility` |
-| `GET /api/v1/releases/{id}/status` | Per-channel status breakdown: `channels` (`[{channel, status}]`), `visibility`, and `soundcloud_last_polled` |
-| `PATCH /api/v1/releases/{id}/channels/{channel}/status` | Manually set a **guided** channel's status (`landr`/`distrokid`/`tunecore`); `soundcloud` or an unknown channel → `400`, an out-of-sequence step → `409` |
-| `PATCH /api/v1/releases/{id}/visibility` | Set release visibility (`private`/`unlisted`/`public`); syncs the source clip's `is_public` and, if uploaded, the SoundCloud track's sharing. Going public/unlisted content-screens the source clip first (`422` when blocked) |
-
-Each channel tracks its own status through the sequence `draft → ready → submitted → in_review → live | rejected` (no skipping — enforced by an atomic, guarded write). SoundCloud is driven automatically: `POST /distribution/soundcloud/upload` accepts an optional `release_id` to record the track id and start the channel at `submitted`, and a background `SoundCloudStatusPoller` advances it from the live track state (`processing`→`in_review`, `finished`+`public`→`live`, `failed`→`rejected`). Reaching `live`/`rejected` records a `NotificationEvent`, which the owner sees in their in-app inbox (`GET /api/v1/users/me/notifications`, #537). The poller is gated by `ACEMUSIC_API_SOUNDCLOUD_POLLER_ENABLED` (default on) with `ACEMUSIC_API_SOUNDCLOUD_POLL_INTERVAL` (default 60s, floor 5s) and `ACEMUSIC_API_SOUNDCLOUD_POLL_BATCH_SIZE` (default 20); it orders by `soundcloud_last_polled` so no release starves. `unlisted` maps to SoundCloud `private` (SoundCloud has no unlisted state).
-
-### Presets
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/presets` | Create a preset (201; 409 on duplicate name) |
-| `GET /api/v1/presets` | List all presets for the authenticated user |
-| `GET /api/v1/presets/{id}` | Get a single preset (404 if missing or not owned) |
-| `PATCH /api/v1/presets/{id}` | Partially update a preset; sending `null` for a parameter clears it (409 on duplicate name; empty body is a no-op) |
-| `DELETE /api/v1/presets/{id}` | Delete a preset (204) |
-
-A preset is a named snapshot of generation parameters. Every creative field accepted by `POST /api/v1/generate` (except `prompt` and `preset_id`) can be saved in a preset; all fields are optional — a preset pins down only what the user chooses to fix. Preset names are unique per user. All endpoints are owner-scoped (404 for missing or another user's preset).
-
-### Studio Export (US-19.6)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/studio/mixdown` | Bounce a studio arrangement to a single audio file (`format`: `wav` default, `flac`, `mp3`); returns 202 + `job_id`. The result is stored as a workspace clip (`generation_mode="studio"`, `parent_clip_ids` lineage to every source clip) |
-| `POST /api/v1/studio/export/daw` | Assemble a DAW hand-off bundle — one full-timeline WAV stem per track plus `project.json` (tempo, markers, track names, per-track volume/pan/mute/solo); returns 202 + `job_id` |
-| `GET /api/v1/studio/export/daw/{job_id}` | Download the assembled ZIP (`application/zip`); 409 until the job completes, 404 if unknown/unowned |
-
-Arrangement state has no backend persistence, so each request carries the full arrangement (tracks → placements referencing workspace clips with `start_sec`/`duration_sec` offsets and per-track `volume_db`/`pan`/`muted`/`solo`). The workspace and every referenced clip are ownership-checked up front (404 before any job is created), and requests are bounded: 1–64 tracks, ≤256 placements per track, ≥1 placement overall, field and computed timeline length capped at 4 hours (the worker re-checks the real arrangement duration, since an untrimmed placement runs its full source clip). Mixing is a pure 48 kHz stereo sum with per-track gain/pan; mute beats solo, and a soloed-but-muted track does not silence the rest. Progress is reported through the generic job status endpoint (`Downloading tracks` → `Mixing`/`Bundling` → `Uploading`). `flac`/`mp3` mixdowns require ffmpeg on the API host; DAW ZIPs are stored under `exports/` keyed by job id and are not cascade-deleted. Both `POST` endpoints are **Pro-only** (`studio_editing`, US-26.2) — the free tier is Studio *view-only* — as is the per-clip `POST /api/v1/clips/{id}/export/daw`, which builds the same kind of bundle from a single clip.
-
-### Music Video Generation (US-22.1, US-22.3)
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/videos/generate` | Submit a music-video render for an owned song: visual `prompt` and/or `style_preset` (abstract/cinematic/animated/lyric_video/live_performance/nature), up to 5 http(s) `reference_image_urls`, `lyrics_sync`, `aspect_ratio` (16:9/9:16/1:1), `resolution` (720p/1080p/4k), `frame_rate` (24/30/60), `transitions` (auto/cut/fade/dissolve). Returns 202 + `job_id`. Credit-gated per minute of song (#694): 156/min at 720p, 375/min at 1080p, 1,350/min at 4K, rounded up, deducted atomically with refund on job-creation failure; 402 with `{error, balance, required}` when short; 503 before any charge when no provider is configured |
-| `GET /api/v1/videos/{job_id}/status` | Rendering progress in the video vocabulary: `queued` → `rendering` → `encoding` → `complete` \| `failed`, with `progress` (0–100), `eta_seconds`, and on completion the stored `video_id` |
-| `POST /api/v1/videos/{video_id}/publish` | Owner-only; marks a rendered video published so it appears on the (public) song detail page. Idempotent; 404 for unknown/unowned |
-| `GET /api/v1/videos/{video_id}` | Video metadata (`id`, `clip_id`, `resolution`, `aspect_ratio`, `published`, …). Owner always; others once published |
-| `GET /api/v1/videos/{video_id}/stream` | Stream the MP4 with `Range`/seek support (200 / 206); `?download=1` serves it as a `Content-Disposition: attachment`. Same visibility as metadata; rate-limited per client IP |
-| `GET /api/v1/videos/for-clip/{clip_id}` | The clip's published video (backs the song page's "Music video" section); 404 when none, or when the clip isn't viewable |
-
-The render runs on an external provider (Runway/Pika-class) configured by `ACEMUSIC_API_VIDEO_API_URL` + `ACEMUSIC_API_VIDEO_API_KEY` (leave blank to disable; see `.env.example`). The worker downloads the source song, submits it with the options, polls the provider (transient 5xx retried up to 3 times with backoff; a couple of consecutive failed polls are tolerated before the job fails), then stores the rendered MP4 (audio muxed by the provider) and records a `Video` document associating it with the song. **Delivery (US-22.3):** the creation page swaps in an in-browser player with an MP4 download and a Publish button once the render completes; a video is private to its owner until published, after which it streams to anyone who can view the song (visibility mirrors clip-audio streaming). A completed render notifies the musician even if they navigated away — an app-level watcher keeps polling in-flight jobs across navigation. **Social export (per-platform re-frames) is not yet implemented** (aspect ratio is chosen at render time).
-
-### Free-tier video watermark (#401)
-
-US-26.2 sells the free tier as "720p **watermarked** video". The resolution half is the
-`high_res_video` capability check in the router; the mark itself is composited by the worker
-in `src/acemusic/video_watermark.py`, after the provider returns the render and before the
-MP4 is stored — so an unmarked object never exists in storage, and the behaviour does not
-depend on a provider feature.
-
-- **What it looks like:** a corner bug — the app icon plus the wordmark *Cadenza* — in the
-  bottom-right, sized at 6% of the frame height with a 2.5% inset. Sizing by *height* means
-  16:9, 9:16 and 1:1 renders get the same apparent mark, and 720p/1080p/4k the same fraction
-  of the frame. The mark is a committed PNG (`src/acemusic/assets/watermark.png`); regenerate
-  it with `uv run python scripts/make_watermark.py`.
-- **Who gets it:** every render whose owner is on the free tier at the moment the render
-  completes — originals *and* edits (`POST /videos/{id}/edit` inherits its source's
-  resolution and has no tier gate of its own, so leaving edits unmarked would have been a way
-  around the mark). The tier is read from the database, never from token claims, and fails
-  closed: an unknown tier, or a user that has since been deleted, is treated as free.
-- **The mark is decided per render, not per account, and it is never revisited.** Upgrading to
-  Pro does not re-render or re-upload anything: videos made while free keep their mark, and
-  re-rendering as a Pro user produces a *new*, unmarked `Video` beside the old marked one.
-  The same rule runs the other way — a video rendered during a paid period stays unmarked
-  after a downgrade, and delivery (`GET /videos/{id}/stream`) serves the stored bytes without
-  re-checking the tier. Only videos generated during the period of payment are unmarked.
-- **Failure is loud.** Watermarking runs through ffmpeg (**required on the API host** for
-  free-tier video — like `flac`/`mp3` conversion elsewhere). If ffmpeg is missing, fails, or
-  times out, the *job* fails; the free tier is never quietly handed the Pro deliverable.
-
-## Stem separation backends
-
-`acemusic stems <clip_id>` separates a clip into stems. Two engines are available
-via `--backend` (or the `ACEMUSIC_BACKEND` default):
-
-- `auto` / `ace-step` — local demucs separation (default). Produces **four** stems:
-  vocals, drums, bass, other, in `wav` or `flac` (`--output-format`).
-- `elevenlabs` — cloud separation via the ElevenLabs API (requires
-  `ELEVENLABS_API_KEY`; no local GPU needed). Produces **six** stems:
-  vocals, drums, bass, **guitar**, **piano**, other, in the format configured
-  by `ELEVENLABS_OUTPUT_FORMAT` (MP3 by default). `--output-format` is
-  ignored — use `ELEVENLABS_OUTPUT_FORMAT` to control the stem format.
-
-Either way, each stem is registered as a child clip of the source, so downstream
-commands (DAW export, etc.) work the same.
-
-## Repaint & extend backends
-
-`acemusic repaint <clip_id>` regenerates a section of a clip and
-`acemusic extend <clip_id>` lengthens one. Both accept `--backend`
-(or the `ACEMUSIC_BACKEND` default):
-
-- `auto` / `ace-step` — ACE-Step repaint task with local crossfade stitching
-  (default; requires `ACEMUSIC_BASE_URL`).
-- `elevenlabs` — cloud inpainting via ElevenLabs composition plans (requires
-  `ELEVENLABS_API_KEY` and an account with the **enterprise inpainting
-  feature**). The source clip — including ACE-Step-generated WAVs — is uploaded
-  (priced like a generation), kept ranges are referenced server-side, and the
-  result is saved in the `ELEVENLABS_OUTPUT_FORMAT` (MP3 by default).
-  ElevenLabs limits: each plan section must be 3s–120s (so repaint boundaries
-  must leave ≥3s of kept audio on each non-edge side) and the total track is
-  capped at 600s. Range validation runs before the upload, so invalid requests
-  never spend credits.
-
-Either way, results are saved as child clips of the source
-(`parent_clip_id` + `generation_mode`), so lineage-aware commands work the same.
-
-## Mashup backends
-
-`acemusic mashup <clip_id> <clip_id> [...]` combines source clips. The two
-engines blend differently:
-
-- `auto` / `ace-step` — audio-level blend of **exactly two** clips
-  (`--blend layered|sequential|ai-guided`, BPM alignment, local stitching).
-- `elevenlabs` — **two or more** clips are uploaded and recombined at the
-  **section/composition level**: each source plays in sequence under an
-  optional unifying `--style`, composed server-side (same enterprise gating,
-  per-upload pricing, and 3s/120s/600s limits as repaint/extend; `--blend`
-  does not apply). With `auto`, three or more clips route here automatically
-  when `ELEVENLABS_API_KEY` is set, since only ElevenLabs can combine them.
-
-Mashup results record **all** sources in `parent_clip_ids` (JSON list; existing
-databases are migrated automatically) plus `parent_clip_id` for the primary.
-
-## File storage
-
-Audio files are managed through a single storage interface
-(`acemusic.storage`) so callers are deployment-agnostic. Select a backend with
-`ACEMUSIC_STORAGE_BACKEND`:
-
-- `local` (default) — files on the local filesystem under
-  `ACEMUSIC_STORAGE_LOCAL_ROOT`. Unset, it defaults to `./storage` **relative to the
-  working directory the process was started from**; the container images set it to the
-  absolute `/data/storage`, backed by a named volume, so clips survive a deploy.
-- `s3` — any S3-compatible bucket (AWS, MinIO, Backblaze B2) via the optional
-  `s3` extra (`uv sync --extra s3`). Set `ACEMUSIC_S3_BUCKET` and, for non-AWS
-  endpoints, `ACEMUSIC_S3_ENDPOINT_URL`. Credentials come from boto3's default
-  chain (env vars / shared config / IAM roles) — never put them in app config.
-  Downloads return presigned URLs whose lifetime is `ACEMUSIC_S3_URL_EXPIRY`
-  seconds (default 3600).
-
-Build the configured backend with `acemusic.storage.get_storage_backend()`;
-keys follow `{user_id}/{workspace_id}/clips/{clip_id}.{format}`. See
-`.env.example` for the full list of storage variables.
-
-## Environment
-
-For the container stack, copy `.env.docker.example` to `.env` — that file is the whole
-contract between the app and a host. For running components directly, copy `.env.example`
-to `.env` and fill in the required values before running.
+| [Developer guide](docs/development.md) | Running from source, tests, the full API reference, backends, storage |
+| [Deployment](docs/deployment.md) | Container images, CI/CD, staging and production |
+| [Model deployment](model-deployment.md) | Running ACE-Step locally or on RunPod |
+| [Voice models](docs/voice-models.md) | Training and using custom voices |
+| [DAW plugin](plugin/README.md) | Building and installing the VST3/AU plugin |
+| [Accessibility](docs/accessibility.md) · [Performance](docs/performance.md) | Audits and budgets for the web app |
+| [Platform spec](ai-music-spec.md) | The full product specification |
 
 ## Licensing
 
-This project has not published a licence for its own source. What is recorded here is
-the arm chosen for dependencies that are dual-licensed, where the choice constrains how
-we build and distribute.
-
-| Component | Arm chosen | Obligation it creates |
-| --- | --- | --- |
-| **JUCE 8.0.14** (`plugin/`) | JUCE 8 EULA, **Starter** tier — free, not AGPLv3 | Valid only while annual revenue is under **$20,000**; upgrade to Indie before crossing it. No source-offer obligation. |
-| **VST3 SDK 3.8.0** (bundled by JUCE) | **MIT** — Steinberg withdrew the proprietary agreement and GPLv3 arm at SDK 3.8 | Ship Steinberg's copyright and MIT notice with any binary (`plugin/THIRD_PARTY_NOTICES.md`). No registration, no fee, no source-offer. "VST" is Steinberg's trademark; we attribute it and do not use the VST Compatible logo. |
-
-Details, the exact upgrade trigger, and how the $20,000 is counted for a company versus
-an individual: **[`plugin/LICENSE.md`](plugin/LICENSE.md)**.
+Auto Music Studio has not yet published a licence for its own source. The licences chosen for
+dual-licensed dependencies (JUCE and the VST3 SDK) are in the
+[developer guide](docs/development.md#licensing) and [`plugin/LICENSE.md`](plugin/LICENSE.md).

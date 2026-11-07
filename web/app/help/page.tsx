@@ -75,8 +75,8 @@ const SECTIONS: { id: string; title: string; steps: React.ReactNode[] }[] = [
       <>
         <Link href="/settings">Account settings</Link> holds your profile and
         handle; <Link href="/settings/billing">Subscription</Link> changes plan.
-        Pro and Enterprise add monthly credits and features such as mastering,
-        voice models and 4K video.
+        Pro adds more monthly credits and features such as mastering, stems and
+        voice models; Enterprise adds 4K video and a priority queue.
       </>,
       <>
         <Link href="/notifications">Notifications</Link> tells you when long
