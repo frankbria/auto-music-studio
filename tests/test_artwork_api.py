@@ -293,6 +293,13 @@ class TestGetArtworkAccess:
         # Same policy as the stream endpoint: a short shared-cache lifetime for public media.
         assert resp.headers["cache-control"] == "public, max-age=300"
 
+    async def test_unlisted_clip_art_is_readable_anonymously(self, client, settings, local_storage) -> None:
+        clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.UNLISTED)
+        resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
+        assert resp.status_code == 200
+        # Unlisted isn't public, so it gets the stream endpoint's no-store policy.
+        assert resp.headers["cache-control"] == "private, no-store"
+
     async def test_private_clip_art_is_hidden_from_anonymous(self, client, settings, local_storage) -> None:
         clip = await _clip_with_art(await make_user("art@example.com"), VisibilityState.PRIVATE)
         resp = await client.get(f"{CLIPS_URL}/{clip.id}/artwork")
