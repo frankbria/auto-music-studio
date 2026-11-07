@@ -115,10 +115,10 @@ project's own servers are in the operator's runbook, not here. Replace `example.
 ## The pipeline
 
 ```
-push to main ──► CI (3.11, 3.12) ──► CD: publish ──► deploy to staging ──► approval ──► deploy to production
-                    required           ghcr.io/…-api      ./deploy.sh <sha>     required      ./deploy.sh <same sha>
-                    checks             ghcr.io/…-web      health gate,          reviewer      health gate,
-                                       :<sha> + :latest   rollback on failure                 rollback on failure
+push to main ──► CI (3.11, 3.12) ──► CD: publish ──► deploy to staging ──► deploy to production
+                    required           ghcr.io/…-api      ./deploy.sh <sha>     ./deploy.sh <same sha>
+                    checks             ghcr.io/…-web      health gate,          health gate,
+                                       :<sha> + :latest   rollback on failure   rollback on failure
 ```
 
 CD triggers on `workflow_run` when CI **completes successfully** on `main`, rather than on
@@ -192,9 +192,9 @@ clients.
 
 Production promotes what staging proved: the `deploy` job needs `deploy-staging`, so it runs only in a CD run whose
 staging rollout passed its health gate and whose public staging URL served the SHA. It deploys that same SHA's images;
-nothing is rebuilt. The `production` environment has a required reviewer, so every promotion waits for an approval in
-the run (*Review deployments*). Production deploys one at a time, and of the runs queued behind one, only the
-newest is kept. Reject a promotion you don't want rather than leaving it waiting. The `production` environment
+nothing is rebuilt. There is no manual approval: a SHA that passes CI and staging's health gate goes straight to
+production. Production deploys one at a time, and of the runs queued behind one, only the newest is kept. The
+`production` environment
 accepts deployments from protected branches only, so a dispatched run from a feature branch stops at staging.
 
 The site is `https://www.automusicstudio.com`, on a shared production box reachable only over Tailscale (details in
@@ -204,7 +204,7 @@ loopback ports behind host nginx and certbot.
 | Kind | Name | Purpose |
 | --- | --- | --- |
 | Variable (repository) | `DEPLOY_ENABLED` | `true` turns the production job on; until then it is skipped. It also needs staging on, since it waits for staging |
-| Protection rule (`production` env) | Required reviewer | Approves each promotion |
+| Protection rule (`production` env) | Deployment branches: protected only | A dispatched feature-branch run stops at staging |
 | Variable (`production` env) | `DEPLOY_PATH` | Host directory holding `compose.yaml` and `.env.docker` |
 | Variable (`production` env) | `DEPLOY_HEALTH_URL` | Host-local health URL `deploy.sh` gates on |
 | Variable (`production` env) | `PRODUCTION_HEALTH_URL` | Public health URL, checked after the rollout |
@@ -222,7 +222,7 @@ live webhook endpoint at `https://www.automusicstudio.com/api/v1/billing/webhook
 - *A failed health gate* rolls back by itself: `deploy.sh` re-pins the previous SHA and the job fails, as on staging.
 - *A healthy release you want to undo:* open the CD run that shipped the previous release and re-run its
   **Deploy to production** job, that job only: *Re-run all jobs* would rebuild and redeploy staging too. It redeploys
-  that run's SHA (the images are still in GHCR) through the same health gate, after the same approval. Runs can be
+  that run's SHA (the images are still in GHCR) through the same health gate. Runs can be
   re-run for 30 days.
 - *By hand, or older than that:* on the host, `./deploy.sh <sha>` in `DEPLOY_PATH`, with the same `API_IMAGE`,
   `WEB_IMAGE` and `HEALTH_URL` as in [Deploy from scratch](#deploy-from-scratch-on-a-vps-342).
@@ -259,12 +259,12 @@ database that already holds two `Video` documents for one job (only possible if 
 above ever ran) would refuse to start; run `uv run python scripts/dedupe_videos.py --apply`
 against it first (dry run without the flag).
 
-### Staging is automatic, production is approved (#699, #700)
+### Every green `main` ships (#699, #700)
 
-Staging takes every green `main` with no approval: CI is a hard gate, and the health gate plus automatic rollback
-carry the safety there. Production adds a person, approving a SHA that is already running on staging, so the
-approval is of something that can be tried at `https://dev.automusicstudio.com` rather than of a diff. The approval
-is an environment protection rule, so it can be removed without touching the workflow.
+Neither staging nor production waits for a person: CI is a hard gate, and each host's health gate plus automatic
+rollback carry the safety. Production only ever receives a SHA that is already healthy on staging. Production
+used to require a reviewer's approval; that was an environment protection rule, removed on 2026-11-07. To bring it
+back, add a required reviewer to the `production` environment; the workflow needs no change.
 
 ### Known gaps
 

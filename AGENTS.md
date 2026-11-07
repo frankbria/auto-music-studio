@@ -269,9 +269,8 @@ Configured in `.pre-commit-config.yaml`:
 - Rolls out over SSH by handing `scripts/deploy.sh` a SHA; that script owns the health
   gate, the automatic rollback and the idempotence check, and is tested in
   `tests/test_deploy_script.py`
-- Every green `main` deploys to staging (#699); the production job needs the staging job and the `production`
-  environment's required reviewer, so it promotes the SHA staging proved healthy (#700, guarded by
-  `tests/test_cd_workflow.py`). Each job is **skipped** until `STAGING_DEPLOY_ENABLED` / `DEPLOY_ENABLED` is `true`.
+- Every green `main` deploys to staging (#699), then to production with no manual approval: the production job needs
+  the staging job, so it promotes only the SHA staging proved healthy (#700, guarded by `tests/test_cd_workflow.py`). Each job is **skipped** until `STAGING_DEPLOY_ENABLED` / `DEPLOY_ENABLED` is `true`.
   See `docs/deployment.md`.
 
 `.github/workflows/docker-publish.yml` — ACE-Step worker image to Docker Hub. Gated on the
