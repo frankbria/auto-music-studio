@@ -148,7 +148,14 @@ const DRAFT_PREFIX = "ams:release-draft:"
 export function loadDraft(clipId: string): Partial<ReleaseMetadata> | null {
   try {
     const raw = localStorage.getItem(DRAFT_PREFIX + clipId)
-    return raw ? (JSON.parse(raw) as Partial<ReleaseMetadata>) : null
+    if (!raw) return null
+    const draft = JSON.parse(raw) as Partial<ReleaseMetadata>
+    // Drafts saved before #735 hold the old placeholder; drop it (or a blank)
+    // so every caller's prefill-then-draft merge keeps the owner's name.
+    if (!draft.artist?.trim() || draft.artist === "Unknown artist") {
+      delete draft.artist
+    }
+    return draft
   } catch {
     return null
   }

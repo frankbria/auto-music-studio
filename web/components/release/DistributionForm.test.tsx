@@ -179,6 +179,16 @@ describe("DistributionForm", () => {
     expect(screen.getByLabelText(/producer/i)).toHaveValue("") // backfilled, not undefined
   })
 
+  it("replaces a pre-#735 draft's placeholder artist with the owner's name", () => {
+    localStorage.setItem(
+      "ams:release-draft:clip-1",
+      JSON.stringify({ title: "Legacy", artist: "Unknown artist" })
+    )
+    render(<DistributionForm clip={makeClip()} />)
+    expect(screen.getByLabelText(/^title/i)).toHaveValue("Legacy")
+    expect(screen.getByLabelText(/^artist/i)).toHaveValue("Ivory Lanes")
+  })
+
   it("keeps a live validation summary count of remaining required fields", async () => {
     const user = userEvent.setup()
     render(<DistributionForm clip={makeClip({ title: null, style_tags: [] })} />)

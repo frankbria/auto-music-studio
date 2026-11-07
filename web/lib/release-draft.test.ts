@@ -142,6 +142,16 @@ describe("draft persistence", () => {
     expect(loadDraft("clip-1")).toEqual(m)
   })
 
+  it("drops a pre-#735 placeholder or blank artist so the owner's name pre-fills", () => {
+    const m = prefillFromClip(makeClip())
+    saveDraft("clip-1", { ...m, artist: "Unknown artist" })
+    expect(loadDraft("clip-1")).not.toHaveProperty("artist")
+    saveDraft("clip-1", { ...m, artist: "  " })
+    expect(loadDraft("clip-1")).not.toHaveProperty("artist")
+    saveDraft("clip-1", { ...m, artist: "Typed By Me" })
+    expect(loadDraft("clip-1")?.artist).toBe("Typed By Me")
+  })
+
   it("keeps drafts separate per clip and clears one", () => {
     saveDraft("clip-1", { ...prefillFromClip(makeClip()), title: "One" })
     saveDraft("clip-2", { ...prefillFromClip(makeClip()), title: "Two" })
