@@ -21,7 +21,7 @@ import io
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from functools import partial
 from typing import Any
@@ -95,6 +95,19 @@ def _default_client_factory() -> AceStepClient:
     if not config.api_url:
         raise JobProcessingError("ACE-Step base URL is not configured (set ACEMUSIC_BASE_URL).")
     return AceStepClient(base_url=config.api_url, api_key=config.api_key)
+
+
+def _first_worded_line(texts: Iterable[str]) -> str | None:
+    """The first line, across ``texts`` in order, that still has words once section tags are dropped."""
+    lines = (" ".join(_SECTION_TAG.sub(" ", line).split()) for text in texts for line in text.splitlines())
+    return next((line for line in lines if line), None)
+
+
+def _shorten_title(text: str) -> str:
+    """``text`` cut at a word boundary with an ellipsis once it is over the derived-title length."""
+    if len(text) <= _DERIVED_TITLE_MAX:
+        return text
+    return text[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
 
 
 class JobProcessor:
@@ -576,12 +589,8 @@ class JobProcessor:
         """The user's title, else the first line with words in the prompt, style or lyrics (section tags dropped)."""
         if params.get("title"):
             return params["title"]
-        texts = (params.get(field) or "" for field in ("prompt", "style", "lyrics"))
-        lines = (" ".join(_SECTION_TAG.sub(" ", line).split()) for text in texts for line in text.splitlines())
-        text = next((line for line in lines if line), None)
-        if text is None or len(text) <= _DERIVED_TITLE_MAX:
-            return text
-        return text[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
+        text = _first_worded_line(params.get(field) or "" for field in ("prompt", "style", "lyrics"))
+        return None if text is None else _shorten_title(text)
 
     @staticmethod
     def _measured_duration(data: bytes) -> float | None:
