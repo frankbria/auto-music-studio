@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { useAuth } from "@/hooks/use-auth"
@@ -9,6 +9,7 @@ import { lockedFeature, type LockedFeature } from "@/lib/tiers"
 import { useClipEdit } from "@/hooks/use-clip-edit"
 import {
   downloadClipAudio,
+  updateClipTitle,
   updateClipVisibility,
   type DownloadFormat,
 } from "@/lib/clips"
@@ -77,6 +78,15 @@ export function useSongActions(
   // The Pro feature a free-tier musician just reached for, driving the upgrade modal.
   const [locked, setLockedFeature] = useState<LockedFeature | null>(null)
 
+  // Null shows the prop, so an idle card follows refetches; a saved rename stays shown until one lands.
+  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
+  const title = optimisticTitle ?? clip.title
+  // Renames go out one at a time so the server ends on the newest; only the newest may roll back,
+  // and it rolls back to the last title the server accepted (null: the prop).
+  const latestRename = useRef(0)
+  const savedTitle = useRef<string | null>(null)
+  const renameQueue = useRef<Promise<unknown>>(Promise.resolve())
+
   const visibility = optimisticVisibility ?? visibilityOf(clip)
   const isPublic = visibility === "public"
 
@@ -86,7 +96,9 @@ export function useSongActions(
     // US-26.2 AC2: reaching for a Pro feature on the free tier opens an upgrade
     // prompt — not an error, and not the silence a `disabled` menu item gave. The
     // check is here rather than in the menu so every entry point behaves the same.
-    if (isSongActionLocked(definition, { isFreeTier, nativeFormat: clip.format })) {
+    if (
+      isSongActionLocked(definition, { isFreeTier, nativeFormat: clip.format })
+    ) {
       setLockedFeature(lockedFeature(definition?.capability))
       return
     }
@@ -158,7 +170,7 @@ export function useSongActions(
   async function setVisibility(next: Visibility) {
     if (!accessToken) return
     if (next === "public") {
-      const guard = publishGuardFor(clip)
+      const guard = publishGuardFor({ ...clip, title })
       if (guard) {
         setPublishGuard(guard)
         return
@@ -175,12 +187,33 @@ export function useSongActions(
       // (fields changed since load); recomputing the guard would then be
       // all-false and render an empty prompt, so fall back to the server's
       // specific message instead.
-      const guard = result.guardFailed ? publishGuardFor(clip) : null
+      const guard = result.guardFailed
+        ? publishGuardFor({ ...clip, title })
+        : null
       if (guard) {
         setPublishGuard(guard)
       } else {
         setActionError(result.message)
       }
+    }
+  }
+
+  /** Rename the clip (#736): shown at once, put back with the server's reason if refused. */
+  async function setTitle(next: string) {
+    if (!accessToken) return
+    const request = ++latestRename.current
+    setOptimisticTitle(next)
+    setActionError(null)
+    const sent = renameQueue.current.then(() =>
+      updateClipTitle(clip.id, next, accessToken)
+    )
+    renameQueue.current = sent
+    const result = await sent
+    if (result.ok) {
+      savedTitle.current = next
+    } else if (request === latestRename.current) {
+      setOptimisticTitle(savedTitle.current)
+      setActionError(result.message)
     }
   }
 
@@ -216,6 +249,10 @@ export function useSongActions(
     /** The Pro feature that was reached for, or null. Drives the upgrade modal (US-26.2). */
     lockedFeature: locked,
     dismissUpgrade: () => setLockedFeature(null),
+    /** The clip's title, including a rename in flight or saved since load (#736). */
+    title,
+    /** Rename the clip; persists, and rolls back with `actionError` on failure. */
+    setTitle,
     /** Tri-state visibility (US-20.7): "private" | "unlisted" | "public". */
     visibility,
     /** Back-compat derived flag: `visibility === "public"`. */
