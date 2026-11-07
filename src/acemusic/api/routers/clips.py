@@ -738,10 +738,7 @@ async def stream_clip_audio(
     # signing out would work too, hence the gate covers callers with no account.
     if format in LOSSLESS_FORMATS and format != native_format:
         await require_tier_capability(current.user_id if current else None, Capability.LOSSLESS_EXPORT)
-    # Access-controlled: a shorter max-age bounds how long a shared cache keeps
-    # serving a clip after it is made private again (the origin check can't reach
-    # cached copies). Private clips stay client-only and uncached.
-    cache_control = "public, max-age=300" if clip.is_public else "private, no-store"
+    cache_control = clip_service.media_cache_control(clip)
 
     # Conversion needs the whole object and produces a different byte layout, so
     # Range (and Accept-Ranges) doesn't apply — download, convert, serve buffered.

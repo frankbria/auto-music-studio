@@ -3,11 +3,7 @@
 // The playbar plays `Track` objects that already carry their display metadata
 // and a resolvable `audioUrl`. `clipAudioUrl` points at the same-origin stream
 // proxy so an <audio src> resolves against this app rather than the (non-public)
-// backend origin.
-//
-// ponytail: `clipArtworkUrl` still builds a bare /api/v1 backend path with no
-// proxy route behind it, so cover art does not load. Left as-is — US-20.0 needs
-// audio, and artwork wants its own proxy + placeholder story.
+// backend origin; `clipArtworkUrl` does the same for an <img src> (#737).
 
 import type { Visibility } from "@/lib/workspace-clips"
 
@@ -55,9 +51,13 @@ export function clipAudioUrl(id: string): string {
   return `/api/clips/${encodeURIComponent(id)}/stream`
 }
 
-/** Backend cover-art path for a clip. */
+/**
+ * Same-origin cover-art path for a clip (#737). Like `clipAudioUrl`, the proxy
+ * falls back to the access cookie so an <img> can show a private clip's art.
+ * A clip with no art 404s, and the player shows its music-note placeholder.
+ */
 export function clipArtworkUrl(id: string): string {
-  return `/api/v1/clips/${encodeURIComponent(id)}/artwork`
+  return `/api/clips/${encodeURIComponent(id)}/artwork`
 }
 
 /** Formats the same-origin audio proxy can convert to (US-17.2 downloads). */
