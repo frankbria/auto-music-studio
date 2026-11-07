@@ -48,13 +48,13 @@ export type ReleaseMetadata = {
   lyrics: string
 }
 
-/** Pre-populate the form from a song's existing metadata (AC1). Fields the Clip
- *  model doesn't carry (artist, album, release date, credits, ISRC/UPC) start
- *  blank for the user to fill; artist mirrors the player's placeholder. */
+/** Pre-populate the form from a song's existing metadata (AC1). Artist is the
+ *  owner's public name (#735); fields the Clip model doesn't carry (album,
+ *  release date, credits, ISRC/UPC) start blank for the user to fill. */
 export function prefillFromClip(clip: Clip): ReleaseMetadata {
   return {
     title: clip.title ?? "",
-    artist: "Unknown artist",
+    artist: clip.artist ?? "",
     album: "",
     genre: clip.style_tags?.[0] ?? "",
     description: "",

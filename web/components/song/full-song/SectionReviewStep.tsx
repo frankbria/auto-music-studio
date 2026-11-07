@@ -21,6 +21,7 @@ export function SectionReviewStep({
   totalSections,
   clipId,
   seedTitle,
+  seedArtist,
   rejected,
   regenAttempts,
   onAccept,
@@ -32,6 +33,7 @@ export function SectionReviewStep({
   totalSections: number
   clipId: string
   seedTitle: string
+  seedArtist?: string | null
   rejected: boolean
   regenAttempts: number
   onAccept: () => void
@@ -60,6 +62,7 @@ export function SectionReviewStep({
         clipId={clipId}
         title={`${seedTitle} — ${section.name}`}
         durationSeconds={section.durationSeconds}
+        artist={seedArtist}
       />
 
       {rejected ? (

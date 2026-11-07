@@ -3,13 +3,17 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { SectionReviewStep } from "@/components/song/full-song/SectionReviewStep"
-import { PlayerProvider } from "@/contexts/player-context"
+import { PlayerProvider, usePlayer } from "@/contexts/player-context"
 import type { Section } from "@/lib/song-structure"
 
 const section: Section = {
   name: "chorus",
   durationSeconds: 31,
   styleHint: "chorus, hook, energetic, full arrangement",
+}
+
+function NowPlayingArtist() {
+  return <p data-testid="now-playing">{usePlayer().state.current?.artist}</p>
 }
 
 function renderReview(
@@ -33,12 +37,19 @@ function renderReview(
         {...handlers}
         {...props}
       />
+      <NowPlayingArtist />
     </PlayerProvider>
   )
   return handlers
 }
 
 describe("SectionReviewStep", () => {
+  it("plays the section under the seed clip's artist (#735)", async () => {
+    renderReview({ seedArtist: "Ivory Lanes" })
+    await userEvent.click(screen.getByRole("button", { name: /play preview/i }))
+    expect(screen.getByTestId("now-playing")).toHaveTextContent("Ivory Lanes")
+  })
+
   it("previews the section and offers accept / reject", () => {
     renderReview()
     expect(screen.getByText(/Section 3 of 7/)).toBeInTheDocument()

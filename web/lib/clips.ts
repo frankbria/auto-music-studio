@@ -15,7 +15,7 @@ import type { Visibility } from "@/lib/workspace-clips"
 export type Track = {
   id: string
   title: string
-  /** Backend `ClipResponse` has no artist column yet; default to a placeholder. */
+  /** The clip owner's public name; a placeholder when they set none. */
   artist: string
   /** Resolvable audio source for the <audio> element. */
   audioUrl: string
@@ -25,16 +25,17 @@ export type Track = {
   duration?: number
 }
 
-/** Build a playable Track from a clip (artist/artwork are placeholders today). */
+/** Build a playable Track from a clip (artwork is a placeholder today). */
 export function trackFromClip(clip: {
   id: string
   title: string | null
   duration: number | null
+  artist?: string | null
 }): Track {
   return {
     id: clip.id,
     title: clip.title ?? "Untitled clip",
-    artist: "Unknown artist",
+    artist: clip.artist || "Unknown artist",
     audioUrl: clipAudioUrl(clip.id),
     artworkUrl: clipArtworkUrl(clip.id),
     duration: clip.duration ?? undefined,

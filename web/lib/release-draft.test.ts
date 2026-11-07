@@ -33,6 +33,7 @@ function makeClip(overrides: Partial<Clip> = {}): Clip {
     generation_mode: "text",
     is_public: false,
     created_at: "2026-07-01T00:00:00Z",
+    artist: "Ivory Lanes",
     ...overrides,
   }
 }
@@ -49,10 +50,15 @@ describe("prefillFromClip", () => {
     expect(m.explicit).toBe(false)
   })
 
+  it("pre-fills the artist with the clip owner's public name (#735)", () => {
+    expect(prefillFromClip(makeClip()).artist).toBe("Ivory Lanes")
+  })
+
   it("fills sensible blanks for fields the clip has no data for", () => {
-    const m = prefillFromClip(makeClip({ title: null, style_tags: [], lyrics: null, bpm: null }))
+    const m = prefillFromClip(makeClip({ title: null, style_tags: [], lyrics: null, bpm: null, artist: null }))
     expect(m.title).toBe("")
-    expect(m.artist).toBe("Unknown artist")
+    // #735: no public name leaves the required Artist field blank, never a placeholder that would ship.
+    expect(m.artist).toBe("")
     expect(m.album).toBe("")
     expect(m.genre).toBe("")
     expect(m.lyrics).toBe("")
