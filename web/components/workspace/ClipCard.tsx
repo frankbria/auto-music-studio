@@ -72,7 +72,7 @@ import {
 
 export type ClipCardProps = {
   clip: Clip
-  /** Inline-rename committed (blur/Enter). */
+  /** Observer for a committed inline rename (blur/Enter); the card persists it itself (#736). */
   onTitleChange?: (id: string, title: string) => void
   /**
    * Observer for menu selections (analytics / parent refetch). The action is
@@ -173,10 +173,8 @@ export function ClipCard({
   const [shareOpen, setShareOpen] = useState(false)
   // Editing cancelled (Escape) — checked in the single onBlur commit path.
   const cancelRef = useRef(false)
-  // Optimistic title overlay: null means "show the prop". Keeps an idle card in
-  // sync with parent/refetch updates while still reflecting the user's own edit.
-  const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
-  const title = optimisticTitle ?? clip.title
+  // Renames persist through useSongActions (#736): optimistic, rolled back on failure.
+  const title = actions.title
   // Visibility is owned by useSongActions (optimistic + persisted + rollback).
   const visibility = actions.visibility
 
@@ -202,10 +200,8 @@ export function ClipCard({
     }
     const next = draft.trim()
     if (next && next !== (title ?? "")) {
-      onTitleChange?.(clip.id, next)
-      // Reflect the rename locally only when a parent can persist it — otherwise
-      // the edit has nowhere to go and shouldn't look saved.
-      if (onTitleChange) setOptimisticTitle(next)
+      onTitleChange?.(clip.id, next) // optional observer
+      void actions.setTitle(next)
     }
   }
 
@@ -480,7 +476,7 @@ export function ClipCard({
           )}
         </div>
 
-        {/* Download failures surface here; delete errors show in their dialog. */}
+        {/* Download and rename failures surface here; delete errors show in their dialog. */}
         {actions.actionError && !actions.confirmingDelete && (
           <p role="alert" className="text-xs text-destructive">
             {actions.actionError}
