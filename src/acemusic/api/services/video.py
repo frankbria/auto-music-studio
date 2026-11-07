@@ -121,7 +121,7 @@ async def list_clip_videos(clip_id: str, user_id: str) -> list[Video]:
     uid = coerce_object_id(user_id)
     if uid is None:
         return []
-    return await Video.find(Video.clip_id == oid, Video.user_id == uid).sort(-Video.created_at).to_list()
+    return await Video.find(Video.clip_id == oid, Video.user_id == uid).sort(-Video.created_at, -Video.id).to_list()
 
 
 async def get_published_video_for_clip(clip_id: str) -> Video | None:
@@ -135,6 +135,6 @@ async def get_published_video_for_clip(clip_id: str) -> Video | None:
         return None
     return (
         await Video.find(Video.clip_id == oid, Video.published == True)  # noqa: E712 - Beanie needs == for the query
-        .sort(-Video.created_at)
+        .sort(-Video.created_at, -Video.id)
         .first_or_none()
     )

@@ -230,7 +230,9 @@ async def answer_video_info_request(video_id: str, user_id: str, context: str) -
 
 async def _answer(query: dict, context: str) -> ClipAppeal:
     requested = (
-        await ClipAppeal.find({**query, "status": "info_requested"}).sort(-ClipAppeal.created_at).first_or_none()
+        await ClipAppeal.find({**query, "status": "info_requested"})
+        .sort(-ClipAppeal.created_at, -ClipAppeal.id)
+        .first_or_none()
     )
     appeal = None
     if requested is not None:
