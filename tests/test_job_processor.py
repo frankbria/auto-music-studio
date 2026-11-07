@@ -7,9 +7,11 @@ HTTP client replaced by an in-process double (mirrors ``tests/test_generate.py``
 """
 
 import asyncio
+import io
 import os
 import threading
 import time
+import wave
 
 import pytest
 from beanie import PydanticObjectId
@@ -230,7 +232,10 @@ class TestClipTitle:
         assert JobProcessor._clip_title({"prompt": "lofi", "title": "Night Drive"}) == "Night Drive"
 
     def test_short_prompt_becomes_the_title(self) -> None:
-        assert JobProcessor._clip_title({"prompt": "  upbeat   pop\nanthem "}) == "upbeat pop anthem"
+        assert JobProcessor._clip_title({"prompt": "  upbeat   pop anthem "}) == "upbeat pop anthem"
+
+    def test_only_the_first_line_of_a_multiline_prompt_is_used(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "upbeat pop\nwith a key change"}) == "upbeat pop"
 
     def test_section_tags_are_dropped_from_a_lyrics_prompt(self) -> None:
         assert JobProcessor._clip_title({"prompt": "[Verse]\nWe cross the river"}) == "We cross the river"
@@ -239,8 +244,35 @@ class TestClipTitle:
         title = JobProcessor._clip_title({"prompt": "cinematic epic orchestral " * 10})
         assert title == "cinematic epic orchestral cinematic epic orchestral…"
 
-    def test_no_prompt_text_leaves_it_untitled(self) -> None:
-        assert JobProcessor._clip_title({"prompt": "[Intro]"}) is None
+    def test_a_tag_only_prompt_falls_back_to_the_style(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "[Intro]", "style": "lo-fi, ambient"}) == "lo-fi, ambient"
+
+    def test_a_tag_only_prompt_falls_back_to_the_first_lyric_line(self) -> None:
+        params = {"prompt": "[Intro]", "lyrics": "[Intro]\n\n[Verse]\nWe cross the river\nand keep going"}
+        assert JobProcessor._clip_title(params) == "We cross the river"
+
+    def test_no_text_anywhere_leaves_it_untitled(self) -> None:
+        assert JobProcessor._clip_title({"prompt": "[Intro]", "lyrics": "[Outro]"}) is None
+
+
+def _wav(seconds: float, rate: int = 8000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(seconds * rate))
+    return buf.getvalue()
+
+
+class TestMeasuredDuration:
+    """#734: a generated clip's duration is the audio's real length."""
+
+    def test_reads_a_wav_length(self) -> None:
+        assert JobProcessor._measured_duration(_wav(1.5)) == pytest.approx(1.5)
+
+    def test_unreadable_audio_is_none(self) -> None:
+        assert JobProcessor._measured_duration(b"FAKE-WAV-BYTES") is None
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +354,36 @@ class TestLifecycle:
 
         clips = await Clip.find(Clip.user_id == job.user_id).to_list()
         assert [c.title for c in clips] == ["Night Drive", "Night Drive"]
+
+    async def test_clip_duration_is_measured_from_the_audio(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/only.wav"], audio=_wav(1.5))
+        proc = _make_processor(fake, storage, concurrency=1)
+        job = await _enqueue({"prompt": "lofi", "format": "wav", "duration": 90.0})
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        clip = (await Clip.find(Clip.user_id == job.user_id).to_list())[0]
+        assert clip.duration == pytest.approx(1.5)
+
+    async def test_unmeasurable_audio_keeps_the_requested_duration(self, mongo_db, tmp_path) -> None:
+        storage = LocalStorage(root_dir=tmp_path)
+        fake = _FakeAceClient(audio_urls=["http://ace/only.wav"])
+        proc = _make_processor(fake, storage, concurrency=1)
+        job = await _enqueue({"prompt": "lofi", "format": "wav", "duration": 90.0})
+
+        await proc.start()
+        try:
+            await _wait_until(lambda: _is_status(job.id, JobStatus.COMPLETED))
+        finally:
+            await proc.stop()
+
+        clip = (await Clip.find(Clip.user_id == job.user_id).to_list())[0]
+        assert clip.duration == 90.0
 
     async def test_untitled_job_is_titled_from_its_prompt(self, mongo_db, tmp_path) -> None:
         storage = LocalStorage(root_dir=tmp_path)

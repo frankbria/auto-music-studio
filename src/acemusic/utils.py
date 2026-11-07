@@ -6,6 +6,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import BinaryIO
 
 
 def make_slug(prompt: str, max_len: int = 40) -> str:
@@ -42,11 +43,11 @@ def human_readable_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f} GB"
 
 
-def get_duration(path: Path | str) -> float | None:
-    """Return the duration in seconds of an audio file using mutagen, or None on failure."""
+def get_duration(path: Path | str | BinaryIO) -> float | None:
+    """Return the duration in seconds of an audio path or open binary file using mutagen, or None on failure."""
     import mutagen
 
-    audio = mutagen.File(str(path))
+    audio = mutagen.File(path if hasattr(path, "read") else str(path))
     if audio is None:
         return None
     return audio.info.length

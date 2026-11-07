@@ -17,6 +17,7 @@ cancels in-flight work for a graceful shutdown.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 import time
@@ -34,6 +35,7 @@ from acemusic.image_client import ImageGenerationClient
 from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
+from acemusic.utils import get_duration
 from acemusic.video_client import VideoGenerationService
 
 from .. import database
@@ -534,7 +536,7 @@ class JobProcessor:
                 clip_id = PydanticObjectId()
                 path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
                 await asyncio.to_thread(storage.upload, path, data)
-                clip = self._build_clip(job, params, clip_id, path, fmt)
+                clip = self._build_clip(job, params, clip_id, path, fmt, self._measured_duration(data))
                 await clip.insert()
                 stored.append((clip, path))
                 clip_ids.append(str(clip_id))
@@ -571,13 +573,24 @@ class JobProcessor:
 
     @staticmethod
     def _clip_title(params: dict[str, Any]) -> str | None:
-        """The user's title, else the prompt's first words (lyrics section tags dropped)."""
+        """The user's title, else the first line with words in the prompt, style or lyrics (section tags dropped)."""
         if params.get("title"):
             return params["title"]
-        prompt = " ".join(_SECTION_TAG.sub(" ", params.get("prompt") or "").split())
-        if len(prompt) <= _DERIVED_TITLE_MAX:
-            return prompt or None
-        return prompt[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
+        texts = (params.get(field) or "" for field in ("prompt", "style", "lyrics"))
+        lines = (" ".join(_SECTION_TAG.sub(" ", line).split()) for text in texts for line in text.splitlines())
+        text = next((line for line in lines if line), None)
+        if text is None or len(text) <= _DERIVED_TITLE_MAX:
+            return text
+        return text[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
+
+    @staticmethod
+    def _measured_duration(data: bytes) -> float | None:
+        """The audio's real length in seconds, or None when mutagen cannot read it."""
+        try:
+            return get_duration(io.BytesIO(data))
+        except Exception:  # a probe failure must not fail the job; the requested duration stands in
+            logger.debug("Could not measure generated audio duration", exc_info=True)
+            return None
 
     @staticmethod
     def _build_clip(
@@ -586,10 +599,10 @@ class JobProcessor:
         clip_id: PydanticObjectId,
         path: str,
         fmt: str,
+        duration: float | None = None,
     ) -> Clip:
         """Construct a Clip from a job's params (id pre-assigned to match the path)."""
-        # ``duration`` is the *requested* duration from the job params (ACE-Step
-        # honours it); we store it as the clip's duration metadata.
+        # ``duration`` is the audio's measured length; the requested one stands in when it couldn't be read.
         # bpm may be the literal "auto"; Clip.bpm is an int, so persist only ints.
         bpm = params.get("bpm")
         style = params.get("style")
@@ -600,7 +613,7 @@ class JobProcessor:
             file_path=path,
             title=JobProcessor._clip_title(params),
             format=fmt,
-            duration=params.get("duration"),
+            duration=duration or params.get("duration"),
             bpm=bpm if isinstance(bpm, int) else None,
             key=params.get("key"),
             style_tags=[style] if isinstance(style, str) and style else [],
