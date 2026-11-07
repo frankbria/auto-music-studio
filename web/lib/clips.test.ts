@@ -5,6 +5,7 @@ import {
   clipArtworkUrl,
   downloadClipAudio,
   formatTime,
+  trackFromClip,
   updateClipVisibility,
 } from "@/lib/clips"
 
@@ -189,5 +190,22 @@ describe("downloadClipAudio", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("net down")))
     const ok = await downloadClipAudio("c1", "mp3", "tok", "x")
     expect(ok).toBe(false)
+  })
+})
+
+describe("trackFromClip artist (#735)", () => {
+  const base = { id: "c1", title: "Midnight", duration: 95 }
+
+  it("names the clip owner as the track artist", () => {
+    expect(trackFromClip({ ...base, artist: "Ivory Lanes" }).artist).toBe(
+      "Ivory Lanes"
+    )
+  })
+
+  it("falls back to a placeholder only when the owner has no public name", () => {
+    expect(trackFromClip({ ...base, artist: null }).artist).toBe(
+      "Unknown artist"
+    )
+    expect(trackFromClip(base).artist).toBe("Unknown artist")
   })
 })
