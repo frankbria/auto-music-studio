@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   JSON_BODY_LIMIT,
   clientIpHeaders,
+  mediaAuthHeaders,
+  pickHeaders,
   readBodyCapped,
   readTextCapped,
 } from "@/lib/proxy-fetch"
@@ -76,5 +78,40 @@ describe("readBodyCapped (#567)", () => {
   it("reads an empty body as empty", async () => {
     const req = new Request("http://localhost/x", { method: "POST" })
     expect(await readTextCapped(req)).toBe("")
+  })
+})
+
+describe("mediaAuthHeaders (#737)", () => {
+  const request = (headers: Record<string, string>, cookie?: string) => ({
+    headers: new Headers(headers),
+    cookies: { get: () => (cookie ? { value: cookie } : undefined) },
+  })
+
+  it("forwards an Authorization header as-is", () => {
+    expect(
+      mediaAuthHeaders(request({ authorization: "Bearer h" }, "c"))
+    ).toEqual({
+      authorization: "Bearer h",
+    })
+  })
+
+  it("falls back to the access cookie as a Bearer token", () => {
+    expect(mediaAuthHeaders(request({}, "c"))).toEqual({
+      authorization: "Bearer c",
+    })
+  })
+
+  it("is anonymous with neither", () => {
+    expect(mediaAuthHeaders(request({}))).toEqual({})
+  })
+})
+
+describe("pickHeaders (#737)", () => {
+  it("copies only the named headers that are present", () => {
+    const picked = pickHeaders(
+      new Headers({ "content-type": "image/png", "set-cookie": "x=1" }),
+      ["content-type", "cache-control"]
+    )
+    expect([...picked.entries()]).toEqual([["content-type", "image/png"]])
   })
 })

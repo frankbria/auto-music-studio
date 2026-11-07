@@ -17,9 +17,11 @@ cancels in-flight work for a graceful shutdown.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from functools import partial
 from typing import Any
@@ -33,6 +35,7 @@ from acemusic.image_client import ImageGenerationClient
 from acemusic.mastering_orchestrator import MasteringOrchestrator
 from acemusic.runpod_client import RunPodClient
 from acemusic.storage import StorageBackend, get_storage_backend
+from acemusic.utils import get_duration
 from acemusic.video_client import VideoGenerationService
 
 from .. import database
@@ -78,6 +81,10 @@ _SUBMIT_FIELDS = (
     "sound_type",
 )
 
+# #734: an untitled generation is named after the start of its prompt.
+_DERIVED_TITLE_MAX = 60
+_SECTION_TAG = re.compile(r"\[[^\]]*\]")
+
 
 JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
 
@@ -88,6 +95,19 @@ def _default_client_factory() -> AceStepClient:
     if not config.api_url:
         raise JobProcessingError("ACE-Step base URL is not configured (set ACEMUSIC_BASE_URL).")
     return AceStepClient(base_url=config.api_url, api_key=config.api_key)
+
+
+def _first_worded_line(texts: Iterable[str]) -> str | None:
+    """The first line, across ``texts`` in order, that still has words once section tags are dropped."""
+    lines = (" ".join(_SECTION_TAG.sub(" ", line).split()) for text in texts for line in text.splitlines())
+    return next((line for line in lines if line), None)
+
+
+def _shorten_title(text: str) -> str:
+    """``text`` cut at a word boundary with an ellipsis once it is over the derived-title length."""
+    if len(text) <= _DERIVED_TITLE_MAX:
+        return text
+    return text[:_DERIVED_TITLE_MAX].rsplit(" ", 1)[0] + "…"
 
 
 class JobProcessor:
@@ -529,7 +549,7 @@ class JobProcessor:
                 clip_id = PydanticObjectId()
                 path = f"{job.user_id}/{job.workspace_id}/clips/{clip_id}.{fmt}"
                 await asyncio.to_thread(storage.upload, path, data)
-                clip = self._build_clip(job, params, clip_id, path, fmt)
+                clip = self._build_clip(job, params, clip_id, path, fmt, self._measured_duration(data))
                 await clip.insert()
                 stored.append((clip, path))
                 clip_ids.append(str(clip_id))
@@ -565,16 +585,33 @@ class JobProcessor:
         return kwargs
 
     @staticmethod
+    def _clip_title(params: dict[str, Any]) -> str | None:
+        """The user's title, else the first line with words in the prompt, style or lyrics (section tags dropped)."""
+        if params.get("title"):
+            return params["title"]
+        text = _first_worded_line(params.get(field) or "" for field in ("prompt", "style", "lyrics"))
+        return None if text is None else _shorten_title(text)
+
+    @staticmethod
+    def _measured_duration(data: bytes) -> float | None:
+        """The audio's real length in seconds, or None when mutagen cannot read it."""
+        try:
+            return get_duration(io.BytesIO(data))
+        except Exception:  # a probe failure must not fail the job; the requested duration stands in
+            logger.debug("Could not measure generated audio duration", exc_info=True)
+            return None
+
+    @staticmethod
     def _build_clip(
         job: Job,
         params: dict[str, Any],
         clip_id: PydanticObjectId,
         path: str,
         fmt: str,
+        duration: float | None = None,
     ) -> Clip:
         """Construct a Clip from a job's params (id pre-assigned to match the path)."""
-        # ``duration`` is the *requested* duration from the job params (ACE-Step
-        # honours it); we store it as the clip's duration metadata.
+        # ``duration`` is the audio's measured length; the requested one stands in when it couldn't be read.
         # bpm may be the literal "auto"; Clip.bpm is an int, so persist only ints.
         bpm = params.get("bpm")
         style = params.get("style")
@@ -583,8 +620,9 @@ class JobProcessor:
             user_id=job.user_id,
             workspace_id=job.workspace_id,
             file_path=path,
+            title=JobProcessor._clip_title(params),
             format=fmt,
-            duration=params.get("duration"),
+            duration=duration or params.get("duration"),
             bpm=bpm if isinstance(bpm, int) else None,
             key=params.get("key"),
             style_tags=[style] if isinstance(style, str) and style else [],

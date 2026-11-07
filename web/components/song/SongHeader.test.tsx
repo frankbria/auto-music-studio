@@ -39,13 +39,19 @@ function renderHeader(props: Partial<SongHeaderProps> = {}) {
 }
 
 describe("SongHeader", () => {
-  it("renders title, artist placeholder, and style/mode badges", () => {
-    renderHeader()
+  it("renders title, artist, and style/mode badges", () => {
+    renderHeader({ clip: clip({ artist: "Ivory Lanes" }) })
     expect(screen.getByRole("heading", { name: "Midnight" })).toBeInTheDocument()
-    expect(screen.getByText("Unknown artist")).toBeInTheDocument()
+    expect(screen.getByText("Ivory Lanes")).toBeInTheDocument()
+    expect(screen.queryByText("Unknown artist")).not.toBeInTheDocument()
     expect(screen.getByText("Remix")).toBeInTheDocument() // mode
     expect(screen.getByText("XL")).toBeInTheDocument() // version
     expect(screen.getByText("lofi")).toBeInTheDocument()
+  })
+
+  it("shows a placeholder artist only when the owner has no public name (#735)", () => {
+    renderHeader({ clip: clip({ artist: null }) })
+    expect(screen.getByText("Unknown artist")).toBeInTheDocument()
   })
 
   it("labels a moderator-flagged clip with a content warning for every viewer (US-27.3)", () => {

@@ -247,3 +247,18 @@ class TestConstantsStayInSync:
             if args:
                 members.update(a for a in args if isinstance(a, str))
         assert members == set(VALID_SOUND_TYPES)
+
+
+class TestTitle:
+    """#734: the Create form's Song title rides on the request."""
+
+    def test_title_is_optional(self):
+        assert GenerationRequest(prompt="x").title is None
+
+    def test_title_is_trimmed(self):
+        assert GenerationRequest(prompt="x", title="  Night Drive  ").title == "Night Drive"
+
+    @pytest.mark.parametrize("bad", ["", "   ", "x" * 201])
+    def test_blank_or_overlong_title_rejected(self, bad):
+        with pytest.raises(ValidationError):
+            GenerationRequest(prompt="x", title=bad)

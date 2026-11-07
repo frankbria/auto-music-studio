@@ -383,6 +383,16 @@ class TestGenerateScreening:
         )
         assert resp.status_code == 422
 
+    async def test_prohibited_title_is_blocked(self, client, settings):
+        user = await make_user("screen-title@example.com")
+        before = user.credits_balance
+        resp = await client.post(
+            GENERATE_URL, json={"prompt": "pop", "title": "sieg heil"}, headers=_auth(user, settings)
+        )
+        assert resp.status_code == 422
+        assert await Job.find(Job.user_id == user.id).to_list() == []
+        assert await _balance(user) == before
+
     async def test_normal_prompt_passes_unflagged(self, client, settings):
         user = await make_user("screen-clean@example.com")
         resp = await client.post(

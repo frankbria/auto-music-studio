@@ -103,8 +103,9 @@ export function SongHeader({
         <h1 className="text-2xl font-bold tracking-tight">
           {clip.title ?? "Untitled clip"}
         </h1>
-        {/* Backend ClipResponse has no artist column yet — placeholder. */}
-        <p className="text-sm text-muted-foreground">Unknown artist</p>
+        <p className="text-sm text-muted-foreground">
+          {clip.artist || "Unknown artist"}
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-1">

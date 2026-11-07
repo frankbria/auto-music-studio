@@ -361,6 +361,16 @@ def native_format(clip: Clip) -> str:
     return (clip.format or Path(clip.file_path).suffix.lstrip(".") or "wav").lower()
 
 
+def media_cache_control(clip: Clip) -> str:
+    """``Cache-Control`` for a clip's streamed media (audio, cover art).
+
+    Access-controlled: a shorter max-age bounds how long a shared cache keeps
+    serving a clip after it is made private again (the origin check can't reach
+    cached copies). Private clips stay client-only and uncached.
+    """
+    return "public, max-age=300" if clip.is_public else "private, no-store"
+
+
 def _contains_regex(text: str) -> dict:
     """Case-insensitive substring matcher, with the needle treated literally."""
     return {"$regex": re.escape(text), "$options": "i"}

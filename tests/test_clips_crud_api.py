@@ -384,6 +384,36 @@ class TestGetClip:
 
 
 @pytest.mark.integration
+class TestClipArtist:
+    """#735: a clip carries its owner's public name, so the player and song page stop reading "Unknown artist"."""
+
+    @pytest.mark.parametrize(
+        "fields, expected",
+        [
+            ({"display_name": "Ivory Lanes", "handle": "ivory"}, "Ivory Lanes"),
+            ({"display_name": None, "handle": "ivory"}, "ivory"),
+            # PATCH /users/me accepts a whitespace-only display name (min_length=1, no strip).
+            ({"display_name": "   ", "handle": "ivory"}, "ivory"),
+            ({"display_name": "", "handle": None}, None),
+        ],
+    )
+    async def test_get_list_and_patch_carry_the_owner_name(self, client, settings, fields, expected) -> None:
+        user = await make_user(f"clips-artist-{next(_SEQ)}@example.com")
+        # make_user skips None values, so null the name fields directly.
+        for field, value in fields.items():
+            setattr(user, field, value)
+        await user.save()
+        workspace = await _make_workspace(user)
+        clip = await _insert_clip(user, workspace, title="Mine")
+        headers = _auth_headers(user, settings)
+
+        assert (await client.get(f"{CLIPS_URL}/{clip.id}", headers=headers)).json()["artist"] == expected
+        assert (await client.get(CLIPS_URL, headers=headers)).json()["clips"][0]["artist"] == expected
+        patched = await client.patch(f"{CLIPS_URL}/{clip.id}", json={"title": "Renamed"}, headers=headers)
+        assert patched.json()["artist"] == expected
+
+
+@pytest.mark.integration
 class TestUpdateClip:
     async def test_update_title_returns_updated_clip(self, client, settings) -> None:
         user = await make_user("clips-patch@example.com")
