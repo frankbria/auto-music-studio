@@ -213,33 +213,73 @@ describe("ClipCard", () => {
     expect(screen.queryByText("Bad Name")).not.toBeInTheDocument()
   })
 
-  it("keeps the newest rename when an older one fails after it (#736)", async () => {
-    let failFirst: (response: Response) => void = () => {}
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(
-        () => new Promise<Response>((resolve) => (failFirst = resolve))
-      )
-      .mockImplementationOnce(async () => new Response("{}", { status: 200 }))
-    vi.stubGlobal("fetch", fetchMock)
-    renderCard()
+  async function renameTwice() {
     for (const name of ["First Name", "Second Name"]) {
       await userEvent.click(screen.getByRole("button", { name: /edit title/i }))
       const input = screen.getByRole("textbox", { name: /title/i })
       await userEvent.clear(input)
       await userEvent.type(input, `${name}{Enter}`)
     }
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    failFirst(
-      new Response(JSON.stringify({ detail: "Refused." }), { status: 422 })
-    )
+  }
 
+  const refused = () =>
+    new Response(JSON.stringify({ detail: "Refused." }), { status: 422 })
+
+  it("sends a second rename only after the first finishes (#736)", async () => {
+    let finishFirst: (response: Response) => void = () => {}
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (finishFirst = resolve))
+      )
+      .mockImplementationOnce(async () => new Response("{}", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    renderCard()
+    await renameTwice()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    finishFirst(refused())
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      title: "Second Name",
+    })
     await waitFor(() =>
       expect(screen.getByText("Second Name")).toBeInTheDocument()
     )
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(screen.getByText("Second Name")).toBeInTheDocument()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("restores the last saved title when every pending rename fails (#736)", async () => {
+    let finishFirst: (response: Response) => void = () => {}
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (finishFirst = resolve))
+      )
+      .mockImplementationOnce(async () => refused())
+    vi.stubGlobal("fetch", fetchMock)
+    renderCard()
+    await renameTwice()
+
+    finishFirst(refused())
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refused.")
+    expect(screen.getByText("Midnight")).toBeInTheDocument()
+    expect(screen.queryByText("First Name")).not.toBeInTheDocument()
+  })
+
+  it("rolls back to a rename that saved, not past it (#736)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => new Response("{}", { status: 200 }))
+      .mockImplementationOnce(async () => refused())
+    vi.stubGlobal("fetch", fetchMock)
+    renderCard()
+    await renameTwice()
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refused.")
+    expect(screen.getByText("First Name")).toBeInTheDocument()
   })
 
   it("restores the old title when the rename can't reach the server (#736)", async () => {

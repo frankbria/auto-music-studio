@@ -81,8 +81,11 @@ export function useSongActions(
   // Null shows the prop, so an idle card follows refetches; a saved rename stays shown until one lands.
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
   const title = optimisticTitle ?? clip.title
-  // Only the latest rename may roll back, so an older failure can't undo a newer save.
+  // Renames go out one at a time so the server ends on the newest; only the newest may roll back,
+  // and it rolls back to the last title the server accepted (null: the prop).
   const latestRename = useRef(0)
+  const savedTitle = useRef<string | null>(null)
+  const renameQueue = useRef<Promise<unknown>>(Promise.resolve())
 
   const visibility = optimisticVisibility ?? visibilityOf(clip)
   const isPublic = visibility === "public"
@@ -198,13 +201,18 @@ export function useSongActions(
   /** Rename the clip (#736): shown at once, put back with the server's reason if refused. */
   async function setTitle(next: string) {
     if (!accessToken) return
-    const prev = optimisticTitle
     const request = ++latestRename.current
     setOptimisticTitle(next)
     setActionError(null)
-    const result = await updateClipTitle(clip.id, next, accessToken)
-    if (!result.ok && request === latestRename.current) {
-      setOptimisticTitle(prev)
+    const sent = renameQueue.current.then(() =>
+      updateClipTitle(clip.id, next, accessToken)
+    )
+    renameQueue.current = sent
+    const result = await sent
+    if (result.ok) {
+      savedTitle.current = next
+    } else if (request === latestRename.current) {
+      setOptimisticTitle(savedTitle.current)
       setActionError(result.message)
     }
   }
