@@ -126,6 +126,7 @@ export function FullSongWizardModal({
             totalSections={flow.totalSections}
             clipId={state.generatedClips[index]}
             seedTitle={seedTitle}
+            seedArtist={clip.artist}
             rejected={state.sectionStatuses[index] === "rejected"}
             regenAttempts={state.regenAttempts[index] ?? 0}
             onAccept={flow.accept}
@@ -136,6 +137,7 @@ export function FullSongWizardModal({
           <CompletionStep
             finalClipId={state.finalClipId}
             seedTitle={seedTitle}
+            seedArtist={clip.artist}
             // The assembled length: the seed plus what each section actually
             // requested (floored), not the raw target the user picked.
             totalDuration={

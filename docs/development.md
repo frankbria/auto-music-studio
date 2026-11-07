@@ -310,7 +310,7 @@ The queue is owner-scoped (one document per user, unique on `user_id`). Repeat i
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/clips` | Paginated clip list with search, filter, and sort |
-| `GET /api/v1/clips/{id}` | Get clip metadata (404 if missing or not owned) |
+| `GET /api/v1/clips/{id}` | Get clip metadata (404 if missing or not owned). Every clip response carries `artist`: the owner's display name, else their handle, else null (#735) |
 | `PATCH /api/v1/clips/{id}` | Rename a clip and/or set its `visibility` (empty body is a no-op). A new title is content-screened, and going public/unlisted re-screens the clip's title, tags and lyrics (`422` naming the category when blocked) |
 | `DELETE /api/v1/clips/{id}` | Delete the clip record and its stored audio |
 | `GET /api/v1/clips/{id}/audio` | Streams or downloads a clip's audio with the correct `Content-Type` |

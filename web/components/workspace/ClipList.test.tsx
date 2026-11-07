@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { ReactNode } from "react"
 
@@ -67,4 +68,31 @@ describe("ClipList", () => {
     )
     expect(screen.getAllByTestId("clip-card")).toHaveLength(2)
   })
+
+  it("saves a card's inline rename to the clip (#736)", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"))
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <AllProviders>
+        <ClipList clips={[clip("a"), clip("b")]} loading={false} />
+      </AllProviders>
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Edit title: b" }))
+    const input = screen.getByRole("textbox", { name: "Title" })
+    await userEvent.clear(input)
+    await userEvent.type(input, "Renamed{Enter}")
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/clips/b",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ title: "Renamed" }),
+      })
+    )
+    expect(await screen.findByText("Renamed")).toBeInTheDocument()
+  })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
