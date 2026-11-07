@@ -467,7 +467,9 @@ class TestReuseDetection:
 
         assert await rotate_refresh_token(old, create_refresh_token(), _future()) is None
 
-        assert (await RefreshToken.get(stored.id)).revoked is False
+        # The TTL index may reap this already-expired document at any moment, so check nothing revoked it
+        # rather than reading it back.
+        assert await RefreshToken.find({"_id": stored.id, "revoked": True}).count() == 0
 
 
 def test_no_writer_saves_the_whole_refresh_token_document():
