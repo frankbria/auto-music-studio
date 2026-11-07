@@ -213,6 +213,35 @@ describe("ClipCard", () => {
     expect(screen.queryByText("Bad Name")).not.toBeInTheDocument()
   })
 
+  it("keeps the newest rename when an older one fails after it (#736)", async () => {
+    let failFirst: (response: Response) => void = () => {}
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (failFirst = resolve))
+      )
+      .mockImplementationOnce(async () => new Response("{}", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    renderCard()
+    for (const name of ["First Name", "Second Name"]) {
+      await userEvent.click(screen.getByRole("button", { name: /edit title/i }))
+      const input = screen.getByRole("textbox", { name: /title/i })
+      await userEvent.clear(input)
+      await userEvent.type(input, `${name}{Enter}`)
+    }
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    failFirst(
+      new Response(JSON.stringify({ detail: "Refused." }), { status: 422 })
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText("Second Name")).toBeInTheDocument()
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.getByText("Second Name")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
   it("restores the old title when the rename can't reach the server (#736)", async () => {
     vi.stubGlobal(
       "fetch",

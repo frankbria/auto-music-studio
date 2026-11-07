@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { useAuth } from "@/hooks/use-auth"
@@ -81,6 +81,8 @@ export function useSongActions(
   // Null shows the prop, so an idle card follows refetches; a saved rename stays shown until one lands.
   const [optimisticTitle, setOptimisticTitle] = useState<string | null>(null)
   const title = optimisticTitle ?? clip.title
+  // Only the latest rename may roll back, so an older failure can't undo a newer save.
+  const latestRename = useRef(0)
 
   const visibility = optimisticVisibility ?? visibilityOf(clip)
   const isPublic = visibility === "public"
@@ -197,10 +199,11 @@ export function useSongActions(
   async function setTitle(next: string) {
     if (!accessToken) return
     const prev = optimisticTitle
+    const request = ++latestRename.current
     setOptimisticTitle(next)
     setActionError(null)
     const result = await updateClipTitle(clip.id, next, accessToken)
-    if (!result.ok) {
+    if (!result.ok && request === latestRename.current) {
       setOptimisticTitle(prev)
       setActionError(result.message)
     }
