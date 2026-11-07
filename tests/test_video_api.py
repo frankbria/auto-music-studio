@@ -919,6 +919,17 @@ class TestVideoEdit:
 
 @pytest.mark.integration
 class TestVideoVersions:
+    async def test_versions_created_in_the_same_millisecond_list_newest_first(
+        self, client, settings, local_storage
+    ) -> None:
+        user, _ws, clip = await _user_with_clip("video-ver-tie@example.com")
+        original = await _insert_video(user, clip)
+        edited = await _insert_video(user, clip, parent_video_id=original.id)
+        # Same timestamp, as two inserts in one millisecond get on a fast runner: the later id must still lead.
+        await Video.find(Video.clip_id == clip.id).update({"$set": {"created_at": original.created_at}})
+        resp = await client.get(_versions_url(str(original.id)), headers=_auth_headers(user, settings))
+        assert [i["id"] for i in resp.json()] == [str(edited.id), str(original.id)]
+
     async def test_lists_versions_newest_first_with_lineage(self, client, settings, local_storage) -> None:
         user, _ws, clip = await _user_with_clip("video-ver-list@example.com")
         original = await _insert_video(user, clip, resolution="1080p")

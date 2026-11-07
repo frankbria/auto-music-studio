@@ -166,7 +166,8 @@ describe("ExplorePage", () => {
         slow
       )
     ).toHaveLength(1)
-  })
+    // The test needs room for both waits above; the 5 s default is no more than one of them.
+  }, 15000)
 
   it("shows an error with a retry that refetches", async () => {
     stubBySort({
