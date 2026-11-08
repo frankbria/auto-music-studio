@@ -20,7 +20,6 @@ const track = (id: string): Track => ({
   title: `Song ${id}`,
   artist: "A",
   audioUrl: `/api/clips/${id}/stream`,
-  artworkUrl: `/api/clips/${id}/artwork`,
 })
 
 function renderInfo() {

@@ -53,14 +53,14 @@ export type ReleaseMetadata = {
  *  release date, credits, ISRC/UPC) start blank for the user to fill. */
 export function prefillFromClip(clip: Clip): ReleaseMetadata {
   return {
-    title: clip.title ?? "",
-    artist: clip.artist ?? "",
+    title: text(clip.title),
+    artist: text(clip.artist),
     album: "",
-    genre: clip.style_tags?.[0] ?? "",
+    genre: text(clip.style_tags?.[0]),
     description: "",
     bpm: clip.bpm,
-    key: clip.key ?? "",
-    language: clip.vocal_language ?? "",
+    key: text(clip.key),
+    language: text(clip.vocal_language),
     explicit: false,
     releaseDate: "",
     copyright: "",
@@ -68,8 +68,13 @@ export function prefillFromClip(clip: Clip): ReleaseMetadata {
     coverArt: { kind: "none" },
     isrc: "",
     upc: "",
-    lyrics: clip.lyrics ?? "",
+    lyrics: text(clip.lyrics),
   }
+}
+
+/** A clip field as form text: empty when the clip has none. */
+function text(value: string | null | undefined): string {
+  return value ?? ""
 }
 
 /** Random n-digit string (as characters, leading zeros kept). */

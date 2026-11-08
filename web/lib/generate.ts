@@ -138,21 +138,39 @@ export function buildAdvancedPayload(
     weirdness: data.weirdness,
     style_influence: data.styleInfluence,
   }
+  addWords(payload, style, lyrics, data)
+  addMusic(payload, data)
+  addRender(payload, data)
+  return payload
+}
+
+// Each optional field is set only when the form has a value: the backend's model_dump uses exclude_none, so an
+// absent field and an explicit empty one are not equivalent.
+
+function addWords(
+  payload: GenerationPayload,
+  style: string,
+  lyrics: string,
+  data: AdvancedFormData
+): void {
   if (style) payload.style = style
   if (lyrics) payload.lyrics = lyrics
   if (data.vocalLanguage) payload.vocal_language = data.vocalLanguage
-  // Auto = no tempo preference, so omit bpm entirely (matching every other
-  // optional field) rather than pinning "auto" — the backend's model_dump uses
-  // exclude_none, so an absent bpm and an explicit "auto" are NOT equivalent.
+  const title = data.title?.trim()
+  if (title) payload.title = title
+}
+
+function addMusic(payload: GenerationPayload, data: AdvancedFormData): void {
+  // Auto = no tempo preference, so bpm is omitted rather than pinned.
   if (!data.bpmAuto && data.bpm.trim()) payload.bpm = Number(data.bpm)
   if (data.key) payload.key = data.key
   if (data.timeSignature) payload.time_signature = data.timeSignature
+}
+
+function addRender(payload: GenerationPayload, data: AdvancedFormData): void {
   if (data.duration.trim()) payload.duration = Number(data.duration)
   if (!data.seedRandom && data.seed.trim()) payload.seed = Number(data.seed)
   if (data.voiceModelId) payload.voice_model_id = data.voiceModelId
-  const title = data.title?.trim()
-  if (title) payload.title = title
-  return payload
 }
 
 /**

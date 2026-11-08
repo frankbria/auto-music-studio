@@ -15,13 +15,11 @@ export type Track = {
   artist: string
   /** Resolvable audio source for the <audio> element. */
   audioUrl: string
-  /** Optional cover art; falls back to a music-note glyph when absent. */
-  artworkUrl?: string
   /** Display duration in seconds; the real value is read off the audio element. */
   duration?: number
 }
 
-/** Build a playable Track from a clip (artwork is a placeholder today). */
+/** Build a playable Track from a clip. Its art is read from the clip id (ClipArtwork). */
 export function trackFromClip(clip: {
   id: string
   title: string | null
@@ -33,7 +31,6 @@ export function trackFromClip(clip: {
     title: clip.title ?? "Untitled clip",
     artist: clip.artist || "Unknown artist",
     audioUrl: clipAudioUrl(clip.id),
-    artworkUrl: clipArtworkUrl(clip.id),
     duration: clip.duration ?? undefined,
   }
 }
