@@ -26,3 +26,7 @@ def test_a_failed_track_contributes_a_reason() -> None:
 
 def test_a_track_with_no_known_state_contributes_nothing() -> None:
     assert soundcloud_details({"permalink_url": "https://soundcloud.com/dj/tune"}, None) == {}
+
+
+def test_a_link_without_a_host_is_never_stored() -> None:
+    assert soundcloud_details({"permalink_url": "https:javascript:alert(1)"}, DistributionStatus.LIVE) == {}

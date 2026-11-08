@@ -49,6 +49,7 @@ async def apply_channel_status(
     new_status: DistributionStatus,
     *,
     validate: bool = True,
+    details: dict[str, str] | None = None,
 ) -> DistributionStatus:
     """Set ``channel``'s status on ``release`` and persist; return the *previous* status.
 
@@ -56,6 +57,8 @@ async def apply_channel_status(
     so the first manual update must begin the sequence. With ``validate=True`` an
     out-of-sequence step raises :class:`InvalidStatusTransition`; the SoundCloud
     poller passes ``validate=False`` to mirror real platform state verbatim.
+    ``details`` (#758) are extra ``$set`` fields written in the same update, so a
+    terminal status never lands without its link or reason.
 
     The returned "previous" status lets the caller decide whether to notify; on a
     lost concurrent race it returns ``new_status`` (a no-op signal) — see below.
@@ -72,7 +75,7 @@ async def apply_channel_status(
     guard = {field: current.value} if channel in release.channel_statuses else {field: {"$exists": False}}
     doc = await Release.get_pymongo_collection().find_one_and_update(
         {"_id": release.id, **guard},
-        {"$set": {field: new_status.value, "updated_at": utcnow()}},
+        {"$set": {field: new_status.value, "updated_at": utcnow(), **(details or {})}},
         return_document=ReturnDocument.AFTER,
     )
     if doc is None:
@@ -143,6 +146,7 @@ def soundcloud_details(track: dict, status: DistributionStatus | None) -> dict[s
     if status is DistributionStatus.REJECTED:
         return {"channel_rejection_reasons.soundcloud": SOUNDCLOUD_REJECTION_REASON}
     link = track.get("permalink_url") or ""
-    if status is DistributionStatus.LIVE and urlparse(link).scheme in ("http", "https"):
+    parsed = urlparse(link)
+    if status is DistributionStatus.LIVE and parsed.scheme in ("http", "https") and parsed.netloc:
         return {"channel_permalinks.soundcloud": link}
     return {}
