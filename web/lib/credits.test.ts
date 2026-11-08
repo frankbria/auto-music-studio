@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   CreditsError,
+  creditShortfall,
   fetchBalance,
   formatCredits,
   parseInsufficientCredits,
@@ -107,5 +108,30 @@ describe("formatCredits", () => {
   it("shows one decimal for half credits", () => {
     // remaster costs 0.5, so halves are real balances, not rounding noise.
     expect(formatCredits(9.5)).toBe("9.5")
+  })
+})
+
+describe("creditShortfall (#739)", () => {
+  const ready = (balance: number) => ({
+    phase: "ready",
+    balance: { balance, tier: "pro", upgrade_url: "/settings/billing" },
+  })
+
+  it("is null until the balance is known", () => {
+    expect(creditShortfall(500, { phase: "loading" })).toBeNull()
+    expect(creditShortfall(500, { phase: "signed-out" })).toBeNull()
+    expect(creditShortfall(500, { phase: "error" })).toBeNull()
+  })
+
+  it("is null when the balance covers the cost exactly or more", () => {
+    expect(creditShortfall(500, ready(500))).toBeNull()
+    expect(creditShortfall(500, ready(900))).toBeNull()
+  })
+
+  it("names the missing credits and where to get more", () => {
+    expect(creditShortfall(500, ready(414))).toEqual({
+      missing: 86,
+      upgradeUrl: "/settings/billing",
+    })
   })
 })

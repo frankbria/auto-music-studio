@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Cancel01Icon, LockIcon } from "@hugeicons/core-free-icons"
 
@@ -10,7 +11,9 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { useCredits } from "@/contexts/credits-context"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
+import { creditShortfall } from "@/lib/credits"
 import {
   MAX_REFERENCE_IMAGES,
   PROMPT_MAX_LENGTH,
@@ -32,6 +35,41 @@ import type { Clip } from "@/lib/workspace-clips"
 
 /** One locally selected reference image and its preview object URL. */
 type ReferenceImage = { file: File; url: string }
+
+/** Something to make a video from (a prompt or a preset), and enough credits for it. */
+function readyToGenerate(
+  prompt: string,
+  preset: VideoStylePreset | null,
+  shortfall: ReturnType<typeof creditShortfall>
+): boolean {
+  return (prompt.trim() !== "" || preset !== null) && shortfall === null
+}
+
+const SHORTFALL_ID = "video-credit-shortfall"
+
+/** Always mounted, so screen readers announce a shortfall when it appears and Generate can point at it. */
+function CreditShortfallNotice({
+  shortfall,
+}: {
+  shortfall: ReturnType<typeof creditShortfall>
+}) {
+  return (
+    <p
+      id={SHORTFALL_ID}
+      role="status"
+      className="text-sm text-destructive empty:hidden"
+    >
+      {shortfall && (
+        <>
+          You need {shortfall.missing} more credits for this video.{" "}
+          <Link href={shortfall.upgradeUrl} className="underline">
+            Get more credits
+          </Link>
+        </>
+      )}
+    </p>
+  )
+}
 
 /**
  * Video configuration form (US-22.2): style prompt + presets, reference images,
@@ -81,7 +119,9 @@ export function VideoForm({
   }, [])
 
   const cost = estimateVideoCost(resolution, clip.duration)
-  const canGenerate = prompt.trim() !== "" || preset !== null
+  const { state: credits } = useCredits()
+  const shortfall = creditShortfall(cost, credits)
+  const canGenerate = readyToGenerate(prompt, preset, shortfall)
 
   /** Seed the prompt with the preset's text (US-22.2 acceptance criterion). */
   function selectPreset(next: VideoStylePreset) {
@@ -344,13 +384,18 @@ export function VideoForm({
 
       {/* Estimate + submit. */}
       <div className="flex items-center gap-4">
-        <Button onClick={handleGenerate} disabled={!canGenerate}>
+        <Button
+          onClick={handleGenerate}
+          disabled={!canGenerate}
+          aria-describedby={SHORTFALL_ID}
+        >
           Generate Video
         </Button>
         <span className="text-sm text-muted-foreground tabular-nums">
           Estimated cost: {cost} credits
         </span>
       </div>
+      <CreditShortfallNotice shortfall={shortfall} />
     </div>
   )
 }

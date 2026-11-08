@@ -12,6 +12,23 @@ export type CreditBalance = {
   upgrade_url: string
 }
 
+/** How far a quote is above the balance, or null when it is covered or the balance isn't known yet (#739). */
+export function creditShortfall(
+  cost: number,
+  credits: { phase: string; balance?: CreditBalance }
+): { missing: number; upgradeUrl: string } | null {
+  if (
+    credits.phase !== "ready" ||
+    !credits.balance ||
+    cost <= credits.balance.balance
+  )
+    return null
+  return {
+    missing: cost - credits.balance.balance,
+    upgradeUrl: credits.balance.upgrade_url,
+  }
+}
+
 /**
  * The shape every billed endpoint returns with 402.
  *
