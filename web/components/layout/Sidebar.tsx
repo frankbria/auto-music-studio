@@ -58,7 +58,8 @@ function NavLink({
       aria-current={active ? "page" : undefined}
       className={cn(
         sidebarItemBase,
-        active && "bg-sidebar-accent text-sidebar-foreground",
+        active &&
+          "bg-sidebar-accent font-medium text-sidebar-foreground [&_svg]:text-sidebar-primary",
         !expanded && "justify-center px-0"
       )}
     >

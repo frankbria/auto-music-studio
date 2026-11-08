@@ -30,7 +30,7 @@ export function TransportControls() {
       </Button>
 
       <Button
-        variant="default"
+        variant="brand"
         size="icon"
         aria-label={state.isPlaying ? "Pause" : "Play"}
         aria-pressed={state.isPlaying}

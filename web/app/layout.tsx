@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import { Nunito_Sans } from "next/font/google"
+import { Space_Grotesk } from "next/font/google"
 
 import "./globals.css"
 import { AppShell, BottomPlaybar } from "@/components/layout"
@@ -17,7 +17,10 @@ export const metadata: Metadata = {
   description: "AI-powered music creation studio",
 }
 
-const nunitoSans = Nunito_Sans({ subsets: ["latin"], variable: "--font-sans" })
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-sans",
+})
 
 export default function RootLayout({
   children,
@@ -28,7 +31,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={cn("antialiased", nunitoSans.variable)}
+      className={cn("antialiased", spaceGrotesk.variable)}
     >
       <body>
         <ThemeProvider>
