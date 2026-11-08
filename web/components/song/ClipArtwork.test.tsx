@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import { ClipArtwork } from "@/components/song/ClipArtwork"
@@ -8,7 +8,9 @@ const glyph = <span data-testid="glyph" />
 describe("ClipArtwork", () => {
   it("shows the clip's cover art from the same-origin artwork route", () => {
     const { container } = render(<ClipArtwork clipId="c 1" fallback={glyph} />)
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/api/clips/c%201/artwork")
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/clips/c%201/artwork"
+    )
     expect(screen.queryByTestId("glyph")).toBeNull()
   })
 
@@ -20,9 +22,29 @@ describe("ClipArtwork", () => {
   })
 
   it("tries again for a different clip after a failure", () => {
-    const { container, rerender } = render(<ClipArtwork clipId="c1" fallback={glyph} />)
+    const { container, rerender } = render(
+      <ClipArtwork clipId="c1" fallback={glyph} />
+    )
     fireEvent.error(container.querySelector("img")!)
     rerender(<ClipArtwork clipId="c2" fallback={glyph} />)
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/api/clips/c2/artwork")
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/clips/c2/artwork"
+    )
+  })
+
+  it("tries again when the connection comes back, so a transient failure recovers", () => {
+    const { container } = render(<ClipArtwork clipId="c1" fallback={glyph} />)
+    fireEvent.error(container.querySelector("img")!)
+    act(() => {
+      window.dispatchEvent(new Event("online"))
+    })
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/clips/c1/artwork"
+    )
+  })
+
+  it("loads lazily, so offscreen covers in long lists aren't fetched up front", () => {
+    const { container } = render(<ClipArtwork clipId="c1" fallback={glyph} />)
+    expect(container.querySelector("img")?.getAttribute("loading")).toBe("lazy")
   })
 })
