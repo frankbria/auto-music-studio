@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Cancel01Icon, LockIcon } from "@hugeicons/core-free-icons"
 
@@ -10,7 +11,9 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { useCredits } from "@/contexts/credits-context"
 import { useSubscriptionTier } from "@/hooks/use-subscription-tier"
+import { creditShortfall } from "@/lib/credits"
 import {
   MAX_REFERENCE_IMAGES,
   PROMPT_MAX_LENGTH,
@@ -81,7 +84,9 @@ export function VideoForm({
   }, [])
 
   const cost = estimateVideoCost(resolution, clip.duration)
-  const canGenerate = prompt.trim() !== "" || preset !== null
+  const { state: credits } = useCredits()
+  const shortfall = creditShortfall(cost, credits)
+  const canGenerate = (prompt.trim() !== "" || preset !== null) && !shortfall
 
   /** Seed the prompt with the preset's text (US-22.2 acceptance criterion). */
   function selectPreset(next: VideoStylePreset) {
@@ -351,6 +356,14 @@ export function VideoForm({
           Estimated cost: {cost} credits
         </span>
       </div>
+      {shortfall && (
+        <p role="status" className="text-sm text-destructive">
+          You need {shortfall.missing} more credits for this video.{" "}
+          <Link href={shortfall.upgradeUrl} className="underline">
+            Get more credits
+          </Link>
+        </p>
+      )}
     </div>
   )
 }

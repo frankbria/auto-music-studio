@@ -2,11 +2,18 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { VideoForm } from "@/components/video/VideoForm"
+import type { CreditsState } from "@/contexts/credits-context"
+import { estimateVideoCost } from "@/lib/video"
 import type { Clip } from "@/lib/workspace-clips"
 
 let tier = { tier: "free", isFreeTier: true, isLoading: false }
 vi.mock("@/hooks/use-subscription-tier", () => ({
   useSubscriptionTier: () => tier,
+}))
+
+let credits: CreditsState = { phase: "signed-out" }
+vi.mock("@/contexts/credits-context", () => ({
+  useCredits: () => ({ state: credits, refresh: () => {} }),
 }))
 
 const clip = {
@@ -36,6 +43,7 @@ function renderForm(onGenerate = vi.fn(), c: Clip = clip) {
 
 beforeEach(() => {
   tier = { tier: "free", isFreeTier: true, isLoading: false }
+  credits = { phase: "signed-out" }
   // Unique URL per call, like the real API — previews are keyed/removed by URL.
   vi.stubGlobal("URL", {
     ...URL,
@@ -253,5 +261,42 @@ describe("VideoForm", () => {
     renderForm()
     const prompt = screen.getByLabelText(/style prompt/i)
     expect(prompt).toHaveAttribute("maxlength", "2000")
+  })
+})
+
+describe("VideoForm credit shortfall (#739)", () => {
+  function ready(balance: number): CreditsState {
+    return {
+      phase: "ready",
+      balance: { balance, tier: "pro", upgrade_url: "/settings/billing" },
+    }
+  }
+
+  it("disables Generate and says how many credits are missing when the quote exceeds the balance", () => {
+    const cost = estimateVideoCost("720p", clip.duration)
+    credits = ready(cost - 86)
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: "neon city" },
+    })
+
+    expect(
+      screen.getByRole("button", { name: "Generate Video" })
+    ).toBeDisabled()
+    expect(screen.getByText(/you need 86 more credits/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /get more credits/i })
+    ).toHaveAttribute("href", "/settings/billing")
+  })
+
+  it("keeps Generate enabled when the balance covers the quote", () => {
+    credits = ready(1_000_000)
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: "neon city" },
+    })
+
+    expect(screen.getByRole("button", { name: "Generate Video" })).toBeEnabled()
+    expect(screen.queryByText(/more credits/i)).not.toBeInTheDocument()
   })
 })
