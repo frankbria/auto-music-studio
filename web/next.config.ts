@@ -1,6 +1,7 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { NextConfig } from "next"
+import { withSentryConfig } from "@sentry/nextjs/config"
 
 // import.meta.dirname is undefined on Node 20.9/20.10 (added in 20.11), which
 // Next's ">=20.9.0" engine still allows — derive dirname portably instead.
@@ -29,4 +30,12 @@ const nextConfig: NextConfig = {
   },
 }
 
-export default nextConfig
+// Uploads source maps for readable browser stack traces (#342) when CI provides SENTRY_AUTH_TOKEN; a build
+// without it skips the upload.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+})

@@ -83,6 +83,13 @@ jobs:
           context: ./web
           file: ./web/Dockerfile
           push: true
+          # Browser error tracking (#342). All optional: unset, the web image builds with Sentry off.
+          build-args: |
+            NEXT_PUBLIC_SENTRY_DSN=${{ vars.SENTRY_WEB_DSN }}
+            SENTRY_ORG=${{ vars.SENTRY_ORG }}
+            SENTRY_PROJECT=${{ vars.SENTRY_WEB_PROJECT }}
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.commit.outputs.sha }}
             ${{ env.WEB_IMAGE }}:latest

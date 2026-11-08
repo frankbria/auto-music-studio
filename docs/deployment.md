@@ -70,7 +70,11 @@ project's own servers are in the operator's runbook, not here. Replace `example.
    reference; signing in with Google reaches `/create`.
 7. **Keep it running.**
    - *Automatic deploys:* see [Enabling it](#enabling-it), [Staging](#staging-699) and [Production](#production-700).
-   - *Error tracking:* set `ACEMUSIC_API_SENTRY_DSN` in `.env.docker`.
+   - *Error tracking:* set `ACEMUSIC_API_SENTRY_DSN` in `.env.docker` for the API, and `WEB_SENTRY_DSN` (plus
+     `WEB_SENTRY_ENVIRONMENT`, e.g. `staging`) for the web server. Browser errors need the DSN at image build time:
+     set the repository variables `SENTRY_WEB_DSN`, `SENTRY_ORG` and `SENTRY_WEB_PROJECT`, and the secret
+     `SENTRY_AUTH_TOKEN` so CD uploads source maps for readable stack traces. Browser events are tagged with the
+     page's host, which tells staging from production.
    - *Uptime:* `scripts/uptime-monitor.sh` checks the health URL and posts to a webhook after three failed checks
      in a row (over two minutes down), and again on recovery. Copy it to `/usr/local/bin/acemusic-uptime-monitor`
      on the machine that runs it, put `HEALTH_URL=https://example.com/api/v1/health` and the webhook
