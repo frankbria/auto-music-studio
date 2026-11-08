@@ -63,3 +63,7 @@ htmlcov/
 
 # Scratch dir for downloaded build-time assets and local demo scripts.
 .cache/
+
+# Demo evidence and local credentials stay out of the repo
+docs/demos/
+client_secret*.json

@@ -151,7 +151,7 @@ plugin/             # JUCE VST3/AU plugin (Layer 4) — Stage 23; see plugin/REA
                     #   AceStepClient, ConnectionManager/Settings/Panel
   tests/            # juce::UnitTest suites (category "acemusic") + ctest runner;
                     #   StubAceStepServer.h is a real loopback HTTP server, not a mock
-docs/               # Demo docs, spec evidence, and story artifacts
+docs/               # Guides (deployment, development, accessibility, performance, voice models) and README assets; demo evidence stays local (docs/demos/ is gitignored)
 ```
 
 ### Key Modules
