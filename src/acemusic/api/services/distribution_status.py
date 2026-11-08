@@ -13,6 +13,10 @@ Two callers, two contracts:
   truth and isn't forced through intermediate steps.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
+from urllib.parse import urlparse
+
 from pymongo import ReturnDocument
 
 from ..models import NotificationEvent
@@ -47,6 +51,7 @@ async def apply_channel_status(
     new_status: DistributionStatus,
     *,
     validate: bool = True,
+    details: Mapping[str, str] = MappingProxyType({}),
 ) -> DistributionStatus:
     """Set ``channel``'s status on ``release`` and persist; return the *previous* status.
 
@@ -54,6 +59,8 @@ async def apply_channel_status(
     so the first manual update must begin the sequence. With ``validate=True`` an
     out-of-sequence step raises :class:`InvalidStatusTransition`; the SoundCloud
     poller passes ``validate=False`` to mirror real platform state verbatim.
+    ``details`` (#758) are extra ``$set`` fields written in the same update, so a
+    terminal status never lands without its link or reason.
 
     The returned "previous" status lets the caller decide whether to notify; on a
     lost concurrent race it returns ``new_status`` (a no-op signal) — see below.
@@ -70,7 +77,7 @@ async def apply_channel_status(
     guard = {field: current.value} if channel in release.channel_statuses else {field: {"$exists": False}}
     doc = await Release.get_pymongo_collection().find_one_and_update(
         {"_id": release.id, **guard},
-        {"$set": {field: new_status.value, "updated_at": utcnow()}},
+        {"$set": {field: new_status.value, "updated_at": utcnow(), **details}},
         return_document=ReturnDocument.AFTER,
     )
     if doc is None:
@@ -128,3 +135,21 @@ def map_soundcloud_state(track: dict) -> DistributionStatus | None:
         # A finished-but-private track is processed yet not publicly live.
         return DistributionStatus.LIVE if (track.get("sharing") == "public") else DistributionStatus.IN_REVIEW
     return None
+
+
+SOUNDCLOUD_REJECTION_REASON = "SoundCloud couldn't process the upload. Try uploading it again."
+
+
+def _public_link(track: dict) -> str | None:
+    """The track's permalink, only if it is an absolute http(s) URL: it is shown as an ``<a href>``."""
+    link = track.get("permalink_url") or ""
+    parsed = urlparse(link)
+    return link if parsed.scheme in ("http", "https") and parsed.netloc else None
+
+
+def soundcloud_details(track: dict, status: DistributionStatus | None) -> dict[str, str]:
+    """The ``$set`` fields a polled track adds next to its status (#758): its link once live, a reason once rejected."""
+    if status is DistributionStatus.REJECTED:
+        return {"channel_rejection_reasons.soundcloud": SOUNDCLOUD_REJECTION_REASON}
+    link = _public_link(track) if status is DistributionStatus.LIVE else None
+    return {"channel_permalinks.soundcloud": link} if link else {}

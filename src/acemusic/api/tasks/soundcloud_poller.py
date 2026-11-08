@@ -157,7 +157,10 @@ class SoundCloudStatusPoller:
         if new_status is not None and new_status != current:
             # validate off: SoundCloud's real state is authoritative. apply is
             # atomic and returns the pre-state; we only "won" if it actually moved.
-            old = await status_service.apply_channel_status(release, SOUNDCLOUD_CHANNEL, new_status, validate=False)
+            details = status_service.soundcloud_details(track, new_status)
+            old = await status_service.apply_channel_status(
+                release, SOUNDCLOUD_CHANNEL, new_status, validate=False, details=details
+            )
             changed = old != new_status
             if changed and status_service.should_notify(old, new_status):
                 await status_service.create_status_notification(release, SOUNDCLOUD_CHANNEL, new_status)

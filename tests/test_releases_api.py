@@ -247,6 +247,38 @@ class TestList:
         ids = [r["id"] for r in body["releases"]]
         assert ids == [second["id"], first["id"]]  # newest first
 
+    async def test_lists_each_channels_link_and_rejection_reason(self, client, settings) -> None:
+        user = await make_user("rel-list-details@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        await Release.get_pymongo_collection().update_one(
+            {"_id": PydanticObjectId(created["id"])},
+            {
+                "$set": {
+                    "channel_statuses": {"soundcloud": "live", "landr": "rejected"},
+                    "channel_permalinks": {"soundcloud": "https://soundcloud.com/dj/tune"},
+                    "channel_rejection_reasons": {"landr": "Artwork too small."},
+                }
+            },
+        )
+
+        listed = (await client.get(RELEASES_URL, headers=_auth_headers(user, settings))).json()["releases"][0]
+        assert listed["channel_permalinks"] == {"soundcloud": "https://soundcloud.com/dj/tune"}
+        assert listed["channel_rejection_reasons"] == {"landr": "Artwork too small."}
+
+    async def test_a_release_stored_before_channel_details_lists_none(self, client, settings) -> None:
+        user = await make_user("rel-list-legacy@example.com")
+        clip = await _insert_clip(user, mastered=True, artwork=True)
+        created = (await _create_release(client, settings=settings, user=user, clip=clip)).json()
+        await Release.get_pymongo_collection().update_one(
+            {"_id": PydanticObjectId(created["id"])},
+            {"$unset": {"channel_permalinks": "", "channel_rejection_reasons": ""}},
+        )
+
+        listed = (await client.get(RELEASES_URL, headers=_auth_headers(user, settings))).json()["releases"][0]
+        assert listed["channel_permalinks"] == {}
+        assert listed["channel_rejection_reasons"] == {}
+
     async def test_empty_list_for_new_user(self, client, settings) -> None:
         user = await make_user("rel-list-empty@example.com")
         resp = await client.get(RELEASES_URL, headers=_auth_headers(user, settings))

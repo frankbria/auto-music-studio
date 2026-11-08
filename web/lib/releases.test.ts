@@ -67,7 +67,9 @@ describe("fetchReleases", () => {
     isrc: "US-AMS-26-00001",
     upc: null,
     created_at: "2026-11-02T10:00:00Z",
-    channel_statuses: { soundcloud: "live", landr: "in_review" },
+    channel_statuses: { soundcloud: "live", landr: "rejected" },
+    channel_permalinks: { soundcloud: "https://soundcloud.com/juno/neon-rain" },
+    channel_rejection_reasons: { landr: "Artwork too small." },
   }
 
   it("reads the caller's releases through the BFF with their token, mapped for the dashboard", async () => {
@@ -103,14 +105,14 @@ describe("fetchReleases", () => {
           {
             channel: "soundcloud",
             status: "live",
-            permalink: null,
+            permalink: "https://soundcloud.com/juno/neon-rain",
             rejectionReason: null,
           },
           {
             channel: "landr",
-            status: "in_review",
+            status: "rejected",
             permalink: null,
-            rejectionReason: null,
+            rejectionReason: "Artwork too small.",
           },
         ],
       },

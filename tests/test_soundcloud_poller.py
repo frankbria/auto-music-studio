@@ -85,6 +85,26 @@ class TestPollOnce:
         assert events[0].event_type == "status_live"
         assert events[0].channel == "soundcloud"
 
+    async def test_live_track_records_its_permalink(self, mongo_db, mongo_settings) -> None:
+        user = await make_user("poll-link@example.com")
+        release = await _make_release(user, DistributionStatus.IN_REVIEW)
+        track = {"state": "finished", "sharing": "public", "permalink_url": "https://soundcloud.com/dj/tune"}
+
+        await _poller(mongo_settings, track=track).poll_once()
+
+        stored = await Release.get(release.id)
+        assert stored.channel_permalinks == {"soundcloud": "https://soundcloud.com/dj/tune"}
+
+    async def test_failed_track_records_why_it_was_rejected(self, mongo_db, mongo_settings) -> None:
+        user = await make_user("poll-reason@example.com")
+        release = await _make_release(user, DistributionStatus.IN_REVIEW)
+
+        await _poller(mongo_settings, track={"state": "failed"}).poll_once()
+
+        stored = await Release.get(release.id)
+        assert stored.channel_statuses["soundcloud"] is DistributionStatus.REJECTED
+        assert stored.channel_rejection_reasons["soundcloud"]
+
     async def test_terminal_release_is_not_polled(self, mongo_db, mongo_settings) -> None:
         user = await make_user("poll-terminal@example.com")
         await _make_release(user, DistributionStatus.LIVE)
