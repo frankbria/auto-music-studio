@@ -88,8 +88,8 @@ jobs:
             NEXT_PUBLIC_SENTRY_DSN=${{ vars.SENTRY_WEB_DSN }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ vars.SENTRY_WEB_PROJECT }}
-          secrets: |
-            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
+          # Passed only when set, so an unconfigured repository builds without the secret at all.
+          secrets: ${{ secrets.SENTRY_AUTH_TOKEN && format('sentry_auth_token={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.commit.outputs.sha }}
             ${{ env.WEB_IMAGE }}:latest
