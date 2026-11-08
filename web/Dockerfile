@@ -1,8 +1,9 @@
+# syntax=docker/dockerfile:1.10
 # Next.js web image (#429). Built from the web/ context, not the repo root.
 #
-# Node 24 (the active LTS line) to match CI. The app is a true BFF — there is not a single NEXT_PUBLIC_* var, and
-# API_BASE_URL is read server-side at request time — so nothing here is baked in at build
-# time and one image is portable across every environment.
+# Node 24 (the active LTS line) to match CI. The app is a BFF: API_BASE_URL is read server-side at request time, so
+# one image is portable across every environment. The one build-time value is the browser's Sentry DSN (#342), which
+# is public and the same for staging and production; events carry the host as their environment.
 
 FROM node:24-slim AS builder
 
@@ -25,7 +26,12 @@ COPY . .
 # this is no longer the only automated check — but it is the one that governs the artifact
 # that actually ships. A broken frontend should not become an image even if someone
 # reorders or trims the CI job.
-RUN npm run typecheck && npm run build
+# Browser error tracking (#342): unset, the SDK stays off. The auth token is a build secret, never a layer: with it,
+# the build uploads source maps so browser stack traces are readable.
+ARG NEXT_PUBLIC_SENTRY_DSN=""
+ARG SENTRY_ORG=""
+ARG SENTRY_PROJECT=""
+RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN npm run typecheck && npm run build
 
 
 FROM node:24-slim AS runtime
