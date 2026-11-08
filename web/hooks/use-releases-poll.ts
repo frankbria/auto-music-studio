@@ -2,10 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { useAuth } from "@/hooks/use-auth"
 import { fetchReleases, type ReleaseSummary } from "@/lib/releases"
 
 /** Default poll cadence — matches the spec's "real-time-ish" status refresh. */
 export const DEFAULT_POLL_INTERVAL_MS = 30_000
+
+/** A result tagged with the user it was loaded for. */
+type ForUser<T> = { userId: string; value: T }
+
+/** The value, but only if it was loaded for `userId`. */
+function forUser<T>(
+  entry: ForUser<T> | null,
+  userId: string | undefined
+): T | null {
+  return entry && entry.userId === userId ? entry.value : null
+}
 
 export type UseReleasesPoll = {
   releases: ReleaseSummary[] | null
@@ -24,14 +36,26 @@ export type UseReleasesPoll = {
  * poll needlessly — and refetches once immediately when the tab regains focus so
  * a returning user sees fresh state without waiting a full interval.
  *
- * Today `fetchReleases` returns a local seam; the transport is real, so when the
- * backend `GET /releases` is wired in there, live transitions flow through here
- * unchanged. Mirrors use-mastering-job's mounted-ref/timer discipline.
+ * Reads the signed-in user's releases (#748). Every result is tagged with the
+ * user it belongs to, so after a sign-in as someone else the hook reads as
+ * loading rather than showing the previous user's list. Keyed on the user id,
+ * not the token, so a token refresh doesn't refetch.
  */
-export function useReleasesPoll(intervalMs: number = DEFAULT_POLL_INTERVAL_MS): UseReleasesPoll {
-  const [releases, setReleases] = useState<ReleaseSummary[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+export function useReleasesPoll(
+  intervalMs: number = DEFAULT_POLL_INTERVAL_MS
+): UseReleasesPoll {
+  const { accessToken, user } = useAuth()
+  const userId = user?.id
+  const tokenRef = useRef(accessToken)
+  useEffect(() => {
+    tokenRef.current = accessToken
+  }, [accessToken])
+
+  const [loaded, setLoaded] = useState<ForUser<ReleaseSummary[]> | null>(null)
+  const [failed, setFailed] = useState<ForUser<string> | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
+  const releases = forUser(loaded, userId)
+  const error = forUser(failed, userId)
 
   // False once unmounted; every post-await branch checks it before setState.
   const mountedRef = useRef(true)
@@ -41,19 +65,23 @@ export function useReleasesPoll(intervalMs: number = DEFAULT_POLL_INTERVAL_MS): 
   // its result if a newer load has since started — no stale overwrite.
   const seqRef = useRef(0)
 
+  const isCurrent = (seq: number) =>
+    mountedRef.current && seq === seqRef.current
+
   const load = useCallback(async () => {
+    const token = tokenRef.current
+    if (!userId || !token) return
     const seq = ++seqRef.current
-    try {
-      const list = await fetchReleases()
-      if (!mountedRef.current || seq !== seqRef.current) return
-      setReleases(list)
-      setError(null)
+    const list = await fetchReleases(token).catch(() => null)
+    if (!isCurrent(seq)) return
+    if (list) {
+      setLoaded({ userId, value: list })
+      setFailed(null)
       setLastUpdated(Date.now())
-    } catch {
-      if (!mountedRef.current || seq !== seqRef.current) return
-      setError("Could not load releases. Please try again.")
+    } else {
+      setFailed({ userId, value: "Could not load releases. Please try again." })
     }
-  }, [])
+  }, [userId])
 
   useEffect(() => {
     mountedRef.current = true
