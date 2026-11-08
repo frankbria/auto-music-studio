@@ -331,7 +331,7 @@ export function ClipCard({
             type="button"
             aria-label={`Edit title: ${title ?? "Untitled clip"}`}
             onClick={startEdit}
-            className="flex min-w-0 items-center gap-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="relative flex min-w-0 items-center gap-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-3 pointer-coarse:after:content-['']"
           >
             <span className="truncate text-sm font-medium">
               {title ?? "Untitled clip"}

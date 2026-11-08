@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 
 /**
  * Run `callback` when the browser comes back online (#339), so a read that failed while offline retries without the
@@ -8,7 +8,9 @@ import { useEffect, useRef } from "react"
  */
 export function useOnReconnect(callback: () => void): void {
   const latest = useRef(callback)
-  useEffect(() => {
+  // Layout, not passive: an "online" event between commit and passive effects would otherwise run a stale callback
+  // that still sees the previous render's state, and the row that just failed would never retry.
+  useLayoutEffect(() => {
     latest.current = callback
   })
   useEffect(() => {

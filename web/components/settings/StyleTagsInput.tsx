@@ -120,13 +120,18 @@ export function StyleTagsInput({
         <ul className="flex flex-wrap gap-1.5" aria-label="Style tags">
           {tags.map((tag) => (
             <li key={tag}>
-              <Badge variant="secondary" className="gap-1 pr-1">
+              <Badge
+                variant="secondary"
+                className="gap-1 pr-1 pointer-coarse:py-0 pointer-coarse:pr-0"
+              >
                 {tag}
+                {/* A real 44px button on touch, not an invisible ::after: that would spill over the tag's own
+                    label and the next chip, and a stray tap would delete a tag. */}
                 <button
                   type="button"
                   aria-label={`Remove ${tag}`}
                   onClick={() => remove(tag)}
-                  className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:inline-grid pointer-coarse:size-11 pointer-coarse:place-items-center"
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
                 </button>
