@@ -425,8 +425,15 @@ class ApiSettings(BaseSettings):
     @classmethod
     def _split_trusted_proxies(cls, value: object) -> object:
         """Accept a comma-separated string of addresses or CIDRs; blank/unset -> [] (trust nobody)."""
-        entries = [ip.strip() for ip in value.split(",") if ip.strip()] if isinstance(value, str) else value
-        for entry in entries if isinstance(entries, list) else []:
+        if isinstance(value, str):
+            return [ip.strip() for ip in value.split(",") if ip.strip()]
+        return value
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _require_addresses(cls, entries: list[str]) -> list[str]:
+        """Reject a typo at startup; otherwise it would raise on every rate-limited request."""
+        for entry in entries:
             try:
                 ipaddress.ip_network(entry, strict=False)
             except ValueError as error:
