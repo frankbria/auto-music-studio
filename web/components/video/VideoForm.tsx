@@ -36,18 +36,6 @@ import type { Clip } from "@/lib/workspace-clips"
 /** One locally selected reference image and its preview object URL. */
 type ReferenceImage = { file: File; url: string }
 
-/**
- * Video configuration form (US-22.2): style prompt + presets, reference images,
- * lyrics sync, and the aspect/resolution/frame-rate/transitions pickers, with a
- * live credit estimate. Generate stays disabled until a prompt or preset exists
- * (the backend 422s otherwise). Pickers are inlined RadioGroups in fieldsets
- * (mastering-config idiom — the codebase has no Select/ToggleGroup primitive).
- *
- * Tier gating: 1080p needs Pro and 4K needs Enterprise; a resolution above the
- * user's tier is badge-locked and disabled (SongActionsMenu idiom). Reference images are previewed locally but not sent —
- * the backend accepts only hosted http(s) URLs and no image-hosting endpoint
- * exists yet (documented limitation; wiring lands with a Stage 22 follow-up).
- */
 /** Something to make a video from (a prompt or a preset), and enough credits for it. */
 function readyToGenerate(
   prompt: string,
@@ -83,6 +71,18 @@ function CreditShortfallNotice({
   )
 }
 
+/**
+ * Video configuration form (US-22.2): style prompt + presets, reference images,
+ * lyrics sync, and the aspect/resolution/frame-rate/transitions pickers, with a
+ * live credit estimate. Generate stays disabled until a prompt or preset exists
+ * (the backend 422s otherwise). Pickers are inlined RadioGroups in fieldsets
+ * (mastering-config idiom — the codebase has no Select/ToggleGroup primitive).
+ *
+ * Tier gating: 1080p needs Pro and 4K needs Enterprise; a resolution above the
+ * user's tier is badge-locked and disabled (SongActionsMenu idiom). Reference images are previewed locally but not sent —
+ * the backend accepts only hosted http(s) URLs and no image-hosting endpoint
+ * exists yet (documented limitation; wiring lands with a Stage 22 follow-up).
+ */
 export function VideoForm({
   clip,
   onGenerate,

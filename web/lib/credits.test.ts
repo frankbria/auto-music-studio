@@ -119,6 +119,8 @@ describe("creditShortfall (#739)", () => {
 
   it("is null until the balance is known", () => {
     expect(creditShortfall(500, { phase: "loading" })).toBeNull()
+    expect(creditShortfall(500, { phase: "signed-out" })).toBeNull()
+    expect(creditShortfall(500, { phase: "error" })).toBeNull()
   })
 
   it("is null when the balance covers the cost exactly or more", () => {
