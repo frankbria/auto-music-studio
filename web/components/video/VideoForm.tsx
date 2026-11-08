@@ -48,6 +48,31 @@ type ReferenceImage = { file: File; url: string }
  * the backend accepts only hosted http(s) URLs and no image-hosting endpoint
  * exists yet (documented limitation; wiring lands with a Stage 22 follow-up).
  */
+/** Something to make a video from (a prompt or a preset), and enough credits for it. */
+function readyToGenerate(
+  prompt: string,
+  preset: VideoStylePreset | null,
+  shortfall: ReturnType<typeof creditShortfall>
+): boolean {
+  return (prompt.trim() !== "" || preset !== null) && shortfall === null
+}
+
+function CreditShortfallNotice({
+  shortfall,
+}: {
+  shortfall: ReturnType<typeof creditShortfall>
+}) {
+  if (!shortfall) return null
+  return (
+    <p role="status" className="text-sm text-destructive">
+      You need {shortfall.missing} more credits for this video.{" "}
+      <Link href={shortfall.upgradeUrl} className="underline">
+        Get more credits
+      </Link>
+    </p>
+  )
+}
+
 export function VideoForm({
   clip,
   onGenerate,
@@ -86,7 +111,7 @@ export function VideoForm({
   const cost = estimateVideoCost(resolution, clip.duration)
   const { state: credits } = useCredits()
   const shortfall = creditShortfall(cost, credits)
-  const canGenerate = (prompt.trim() !== "" || preset !== null) && !shortfall
+  const canGenerate = readyToGenerate(prompt, preset, shortfall)
 
   /** Seed the prompt with the preset's text (US-22.2 acceptance criterion). */
   function selectPreset(next: VideoStylePreset) {
@@ -356,14 +381,7 @@ export function VideoForm({
           Estimated cost: {cost} credits
         </span>
       </div>
-      {shortfall && (
-        <p role="status" className="text-sm text-destructive">
-          You need {shortfall.missing} more credits for this video.{" "}
-          <Link href={shortfall.upgradeUrl} className="underline">
-            Get more credits
-          </Link>
-        </p>
-      )}
+      <CreditShortfallNotice shortfall={shortfall} />
     </div>
   )
 }
