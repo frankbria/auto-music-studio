@@ -398,6 +398,39 @@ describe("ClipCard", () => {
     vi.unstubAllGlobals()
   })
 
+  it("publishes straight after renaming an untitled clip, without the guard asking for a title (#750)", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"))
+      return new Response(JSON.stringify({ id: "c1", ...body }), {
+        status: 200,
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <AllProviders>
+        <ClipCard clip={clip({ title: null, style_tags: ["synthwave"] })} />
+      </AllProviders>
+    )
+
+    await userEvent.click(screen.getByRole("button", { name: /edit title/i }))
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /title/i }),
+      "Night Drive{Enter}"
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Visibility: Private" })
+    )
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Public" }))
+
+    await waitFor(() => expect(screen.getByText("Public")).toBeInTheDocument())
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    const bodies = fetchMock.mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body))
+    )
+    expect(bodies).toEqual([{ title: "Night Drive" }, { visibility: "public" }])
+    vi.unstubAllGlobals()
+  })
+
   it("changes visibility to unlisted without a guard, even on an incomplete clip", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
