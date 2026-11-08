@@ -60,18 +60,20 @@ export function useReleasesPoll(
   // its result if a newer load has since started — no stale overwrite.
   const seqRef = useRef(0)
 
+  const isCurrent = (seq: number) =>
+    mountedRef.current && seq === seqRef.current
+
   const load = useCallback(async () => {
     const token = tokenRef.current
     if (!userId || !token) return
     const seq = ++seqRef.current
-    try {
-      const list = await fetchReleases(token)
-      if (!mountedRef.current || seq !== seqRef.current) return
+    const list = await fetchReleases(token).catch(() => null)
+    if (!isCurrent(seq)) return
+    if (list) {
       setLoaded({ userId, list })
       setFailed(null)
       setLastUpdated(Date.now())
-    } catch {
-      if (!mountedRef.current || seq !== seqRef.current) return
+    } else {
       setFailed({
         userId,
         message: "Could not load releases. Please try again.",
