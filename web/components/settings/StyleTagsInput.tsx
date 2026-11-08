@@ -126,7 +126,7 @@ export function StyleTagsInput({
                   type="button"
                   aria-label={`Remove ${tag}`}
                   onClick={() => remove(tag)}
-                  className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  className="relative rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:after:absolute pointer-coarse:after:-inset-4 pointer-coarse:after:content-['']"
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={12} />
                 </button>
