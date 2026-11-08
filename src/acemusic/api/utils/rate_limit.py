@@ -63,16 +63,22 @@ class FixedWindowRateLimiter:
             self._hits[key] = (window_start, count + weight)
 
 
+def _trusted_network(entry: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+    """Parse a trusted entry, folding an IPv4-mapped network (``::ffff:a.b.c.d/n``) to IPv4 like peers are."""
+    network = ipaddress.ip_network(_normalize_ip(entry), strict=False)
+    mapped = network.network_address.ipv4_mapped if isinstance(network, ipaddress.IPv6Network) else None
+    if mapped is None:
+        return network
+    return ipaddress.ip_network(f"{mapped}/{network.prefixlen - 96}")
+
+
 def _is_trusted(peer: str, trusted_proxies: Collection[str]) -> bool:
     """True when ``peer`` is a listed proxy address or falls inside a listed CIDR (``172.18.0.0/16``)."""
     try:
         address = ipaddress.ip_address(peer)
     except ValueError:
         return peer in trusted_proxies
-    # The peer arrives normalized to IPv4, so an operator's ::ffff:a.b.c.d/n network needs the mapped form too.
-    forms = [address, ipaddress.IPv6Address(f"::ffff:{address}")] if address.version == 4 else [address]
-    networks = [ipaddress.ip_network(_normalize_ip(entry), strict=False) for entry in trusted_proxies]
-    return any(form in network for form in forms for network in networks)
+    return any(address in _trusted_network(entry) for entry in trusted_proxies)
 
 
 def client_key(request: Request, trusted_proxies: Collection[str]) -> str:
