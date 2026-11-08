@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import { BACKEND_URL } from "@/lib/auth-server"
+import { fetchWithTimeout } from "@/lib/proxy-fetch"
 
 // Same-origin proxy for GET /api/v1/releases (#748): the caller's releases for the distribution dashboard.
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   let res: Response
   try {
-    res = await fetch(`${BACKEND_URL}/api/v1/releases`, {
+    res = await fetchWithTimeout(`${BACKEND_URL}/api/v1/releases`, {
       headers: { authorization: auth, accept: "application/json" },
     })
   } catch {
