@@ -32,7 +32,10 @@ function CreatePageBody() {
   // pre-attaches the playlist as an inspiration chip on the Simple form.
   const inspirationId = searchParams?.get("inspiration")
   const initialInspiration: InspirationSelection | undefined = inspirationId
-    ? { id: inspirationId, name: searchParams?.get("inspirationName") ?? "Playlist" }
+    ? {
+        id: inspirationId,
+        name: searchParams?.get("inspirationName") ?? "Playlist",
+      }
     : undefined
 
   // Bumped whenever a creation form finishes a generation, so the workspace panel
@@ -52,7 +55,14 @@ function CreatePageBody() {
       <div className="flex h-full">
         <div className="min-w-0 flex-1 overflow-y-auto p-8">
           <div className="mb-6 flex items-center justify-between gap-4">
-            <h1 className="text-2xl font-semibold">Create</h1>
+            <div className="flex flex-col gap-1">
+              <h1 className="text-4xl font-bold tracking-tight">
+                What are we making?
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Describe a song, pick a vibe, and hit Create.
+              </p>
+            </div>
             <ModelSelector />
           </div>
           <Tabs defaultValue="simple">

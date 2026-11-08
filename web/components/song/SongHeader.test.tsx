@@ -49,6 +49,13 @@ describe("SongHeader", () => {
     expect(screen.getByText("lofi")).toBeInTheDocument()
   })
 
+  it("leads with the song's cover art as a hero (#754)", () => {
+    renderHeader({ clip: clip({ id: "c-hero" }) })
+    expect(screen.getByTestId("song-hero-art").querySelector("img")?.getAttribute("src")).toBe(
+      "/api/clips/c-hero/artwork"
+    )
+  })
+
   it("shows a placeholder artist only when the owner has no public name (#735)", () => {
     renderHeader({ clip: clip({ artist: null }) })
     expect(screen.getByText("Unknown artist")).toBeInTheDocument()

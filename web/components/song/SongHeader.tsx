@@ -4,12 +4,14 @@ import { useMemo, useState, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   FavouriteIcon,
+  MusicNote01Icon,
   Share01Icon,
   ThumbsDownIcon,
 } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 import { ReportClipButton } from "@/components/moderation/ReportClipButton"
 import { ShareModal } from "@/components/song/ShareModal"
 import { VisibilityBadge } from "@/components/song/VisibilityBadge"
@@ -98,76 +100,89 @@ export function SongHeader({
   }
 
   return (
-    <header className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight">
-          {clip.title ?? "Untitled clip"}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          {clip.artist || "Unknown artist"}
-        </p>
+    <header className="flex flex-col gap-6 sm:flex-row sm:items-end">
+      <div
+        data-testid="song-hero-art"
+        className="flex size-40 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-muted text-muted-foreground sm:size-52"
+      >
+        <ClipArtwork
+          clipId={clip.id}
+          fallback={
+            <HugeiconsIcon icon={MusicNote01Icon} size={48} aria-hidden />
+          }
+        />
       </div>
+      <div className="flex min-w-0 flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
+            {clip.title ?? "Untitled clip"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {clip.artist || "Unknown artist"}
+          </p>
+        </div>
 
-      <div className="flex flex-wrap items-center gap-1">
-        {clip.content_warning && (
-          <Badge variant="destructive">Content warning</Badge>
-        )}
-        {version && <Badge variant="secondary">{version}</Badge>}
-        {mode && <Badge variant="outline">{mode}</Badge>}
-        {clip.style_tags.map((tag) => (
-          <Badge key={tag} variant="outline">
-            {tag}
-          </Badge>
-        ))}
-        {isOwner && <VisibilityBadge visibility={visibility} />}
+        <div className="flex flex-wrap items-center gap-1">
+          {clip.content_warning && (
+            <Badge variant="destructive">Content warning</Badge>
+          )}
+          {version && <Badge variant="secondary">{version}</Badge>}
+          {mode && <Badge variant="outline">{mode}</Badge>}
+          {clip.style_tags.map((tag) => (
+            <Badge key={tag} variant="outline">
+              {tag}
+            </Badge>
+          ))}
+          {isOwner && <VisibilityBadge visibility={visibility} />}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={liked ? "Unlike" : "Like"}
+            aria-pressed={liked}
+            onClick={() => toggleLike(clip.id)}
+            className={cn(liked && "text-primary")}
+          >
+            <HugeiconsIcon
+              icon={FavouriteIcon}
+              size={18}
+              className={cn(liked && "fill-current")}
+            />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Dislike"
+            aria-pressed={disliked}
+            onClick={dislike}
+            className={cn(disliked && "text-primary")}
+          >
+            <HugeiconsIcon icon={ThumbsDownIcon} size={18} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Share"
+            onClick={share}
+          >
+            <HugeiconsIcon icon={Share01Icon} size={18} />
+          </Button>
+          <ReportClipButton clipId={clip.id} isOwner={isOwner} />
+          {isOwner && (
+            <VisibilityToggle value={visibility} onChange={changeVisibility} />
+          )}
+          {actions && <div className="ml-auto">{actions}</div>}
+        </div>
+
+        <ShareModal
+          open={shareOpen}
+          clipId={clip.id}
+          clipTitle={clip.title}
+          onClose={() => setShareOpen(false)}
+        />
       </div>
-
-      <div className="flex flex-wrap items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={liked ? "Unlike" : "Like"}
-          aria-pressed={liked}
-          onClick={() => toggleLike(clip.id)}
-          className={cn(liked && "text-primary")}
-        >
-          <HugeiconsIcon
-            icon={FavouriteIcon}
-            size={18}
-            className={cn(liked && "fill-current")}
-          />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Dislike"
-          aria-pressed={disliked}
-          onClick={dislike}
-          className={cn(disliked && "text-primary")}
-        >
-          <HugeiconsIcon icon={ThumbsDownIcon} size={18} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Share"
-          onClick={share}
-        >
-          <HugeiconsIcon icon={Share01Icon} size={18} />
-        </Button>
-        <ReportClipButton clipId={clip.id} isOwner={isOwner} />
-        {isOwner && (
-          <VisibilityToggle value={visibility} onChange={changeVisibility} />
-        )}
-        {actions && <div className="ml-auto">{actions}</div>}
-      </div>
-
-      <ShareModal
-        open={shareOpen}
-        clipId={clip.id}
-        clipTitle={clip.title}
-        onClose={() => setShareOpen(false)}
-      />
     </header>
   )
 }
