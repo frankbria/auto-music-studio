@@ -22,9 +22,10 @@ import { useLikeToggle } from "@/hooks/use-like-toggle"
 import { usePlayReport } from "@/hooks/use-play-report"
 import { clipInspirationHref, type FeedItem } from "@/lib/feed"
 import { cn } from "@/lib/utils"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
-// One short-form feed item (US-20.4). Full-height card with a glyph artwork
-// backdrop (no authed artwork proxy), title/tag overlays, and an action
+// One short-form feed item (US-20.4). Full-height card with a cover-art
+// backdrop (a glyph when there is none), title/tag overlays, and an action
 // rail. Owns its own <audio>: an effect drives play/pause off the `active` prop
 // (the in-view item), which is a side-effect syncing to an external element — not
 // set-state-in-effect. The play/pause icon tracks the element's own events.
@@ -139,7 +140,10 @@ export function FeedItemCard({
         className="group relative w-full max-w-md overflow-hidden rounded-2xl bg-gradient-to-b from-muted to-muted-foreground/20 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <span className="absolute inset-0 flex items-center justify-center text-muted-foreground/40">
-          <HugeiconsIcon icon={MusicNote01Icon} size={96} aria-hidden />
+          <ClipArtwork
+            clipId={item.id}
+            fallback={<HugeiconsIcon icon={MusicNote01Icon} size={96} aria-hidden />}
+          />
         </span>
         {/* Center play/pause affordance; visible when paused or on hover. */}
         <span

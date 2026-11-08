@@ -3,12 +3,12 @@ import { MusicNote01Icon } from "@hugeicons/core-free-icons"
 
 import type { Playlist } from "@/lib/playlists"
 import { cn } from "@/lib/utils"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
-// Playlist cover (US-20.3). Custom upload wins; otherwise an auto-mosaic. There's
-// no authed artwork proxy (a real <img src=.../artwork> would 401), so the mosaic
-// is glyph tiles, not real thumbnails — swap a tile for the clip's artwork when a
-// public artwork endpoint exists. An empty playlist shows a single glyph so it
-// reads as "no songs yet" rather than a full cover.
+// Playlist cover (US-20.3). Custom upload wins; otherwise a mosaic of the first
+// four songs' cover art (a glyph tile for a song without art, or past the end of a
+// short playlist). An empty playlist shows a single glyph so it reads as "no songs
+// yet" rather than a full cover.
 
 function box(className?: string) {
   return cn("relative aspect-square w-full overflow-hidden rounded-md bg-muted", className)
@@ -52,8 +52,6 @@ export function PlaylistCover({
     )
   }
 
-  // 2×2 glyph mosaic. Not thumbnails yet (see note above) — the grid is a stand-in
-  // until real artwork lands.
   return (
     <div
       className={cn(box(className), "grid grid-cols-2 grid-rows-2 gap-px")}
@@ -61,9 +59,14 @@ export function PlaylistCover({
       role="img"
       aria-label={`${playlist.name} cover`}
     >
-      {Array.from({ length: 4 }, (_, i) => (
-        <Glyph key={i} size={18} />
-      ))}
+      {Array.from({ length: 4 }, (_, i) => {
+        const clipId = playlist.clipIds[i]
+        return clipId ? (
+          <ClipArtwork key={i} clipId={clipId} fallback={<Glyph size={18} />} />
+        ) : (
+          <Glyph key={i} size={18} />
+        )
+      })}
     </div>
   )
 }

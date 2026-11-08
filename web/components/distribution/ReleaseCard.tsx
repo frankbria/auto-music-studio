@@ -7,6 +7,7 @@ import { Alert01Icon, LinkSquare02Icon, MusicNote01Icon } from "@hugeicons/core-
 import { Card, CardContent } from "@/components/ui/card"
 import { StatusBadge } from "@/components/distribution/StatusBadge"
 import { channelLabel, externalLink, type ReleaseSummary } from "@/lib/releases"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 /** Format an ISO date as a short, locale-stable label (UTC to avoid SSR drift). */
 function formatDate(iso: string): string {
@@ -18,7 +19,7 @@ function formatDate(iso: string): string {
 
 /**
  * One release row for the distribution dashboard (US-21.6). Shows the cover
- * (music-glyph placeholder — no artwork proxy in web/), title/artist, release
+ * (the song's cover art, or a music glyph), title/artist, release
  * date, identifiers, a per-channel StatusBadge, a live external link, and the
  * rejection reason when a channel was rejected.
  */
@@ -26,8 +27,11 @@ export function ReleaseCard({ release }: { release: ReleaseSummary }) {
   return (
     <Card>
       <CardContent className="flex items-start gap-4 p-4">
-        <span className="flex size-16 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <HugeiconsIcon icon={MusicNote01Icon} size={24} />
+        <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+          <ClipArtwork
+            clipId={release.clipId}
+            fallback={<HugeiconsIcon icon={MusicNote01Icon} size={24} />}
+          />
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-2">

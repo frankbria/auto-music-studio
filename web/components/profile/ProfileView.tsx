@@ -25,7 +25,7 @@ type ProfileState =
   | { status: "not-found" }
   | { status: "ready"; profile: PublicProfile }
 
-/** First-letter initials for the glyph avatar (no authed artwork proxy). */
+/** First-letter initials for the avatar: profiles have no avatar image yet. */
 function initials(name: string): string {
   return name
     .split(/\s+/)

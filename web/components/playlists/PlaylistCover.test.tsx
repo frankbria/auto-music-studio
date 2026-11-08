@@ -22,6 +22,16 @@ describe("PlaylistCover", () => {
     expect(screen.getByRole("img", { name: "Mix cover" })).toBeInTheDocument()
   })
 
+  it("tiles the first songs' cover art, with glyph tiles past the end (#749)", () => {
+    const { container } = render(<PlaylistCover playlist={pl({ clipIds: ["a", "b"] })} />)
+    const tiles = screen.getByTestId("playlist-mosaic").children
+    expect(tiles).toHaveLength(4)
+    expect([...container.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual([
+      "/api/clips/a/artwork",
+      "/api/clips/b/artwork",
+    ])
+  })
+
   it("renders a single glyph (no mosaic) for an empty playlist", () => {
     render(<PlaylistCover playlist={pl()} />)
     expect(screen.queryByTestId("playlist-mosaic")).not.toBeInTheDocument()
