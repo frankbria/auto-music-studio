@@ -24,7 +24,9 @@ export type ReleaseCredits = {
  *  draft (localStorage can't hold it) — only the descriptor, so a resumed draft
  *  shows "was uploaded: name" and the user re-picks if they want to change it. */
 export type CoverArtChoice =
-  { kind: "none" } | { kind: "existing" } | { kind: "uploaded"; name: string }
+  | { kind: "none" }
+  | { kind: "existing" }
+  | { kind: "uploaded"; name: string }
 
 /** The editable release form model. `bpm` stays null when the song has none. */
 export type ReleaseMetadata = {
@@ -49,11 +51,6 @@ export type ReleaseMetadata = {
 /** Pre-populate the form from a song's existing metadata (AC1). Artist is the
  *  owner's public name (#735); fields the Clip model doesn't carry (album,
  *  release date, credits, ISRC/UPC) start blank for the user to fill. */
-/** A clip field as form text: empty when the clip has none. */
-function text(value: string | null | undefined): string {
-  return value ?? ""
-}
-
 export function prefillFromClip(clip: Clip): ReleaseMetadata {
   return {
     title: text(clip.title),
@@ -73,6 +70,11 @@ export function prefillFromClip(clip: Clip): ReleaseMetadata {
     upc: "",
     lyrics: text(clip.lyrics),
   }
+}
+
+/** A clip field as form text: empty when the clip has none. */
+function text(value: string | null | undefined): string {
+  return value ?? ""
 }
 
 /** Random n-digit string (as characters, leading zeros kept). */
@@ -106,9 +108,7 @@ export function generateUpc(): string {
 
 /** True when a 12-digit string carries a correct UPC-A check digit. */
 function isValidUpc(upc: string): boolean {
-  return (
-    /^\d{12}$/.test(upc) && upcCheckDigit(upc.slice(0, 11)) === Number(upc[11])
-  )
+  return /^\d{12}$/.test(upc) && upcCheckDigit(upc.slice(0, 11)) === Number(upc[11])
 }
 
 /** ISRC shape check (not registry-verified): CC-XXX-YY-NNNNN. */
@@ -117,10 +117,7 @@ function isValidIsrc(isrc: string): boolean {
 }
 
 /** Error message if cover art is below the store minimum, else null (AC3). */
-export function coverArtResolutionError(
-  width: number,
-  height: number
-): string | null {
+export function coverArtResolutionError(width: number, height: number): string | null {
   if (width < MIN_COVER_ART_PX || height < MIN_COVER_ART_PX) {
     return `Cover art must be at least ${MIN_COVER_ART_PX}×${MIN_COVER_ART_PX}px (got ${width}×${height}).`
   }
@@ -133,24 +130,17 @@ export const REQUIRED_FIELDS = [
   { key: "title", label: "Title" },
   { key: "artist", label: "Artist" },
   { key: "genre", label: "Genre" },
-] as const satisfies ReadonlyArray<{
-  key: keyof ReleaseMetadata
-  label: string
-}>
+] as const satisfies ReadonlyArray<{ key: keyof ReleaseMetadata; label: string }>
 
 /** Field-keyed validation errors (AC5). Empty object ⇒ valid. Required fields come
  *  from REQUIRED_FIELDS; ISRC/UPC are optional but must be well-formed when present. */
-export function validateMetadata(
-  m: ReleaseMetadata
-): Partial<Record<keyof ReleaseMetadata, string>> {
+export function validateMetadata(m: ReleaseMetadata): Partial<Record<keyof ReleaseMetadata, string>> {
   const errors: Partial<Record<keyof ReleaseMetadata, string>> = {}
   for (const { key, label } of REQUIRED_FIELDS) {
     if (!String(m[key] ?? "").trim()) errors[key] = `${label} is required.`
   }
-  if (m.isrc.trim() && !isValidIsrc(m.isrc.trim()))
-    errors.isrc = "Enter a valid ISRC (e.g. US-AMS-25-00001)."
-  if (m.upc.trim() && !isValidUpc(m.upc.trim()))
-    errors.upc = "Enter a valid 12-digit UPC."
+  if (m.isrc.trim() && !isValidIsrc(m.isrc.trim())) errors.isrc = "Enter a valid ISRC (e.g. US-AMS-25-00001)."
+  if (m.upc.trim() && !isValidUpc(m.upc.trim())) errors.upc = "Enter a valid 12-digit UPC."
   return errors
 }
 
