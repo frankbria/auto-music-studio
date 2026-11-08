@@ -78,8 +78,9 @@ type ApiRelease = {
   upc: string | null
   created_at: string
   channel_statuses: Record<string, DistributionStatus>
-  channel_permalinks: Record<string, string>
-  channel_rejection_reasons: Record<string, string>
+  /** Absent from an API older than #758, which a web deploy can briefly run against. */
+  channel_permalinks?: Record<string, string>
+  channel_rejection_reasons?: Record<string, string>
 }
 
 function toSummary(release: ApiRelease): ReleaseSummary {
@@ -98,8 +99,8 @@ function toSummary(release: ApiRelease): ReleaseSummary {
       ([channel, status]) => ({
         channel,
         status,
-        permalink: release.channel_permalinks[channel] ?? null,
-        rejectionReason: release.channel_rejection_reasons[channel] ?? null,
+        permalink: release.channel_permalinks?.[channel] ?? null,
+        rejectionReason: release.channel_rejection_reasons?.[channel] ?? null,
       })
     ),
   }

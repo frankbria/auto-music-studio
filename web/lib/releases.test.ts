@@ -73,13 +73,11 @@ describe("fetchReleases", () => {
   }
 
   it("reads the caller's releases through the BFF with their token, mapped for the dashboard", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ releases: [apiRelease], total: 1 }), {
-          status: 200,
-        })
-      )
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ releases: [apiRelease], total: 1 }), {
+        status: 200,
+      })
+    )
     vi.stubGlobal("fetch", fetchMock)
 
     const releases = await fetchReleases("tok")
@@ -119,6 +117,26 @@ describe("fetchReleases", () => {
     ])
   })
 
+  it("reads a release from an API without channel details as having none", async () => {
+    const older: Record<string, unknown> = { ...apiRelease }
+    delete older.channel_permalinks
+    delete older.channel_rejection_reasons
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ releases: [older], total: 1 }), {
+          status: 200,
+        })
+      )
+    )
+    const [release] = await fetchReleases("tok")
+    expect(
+      release.channels.every(
+        (c) => c.permalink === null && c.rejectionReason === null
+      )
+    ).toBe(true)
+  })
+
   it("orders newest first", async () => {
     const older = {
       ...apiRelease,
@@ -142,13 +160,11 @@ describe("fetchReleases", () => {
   it("returns an empty list when the user has no releases", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ releases: [], total: 0 }), {
-            status: 200,
-          })
-        )
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ releases: [], total: 0 }), {
+          status: 200,
+        })
+      )
     )
     expect(await fetchReleases("tok")).toEqual([])
   })
