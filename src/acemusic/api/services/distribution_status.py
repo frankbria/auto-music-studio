@@ -13,6 +13,8 @@ Two callers, two contracts:
   truth and isn't forced through intermediate steps.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from urllib.parse import urlparse
 
 from pymongo import ReturnDocument
@@ -49,7 +51,7 @@ async def apply_channel_status(
     new_status: DistributionStatus,
     *,
     validate: bool = True,
-    details: dict[str, str] | None = None,
+    details: Mapping[str, str] = MappingProxyType({}),
 ) -> DistributionStatus:
     """Set ``channel``'s status on ``release`` and persist; return the *previous* status.
 
@@ -75,7 +77,7 @@ async def apply_channel_status(
     guard = {field: current.value} if channel in release.channel_statuses else {field: {"$exists": False}}
     doc = await Release.get_pymongo_collection().find_one_and_update(
         {"_id": release.id, **guard},
-        {"$set": {field: new_status.value, "updated_at": utcnow(), **(details or {})}},
+        {"$set": {field: new_status.value, "updated_at": utcnow(), **details}},
         return_document=ReturnDocument.AFTER,
     )
     if doc is None:
