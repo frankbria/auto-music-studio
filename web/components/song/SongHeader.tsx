@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   FavouriteIcon,
@@ -62,15 +62,6 @@ export function SongHeader({
   isOwner = false,
   actions,
 }: SongHeaderProps) {
-  const { state, dispatch } = usePlayer()
-  const toggleLike = useLikeToggle()
-  const likedSet = useMemo(() => new Set(state.likedIds), [state.likedIds])
-  const dislikedSet = useMemo(
-    () => new Set(state.dislikedIds),
-    [state.dislikedIds]
-  )
-  const liked = likedSet.has(clip.id)
-  const disliked = dislikedSet.has(clip.id)
   const [optimisticVisibility, setOptimisticVisibility] =
     useState<Visibility | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
@@ -79,11 +70,6 @@ export function SongHeader({
 
   const version = versionLabel(clip.model)
   const mode = modeLabel(clip.generation_mode)
-
-  function dislike() {
-    dispatch({ type: "dislike/toggle", id: clip.id })
-    onDislike?.(clip.id)
-  }
 
   function share() {
     setShareOpen(true)
@@ -122,45 +108,15 @@ export function SongHeader({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1">
-          {clip.content_warning && (
-            <Badge variant="destructive">Content warning</Badge>
-          )}
-          {version && <Badge variant="secondary">{version}</Badge>}
-          {mode && <Badge variant="outline">{mode}</Badge>}
-          {clip.style_tags.map((tag) => (
-            <Badge key={tag} variant="outline">
-              {tag}
-            </Badge>
-          ))}
-          {isOwner && <VisibilityBadge visibility={visibility} />}
-        </div>
+        <SongBadges
+          clip={clip}
+          version={version}
+          mode={mode}
+          visibility={isOwner ? visibility : null}
+        />
 
         <div className="flex flex-wrap items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={liked ? "Unlike" : "Like"}
-            aria-pressed={liked}
-            onClick={() => toggleLike(clip.id)}
-            className={cn(liked && "text-primary")}
-          >
-            <HugeiconsIcon
-              icon={FavouriteIcon}
-              size={18}
-              className={cn(liked && "fill-current")}
-            />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Dislike"
-            aria-pressed={disliked}
-            onClick={dislike}
-            className={cn(disliked && "text-primary")}
-          >
-            <HugeiconsIcon icon={ThumbsDownIcon} size={18} />
-          </Button>
+          <ReactionButtons clipId={clip.id} onDislike={onDislike} />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -184,5 +140,83 @@ export function SongHeader({
         />
       </div>
     </header>
+  )
+}
+
+/** Content warning, model version, mode, style tags, and the owner's visibility. */
+function SongBadges({
+  clip,
+  version,
+  mode,
+  visibility,
+}: {
+  clip: Clip
+  version: string | null
+  mode: string | null
+  /** The owner's visibility badge; null for anyone else. */
+  visibility: Visibility | null
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {clip.content_warning && (
+        <Badge variant="destructive">Content warning</Badge>
+      )}
+      {version && <Badge variant="secondary">{version}</Badge>}
+      {mode && <Badge variant="outline">{mode}</Badge>}
+      {clip.style_tags.map((tag) => (
+        <Badge key={tag} variant="outline">
+          {tag}
+        </Badge>
+      ))}
+      {visibility && <VisibilityBadge visibility={visibility} />}
+    </div>
+  )
+}
+
+/** Like and Dislike, wired to the player store (persisted, as in ClipCard). */
+function ReactionButtons({
+  clipId,
+  onDislike,
+}: {
+  clipId: string
+  onDislike?: (id: string) => void
+}) {
+  const { state, dispatch } = usePlayer()
+  const toggleLike = useLikeToggle()
+  const liked = state.likedIds.includes(clipId)
+  const disliked = state.dislikedIds.includes(clipId)
+
+  function dislike() {
+    dispatch({ type: "dislike/toggle", id: clipId })
+    onDislike?.(clipId)
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={liked ? "Unlike" : "Like"}
+        aria-pressed={liked}
+        onClick={() => toggleLike(clipId)}
+        className={cn(liked && "text-primary")}
+      >
+        <HugeiconsIcon
+          icon={FavouriteIcon}
+          size={18}
+          className={cn(liked && "fill-current")}
+        />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Dislike"
+        aria-pressed={disliked}
+        onClick={dislike}
+        className={cn(disliked && "text-primary")}
+      >
+        <HugeiconsIcon icon={ThumbsDownIcon} size={18} />
+      </Button>
+    </>
   )
 }
