@@ -63,6 +63,15 @@ class FixedWindowRateLimiter:
             self._hits[key] = (window_start, count + weight)
 
 
+def _is_trusted(peer: str, trusted_proxies: Collection[str]) -> bool:
+    """True when ``peer`` is a listed proxy address or falls inside a listed CIDR (``172.18.0.0/16``)."""
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer in trusted_proxies
+    return any(address in ipaddress.ip_network(_normalize_ip(entry), strict=False) for entry in trusted_proxies)
+
+
 def client_key(request: Request, trusted_proxies: Collection[str]) -> str:
     """Rate-limit key: the real client IP.
 
@@ -81,8 +90,7 @@ def client_key(request: Request, trusted_proxies: Collection[str]) -> str:
     function; see ``ACEMUSIC_API_TRUSTED_PROXIES`` in ``.env.example``.
     """
     peer = _normalize_ip(request.client.host) if request.client else "anonymous"
-    trusted = {_normalize_ip(ip) for ip in trusted_proxies}
-    if peer in trusted:
+    if _is_trusted(peer, trusted_proxies):
         forwarded = request.headers.get("x-forwarded-for", "")
         client = forwarded.split(",")[0].strip()
         if client:
