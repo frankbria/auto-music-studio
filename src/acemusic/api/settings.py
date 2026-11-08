@@ -418,7 +418,7 @@ class ApiSettings(BaseSettings):
 
     @property
     def trusted_proxy_set(self) -> frozenset[str]:
-        """Trusted-proxy IPs as a set for O(1) membership in the limiter."""
+        """Trusted-proxy addresses and CIDRs, deduplicated for the limiter."""
         return frozenset(self.trusted_proxies)
 
     @field_validator("trusted_proxies", mode="before")
