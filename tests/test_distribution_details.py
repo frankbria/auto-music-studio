@@ -22,3 +22,7 @@ def test_a_track_still_in_review_contributes_nothing() -> None:
 def test_a_failed_track_contributes_a_reason() -> None:
     details = soundcloud_details({}, DistributionStatus.REJECTED)
     assert details["channel_rejection_reasons.soundcloud"].startswith("SoundCloud")
+
+
+def test_a_track_with_no_known_state_contributes_nothing() -> None:
+    assert soundcloud_details({"permalink_url": "https://soundcloud.com/dj/tune"}, None) == {}

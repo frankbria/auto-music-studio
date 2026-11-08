@@ -135,7 +135,7 @@ def map_soundcloud_state(track: dict) -> DistributionStatus | None:
 SOUNDCLOUD_REJECTION_REASON = "SoundCloud couldn't process the upload. Try uploading it again."
 
 
-def soundcloud_details(track: dict, status: DistributionStatus) -> dict[str, str]:
+def soundcloud_details(track: dict, status: DistributionStatus | None) -> dict[str, str]:
     """The ``$set`` fields a polled track adds next to its status (#758): its link once live, a reason once rejected.
 
     The link is shown as an ``<a href>``, so only an absolute http(s) URL is stored.

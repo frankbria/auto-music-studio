@@ -164,7 +164,7 @@ class SoundCloudStatusPoller:
 
         # Stamp the poll time regardless, with the track's link or rejection reason (#758) — atomic so it can't
         # clobber a concurrent channel update the way a full-document save would.
-        details = status_service.soundcloud_details(track, new_status) if new_status else {}
+        details = status_service.soundcloud_details(track, new_status)
         await Release.get_pymongo_collection().update_one(
             {"_id": release.id}, {"$set": {"soundcloud_last_polled": utcnow(), **details}}
         )
