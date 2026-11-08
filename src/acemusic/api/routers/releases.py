@@ -147,6 +147,9 @@ class ReleaseResponse(BaseModel):
     # Per-channel distribution status + visibility (US-13.6), so a listing shows
     # where each release stands across all channels without a second call.
     channel_statuses: dict[str, DistributionStatus]
+    # Per channel (#758): the public URL once live, and why a channel was rejected.
+    channel_permalinks: dict[str, str]
+    channel_rejection_reasons: dict[str, str]
     visibility: VisibilityState
     created_at: datetime
     updated_at: datetime | None
@@ -173,6 +176,8 @@ class ReleaseResponse(BaseModel):
             warnings=warnings,
             submitted_channels=release.submitted_channels,
             channel_statuses=release.channel_statuses,
+            channel_permalinks=release.channel_permalinks,
+            channel_rejection_reasons=release.channel_rejection_reasons,
             visibility=release.visibility,
             created_at=release.created_at,
             updated_at=release.updated_at,

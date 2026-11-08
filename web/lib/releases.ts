@@ -1,8 +1,7 @@
 // Release listing + distribution status for the dashboard (US-21.6, #748).
 //
 // Reads the caller's releases from the backend `GET /api/v1/releases` through the `/api/releases` BFF and maps
-// `channel_statuses` to `channels`. `permalink` and `rejectionReason` are fields the backend Release model does not
-// carry yet: they are null until it does, and the UI already handles them.
+// `channel_statuses` to `channels`, with each channel's public link and rejection reason (#758) where known.
 
 /** Per-channel distribution lifecycle — matches backend DistributionStatus
  *  (`draft → ready → submitted → in_review → live | rejected`). */
@@ -79,6 +78,8 @@ type ApiRelease = {
   upc: string | null
   created_at: string
   channel_statuses: Record<string, DistributionStatus>
+  channel_permalinks: Record<string, string>
+  channel_rejection_reasons: Record<string, string>
 }
 
 function toSummary(release: ApiRelease): ReleaseSummary {
@@ -97,8 +98,8 @@ function toSummary(release: ApiRelease): ReleaseSummary {
       ([channel, status]) => ({
         channel,
         status,
-        permalink: null,
-        rejectionReason: null,
+        permalink: release.channel_permalinks[channel] ?? null,
+        rejectionReason: release.channel_rejection_reasons[channel] ?? null,
       })
     ),
   }

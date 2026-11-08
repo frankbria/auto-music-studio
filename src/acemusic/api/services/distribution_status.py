@@ -13,6 +13,8 @@ Two callers, two contracts:
   truth and isn't forced through intermediate steps.
 """
 
+from urllib.parse import urlparse
+
 from pymongo import ReturnDocument
 
 from ..models import NotificationEvent
@@ -128,3 +130,19 @@ def map_soundcloud_state(track: dict) -> DistributionStatus | None:
         # A finished-but-private track is processed yet not publicly live.
         return DistributionStatus.LIVE if (track.get("sharing") == "public") else DistributionStatus.IN_REVIEW
     return None
+
+
+SOUNDCLOUD_REJECTION_REASON = "SoundCloud couldn't process the upload. Try uploading it again."
+
+
+def soundcloud_details(track: dict, status: DistributionStatus) -> dict[str, str]:
+    """The ``$set`` fields a polled track adds next to its status (#758): its link once live, a reason once rejected.
+
+    The link is shown as an ``<a href>``, so only an absolute http(s) URL is stored.
+    """
+    if status is DistributionStatus.REJECTED:
+        return {"channel_rejection_reasons.soundcloud": SOUNDCLOUD_REJECTION_REASON}
+    link = track.get("permalink_url") or ""
+    if status is DistributionStatus.LIVE and urlparse(link).scheme in ("http", "https"):
+        return {"channel_permalinks.soundcloud": link}
+    return {}

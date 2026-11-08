@@ -66,6 +66,10 @@ class Release(Document):
     # channel is engaged. Distinct from ``status`` above, which is the release's own
     # lifecycle — a channel can be ``in_review`` while the release is ``submitted``.
     channel_statuses: dict[str, DistributionStatus] = Field(default_factory=dict)
+    # Per-channel details next to a status (#758): the public URL once a channel is live, and why it was rejected.
+    # A row written before these existed has no key and reads as empty: no link or reason is known for it.
+    channel_permalinks: dict[str, str] = Field(default_factory=dict)
+    channel_rejection_reasons: dict[str, str] = Field(default_factory=dict)
     visibility: VisibilityState = VisibilityState.PRIVATE
     # Set when the release is uploaded to SoundCloud (US-13.2 upload + US-13.6
     # association); the poller uses it to fetch live track state.

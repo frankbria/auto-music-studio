@@ -162,10 +162,11 @@ class SoundCloudStatusPoller:
             if changed and status_service.should_notify(old, new_status):
                 await status_service.create_status_notification(release, SOUNDCLOUD_CHANNEL, new_status)
 
-        # Stamp the poll time regardless — atomic so it can't clobber a concurrent
-        # channel update the way a full-document save would.
+        # Stamp the poll time regardless, with the track's link or rejection reason (#758) — atomic so it can't
+        # clobber a concurrent channel update the way a full-document save would.
+        details = status_service.soundcloud_details(track, new_status) if new_status else {}
         await Release.get_pymongo_collection().update_one(
-            {"_id": release.id}, {"$set": {"soundcloud_last_polled": utcnow()}}
+            {"_id": release.id}, {"$set": {"soundcloud_last_polled": utcnow(), **details}}
         )
         return changed
 
