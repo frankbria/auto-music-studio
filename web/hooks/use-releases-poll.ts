@@ -8,6 +8,17 @@ import { fetchReleases, type ReleaseSummary } from "@/lib/releases"
 /** Default poll cadence — matches the spec's "real-time-ish" status refresh. */
 export const DEFAULT_POLL_INTERVAL_MS = 30_000
 
+/** A result tagged with the user it was loaded for. */
+type ForUser<T> = { userId: string; value: T }
+
+/** The value, but only if it was loaded for `userId`. */
+function forUser<T>(
+  entry: ForUser<T> | null,
+  userId: string | undefined
+): T | null {
+  return entry && entry.userId === userId ? entry.value : null
+}
+
 export type UseReleasesPoll = {
   releases: ReleaseSummary[] | null
   loading: boolean
@@ -40,17 +51,11 @@ export function useReleasesPoll(
     tokenRef.current = accessToken
   }, [accessToken])
 
-  const [loaded, setLoaded] = useState<{
-    userId: string
-    list: ReleaseSummary[]
-  } | null>(null)
-  const [failed, setFailed] = useState<{
-    userId: string
-    message: string
-  } | null>(null)
+  const [loaded, setLoaded] = useState<ForUser<ReleaseSummary[]> | null>(null)
+  const [failed, setFailed] = useState<ForUser<string> | null>(null)
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
-  const releases = loaded && loaded.userId === userId ? loaded.list : null
-  const error = failed && failed.userId === userId ? failed.message : null
+  const releases = forUser(loaded, userId)
+  const error = forUser(failed, userId)
 
   // False once unmounted; every post-await branch checks it before setState.
   const mountedRef = useRef(true)
@@ -70,14 +75,11 @@ export function useReleasesPoll(
     const list = await fetchReleases(token).catch(() => null)
     if (!isCurrent(seq)) return
     if (list) {
-      setLoaded({ userId, list })
+      setLoaded({ userId, value: list })
       setFailed(null)
       setLastUpdated(Date.now())
     } else {
-      setFailed({
-        userId,
-        message: "Could not load releases. Please try again.",
-      })
+      setFailed({ userId, value: "Could not load releases. Please try again." })
     }
   }, [userId])
 
