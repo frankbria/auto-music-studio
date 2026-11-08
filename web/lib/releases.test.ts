@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   channelLabel,
@@ -32,44 +32,130 @@ describe("externalLink", () => {
   })
 
   it("is null for non-live statuses even with a permalink", () => {
-    expect(externalLink({ channel: "soundcloud", status: "submitted", permalink: "https://x" })).toBeNull()
+    expect(
+      externalLink({
+        channel: "soundcloud",
+        status: "submitted",
+        permalink: "https://x",
+      })
+    ).toBeNull()
   })
 
   it("rejects non-http(s) schemes (XSS guard) and malformed URLs", () => {
-    expect(externalLink({ ...base, permalink: "javascript:alert(document.cookie)" })).toBeNull()
-    expect(externalLink({ ...base, permalink: "data:text/html,<script>x</script>" })).toBeNull()
+    expect(
+      externalLink({ ...base, permalink: "javascript:alert(document.cookie)" })
+    ).toBeNull()
+    expect(
+      externalLink({ ...base, permalink: "data:text/html,<script>x</script>" })
+    ).toBeNull()
     expect(externalLink({ ...base, permalink: "not a url" })).toBeNull()
     expect(externalLink({ ...base, permalink: "http://ok" })).toBe("http://ok")
   })
 })
 
 describe("fetchReleases", () => {
-  it("returns rows spanning every distribution status", async () => {
-    const releases = await fetchReleases()
-    const statuses = new Set(releases.flatMap((r) => r.channels.map((c) => c.status)))
-    for (const s of ["draft", "ready", "submitted", "in_review", "live", "rejected"]) {
-      expect(statuses).toContain(s)
-    }
+  afterEach(() => vi.unstubAllGlobals())
+
+  const apiRelease = {
+    id: "r1",
+    clip_id: "c1",
+    title: "Neon Rain",
+    artist: "Juno Vale",
+    genre: "Synthwave",
+    release_date: "2026-11-01T00:00:00Z",
+    album_name: null,
+    isrc: "US-AMS-26-00001",
+    upc: null,
+    created_at: "2026-11-02T10:00:00Z",
+    channel_statuses: { soundcloud: "live", landr: "in_review" },
+  }
+
+  it("reads the caller's releases through the BFF with their token, mapped for the dashboard", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ releases: [apiRelease], total: 1 }), {
+          status: 200,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const releases = await fetchReleases("tok")
+
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/releases")
+    expect((opts.headers as Record<string, string>).authorization).toBe(
+      "Bearer tok"
+    )
+    expect(releases).toEqual([
+      {
+        id: "r1",
+        clipId: "c1",
+        title: "Neon Rain",
+        artist: "Juno Vale",
+        genre: "Synthwave",
+        releaseDate: "2026-11-01T00:00:00Z",
+        album: null,
+        isrc: "US-AMS-26-00001",
+        upc: null,
+        createdAt: "2026-11-02T10:00:00Z",
+        channels: [
+          {
+            channel: "soundcloud",
+            status: "live",
+            permalink: null,
+            rejectionReason: null,
+          },
+          {
+            channel: "landr",
+            status: "in_review",
+            permalink: null,
+            rejectionReason: null,
+          },
+        ],
+      },
+    ])
   })
 
   it("orders newest first", async () => {
-    const releases = await fetchReleases()
-    const times = releases.map((r) => r.createdAt)
-    expect(times).toEqual([...times].sort((a, b) => b.localeCompare(a)))
+    const older = {
+      ...apiRelease,
+      id: "old",
+      created_at: "2026-10-01T00:00:00Z",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ releases: [older, apiRelease], total: 2 }),
+            { status: 200 }
+          )
+        )
+    )
+    expect((await fetchReleases("tok")).map((r) => r.id)).toEqual(["r1", "old"])
   })
 
-  it("carries a live permalink and a rejection reason on the relevant rows", async () => {
-    const releases = await fetchReleases()
-    const live = releases.flatMap((r) => r.channels).find((c) => c.status === "live")
-    const rejected = releases.flatMap((r) => r.channels).find((c) => c.status === "rejected")
-    expect(live?.permalink).toMatch(/^https:\/\//)
-    expect(rejected?.rejectionReason).toBeTruthy()
+  it("returns an empty list when the user has no releases", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ releases: [], total: 0 }), {
+            status: 200,
+          })
+        )
+    )
+    expect(await fetchReleases("tok")).toEqual([])
   })
 
-  it("returns a defensive copy the caller can't use to mutate the seed", async () => {
-    const first = await fetchReleases()
-    first[0].channels[0].status = "draft"
-    const second = await fetchReleases()
-    expect(second.some((r) => r.channels.some((c) => c.status === "live"))).toBe(true)
+  it("throws on a failed response so the dashboard shows its error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{}", { status: 502 }))
+    )
+    await expect(fetchReleases("tok")).rejects.toThrow()
   })
 })

@@ -8,7 +8,13 @@ import type { ReleaseSummary } from "@/lib/releases"
 // runtime, so dropping the other exports is harmless.
 vi.mock("@/lib/releases", () => ({ fetchReleases: vi.fn() }))
 import { fetchReleases } from "@/lib/releases"
-const mockFetch = fetchReleases as unknown as ReturnType<typeof vi.fn>
+const mockFetch = vi.mocked(fetchReleases)
+
+let auth: { accessToken: string | null; user: { id: string } | null } = {
+  accessToken: "tok",
+  user: { id: "u1" },
+}
+vi.mock("@/hooks/use-auth", () => ({ useAuth: () => auth }))
 
 const sample: ReleaseSummary[] = [
   {
@@ -19,14 +25,21 @@ const sample: ReleaseSummary[] = [
     genre: "G",
     releaseDate: "2026-01-01",
     createdAt: "2026-01-01T00:00:00Z",
-    channels: [{ channel: "soundcloud", status: "live", permalink: "https://x" }],
+    channels: [
+      { channel: "soundcloud", status: "live", permalink: "https://x" },
+    ],
   },
 ]
 
 afterEach(() => {
+  auth = { accessToken: "tok", user: { id: "u1" } }
+  mockFetch.mockReset()
   vi.restoreAllMocks()
   vi.useRealTimers()
-  Object.defineProperty(document, "hidden", { value: false, configurable: true })
+  Object.defineProperty(document, "hidden", {
+    value: false,
+    configurable: true,
+  })
 })
 
 describe("useReleasesPoll", () => {
@@ -73,7 +86,10 @@ describe("useReleasesPoll", () => {
     })
     expect(mockFetch).toHaveBeenCalledTimes(1)
 
-    Object.defineProperty(document, "hidden", { value: true, configurable: true })
+    Object.defineProperty(document, "hidden", {
+      value: true,
+      configurable: true,
+    })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000)
     })
@@ -84,7 +100,9 @@ describe("useReleasesPoll", () => {
     // load #1 (mount) stays pending; load #2 (refresh) resolves with newer data
     // first; then #1 resolves late and must NOT overwrite the newer result.
     let resolveStale: (v: ReleaseSummary[]) => void = () => {}
-    const stalePromise = new Promise<ReleaseSummary[]>((r) => (resolveStale = r))
+    const stalePromise = new Promise<ReleaseSummary[]>(
+      (r) => (resolveStale = r)
+    )
     const newer: ReleaseSummary[] = [{ ...sample[0], id: "newer" }]
     mockFetch.mockReturnValueOnce(stalePromise).mockResolvedValueOnce(newer)
 
@@ -112,5 +130,35 @@ describe("useReleasesPoll", () => {
       result.current.refresh()
     })
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2))
+  })
+
+  it("loads with the signed-in user's token", async () => {
+    mockFetch.mockResolvedValue(sample)
+    renderHook(() => useReleasesPoll(60_000))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("tok"))
+  })
+
+  it("waits for a session before fetching", async () => {
+    auth = { accessToken: null, user: null }
+    mockFetch.mockResolvedValue(sample)
+    const { result } = renderHook(() => useReleasesPoll(60_000))
+    await act(async () => {})
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(result.current.loading).toBe(true)
+  })
+
+  it("never shows one user's releases to the next user signed in", async () => {
+    mockFetch
+      .mockResolvedValueOnce(sample)
+      .mockReturnValueOnce(new Promise(() => {}))
+    const { result, rerender } = renderHook(() => useReleasesPoll(60_000))
+    await waitFor(() => expect(result.current.releases).toEqual(sample))
+
+    auth = { accessToken: "tok-2", user: { id: "u2" } }
+    rerender()
+
+    expect(result.current.releases).toBeNull()
+    expect(result.current.loading).toBe(true)
+    await waitFor(() => expect(mockFetch).toHaveBeenLastCalledWith("tok-2"))
   })
 })
