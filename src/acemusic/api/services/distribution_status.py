@@ -138,15 +138,16 @@ def map_soundcloud_state(track: dict) -> DistributionStatus | None:
 SOUNDCLOUD_REJECTION_REASON = "SoundCloud couldn't process the upload. Try uploading it again."
 
 
-def soundcloud_details(track: dict, status: DistributionStatus | None) -> dict[str, str]:
-    """The ``$set`` fields a polled track adds next to its status (#758): its link once live, a reason once rejected.
-
-    The link is shown as an ``<a href>``, so only an absolute http(s) URL is stored.
-    """
-    if status is DistributionStatus.REJECTED:
-        return {"channel_rejection_reasons.soundcloud": SOUNDCLOUD_REJECTION_REASON}
+def _public_link(track: dict) -> str | None:
+    """The track's permalink, only if it is an absolute http(s) URL: it is shown as an ``<a href>``."""
     link = track.get("permalink_url") or ""
     parsed = urlparse(link)
-    if status is DistributionStatus.LIVE and parsed.scheme in ("http", "https") and parsed.netloc:
-        return {"channel_permalinks.soundcloud": link}
-    return {}
+    return link if parsed.scheme in ("http", "https") and parsed.netloc else None
+
+
+def soundcloud_details(track: dict, status: DistributionStatus | None) -> dict[str, str]:
+    """The ``$set`` fields a polled track adds next to its status (#758): its link once live, a reason once rejected."""
+    if status is DistributionStatus.REJECTED:
+        return {"channel_rejection_reasons.soundcloud": SOUNDCLOUD_REJECTION_REASON}
+    link = _public_link(track) if status is DistributionStatus.LIVE else None
+    return {"channel_permalinks.soundcloud": link} if link else {}
