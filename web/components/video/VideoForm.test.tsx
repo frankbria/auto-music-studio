@@ -287,6 +287,9 @@ describe("VideoForm credit shortfall (#739)", () => {
     expect(
       screen.getByRole("link", { name: /get more credits/i })
     ).toHaveAttribute("href", "/settings/billing")
+    expect(
+      screen.getByRole("button", { name: "Generate Video" })
+    ).toHaveAccessibleDescription(/you need 86 more credits/i)
   })
 
   it("keeps Generate enabled when the balance covers the quote", () => {

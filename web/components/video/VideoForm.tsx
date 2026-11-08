@@ -57,18 +57,28 @@ function readyToGenerate(
   return (prompt.trim() !== "" || preset !== null) && shortfall === null
 }
 
+const SHORTFALL_ID = "video-credit-shortfall"
+
+/** Always mounted, so screen readers announce a shortfall when it appears and Generate can point at it. */
 function CreditShortfallNotice({
   shortfall,
 }: {
   shortfall: ReturnType<typeof creditShortfall>
 }) {
-  if (!shortfall) return null
   return (
-    <p role="status" className="text-sm text-destructive">
-      You need {shortfall.missing} more credits for this video.{" "}
-      <Link href={shortfall.upgradeUrl} className="underline">
-        Get more credits
-      </Link>
+    <p
+      id={SHORTFALL_ID}
+      role="status"
+      className="text-sm text-destructive empty:hidden"
+    >
+      {shortfall && (
+        <>
+          You need {shortfall.missing} more credits for this video.{" "}
+          <Link href={shortfall.upgradeUrl} className="underline">
+            Get more credits
+          </Link>
+        </>
+      )}
     </p>
   )
 }
@@ -374,7 +384,11 @@ export function VideoForm({
 
       {/* Estimate + submit. */}
       <div className="flex items-center gap-4">
-        <Button onClick={handleGenerate} disabled={!canGenerate}>
+        <Button
+          onClick={handleGenerate}
+          disabled={!canGenerate}
+          aria-describedby={SHORTFALL_ID}
+        >
           Generate Video
         </Button>
         <span className="text-sm text-muted-foreground tabular-nums">
