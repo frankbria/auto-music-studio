@@ -237,6 +237,10 @@ class TestClientKey:
         assert client_key(self._request("172.18.0.9", xff="198.51.100.7"), trusted) == "198.51.100.7"
         assert client_key(self._request("172.19.0.9", xff="198.51.100.7"), trusted) == "172.19.0.9"
 
+    def test_ipv4_mapped_cidr_covers_a_mapped_peer(self) -> None:
+        trusted = frozenset({"::ffff:172.18.0.0/112"})
+        assert client_key(self._request("::ffff:172.18.0.9", xff="198.51.100.7"), trusted) == "198.51.100.7"
+
     def test_forwarded_client_is_normalized_to_one_bucket(self) -> None:
         # An IPv4-mapped and plain form of the same visitor key one bucket.
         trusted = frozenset({"10.0.0.2"})

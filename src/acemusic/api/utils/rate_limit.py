@@ -69,7 +69,10 @@ def _is_trusted(peer: str, trusted_proxies: Collection[str]) -> bool:
         address = ipaddress.ip_address(peer)
     except ValueError:
         return peer in trusted_proxies
-    return any(address in ipaddress.ip_network(_normalize_ip(entry), strict=False) for entry in trusted_proxies)
+    # The peer arrives normalized to IPv4, so an operator's ::ffff:a.b.c.d/n network needs the mapped form too.
+    forms = [address, ipaddress.IPv6Address(f"::ffff:{address}")] if address.version == 4 else [address]
+    networks = [ipaddress.ip_network(_normalize_ip(entry), strict=False) for entry in trusted_proxies]
+    return any(form in network for form in forms for network in networks)
 
 
 def client_key(request: Request, trusted_proxies: Collection[str]) -> str:
