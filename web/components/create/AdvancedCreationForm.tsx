@@ -396,6 +396,7 @@ export function AdvancedCreationForm({
 
       <div className="flex items-center gap-2">
         <Button
+          variant="brand"
           type="button"
           className="w-fit"
           disabled={!canSubmit || busy || modelLoading}

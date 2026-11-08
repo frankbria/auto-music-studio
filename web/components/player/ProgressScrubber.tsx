@@ -7,6 +7,7 @@ import { formatTime } from "@/lib/clips"
 export function ProgressScrubber() {
   const { state, dispatch } = usePlayer()
   const max = state.duration > 0 ? state.duration : 0
+  const playedPercent = max ? (Math.min(state.currentTime, max) / max) * 100 : 0
 
   return (
     <div className="flex w-full items-center gap-2">
@@ -25,7 +26,8 @@ export function ProgressScrubber() {
         onChange={(e) =>
           dispatch({ type: "seek/request", time: Number(e.target.value) })
         }
-        className="h-1 pointer-coarse:h-11 pointer-coarse:py-5 pointer-coarse:bg-clip-content flex-1 cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ backgroundSize: `${playedPercent}% 100%` }}
+        className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-muted bg-brand bg-no-repeat accent-primary disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:h-11 pointer-coarse:bg-clip-content pointer-coarse:py-5"
       />
       <span className="w-10 text-xs text-muted-foreground tabular-nums">
         {formatTime(state.duration)}

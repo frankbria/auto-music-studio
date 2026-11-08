@@ -6,6 +6,9 @@
 
 @theme inline {
     --font-heading: var(--font-sans);
+    --color-brand-from: var(--brand-from);
+    --color-brand-to: var(--brand-to);
+    --color-brand-foreground: var(--brand-foreground);
     --font-sans: var(--font-sans);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
@@ -47,73 +50,81 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Night Session (#754): violet-tinted neutrals, a magenta primary and a magenta-to-orange brand gradient.
+   Every text/background pair here clears WCAG AA (4.5:1). */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    --background: oklch(0.987 0.007 295.5);
+    --foreground: oklch(0.191 0.026 290.8);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.191 0.026 290.8);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.191 0.026 290.8);
+    --primary: oklch(0.566 0.220 7.3);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.947 0.029 296.8);
+    --secondary-foreground: oklch(0.42 0.17 285);
+    --muted: oklch(0.959 0.011 297.6);
+    --muted-foreground: oklch(0.497 0.045 292.9);
+    --accent: oklch(0.947 0.029 296.8);
+    --accent-foreground: oklch(0.191 0.026 290.8);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --border: oklch(0.920 0.019 299.1);
+    --input: oklch(0.920 0.019 299.1);
+    --ring: oklch(0.566 0.220 7.3);
+    --chart-1: oklch(0.566 0.220 7.3);
+    --chart-2: oklch(0.70 0.16 55);
+    --chart-3: oklch(0.499 0.221 283.2);
+    --chart-4: oklch(0.60 0.12 220);
+    --chart-5: oklch(0.60 0.14 160);
+    --radius: 0.75rem;
+    --sidebar: oklch(0.974 0.009 299.2);
+    --sidebar-foreground: oklch(0.191 0.026 290.8);
+    --sidebar-primary: oklch(0.566 0.220 7.3);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-accent: oklch(0.947 0.029 296.8);
+    --sidebar-accent-foreground: oklch(0.191 0.026 290.8);
+    --sidebar-border: oklch(0.920 0.019 299.1);
+    --sidebar-ring: oklch(0.566 0.220 7.3);
+    --brand-from: oklch(0.566 0.220 7.3);
+    --brand-to: oklch(0.58 0.19 40);
+    --brand-foreground: oklch(1 0 0);
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --background: oklch(0.152 0.021 288.2);
+    --foreground: oklch(0.966 0.017 293.1);
+    --card: oklch(0.195 0.024 291.7);
+    --card-foreground: oklch(0.966 0.017 293.1);
+    --popover: oklch(0.228 0.031 289.4);
+    --popover-foreground: oklch(0.966 0.017 293.1);
+    --primary: oklch(0.670 0.231 5.4);
+    --primary-foreground: oklch(0.152 0.021 288.2);
+    --secondary: oklch(0.264 0.046 288.3);
+    --secondary-foreground: oklch(0.966 0.017 293.1);
+    --muted: oklch(0.228 0.031 289.4);
+    --muted-foreground: oklch(0.731 0.048 293.5);
+    --accent: oklch(0.264 0.046 288.3);
+    --accent-foreground: oklch(0.966 0.017 293.1);
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --border: oklch(1 0 0 / 9%);
+    --input: oklch(1 0 0 / 14%);
+    --ring: oklch(0.670 0.231 5.4);
+    --chart-1: oklch(0.670 0.231 5.4);
+    --chart-2: oklch(0.776 0.159 59.0);
+    --chart-3: oklch(0.599 0.230 286.2);
+    --chart-4: oklch(0.815 0.135 220.4);
+    --chart-5: oklch(0.797 0.164 159.7);
+    --sidebar: oklch(0.164 0.027 290.1);
+    --sidebar-foreground: oklch(0.966 0.017 293.1);
+    --sidebar-primary: oklch(0.670 0.231 5.4);
+    --sidebar-primary-foreground: oklch(0.152 0.021 288.2);
+    --sidebar-accent: oklch(0.264 0.046 288.3);
+    --sidebar-accent-foreground: oklch(0.966 0.017 293.1);
+    --sidebar-border: oklch(1 0 0 / 8%);
+    --sidebar-ring: oklch(0.670 0.231 5.4);
+    --brand-from: oklch(0.670 0.231 5.4);
+    --brand-to: oklch(0.776 0.159 59.0);
+    --brand-foreground: oklch(0.152 0.021 288.2);
 }
 
 /* The playbar's height (LAYOUT.playbarHeight on desktop). On a touch screen its two rows of 44px targets need more
@@ -137,4 +148,9 @@
   html {
     @apply font-sans;
     }
+}
+
+/* The brand gradient for the few signature surfaces (primary create action, playbar progress, active nav). */
+@utility bg-brand {
+  background-image: linear-gradient(135deg, var(--brand-from), var(--brand-to));
 }
