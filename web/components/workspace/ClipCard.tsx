@@ -69,6 +69,7 @@ import {
   type ClipMenuAction,
   type SongActionId,
 } from "@/lib/song-actions"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 export type ClipCardProps = {
   clip: Clip
@@ -287,10 +288,15 @@ export function ClipCard({
           }
           className="group/thumb relative flex size-full items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          <HugeiconsIcon
-            icon={MusicNote01Icon}
-            size={20}
-            className="group-hover/thumb:opacity-0"
+          <ClipArtwork
+            clipId={clip.id}
+            fallback={
+              <HugeiconsIcon
+                icon={MusicNote01Icon}
+                size={20}
+                className="group-hover/thumb:opacity-0"
+              />
+            }
           />
           <span className="absolute inset-0 flex items-center justify-center bg-background/40 opacity-0 transition-opacity group-hover/thumb:opacity-100">
             <HugeiconsIcon icon={PlayIcon} size={20} className="fill-current" />

@@ -8,16 +8,15 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { formatTime } from "@/lib/clips"
 import type { Clip } from "@/lib/workspace-clips"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 /**
  * Selected-song summary for the release page header (US-21.1). Shows the chosen
  * clip's thumbnail, title, duration, and its mastering/distribution status, plus
  * a "Change Song" affordance to reopen the selector.
  *
- * ponytail: no artwork proxy exists in web/ (thumbnails are music-glyph
- * placeholders everywhere), and distribution has no releases API yet — the
- * Distribute workflow lands in US-21.4/21.5, so distribution status is a static
- * "Not distributed" until then.
+ * Distribution status is a static "Not distributed": the summary doesn't read
+ * the song's releases.
  */
 export function SelectedSongSummary({
   clip,
@@ -34,8 +33,11 @@ export function SelectedSongSummary({
   return (
     <Card>
       <CardContent className="flex items-center gap-4 p-4">
-        <span className="flex size-16 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <HugeiconsIcon icon={MusicNote01Icon} size={24} />
+        <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+          <ClipArtwork
+            clipId={clip.id}
+            fallback={<HugeiconsIcon icon={MusicNote01Icon} size={24} />}
+          />
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">

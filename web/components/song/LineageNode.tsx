@@ -3,12 +3,11 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { MusicNote01Icon } from "@hugeicons/core-free-icons"
 
 import type { LabeledNode } from "@/lib/lineage"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 // A single ancestor in the generation-lineage chain (US-17.7): a clickable card
 // with a relationship label ("Remixed from"), the clip title, and a link to that
-// clip's song page. Lineage nodes are light summaries with no artwork field, and
-// there's no authed same-origin artwork proxy yet, so the thumbnail is a music
-// glyph placeholder — swap in a real cover once /api/clips/{id}/artwork exists.
+// clip's song page, with its cover art (a music glyph when it has none).
 
 export function LineageNode({ node }: { node: LabeledNode }) {
   const title = node.title ?? "Untitled clip"
@@ -22,8 +21,11 @@ export function LineageNode({ node }: { node: LabeledNode }) {
         {node.label}
       </span>
       <span className="flex items-center gap-2">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <HugeiconsIcon icon={MusicNote01Icon} size={16} />
+        <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+          <ClipArtwork
+            clipId={node.id}
+            fallback={<HugeiconsIcon icon={MusicNote01Icon} size={16} />}
+          />
         </span>
         <span className="truncate text-sm font-medium" title={title}>
           {title}

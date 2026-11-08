@@ -13,12 +13,13 @@ import { versionLabel } from "@/lib/clip-labels"
 import { formatTime } from "@/lib/clips"
 import { cn } from "@/lib/utils"
 import type { Clip } from "@/lib/workspace-clips"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 // Presentational discovery card for Explore and Search (US-20.1). Deliberately NOT
 // the workspace ClipCard: this one is for anonymous browsing, so it has no owner
 // actions (rename/publish/remix/drag/player dispatch) — the whole card is one
-// link to the public song detail page. Artwork shows a music-note glyph: there
-// is no authed artwork proxy, so a real <img src=.../artwork> would 401.
+// link to the public song detail page. Artwork is the clip's cover art, or a
+// music-note glyph when it has none.
 // The Report control (US-27.2) sits beside the link, not inside it — a button
 // nested in an <a> is invalid and would navigate on click.
 
@@ -56,13 +57,18 @@ export function ExploreClipCard({
         data-testid="explore-clip-card"
         className="group/card flex flex-col gap-2 rounded-lg border border-border bg-card p-2 transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        {/* Square artwork placeholder with a duration overlay. */}
+        {/* Square artwork with a duration overlay. */}
         <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
-          <HugeiconsIcon
-            icon={MusicNote01Icon}
-            size={28}
-            aria-hidden
-            className="group-hover/card:opacity-0"
+          <ClipArtwork
+            clipId={clip.id}
+            fallback={
+              <HugeiconsIcon
+                icon={MusicNote01Icon}
+                size={28}
+                aria-hidden
+                className="group-hover/card:opacity-0"
+              />
+            }
           />
           {rank != null && (
             <span

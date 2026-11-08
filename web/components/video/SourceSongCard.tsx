@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { clipAudioUrl, formatTime } from "@/lib/clips"
 import type { Clip } from "@/lib/workspace-clips"
+import { ClipArtwork } from "@/components/song/ClipArtwork"
 
 /**
- * Source-song card for the video page (US-22.2): music-glyph thumbnail (no
- * artwork proxy exists in web/), title, duration, style tags, and play/pause
+ * Source-song card for the video page (US-22.2): cover-art thumbnail (a glyph
+ * when there is none), title, duration, style tags, and play/pause
  * driven by the cookie-authed `/stream` proxy (preview-player idiom).
  */
 export function SourceSongCard({ clip }: { clip: Clip }) {
@@ -40,8 +41,11 @@ export function SourceSongCard({ clip }: { clip: Clip }) {
           data-testid="source-audio"
         />
 
-        <span className="flex size-16 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <HugeiconsIcon icon={MusicNote01Icon} size={24} />
+        <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+          <ClipArtwork
+            clipId={clip.id}
+            fallback={<HugeiconsIcon icon={MusicNote01Icon} size={24} />}
+          />
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">

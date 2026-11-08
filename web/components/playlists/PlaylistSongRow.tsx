@@ -17,8 +17,7 @@ import { formatTime } from "@/lib/clips"
 import type { Clip } from "@/lib/workspace-clips"
 
 // One song in the playlist detail list (US-20.3). Play affordance links to the
-// public song page (playback controls live there — no authed artwork/stream proxy
-// to embed here). Reorder is keyboard-accessible via up/down buttons; native HTML5
+// public song page, where the playback controls are. Reorder is keyboard-accessible via up/down buttons; native HTML5
 // drag (handled by the parent) is the pointer path for the "drag-to-reorder" AC.
 
 export function PlaylistSongRow({
