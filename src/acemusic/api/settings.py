@@ -5,6 +5,7 @@ All API settings are namespaced under the ``ACEMUSIC_API_`` env prefix so they d
 not collide with CLI or ACE-Step server variables.
 """
 
+import ipaddress
 import re
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -417,16 +418,27 @@ class ApiSettings(BaseSettings):
 
     @property
     def trusted_proxy_set(self) -> frozenset[str]:
-        """Trusted-proxy IPs as a set for O(1) membership in the limiter."""
+        """Trusted-proxy addresses and CIDRs, deduplicated for the limiter."""
         return frozenset(self.trusted_proxies)
 
     @field_validator("trusted_proxies", mode="before")
     @classmethod
     def _split_trusted_proxies(cls, value: object) -> object:
-        """Accept a comma-separated string; blank/unset -> [] (trust nobody)."""
+        """Accept a comma-separated string of addresses or CIDRs; blank/unset -> [] (trust nobody)."""
         if isinstance(value, str):
             return [ip.strip() for ip in value.split(",") if ip.strip()]
         return value
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _require_addresses(cls, entries: list[str]) -> list[str]:
+        """Reject a typo at startup; otherwise it would raise on every rate-limited request."""
+        for entry in entries:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError as error:
+                raise ValueError(f"trusted proxy {entry!r} is not an IP address or CIDR") from error
+        return entries
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

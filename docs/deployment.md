@@ -64,8 +64,10 @@ project's own servers are in the operator's runbook, not here. Replace `example.
    }
    ```
    Enable it, then `certbot --nginx -d example.com --redirect`. Set `ACEMUSIC_API_TRUSTED_PROXIES` to the Docker
-   network's gateway and the web container's address (`docker network inspect acemusic_default`) and recreate the
-   API, so rate limits key on real clients. Left unset, every client shares the proxy's bucket.
+   network's subnet (`docker network inspect acemusic_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`,
+   e.g. `172.18.0.0/16`) and recreate the API, so rate limits key on real clients. Trust the subnet, not single
+   addresses: containers get a new address when a deploy recreates them. Every container on that network can then set
+   its own `X-Forwarded-For`, so keep only this stack on it, and never list a broad range such as `0.0.0.0/0`. Left unset, every client shares the proxy's bucket.
 6. **Check it.** `curl https://example.com/api/v1/health` reports the deployed `build_sha`; `/docs` shows the API
    reference; signing in with Google reaches `/create`.
 7. **Keep it running.**
@@ -189,7 +191,8 @@ reach the staging tag as the deploy user, alongside the network grant. The runne
 
 The staging stack binds its ports to loopback, and nginx on the box terminates TLS and routes `/api/v1/` to the API
 and everything else to the web app. nginx replaces `X-Forwarded-For` with the client address, and
-`ACEMUSIC_API_TRUSTED_PROXIES` lists the Docker gateway and the web container, so the rate limiters key on real
+`ACEMUSIC_API_TRUSTED_PROXIES` is the Docker network's subnet (host nginx arrives from its gateway, the web BFF from
+its container), so the rate limiters key on real
 clients.
 
 ### Production (#700)

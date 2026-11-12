@@ -6,6 +6,7 @@ ergonomic ``.env`` configuration.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from acemusic.api.settings import ApiSettings
 
@@ -71,6 +72,16 @@ class TestTrustedProxies:
         monkeypatch.setenv("ACEMUSIC_API_TRUSTED_PROXIES", "  ")
         settings = ApiSettings(_env_file=None)
         assert settings.trusted_proxies == []
+
+    def test_cidr_is_accepted(self, monkeypatch):
+        monkeypatch.setenv("ACEMUSIC_API_TRUSTED_PROXIES", "172.18.0.0/16")
+        assert ApiSettings(_env_file=None).trusted_proxies == ["172.18.0.0/16"]
+
+    def test_entry_that_is_not_an_address_fails_at_startup(self, monkeypatch):
+        """A typo must stop the API booting, not raise on every rate-limited request."""
+        monkeypatch.setenv("ACEMUSIC_API_TRUSTED_PROXIES", "10.0.0.2, localhost")
+        with pytest.raises(ValidationError, match="localhost"):
+            ApiSettings(_env_file=None)
 
 
 class TestAuthSettings:
