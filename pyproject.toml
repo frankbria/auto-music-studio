@@ -73,7 +73,7 @@ audio-ml-midi = [
     "onnxruntime>=1.17",
     # basic-pitch -> resampy imports pkg_resources, which TensorFlow's tree used to bring in (#597);
     # setuptools 81 removes it.
-    "setuptools<81",
+    "setuptools<85",
 ]
 api = [
     "uvicorn[standard]>=0.54.0",
