@@ -222,7 +222,7 @@ an `ssh` rule letting `tag:ci` reach the production tag as the deploy user, as i
 
 Production's `.env.docker` differs from staging's in what it talks to: Stripe **live** keys and the signing secret of a
 live webhook endpoint at `https://www.automusicstudio.com/api/v1/billing/webhook`, a Google OAuth redirect of
-`https://www.automusicstudio.com/api/auth/callback/google`, and CORS and Stripe return URLs on that origin.
+`https://www.automusicstudio.com/auth/callback/google`, and CORS and Stripe return URLs on that origin.
 
 **Rollback.**
 
