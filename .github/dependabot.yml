@@ -27,6 +27,13 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 14
+    ignore:
+      # setuptools 82+ drops pkg_resources, which basic-pitch -> resampy 0.4.2 imports at load, so
+      # the audio-ml-midi extra would fail to import (CI does not install that extra, so a green
+      # run would not show it). pyproject.toml caps setuptools for the same reason; lift both
+      # together once basic-pitch allows resampy>=0.4.3. #775 tried to move it to 84.1.0.
+      - dependency-name: "setuptools"
+        versions: [">=82"]
     groups:
       security-updates:
         applies-to: security-updates
