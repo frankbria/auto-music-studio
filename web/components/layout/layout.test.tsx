@@ -62,9 +62,11 @@ describe("AppShell", () => {
 
   it("reserves bottom space for the fixed playbar so content is not hidden", () => {
     render(<AppShell>x</AppShell>)
-    expect(screen.getByTestId("app-shell")).toHaveStyle({
-      paddingBottom: "var(--playbar-height)",
-    })
+    // Inline style, not toHaveStyle: jsdom 31's getComputedStyle resolves var(), and the
+    // tests never define --playbar-height, so the computed value is the property's initial one.
+    expect(screen.getByTestId("app-shell").style.paddingBottom).toBe(
+      "var(--playbar-height)"
+    )
   })
 
   it("only renders the right panel when rightPanel content is provided", () => {
@@ -107,6 +109,6 @@ describe("BottomPlaybar", () => {
     expect(el.className).toContain("fixed")
     expect(el.className).toContain("bottom-0")
     expect(el.className).toContain(`z-${LAYOUT.z.playbar}`)
-    expect(el).toHaveStyle({ height: "var(--playbar-height)" })
+    expect(el.style.height).toBe("var(--playbar-height)")
   })
 })

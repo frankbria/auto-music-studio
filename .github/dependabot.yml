@@ -85,8 +85,10 @@ updates:
       # (basic-pitch -> tensorflow 2.14): numpy 1.x ships no CPython 3.13+ wheels, so
       # `uv sync` fails at image build (#456). Lift together with the numpy cap, and move
       # the CI matrix in the same change so the image never runs a Python CI does not test.
+      # Docker tags read 3.12 -> 3.15 as a minor bump (#781), so minor is ignored too; patch
+      # moves inside 3.12 are still welcome.
       - dependency-name: "python"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       security-updates:
         applies-to: security-updates

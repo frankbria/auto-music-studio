@@ -28,7 +28,7 @@ dependencies = [
     # fastapi + pydantic-settings are core (not an optional extra): from Layer 2
     # onward the HTTP API is a required component of the package, and the test
     # suite imports acemusic.api. Only the server runner (uvicorn) is optional.
-    "fastapi>=0.162.0",
+    "fastapi>=0.162.2",
     # Required by FastAPI to parse multipart/form-data (cover-art upload, US-13.1).
     "python-multipart>=0.0.33",
     "pydantic-settings>=2.16.2",
@@ -44,7 +44,7 @@ dependencies = [
     "authlib>=1.9.5",
     "pyjwt>=2.15.1",
     "stripe>=16.1.0",
-    "sentry-sdk[fastapi]>=2.73.0",
+    "sentry-sdk[fastapi]>=2.74.0",
 ]
 
 [project.scripts]
@@ -75,13 +75,13 @@ audio-ml-midi = [
     # basic-pitch 0.4.0 pins resampy<0.4.3, and resampy 0.4.2 imports pkg_resources at module load;
     # setuptools 82 removed pkg_resources (81.0.0 still ships it). Keep this cap, and the matching
     # dependabot ignore, until basic-pitch allows resampy>=0.4.3 (which uses importlib.resources).
-    "setuptools<81",
+    "setuptools<82",
 ]
 api = [
     "uvicorn[standard]>=0.54.0",
 ]
 s3 = [
-    "boto3>=1.43.125",
+    "boto3>=1.43.126",
 ]
 
 [tool.uv]
