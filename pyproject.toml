@@ -44,7 +44,7 @@ dependencies = [
     "authlib>=1.9.5",
     "pyjwt>=2.15.1",
     "stripe>=16.1.0",
-    "sentry-sdk[fastapi]>=2.73.0",
+    "sentry-sdk[fastapi]>=2.74.0",
 ]
 
 [project.scripts]
