@@ -71,8 +71,10 @@ audio-ml-midi = [
     "basic-pitch>=0.3.0",
     # basic-pitch runs its bundled ONNX model when TensorFlow is absent (#597).
     "onnxruntime>=1.17",
-    # basic-pitch -> resampy imports pkg_resources, which TensorFlow's tree used to bring in (#597);
-    # setuptools 81 removes it.
+    # basic-pitch -> resampy imports pkg_resources, which TensorFlow's tree used to bring in (#597).
+    # basic-pitch 0.4.0 pins resampy<0.4.3, and resampy 0.4.2 imports pkg_resources at module load;
+    # setuptools 82 removed pkg_resources (81.0.0 still ships it). Keep this cap, and the matching
+    # dependabot ignore, until basic-pitch allows resampy>=0.4.3 (which uses importlib.resources).
     "setuptools<81",
 ]
 api = [
