@@ -64,7 +64,9 @@ describe("AppShell", () => {
     render(<AppShell>x</AppShell>)
     // Inline style, not toHaveStyle: jsdom 31's getComputedStyle resolves var(), and the
     // tests never define --playbar-height, so the computed value is the property's initial one.
-    expect(screen.getByTestId("app-shell").style.paddingBottom).toBe("var(--playbar-height)")
+    expect(screen.getByTestId("app-shell").style.paddingBottom).toBe(
+      "var(--playbar-height)"
+    )
   })
 
   it("only renders the right panel when rightPanel content is provided", () => {
