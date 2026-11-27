@@ -43,7 +43,7 @@ dependencies = [
     # and verifies our own access tokens (python-jose is unmaintained / has CVEs).
     "authlib>=1.9.5",
     "pyjwt>=2.15.1",
-    "stripe>=16.1.0",
+    "stripe>=17.0.0",
     "sentry-sdk[fastapi]>=2.74.0",
 ]
 
