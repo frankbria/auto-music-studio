@@ -7,7 +7,7 @@ name = "acemusic"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "typer>=0.28.0",
+    "typer>=0.29.1",
     "httpx>=0.27",
     "python-dotenv>=1.2.4",
     "PyYAML>=5.4",
@@ -28,7 +28,7 @@ dependencies = [
     # fastapi + pydantic-settings are core (not an optional extra): from Layer 2
     # onward the HTTP API is a required component of the package, and the test
     # suite imports acemusic.api. Only the server runner (uvicorn) is optional.
-    "fastapi>=0.162.2",
+    "fastapi>=0.162.5",
     # Required by FastAPI to parse multipart/form-data (cover-art upload, US-13.1).
     "python-multipart>=0.0.33",
     "pydantic-settings>=2.16.2",
@@ -36,7 +36,7 @@ dependencies = [
     # (AsyncMongoClient) directly — Motor is deprecated and no longer used.
     # dnspython is required for Atlas mongodb+srv:// connection strings.
     "beanie>=2.2.0",
-    "pymongo>=4.19.0",
+    "pymongo>=4.20.0",
     "dnspython>=2.9.2",
     "email-validator>=2.0",
     # OAuth2 + JWT auth (US-8.3). authlib drives the provider flows; PyJWT signs
@@ -70,7 +70,7 @@ dev = [
 audio-ml-midi = [
     "basic-pitch>=0.3.0",
     # basic-pitch runs its bundled ONNX model when TensorFlow is absent (#597).
-    "onnxruntime>=1.17",
+    "onnxruntime>=1.32.0",
     # basic-pitch -> resampy imports pkg_resources, which TensorFlow's tree used to bring in (#597).
     # basic-pitch 0.4.0 pins resampy<0.4.3, and resampy 0.4.2 imports pkg_resources at module load;
     # setuptools 82 removed pkg_resources (81.0.0 still ships it). Keep this cap, and the matching
@@ -81,7 +81,7 @@ api = [
     "uvicorn[standard]>=0.54.0",
 ]
 s3 = [
-    "boto3>=1.43.126",
+    "boto3>=1.44.2",
 ]
 
 [tool.uv]
